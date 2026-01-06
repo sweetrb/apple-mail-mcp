@@ -1,17 +1,17 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "apple-notes-mcp",
-  "version": "1.0.0",
-  "description": "Apple Notes integration for Claude Code via MCP",
+  "name": "apple-mail-mcp",
+  "version": "0.1.0",
+  "description": "Apple Mail integration for Claude Code via MCP",
   "owner": {
     "name": "Rob Sweet",
     "email": "rob@superiortech.io"
   },
   "plugins": [
     {
-      "name": "apple-notes",
-      "description": "Manage Apple Notes through natural language - create, search, read, update, delete, and organize notes and folders",
-      "version": "1.1.1",
+      "name": "apple-mail",
+      "description": "Manage Apple Mail through natural language - read, search, send, and organize emails",
+      "version": "0.1.0",
       "author": {
         "name": "Rob Sweet",
         "email": "rob@superiortech.io"

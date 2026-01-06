@@ -1,4 +1,4 @@
-# Contributing to Apple Notes MCP Server
+# Contributing to Apple Mail MCP Server
 
 Thank you for your interest in contributing! This document provides guidelines for contributing to the project.
 
@@ -6,8 +6,8 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/sweetrb/mcp-apple-notes.git
-   cd mcp-apple-notes
+   git clone https://github.com/sweetrb/apple-mail-mcp.git
+   cd apple-mail-mcp
    ```
 
 2. **Install dependencies**
@@ -57,7 +57,7 @@ npm run test:watch
 
 ### Testing Guidelines
 
-- Tests mock the `runAppleScript` function since AppleScript only works on macOS
+- Tests mock the `executeAppleScript` function since AppleScript only works on macOS
 - Test both success and failure paths
 - Test edge cases (empty strings, special characters, etc.)
 
@@ -94,14 +94,14 @@ npm run test:watch
 When adding a new MCP tool:
 
 1. **Add the schema** in `src/index.ts`
-2. **Implement the method** in `src/services/appleNotesManager.ts`
+2. **Implement the method** in `src/services/appleMailManager.ts`
 3. **Add type definitions** in `src/types.ts`
-4. **Write tests** in `src/services/appleNotesManager.test.ts`
+4. **Write tests** in `src/services/appleMailManager.test.ts`
 5. **Update documentation** in README.md and CHANGELOG.md
 
 ## AppleScript Guidelines
 
-- Always escape user input using `escapeForAppleScript()` for plain text or `escapeHtmlForAppleScript()` for HTML content
+- Always escape user input using `escapeForAppleScript()`
 - Handle errors gracefully (return null/false instead of throwing)
 - Log errors with `console.error()` for debugging
 - Test on actual macOS when possible

@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "apple-notes": {
+    "apple-mail": {
       "command": "npx",
-      "args": ["apple-notes-mcp"]
+      "args": ["apple-mail-mcp"]
     }
   }
 }

@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a problem with apple-notes-mcp
+about: Report a problem with apple-mail-mcp
 title: ''
 labels: bug
 assignees: ''
@@ -28,7 +28,7 @@ What actually happened.
 
 - macOS version:
 - Node.js version:
-- apple-notes-mcp version:
+- apple-mail-mcp version:
 - Claude Desktop version (if applicable):
 
 ## Error Messages

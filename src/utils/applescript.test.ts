@@ -25,14 +25,14 @@ describe("executeAppleScript", () => {
   describe("successful execution", () => {
     it("returns success result with trimmed output", () => {
       // Arrange: Mock a successful AppleScript execution
-      mockExecSync.mockReturnValue("  Note Title  \n");
+      mockExecSync.mockReturnValue("  Message Subject  \n");
 
       // Act: Execute a simple script
-      const result = executeAppleScript('tell app "Notes" to get name of note 1');
+      const result = executeAppleScript('tell app "Mail" to get subject of message 1');
 
       // Assert: Output should be trimmed
       expect(result.success).toBe(true);
-      expect(result.output).toBe("Note Title");
+      expect(result.output).toBe("Message Subject");
       expect(result.error).toBeUndefined();
     });
 
@@ -41,9 +41,9 @@ describe("executeAppleScript", () => {
 
       // Multi-line AppleScript with tell blocks
       const script = `
-        tell application "Notes"
+        tell application "Mail"
           tell account "iCloud"
-            get notes
+            get messages of mailbox "INBOX"
           end tell
         end tell
       `;
@@ -59,8 +59,8 @@ describe("executeAppleScript", () => {
     it("escapes single quotes in the script for shell safety", () => {
       mockExecSync.mockReturnValue("content");
 
-      // Script containing a single quote (e.g., in a note title)
-      executeAppleScript('get note "Rob\'s Notes"');
+      // Script containing a single quote (e.g., in a search query)
+      executeAppleScript('search messages for "Rob\'s Messages"');
 
       // Verify the quote was escaped for shell
       const calledCommand = mockExecSync.mock.calls[0][0] as string;
@@ -72,11 +72,11 @@ describe("executeAppleScript", () => {
     it("returns error result when execution fails", () => {
       // Arrange: Mock an AppleScript execution failure
       mockExecSync.mockImplementation(() => {
-        throw new Error("execution error: Can't get note. (-1728)");
+        throw new Error("execution error: Can't get message. (-1728)");
       });
 
       // Act: Try to execute a script that will fail
-      const result = executeAppleScript('get note "Nonexistent"');
+      const result = executeAppleScript('get message "Nonexistent"');
 
       // Assert: Should return structured error
       expect(result.success).toBe(false);
@@ -86,25 +86,23 @@ describe("executeAppleScript", () => {
 
     it("parses execution error messages cleanly", () => {
       mockExecSync.mockImplementation(() => {
-        throw new Error("execution error: Note not found (-1728)");
+        throw new Error("execution error: Message not found (-1728)");
       });
 
-      const result = executeAppleScript("get note 1");
+      const result = executeAppleScript("get message 1");
 
       // Should extract the meaningful part of the error
-      expect(result.error).toBe("Note not found");
+      expect(result.error).toBe("Message not found");
     });
 
-    it("handles 'not found' error patterns with user-friendly message", () => {
+    it("handles 'message not found' error patterns with user-friendly message", () => {
       mockExecSync.mockImplementation(() => {
-        throw new Error('Can\'t get note "Missing".');
+        throw new Error("Can't get message.");
       });
 
-      const result = executeAppleScript('get note "Missing"');
+      const result = executeAppleScript('get message "Missing"');
 
-      expect(result.error).toContain("not found");
-      expect(result.error).toContain("Missing");
-      expect(result.error).toContain("case-sensitive"); // Includes helpful hint
+      expect(result.error).toContain("Message not found");
     });
 
     it("provides helpful message for permission errors", () => {
@@ -118,16 +116,16 @@ describe("executeAppleScript", () => {
       expect(result.error).toContain("System Preferences");
     });
 
-    it("provides helpful message for folder not found", () => {
+    it("provides helpful message for mailbox not found", () => {
       mockExecSync.mockImplementation(() => {
-        throw new Error('Can\'t get folder "Work".');
+        throw new Error('Can\'t get mailbox "Work".');
       });
 
       const result = executeAppleScript("test");
 
       expect(result.error).toContain("Work");
       expect(result.error).toContain("not found");
-      expect(result.error).toContain("list-folders");
+      expect(result.error).toContain("list-mailboxes");
     });
 
     it("provides helpful message for account not found", () => {
@@ -231,7 +229,7 @@ describe("executeAppleScript", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("timed out after 30 seconds");
-      expect(result.error).toContain("Notes.app may be unresponsive");
+      expect(result.error).toContain("Mail.app may be unresponsive");
     });
 
     it("includes custom timeout value in error message", () => {
@@ -255,7 +253,7 @@ describe("executeAppleScript", () => {
   describe("retry logic", () => {
     it("does not retry by default (maxRetries=1)", () => {
       mockExecSync.mockImplementation(() => {
-        throw new Error("Notes.app is not responding");
+        throw new Error("Mail.app is not responding");
       });
 
       executeAppleScript("test");
@@ -269,7 +267,7 @@ describe("executeAppleScript", () => {
       mockExecSync.mockImplementation(() => {
         callCount++;
         if (callCount < 3) {
-          throw new Error("Notes.app is not responding");
+          throw new Error("Mail.app is not responding");
         }
         return "success";
       });
@@ -283,12 +281,12 @@ describe("executeAppleScript", () => {
 
     it("does not retry on non-transient errors", () => {
       mockExecSync.mockImplementation(() => {
-        throw new Error('Can\'t get note "Missing"');
+        throw new Error("syntax error");
       });
 
       executeAppleScript("test", { maxRetries: 3, retryDelayMs: 1 });
 
-      // Should not retry for "note not found" errors
+      // Should not retry for syntax errors
       expect(mockExecSync).toHaveBeenCalledTimes(1);
     });
 
@@ -333,7 +331,7 @@ describe("executeAppleScript", () => {
 
     it("returns last error after all retries exhausted", () => {
       mockExecSync.mockImplementation(() => {
-        throw new Error("Notes.app is not responding");
+        throw new Error("Mail.app is not responding");
       });
 
       const result = executeAppleScript("test", { maxRetries: 3, retryDelayMs: 1 });
@@ -364,7 +362,7 @@ describe("executeAppleScript", () => {
       mockExecSync.mockImplementation(() => {
         callCount++;
         if (callCount < 2) {
-          throw new Error("lost connection to Notes.app");
+          throw new Error("lost connection to Mail.app");
         }
         return "recovered";
       });
@@ -380,7 +378,7 @@ describe("executeAppleScript", () => {
       mockExecSync.mockImplementation(() => {
         callCount++;
         if (callCount < 2) {
-          throw new Error("Notes.app is busy");
+          throw new Error("Mail.app is busy");
         }
         return "recovered";
       });
@@ -398,7 +396,7 @@ describe("executeAppleScript", () => {
       mockExecSync.mockImplementation(() => {
         execCallCount++;
         if (execCallCount <= 3) {
-          throw new Error("Notes.app is not responding");
+          throw new Error("Mail.app is not responding");
         }
         return "success";
       });

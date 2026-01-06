@@ -13,7 +13,7 @@ import type { AppleScriptResult, AppleScriptOptions } from "@/types.js";
 /**
  * Default execution timeout for AppleScript commands in milliseconds.
  * 30 seconds is sufficient for most operations, including complex
- * searches on large note collections. Can be overridden per-call.
+ * searches on large mailboxes. Can be overridden per-call.
  */
 const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -92,7 +92,7 @@ function isTimeoutError(error: unknown): boolean {
 
 /**
  * Error patterns that indicate transient failures worth retrying.
- * These typically occur when Notes.app is syncing or temporarily busy.
+ * These typically occur when Mail.app is busy or temporarily unresponsive.
  */
 const RETRYABLE_ERROR_PATTERNS = [
   /timed? out/i,
@@ -152,47 +152,42 @@ const ERROR_MAPPINGS: Array<{ pattern: RegExp; message: string }> = [
   // Application not running
   {
     pattern: /application isn't running|not running/i,
-    message: "Notes.app is not responding. Try opening Notes.app manually.",
+    message: "Mail.app is not responding. Try opening Mail.app manually.",
   },
   // Connection errors
   {
     pattern: /connection is invalid|lost connection/i,
-    message: "Lost connection to Notes.app. The app may have crashed or been restarted.",
+    message: "Lost connection to Mail.app. The app may have crashed or been restarted.",
   },
-  // Note not found (general)
+  // Message not found
   {
-    pattern: /can't get note "([^"]+)"/i,
-    message: 'Note "$1" not found. Verify the title is exact (case-sensitive).',
+    pattern: /can't get message/i,
+    message: "Message not found. The message may have been deleted or moved.",
   },
-  // Note not found by ID
+  // Mailbox not found
   {
-    pattern: /can't get note id/i,
-    message: "Note not found. The note may have been deleted or the ID is invalid.",
-  },
-  // Folder not found
-  {
-    pattern: /can't get folder "([^"]+)"/i,
-    message: 'Folder "$1" not found. Use list-folders to see available folders.',
+    pattern: /can't get mailbox "([^"]+)"/i,
+    message: 'Mailbox "$1" not found. Use list-mailboxes to see available mailboxes.',
   },
   // Account not found
   {
     pattern: /can't get account "([^"]+)"/i,
     message: 'Account "$1" not found. Use list-accounts to see available accounts.',
   },
-  // Folder already exists
+  // Send failed
   {
-    pattern: /folder.*already exists/i,
-    message: "A folder with that name already exists.",
+    pattern: /couldn't send|send failed|cannot send/i,
+    message: "Failed to send email. Check your network connection and Mail.app settings.",
+  },
+  // Offline
+  {
+    pattern: /offline|no connection/i,
+    message: "Mail.app is offline. Check your network connection.",
   },
   // Cannot delete (various reasons)
   {
     pattern: /can't delete|cannot delete/i,
-    message: "Cannot delete. The item may be locked or in use.",
-  },
-  // Password protected notes
-  {
-    pattern: /password protected|locked note/i,
-    message: "Note is password-protected. Unlock it in Notes.app first.",
+    message: "Cannot delete. The message may be locked or in use.",
   },
   // Syntax/script errors (usually programming bugs)
   {
@@ -353,7 +348,7 @@ export function executeAppleScript(
       if (isTimeoutError(error)) {
         isTimeout = true;
         const timeoutSecs = Math.round(timeoutMs / 1000);
-        errorMessage = `Operation timed out after ${timeoutSecs} seconds. Notes.app may be unresponsive or the operation involves too many notes.`;
+        errorMessage = `Operation timed out after ${timeoutSecs} seconds. Mail.app may be unresponsive or the operation involves too many messages.`;
       } else if (error instanceof Error) {
         rawError = error.message;
         // Node's ExecException includes stderr in the message

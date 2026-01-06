@@ -1,7 +1,7 @@
 {
-  "name": "apple-notes",
-  "version": "1.1.1",
-  "description": "Manage Apple Notes through natural language - create, search, read, update, delete, and organize notes and folders (macOS only)",
+  "name": "apple-mail",
+  "version": "0.1.0",
+  "description": "Manage Apple Mail through natural language - read, search, send, and organize emails (macOS only)",
   "author": {
     "name": "Rob Sweet",
     "email": "rob@superiortech.io"
