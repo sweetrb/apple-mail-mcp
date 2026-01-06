@@ -436,6 +436,176 @@ export class AppleMailManager {
   }
 
   /**
+   * Create a draft email (saved to Drafts folder, not sent).
+   *
+   * @param to - Recipient email addresses
+   * @param subject - Email subject
+   * @param body - Email body (plain text)
+   * @param cc - CC recipients
+   * @param bcc - BCC recipients
+   * @param account - Account to create draft in
+   * @returns true if draft created successfully
+   */
+  createDraft(
+    to: string[],
+    subject: string,
+    body: string,
+    cc?: string[],
+    bcc?: string[],
+    account?: string
+  ): boolean {
+    const safeSubject = escapeForAppleScript(subject);
+    const safeBody = escapeForAppleScript(body);
+
+    // Build recipient additions
+    let recipientCommands = "";
+    for (const addr of to) {
+      recipientCommands += `make new to recipient at end of to recipients with properties {address:"${escapeForAppleScript(addr)}"}\n`;
+    }
+    if (cc) {
+      for (const addr of cc) {
+        recipientCommands += `make new cc recipient at end of cc recipients with properties {address:"${escapeForAppleScript(addr)}"}\n`;
+      }
+    }
+    if (bcc) {
+      for (const addr of bcc) {
+        recipientCommands += `make new bcc recipient at end of bcc recipients with properties {address:"${escapeForAppleScript(addr)}"}\n`;
+      }
+    }
+
+    let draftCommand: string;
+    if (account) {
+      const safeAccount = escapeForAppleScript(account);
+      draftCommand = `
+        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
+        tell newMessage
+          ${recipientCommands}
+          set sender to "${safeAccount}"
+        end tell
+        return "draft created"
+      `;
+    } else {
+      draftCommand = `
+        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
+        tell newMessage
+          ${recipientCommands}
+        end tell
+        return "draft created"
+      `;
+    }
+
+    const script = buildAppLevelScript(draftCommand);
+    const result = executeAppleScript(script);
+
+    if (!result.success) {
+      console.error(`Failed to create draft: ${result.error}`);
+      return false;
+    }
+
+    return result.output.includes("draft created");
+  }
+
+  /**
+   * Reply to a message.
+   *
+   * @param id - Message ID to reply to
+   * @param body - Reply body
+   * @param replyAll - If true, reply to all recipients
+   * @param send - If true, send immediately; if false, save as draft
+   * @returns true if reply created/sent successfully
+   */
+  replyToMessage(id: string, body: string, replyAll = false, send = true): boolean {
+    const safeBody = escapeForAppleScript(body);
+    const replyType = replyAll
+      ? "reply with opening window to msg with reply to all"
+      : "reply with opening window to msg";
+    const sendAction = send ? "send theReply" : "";
+
+    const script = buildAppLevelScript(`
+      try
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${id})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                set theReply to ${replyType}
+                set content of theReply to "${safeBody}" & return & return & content of theReply
+                ${sendAction}
+                return "ok"
+              end if
+            end try
+          end repeat
+        end repeat
+        return "error:Message not found"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
+
+    if (!result.success || result.output.startsWith("error:")) {
+      console.error(`Failed to reply to message: ${result.error || result.output}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Forward a message.
+   *
+   * @param id - Message ID to forward
+   * @param to - Recipients to forward to
+   * @param body - Optional body to prepend
+   * @param send - If true, send immediately; if false, save as draft
+   * @returns true if forward created/sent successfully
+   */
+  forwardMessage(id: string, to: string[], body?: string, send = true): boolean {
+    const safeBody = body ? escapeForAppleScript(body) : "";
+    const sendAction = send ? "send theForward" : "";
+
+    // Build recipient additions
+    let recipientCommands = "";
+    for (const addr of to) {
+      recipientCommands += `make new to recipient at end of to recipients of theForward with properties {address:"${escapeForAppleScript(addr)}"}\n`;
+    }
+
+    const script = buildAppLevelScript(`
+      try
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${id})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                set theForward to forward msg with opening window
+                ${recipientCommands}
+                ${safeBody ? `set content of theForward to "${safeBody}" & return & return & content of theForward` : ""}
+                ${sendAction}
+                return "ok"
+              end if
+            end try
+          end repeat
+        end repeat
+        return "error:Message not found"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
+
+    if (!result.success || result.output.startsWith("error:")) {
+      console.error(`Failed to forward message: ${result.error || result.output}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
    * Helper to find and operate on a message by ID.
    */
   private findMessageScript(id: string, operation: string): string {

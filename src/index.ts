@@ -186,6 +186,73 @@ server.tool(
   }, "Error sending email")
 );
 
+// --- create-draft ---
+
+server.tool(
+  "create-draft",
+  {
+    to: z.array(z.string()).min(1, "At least one recipient is required"),
+    subject: z.string().min(1, "Subject is required"),
+    body: z.string().min(1, "Body is required"),
+    cc: z.array(z.string()).optional().describe("CC recipients"),
+    bcc: z.array(z.string()).optional().describe("BCC recipients"),
+    account: z.string().optional().describe("Account to create draft in"),
+  },
+  withErrorHandling(({ to, subject, body, cc, bcc, account }) => {
+    const success = mailManager.createDraft(to, subject, body, cc, bcc, account);
+
+    if (!success) {
+      return errorResponse("Failed to create draft. Check Mail.app configuration.");
+    }
+
+    return successResponse(`Draft created for ${to.join(", ")}`);
+  }, "Error creating draft")
+);
+
+// --- reply-to-message ---
+
+server.tool(
+  "reply-to-message",
+  {
+    id: z.string().min(1, "Message ID is required"),
+    body: z.string().min(1, "Reply body is required"),
+    replyAll: z.boolean().optional().default(false).describe("Reply to all recipients"),
+    send: z.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
+  },
+  withErrorHandling(({ id, body, replyAll, send }) => {
+    const success = mailManager.replyToMessage(id, body, replyAll, send);
+
+    if (!success) {
+      return errorResponse(`Failed to reply to message "${id}"`);
+    }
+
+    return successResponse(send ? "Reply sent" : "Reply saved as draft");
+  }, "Error replying to message")
+);
+
+// --- forward-message ---
+
+server.tool(
+  "forward-message",
+  {
+    id: z.string().min(1, "Message ID is required"),
+    to: z.array(z.string()).min(1, "At least one recipient is required"),
+    body: z.string().optional().describe("Optional message to prepend"),
+    send: z.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
+  },
+  withErrorHandling(({ id, to, body, send }) => {
+    const success = mailManager.forwardMessage(id, to, body, send);
+
+    if (!success) {
+      return errorResponse(`Failed to forward message "${id}"`);
+    }
+
+    return successResponse(
+      send ? `Message forwarded to ${to.join(", ")}` : "Forward saved as draft"
+    );
+  }, "Error forwarding message")
+);
+
 // --- mark-as-read ---
 
 server.tool(
