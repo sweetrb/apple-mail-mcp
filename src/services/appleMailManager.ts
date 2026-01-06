@@ -150,25 +150,25 @@ export class AppleMailManager {
     }
 
     const searchCommand = `
-      set msgList to {}
+      set outputText to ""
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
       set allMessages to messages of theMailbox ${searchCondition}
       set msgCount to 0
       repeat with msg in allMessages
         if msgCount >= ${limit} then exit repeat
         try
-          set msgId to id of msg
+          set msgId to id of msg as string
           set msgSubject to subject of msg
           set msgSender to sender of msg
-          set msgDate to date received of msg
-          set msgRead to read status of msg
-          set msgFlagged to flagged status of msg
-          set end of msgList to msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & (msgDate as string) & "|||" & msgRead & "|||" & msgFlagged
+          set msgDate to date received of msg as string
+          set msgRead to read status of msg as string
+          set msgFlagged to flagged status of msg as string
+          if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+          set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged
           set msgCount to msgCount + 1
         end try
       end repeat
-      set AppleScript's text item delimiters to "|||ITEM|||"
-      return msgList as text
+      return outputText
     `;
 
     const script = buildAccountScopedScript(targetAccount, searchCommand);
@@ -186,27 +186,40 @@ export class AppleMailManager {
 
   /**
    * Get a message by ID.
+   *
+   * Note: Mail.app message IDs are unique per mailbox. This method searches
+   * all mailboxes in all accounts to find the message.
    */
   getMessageById(id: string): Message | null {
     const script = buildAppLevelScript(`
       try
-        set msg to message id ${id}
-        set msgSubject to subject of msg
-        set msgSender to sender of msg
-        set msgDate to date received of msg
-        set msgRead to read status of msg
-        set msgFlagged to flagged status of msg
-        set msgJunk to junk mail status of msg
-        set msgDeleted to deleted status of msg
-        set msgMailbox to name of mailbox of msg
-        set msgAccount to name of account of mailbox of msg
-        return msgSubject & "|||" & msgSender & "|||" & (msgDate as string) & "|||" & msgRead & "|||" & msgFlagged & "|||" & msgJunk & "|||" & msgDeleted & "|||" & msgMailbox & "|||" & msgAccount
-      on error
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${id})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                set msgSubject to subject of msg
+                set msgSender to sender of msg
+                set msgDate to date received of msg as string
+                set msgRead to read status of msg as string
+                set msgFlagged to flagged status of msg as string
+                set msgJunk to junk mail status of msg as string
+                set msgDeleted to deleted status of msg as string
+                set msgMailbox to name of mb
+                set msgAccount to name of acct
+                return msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & msgJunk & "|||" & msgDeleted & "|||" & msgMailbox & "|||" & msgAccount
+              end if
+            end try
+          end repeat
+        end repeat
+        return ""
+      on error errMsg
         return ""
       end try
     `);
 
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(script, { timeoutMs: 60000 }); // Longer timeout for search
 
     if (!result.success || !result.output.trim()) {
       console.error(`Failed to get message ${id}: ${result.error}`);
@@ -228,7 +241,7 @@ export class AppleMailManager {
       isDeleted: parts[6] === "true",
       mailbox: parts[7],
       account: parts[8],
-      hasAttachments: false, // Would require separate query
+      hasAttachments: false,
     };
   }
 
@@ -238,19 +251,29 @@ export class AppleMailManager {
   getMessageContent(id: string): MessageContent | null {
     const script = buildAppLevelScript(`
       try
-        set msg to message id ${id}
-        set msgSubject to subject of msg
-        set msgContent to content of msg
-        return msgSubject & "|||CONTENT|||" & msgContent
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${id})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                set msgSubject to subject of msg
+                set msgContent to content of msg
+                return msgSubject & "|||CONTENT|||" & msgContent
+              end if
+            end try
+          end repeat
+        end repeat
+        return ""
       on error errMsg
-        return "ERROR:" & errMsg
+        return ""
       end try
     `);
 
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
-    if (!result.success || result.output.startsWith("ERROR:")) {
-      console.error(`Failed to get message content: ${result.error || result.output}`);
+    if (!result.success || !result.output.trim()) {
+      console.error(`Failed to get message content: ${result.error}`);
       return null;
     }
 
@@ -277,24 +300,24 @@ export class AppleMailManager {
     const targetMailbox = mailbox || "INBOX";
 
     const listCommand = `
-      set msgList to {}
+      set outputText to ""
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
       set msgCount to 0
       repeat with msg in messages of theMailbox
         if msgCount >= ${limit} then exit repeat
         try
-          set msgId to id of msg
+          set msgId to id of msg as string
           set msgSubject to subject of msg
           set msgSender to sender of msg
-          set msgDate to date received of msg
-          set msgRead to read status of msg
-          set msgFlagged to flagged status of msg
-          set end of msgList to msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & (msgDate as string) & "|||" & msgRead & "|||" & msgFlagged
+          set msgDate to date received of msg as string
+          set msgRead to read status of msg as string
+          set msgFlagged to flagged status of msg as string
+          if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+          set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged
           set msgCount to msgCount + 1
         end try
       end repeat
-      set AppleScript's text item delimiters to "|||ITEM|||"
-      return msgList as text
+      return outputText
     `;
 
     const script = buildAccountScopedScript(targetAccount, listCommand);
@@ -413,19 +436,36 @@ export class AppleMailManager {
   }
 
   /**
-   * Mark a message as read.
+   * Helper to find and operate on a message by ID.
    */
-  markAsRead(id: string): boolean {
-    const script = buildAppLevelScript(`
+  private findMessageScript(id: string, operation: string): string {
+    return buildAppLevelScript(`
       try
-        set read status of message id ${id} to true
-        return "ok"
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${id})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                ${operation}
+                return "ok"
+              end if
+            end try
+          end repeat
+        end repeat
+        return "error:Message not found"
       on error errMsg
         return "error:" & errMsg
       end try
     `);
+  }
 
-    const result = executeAppleScript(script);
+  /**
+   * Mark a message as read.
+   */
+  markAsRead(id: string): boolean {
+    const script = this.findMessageScript(id, "set read status of msg to true");
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success || result.output.startsWith("error:")) {
       console.error(`Failed to mark message as read: ${result.error || result.output}`);
@@ -439,16 +479,8 @@ export class AppleMailManager {
    * Mark a message as unread.
    */
   markAsUnread(id: string): boolean {
-    const script = buildAppLevelScript(`
-      try
-        set read status of message id ${id} to false
-        return "ok"
-      on error errMsg
-        return "error:" & errMsg
-      end try
-    `);
-
-    const result = executeAppleScript(script);
+    const script = this.findMessageScript(id, "set read status of msg to false");
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success || result.output.startsWith("error:")) {
       console.error(`Failed to mark message as unread: ${result.error || result.output}`);
@@ -462,16 +494,8 @@ export class AppleMailManager {
    * Flag a message.
    */
   flagMessage(id: string): boolean {
-    const script = buildAppLevelScript(`
-      try
-        set flagged status of message id ${id} to true
-        return "ok"
-      on error errMsg
-        return "error:" & errMsg
-      end try
-    `);
-
-    const result = executeAppleScript(script);
+    const script = this.findMessageScript(id, "set flagged status of msg to true");
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success || result.output.startsWith("error:")) {
       console.error(`Failed to flag message: ${result.error || result.output}`);
@@ -485,16 +509,8 @@ export class AppleMailManager {
    * Unflag a message.
    */
   unflagMessage(id: string): boolean {
-    const script = buildAppLevelScript(`
-      try
-        set flagged status of message id ${id} to false
-        return "ok"
-      on error errMsg
-        return "error:" & errMsg
-      end try
-    `);
-
-    const result = executeAppleScript(script);
+    const script = this.findMessageScript(id, "set flagged status of msg to false");
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success || result.output.startsWith("error:")) {
       console.error(`Failed to unflag message: ${result.error || result.output}`);
@@ -508,16 +524,8 @@ export class AppleMailManager {
    * Delete a message.
    */
   deleteMessage(id: string): boolean {
-    const script = buildAppLevelScript(`
-      try
-        delete message id ${id}
-        return "ok"
-      on error errMsg
-        return "error:" & errMsg
-      end try
-    `);
-
-    const result = executeAppleScript(script);
+    const script = this.findMessageScript(id, "delete msg");
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success || result.output.startsWith("error:")) {
       console.error(`Failed to delete message: ${result.error || result.output}`);
@@ -537,16 +545,26 @@ export class AppleMailManager {
 
     const script = buildAppLevelScript(`
       try
-        set msg to message id ${id}
-        set destMailbox to mailbox "${safeMailbox}" of account "${safeAccount}"
-        move msg to destMailbox
-        return "ok"
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${id})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                set destMailbox to mailbox "${safeMailbox}" of account "${safeAccount}"
+                move msg to destMailbox
+                return "ok"
+              end if
+            end try
+          end repeat
+        end repeat
+        return "error:Message not found"
       on error errMsg
         return "error:" & errMsg
       end try
     `);
 
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success || result.output.startsWith("error:")) {
       console.error(`Failed to move message: ${result.error || result.output}`);
@@ -562,22 +580,34 @@ export class AppleMailManager {
   listAttachments(id: string): Attachment[] {
     const script = buildAppLevelScript(`
       try
-        set msg to message id ${id}
-        set attachList to {}
-        repeat with att in mail attachments of msg
-          set attName to name of att
-          set attType to MIME type of att
-          set attSize to file size of att
-          set end of attachList to attName & "|||" & attType & "|||" & attSize
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${id})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                set outputText to ""
+                set attCount to 0
+                repeat with att in mail attachments of msg
+                  set attName to name of att
+                  set attType to MIME type of att
+                  set attSize to file size of att as string
+                  if attCount > 0 then set outputText to outputText & "|||ITEM|||"
+                  set outputText to outputText & attName & "|||" & attType & "|||" & attSize
+                  set attCount to attCount + 1
+                end repeat
+                return outputText
+              end if
+            end try
+          end repeat
         end repeat
-        set AppleScript's text item delimiters to "|||ITEM|||"
-        return attachList as text
+        return ""
       on error errMsg
         return ""
       end try
     `);
 
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success || !result.output.trim()) {
       return [];
@@ -591,7 +621,7 @@ export class AppleMailManager {
       if (parts.length < 3) continue;
 
       attachments.push({
-        id: `${id}-${parts[0]}`, // Composite ID
+        id: `${id}-${parts[0]}`,
         name: parts[0],
         mimeType: parts[1],
         size: parseInt(parts[2]) || 0,
