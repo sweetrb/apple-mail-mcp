@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "apple-mail-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Apple Mail integration for Claude Code via MCP",
   "owner": {
     "name": "Rob Sweet",
@@ -11,7 +11,7 @@
     {
       "name": "apple-mail",
       "description": "Manage Apple Mail through natural language - read, search, send, and organize emails",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "author": {
         "name": "Rob Sweet",
         "email": "rob@superiortech.io"

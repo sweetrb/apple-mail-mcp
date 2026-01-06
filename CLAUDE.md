@@ -6,8 +6,6 @@ This file provides guidance for AI agents (Claude, etc.) when using this MCP ser
 
 This MCP server enables AI assistants to interact with Apple Mail on macOS via AppleScript. All operations are local - no data leaves the user's machine.
 
-> ⚠️ **Work in Progress** - Many tools are stubbed and not yet functional.
-
 ## Tool Usage Tips
 
 ### Message Operations
@@ -24,7 +22,23 @@ This MCP server enables AI assistants to interact with Apple Mail on macOS via A
 - `body` is plain text by default
 - Specify `account` to send from a specific account
 
-#### mark-as-read / mark-as-unread / flag-message / delete-message
+#### create-draft
+- Same parameters as `send-email`
+- Saves to Drafts folder without sending
+- User can review and send manually from Mail.app
+
+#### reply-to-message
+- Requires message `id` to reply to
+- Set `replyAll: true` to reply to all recipients
+- Set `send: false` to save as draft instead of sending
+
+#### forward-message
+- Requires message `id` to forward
+- `to` must be an array of recipient addresses
+- Optional `body` to prepend a message
+- Set `send: false` to save as draft instead of sending
+
+#### mark-as-read / mark-as-unread / flag-message / unflag-message / delete-message
 - All require a message `id`
 - Get message IDs from `search-messages` or `list-messages`
 
@@ -56,6 +70,7 @@ This MCP server enables AI assistants to interact with Apple Mail on macOS via A
 | "Message not found" | Message ID is invalid or message was deleted |
 | "Permission denied" | macOS automation permission needed |
 | "Account not found" | Account name doesn't match exactly |
+| "Failed to send email" | Network issue or Mail.app configuration problem |
 
 ## Security Considerations
 
@@ -74,8 +89,22 @@ This MCP server enables AI assistants to interact with Apple Mail on macOS via A
 
 ### Send a reply
 ```
-1. get-message id="..." → read original
-2. send-email to=["sender@..."] subject="Re: ..." body="..."
+1. get-message id="..." → read original message
+2. reply-to-message id="..." body="Thanks for the update!" → reply to sender
+   OR
+   reply-to-message id="..." body="..." replyAll=true → reply to all
+```
+
+### Create a draft for user review
+```
+1. create-draft to=["recipient@example.com"] subject="..." body="..."
+2. Tell user to review the draft in Mail.app before sending
+```
+
+### Forward an email
+```
+1. get-message id="..." → read the message to forward
+2. forward-message id="..." to=["colleague@company.com"] body="FYI - see below"
 ```
 
 ### Organize inbox

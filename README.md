@@ -3,8 +3,7 @@
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that enables AI assistants like Claude to read, send, search, and manage emails in Apple Mail on macOS.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-> ⚠️ **Work in Progress** - This project is in early development. Many features are stubbed out and not yet implemented.
+[![npm version](https://img.shields.io/npm/v/apple-mail-mcp.svg)](https://www.npmjs.com/package/apple-mail-mcp)
 
 ## What is This?
 
@@ -13,8 +12,10 @@ This server acts as a bridge between AI assistants and Apple Mail. Once configur
 - "Check my inbox for unread messages"
 - "Find emails from john@example.com"
 - "Send an email to the team about the meeting"
+- "Create a draft email for me to review"
+- "Reply to that message"
+- "Forward this to my colleague"
 - "Move old newsletters to the Archive folder"
-- "What emails do I have flagged?"
 
 The AI assistant communicates with this server, which then uses AppleScript to interact with the Mail app on your Mac. All data stays local on your machine.
 
@@ -55,22 +56,26 @@ On first use, macOS will ask for permission to automate Mail.app. Click "OK" to 
 - **Node.js 20+** - Required for the MCP server
 - **Apple Mail** - Must have at least one account configured
 
-## Features (Planned)
+## Features
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| **List Messages** | 🚧 Stub | List messages in a mailbox |
-| **Search Messages** | 🚧 Stub | Find emails by sender, subject, content |
-| **Read Messages** | 🚧 Stub | Get full email content |
-| **Send Email** | 🚧 Stub | Compose and send new emails |
-| **Mark Read/Unread** | 🚧 Stub | Change read status |
-| **Flag Messages** | 🚧 Stub | Flag/unflag messages |
-| **Delete Messages** | 🚧 Stub | Move messages to trash |
-| **Move Messages** | 🚧 Stub | Organize into mailboxes |
-| **List Mailboxes** | 🚧 Stub | Show all folders |
-| **List Accounts** | ✅ Done | Show configured accounts |
-| **Health Check** | ✅ Done | Verify Mail.app connectivity |
-| **Statistics** | 🚧 Stub | Unread counts, totals |
+| **List Messages** | ✅ | List messages in any mailbox |
+| **Search Messages** | ✅ | Find emails by sender, subject, content |
+| **Read Messages** | ✅ | Get full email content |
+| **Send Email** | ✅ | Compose and send new emails |
+| **Create Draft** | ✅ | Save emails to Drafts folder |
+| **Reply** | ✅ | Reply to messages (with reply-all support) |
+| **Forward** | ✅ | Forward messages to new recipients |
+| **Mark Read/Unread** | ✅ | Change read status |
+| **Flag/Unflag** | ✅ | Flag or unflag messages |
+| **Delete Messages** | ✅ | Move messages to trash |
+| **Move Messages** | ✅ | Organize into mailboxes |
+| **List Mailboxes** | ✅ | Show all folders with counts |
+| **List Accounts** | ✅ | Show configured accounts |
+| **Unread Count** | ✅ | Get unread counts per mailbox |
+| **Health Check** | ✅ | Verify Mail.app connectivity |
+| **Statistics** | ✅ | Message and unread counts |
 
 ## Tool Reference
 
@@ -81,13 +86,9 @@ Search for messages matching criteria.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | No | Text to search for |
-| `from` | string | No | Filter by sender |
-| `subject` | string | No | Filter by subject |
-| `mailbox` | string | No | Mailbox to search in |
+| `query` | string | No | Text to search in subject/sender |
+| `mailbox` | string | No | Mailbox to search in (default: INBOX) |
 | `account` | string | No | Account to search in |
-| `isRead` | boolean | No | Filter by read status |
-| `isFlagged` | boolean | No | Filter by flagged status |
 | `limit` | number | No | Max results (default: 50) |
 
 #### `get-message`
@@ -105,19 +106,50 @@ List messages in a mailbox.
 | `mailbox` | string | No | Mailbox name (default: INBOX) |
 | `account` | string | No | Account name |
 | `limit` | number | No | Max messages (default: 50) |
-| `unreadOnly` | boolean | No | Only unread messages |
 
 #### `send-email`
-Send a new email.
+Send a new email immediately.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `to` | string[] | Yes | Recipient addresses |
 | `subject` | string | Yes | Email subject |
-| `body` | string | Yes | Email body |
+| `body` | string | Yes | Email body (plain text) |
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
-| `account` | string | No | Send from account |
+| `account` | string | No | Send from specific account |
+
+#### `create-draft`
+Save an email to Drafts without sending.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `to` | string[] | Yes | Recipient addresses |
+| `subject` | string | Yes | Email subject |
+| `body` | string | Yes | Email body (plain text) |
+| `cc` | string[] | No | CC recipients |
+| `bcc` | string[] | No | BCC recipients |
+| `account` | string | No | Account for draft |
+
+#### `reply-to-message`
+Reply to an existing message.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID to reply to |
+| `body` | string | Yes | Reply body |
+| `replyAll` | boolean | No | Reply to all recipients (default: false) |
+| `send` | boolean | No | Send immediately (default: true, false = save as draft) |
+
+#### `forward-message`
+Forward a message to new recipients.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID to forward |
+| `to` | string[] | Yes | Recipients to forward to |
+| `body` | string | No | Message to prepend |
+| `send` | boolean | No | Send immediately (default: true, false = save as draft) |
 
 #### `mark-as-read` / `mark-as-unread`
 Change read status of a message.
@@ -126,8 +158,8 @@ Change read status of a message.
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Message ID |
 
-#### `flag-message`
-Flag a message.
+#### `flag-message` / `unflag-message`
+Flag or unflag a message.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -152,7 +184,7 @@ Move a message to a different mailbox.
 ### Mailbox Operations
 
 #### `list-mailboxes`
-List all mailboxes.
+List all mailboxes for an account.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -163,7 +195,7 @@ Get unread message count.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `mailbox` | string | No | Mailbox to check |
+| `mailbox` | string | No | Mailbox to check (omit for total) |
 | `account` | string | No | Account to check |
 
 ### Account Operations
@@ -181,7 +213,7 @@ Verify Mail.app connectivity and permissions.
 **Parameters:** None
 
 #### `get-mail-stats`
-Get mail statistics (total messages, unread counts).
+Get mail statistics (total messages, unread counts per account).
 
 **Parameters:** None
 
@@ -190,6 +222,7 @@ Get mail statistics (total messages, unread counts).
 - **Local only** - All operations happen locally via AppleScript
 - **Permission required** - macOS will prompt for automation permission
 - **No credential storage** - The server doesn't store any passwords
+- **Email safety** - Review emails before sending via `create-draft` + manual send
 
 ## Development
 

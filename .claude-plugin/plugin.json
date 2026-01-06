@@ -1,6 +1,6 @@
 {
   "name": "apple-mail",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Manage Apple Mail through natural language - read, search, send, and organize emails (macOS only)",
   "author": {
     "name": "Rob Sweet",
