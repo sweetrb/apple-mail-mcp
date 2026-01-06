@@ -1,0 +1,24 @@
+# Source files (compiled output is in build/)
+src/
+
+# Development configuration
+.devcontainer/
+.github/
+.eslintrc.cjs
+.prettierrc
+.nvmrc
+tsconfig.json
+vitest.config.ts
+
+# Test files
+**/*.test.ts
+coverage/
+
+# Claude Code plugin files (marketplace only, not needed for npm)
+.claude-plugin/
+.mcp.json
+skills/
+
+# Other
+*.tgz
+.DS_Store
