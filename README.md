@@ -21,14 +21,32 @@ The AI assistant communicates with this server, which then uses AppleScript to i
 
 ## Quick Start
 
+### Using Claude Code (Easiest)
+
+If you're using [Claude Code](https://claude.com/product/claude-code) (in Terminal or VS Code), just ask Claude to install it:
+
+```
+Install the apple-mail-mcp MCP server so you can help me manage my Apple Mail
+```
+
+Claude will handle the installation and configuration automatically.
+
+### Using the Plugin Marketplace
+
+Install as a Claude Code plugin for automatic configuration and enhanced AI behavior:
+
+```bash
+/plugin marketplace add sweetrb/apple-mail-mcp
+/plugin install apple-mail
+```
+
+This method also installs a **skill** that teaches Claude when and how to use Apple Mail effectively.
+
 ### Manual Installation
 
-**1. Clone and build:**
+**1. Install the server:**
 ```bash
-git clone https://github.com/sweetrb/apple-mail-mcp.git
-cd apple-mail-mcp
-npm install
-npm run build
+npm install -g apple-mail-mcp
 ```
 
 **2. Add to Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
@@ -36,8 +54,8 @@ npm run build
 {
   "mcpServers": {
     "apple-mail": {
-      "command": "node",
-      "args": ["/path/to/apple-mail-mcp/build/index.js"]
+      "command": "npx",
+      "args": ["apple-mail-mcp"]
     }
   }
 }
