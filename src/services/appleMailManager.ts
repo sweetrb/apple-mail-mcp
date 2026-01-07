@@ -516,9 +516,7 @@ export class AppleMailManager {
    */
   replyToMessage(id: string, body: string, replyAll = false, send = true): boolean {
     const safeBody = escapeForAppleScript(body);
-    const replyType = replyAll
-      ? "reply with opening window to msg with reply to all"
-      : "reply with opening window to msg";
+    const replyAllClause = replyAll ? " with reply to all" : "";
     const sendAction = send ? "send theReply" : "";
 
     const script = buildAppLevelScript(`
@@ -529,7 +527,7 @@ export class AppleMailManager {
               set matchingMsgs to (messages of mb whose id is ${id})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
-                set theReply to ${replyType}
+                set theReply to reply msg with opening window${replyAllClause}
                 set content of theReply to "${safeBody}" & return & return & content of theReply
                 ${sendAction}
                 return "ok"
