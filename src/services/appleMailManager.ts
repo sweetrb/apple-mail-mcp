@@ -84,6 +84,19 @@ function buildAppLevelScript(command: string): string {
   `;
 }
 
+/**
+ * Common mailbox name variations across different account types.
+ * Maps normalized (lowercase) names to possible actual names.
+ */
+const MAILBOX_ALIASES: Record<string, string[]> = {
+  inbox: ["INBOX", "Inbox", "inbox"],
+  sent: ["Sent", "Sent Items", "Sent Messages", "SENT", "sent"],
+  drafts: ["Drafts", "DRAFTS", "drafts", "Draft"],
+  trash: ["Trash", "Deleted Items", "Deleted Messages", "TRASH", "trash"],
+  junk: ["Junk", "Junk Email", "Spam", "JUNK", "junk"],
+  archive: ["Archive", "ARCHIVE", "archive", "All Mail"],
+};
+
 // =============================================================================
 // Apple Mail Manager Class
 // =============================================================================
@@ -125,6 +138,76 @@ export class AppleMailManager {
     return "iCloud"; // Last resort fallback
   }
 
+  /**
+   * Resolves a mailbox name to its actual name in the account.
+   *
+   * Different account types (IMAP, Exchange, iCloud) use different
+   * mailbox naming conventions:
+   * - IMAP/Gmail: "INBOX", "Sent", "Drafts"
+   * - Exchange: "Inbox", "Sent Items", "Deleted Items"
+   * - iCloud: "INBOX", "Sent", "Trash"
+   *
+   * This method tries to find a matching mailbox by:
+   * 1. Exact match
+   * 2. Case-insensitive match
+   * 3. Known aliases (e.g., "Sent" -> "Sent Items")
+   *
+   * @param mailbox - Requested mailbox name
+   * @param account - Account to search in
+   * @returns Actual mailbox name, or original if not found
+   */
+  private resolveMailbox(mailbox: string, account: string): string {
+    // Get actual mailbox names from the account
+    const script = buildAccountScopedScript(
+      account,
+      `
+      set mbNames to {}
+      repeat with mb in mailboxes
+        set end of mbNames to name of mb
+      end repeat
+      return mbNames
+    `
+    );
+
+    const result = executeAppleScript(script);
+    if (!result.success || !result.output) {
+      return mailbox; // Fall back to original
+    }
+
+    // Parse the mailbox names (AppleScript returns comma-separated list)
+    const actualMailboxes = result.output.split(", ").map((s) => s.trim());
+
+    // 1. Try exact match
+    if (actualMailboxes.includes(mailbox)) {
+      return mailbox;
+    }
+
+    // 2. Try case-insensitive match
+    const lowerMailbox = mailbox.toLowerCase();
+    const caseMatch = actualMailboxes.find((mb) => mb.toLowerCase() === lowerMailbox);
+    if (caseMatch) {
+      return caseMatch;
+    }
+
+    // 3. Try known aliases
+    const aliases = MAILBOX_ALIASES[lowerMailbox];
+    if (aliases) {
+      for (const alias of aliases) {
+        if (actualMailboxes.includes(alias)) {
+          return alias;
+        }
+        // Also try case-insensitive alias match
+        const aliasMatch = actualMailboxes.find((mb) => mb.toLowerCase() === alias.toLowerCase());
+        if (aliasMatch) {
+          return aliasMatch;
+        }
+      }
+    }
+
+    // No match found, return original and let AppleScript handle the error
+    return mailbox;
+  }
+
   // ===========================================================================
   // Message Operations
   // ===========================================================================
@@ -140,7 +223,8 @@ export class AppleMailManager {
    */
   searchMessages(query?: string, mailbox?: string, account?: string, limit = 50): Message[] {
     const targetAccount = this.resolveAccount(account);
-    const targetMailbox = mailbox || "INBOX";
+    const requestedMailbox = mailbox || "INBOX";
+    const targetMailbox = this.resolveMailbox(requestedMailbox, targetAccount);
 
     // Build the search condition
     let searchCondition = "";
@@ -297,7 +381,8 @@ export class AppleMailManager {
    */
   listMessages(mailbox?: string, account?: string, limit = 50): Message[] {
     const targetAccount = this.resolveAccount(account);
-    const targetMailbox = mailbox || "INBOX";
+    const requestedMailbox = mailbox || "INBOX";
+    const targetMailbox = this.resolveMailbox(requestedMailbox, targetAccount);
 
     const listCommand = `
       set outputText to ""
@@ -708,7 +793,8 @@ export class AppleMailManager {
    */
   moveMessage(id: string, mailbox: string, account?: string): boolean {
     const targetAccount = this.resolveAccount(account);
-    const safeMailbox = escapeForAppleScript(mailbox);
+    const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
+    const safeMailbox = escapeForAppleScript(targetMailbox);
     const safeAccount = escapeForAppleScript(targetAccount);
 
     const script = buildAppLevelScript(`
@@ -857,7 +943,8 @@ export class AppleMailManager {
 
     let command: string;
     if (mailbox) {
-      const safeMailbox = escapeForAppleScript(mailbox);
+      const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
+      const safeMailbox = escapeForAppleScript(targetMailbox);
       command = `return unread count of mailbox "${safeMailbox}"`;
     } else {
       // Get total unread across all mailboxes
