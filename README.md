@@ -434,6 +434,30 @@ If installed from source, use this configuration:
 | Message ID scope | Message IDs are searched across all mailboxes (may be slow with large mailboxes) |
 | No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
 
+### Backslash Escaping (Important for AI Agents)
+
+When sending content containing backslashes (`\`) to this MCP server, **you must escape them as `\\`** in the JSON parameters.
+
+**Why:** The MCP protocol uses JSON for parameter passing. In JSON, a single backslash is an escape character. To include a literal backslash in content, it must be escaped as `\\`.
+
+**Example - Email with file path:**
+```json
+{
+  "to": ["colleague@company.com"],
+  "subject": "File Location",
+  "body": "The file is at C:\\\\Users\\\\Documents\\\\report.pdf"
+}
+```
+
+The `\\\\` in JSON becomes `\\` in the actual string, which represents a single `\` in the email.
+
+**Common patterns requiring escaping:**
+- Windows paths: `C:\Users\` → `C:\\\\Users\\\\` in JSON
+- Shell escaped spaces: `Mobile\ Documents` → `Mobile\\\\ Documents` in JSON
+- Regex patterns: `\d+` → `\\\\d+` in JSON
+
+**If you see errors** when sending emails with backslashes, double-check that backslashes are properly escaped in the JSON payload.
+
 ---
 
 ## Troubleshooting
@@ -469,7 +493,7 @@ If installed from source, use this configuration:
 ```bash
 npm install      # Install dependencies
 npm run build    # Compile TypeScript
-npm test         # Run test suite
+npm test         # Run test suite (28 tests)
 npm run lint     # Check code style
 npm run format   # Format code
 ```
