@@ -47,7 +47,7 @@ This method also installs a **skill** that teaches Claude when and how to use Ap
 
 **1. Install the server:**
 ```bash
-npm install -g apple-mail-mcp
+npm install -g github:sweetrb/apple-mail-mcp
 ```
 
 **2. Add to Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
@@ -389,7 +389,7 @@ AI: [calls move-message for each, with mailbox="Archive"]
 ### npm (Recommended)
 
 ```bash
-npm install -g apple-mail-mcp
+npm install -g github:sweetrb/apple-mail-mcp
 ```
 
 ### From Source
