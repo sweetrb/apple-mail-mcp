@@ -27,7 +27,7 @@ The AI assistant communicates with this server, which then uses AppleScript to i
 If you're using [Claude Code](https://claude.com/product/claude-code) (in Terminal or VS Code), just ask Claude to install it:
 
 ```
-Install the apple-mail-mcp MCP server so you can help me manage my Apple Mail
+Install the sweetrb/apple-mail-mcp MCP server so you can help me manage my Apple Mail
 ```
 
 Claude will handle the installation and configuration automatically.
