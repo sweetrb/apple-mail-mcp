@@ -152,6 +152,28 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 2. For each: move-message id="..." mailbox="Archive"
 ```
 
+### Batch operations (efficient for multiple messages)
+```
+1. search-messages query="old" → find messages to clean up
+2. batch-delete-messages ids=["123", "456", "789"] → delete multiple
+   OR
+   batch-move-messages ids=["123", "456"] mailbox="Archive" → archive multiple
+   OR
+   batch-mark-as-read ids=["123", "456"] → mark multiple as read
+```
+
+### Check for attachments
+```
+1. list-messages mailbox="INBOX" → get message IDs
+2. list-attachments id="..." → see attachments (name, MIME type, size)
+```
+
+### Check mail sync status
+```
+1. get-sync-status → see if Mail.app is running and syncing
+2. get-mail-stats → see total/unread counts and recently received counts
+```
+
 ## Testing Your Understanding
 
 Before sending emails with paths or special characters, verify escaping:

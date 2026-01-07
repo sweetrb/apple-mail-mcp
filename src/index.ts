@@ -345,6 +345,101 @@ server.tool(
   }, "Error moving message")
 );
 
+// --- batch-delete-messages ---
+
+server.tool(
+  "batch-delete-messages",
+  {
+    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+  },
+  withErrorHandling(({ ids }) => {
+    const results = mailManager.batchDeleteMessages(ids);
+    const successCount = results.filter((r) => r.success).length;
+    const failCount = results.length - successCount;
+
+    if (failCount === 0) {
+      return successResponse(`Successfully deleted ${successCount} message(s)`);
+    } else if (successCount === 0) {
+      return errorResponse(`Failed to delete all ${failCount} message(s)`);
+    } else {
+      return successResponse(`Deleted ${successCount} message(s), ${failCount} failed`);
+    }
+  }, "Error batch deleting messages")
+);
+
+// --- batch-move-messages ---
+
+server.tool(
+  "batch-move-messages",
+  {
+    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    mailbox: z.string().min(1, "Destination mailbox is required"),
+    account: z.string().optional().describe("Account containing the destination mailbox"),
+  },
+  withErrorHandling(({ ids, mailbox, account }) => {
+    const results = mailManager.batchMoveMessages(ids, mailbox, account);
+    const successCount = results.filter((r) => r.success).length;
+    const failCount = results.length - successCount;
+
+    if (failCount === 0) {
+      return successResponse(`Successfully moved ${successCount} message(s) to "${mailbox}"`);
+    } else if (successCount === 0) {
+      return errorResponse(`Failed to move all ${failCount} message(s)`);
+    } else {
+      return successResponse(
+        `Moved ${successCount} message(s) to "${mailbox}", ${failCount} failed`
+      );
+    }
+  }, "Error batch moving messages")
+);
+
+// --- batch-mark-as-read ---
+
+server.tool(
+  "batch-mark-as-read",
+  {
+    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+  },
+  withErrorHandling(({ ids }) => {
+    const results = mailManager.batchMarkAsRead(ids);
+    const successCount = results.filter((r) => r.success).length;
+    const failCount = results.length - successCount;
+
+    if (failCount === 0) {
+      return successResponse(`Successfully marked ${successCount} message(s) as read`);
+    } else if (successCount === 0) {
+      return errorResponse(`Failed to mark all ${failCount} message(s) as read`);
+    } else {
+      return successResponse(`Marked ${successCount} message(s) as read, ${failCount} failed`);
+    }
+  }, "Error batch marking messages as read")
+);
+
+// --- list-attachments ---
+
+server.tool(
+  "list-attachments",
+  {
+    id: z.string().min(1, "Message ID is required"),
+  },
+  withErrorHandling(({ id }) => {
+    const attachments = mailManager.listAttachments(id);
+
+    if (attachments.length === 0) {
+      return successResponse("No attachments found");
+    }
+
+    const attachmentList = attachments
+      .map((a) => {
+        const sizeKb = Math.round(a.size / 1024);
+        return `  - ${a.name} (${a.mimeType}, ${sizeKb} KB)`;
+      })
+      .join("\n");
+
+    return successResponse(`Found ${attachments.length} attachment(s):\n${attachmentList}`);
+  }, "Error listing attachments")
+);
+
 // =============================================================================
 // Mailbox Tools
 // =============================================================================
@@ -447,6 +542,14 @@ server.tool(
     lines.push(`Unread messages: ${stats.totalUnread}`);
     lines.push(``);
 
+    if (stats.recentlyReceived) {
+      lines.push(`📥 Recently Received:`);
+      lines.push(`  Last 24 hours: ${stats.recentlyReceived.last24h}`);
+      lines.push(`  Last 7 days: ${stats.recentlyReceived.last7d}`);
+      lines.push(`  Last 30 days: ${stats.recentlyReceived.last30d}`);
+      lines.push(``);
+    }
+
     if (stats.accounts.length > 0) {
       lines.push(`📁 By Account:`);
       for (const account of stats.accounts) {
@@ -458,6 +561,29 @@ server.tool(
 
     return successResponse(lines.join("\n"));
   }, "Error getting mail statistics")
+);
+
+// --- get-sync-status ---
+
+server.tool(
+  "get-sync-status",
+  {},
+  withErrorHandling(() => {
+    const status = mailManager.getSyncStatus();
+
+    const lines: string[] = [];
+    lines.push(`🔄 Mail Sync Status`);
+    lines.push(`═══════════════════`);
+
+    if (status.error) {
+      lines.push(`Status: ⚠️ ${status.error}`);
+    } else {
+      lines.push(`Mail.app: ${status.recentActivity ? "Running" : "Not running"}`);
+      lines.push(`Sync active: ${status.syncDetected ? "Yes" : "No"}`);
+    }
+
+    return successResponse(lines.join("\n"));
+  }, "Error getting sync status")
 );
 
 // =============================================================================

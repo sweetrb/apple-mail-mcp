@@ -354,6 +354,20 @@ export interface AccountStats {
 }
 
 /**
+ * Recently received message counts.
+ */
+export interface RecentlyReceivedStats {
+  /** Messages received in last 24 hours */
+  last24h: number;
+
+  /** Messages received in last 7 days */
+  last7d: number;
+
+  /** Messages received in last 30 days */
+  last30d: number;
+}
+
+/**
  * Overall mail statistics.
  */
 export interface MailStats {
@@ -365,4 +379,49 @@ export interface MailStats {
 
   /** Per-account statistics */
   accounts: AccountStats[];
+
+  /** Recently received message counts */
+  recentlyReceived?: RecentlyReceivedStats;
+}
+
+// =============================================================================
+// Batch Operations
+// =============================================================================
+
+/**
+ * Result of a batch operation on a single item.
+ */
+export interface BatchOperationResult {
+  /** Item identifier */
+  id: string;
+
+  /** Whether the operation succeeded */
+  success: boolean;
+
+  /** Error message if operation failed */
+  error?: string;
+}
+
+// =============================================================================
+// Sync Detection
+// =============================================================================
+
+/**
+ * Status of Mail.app sync activity.
+ */
+export interface SyncStatus {
+  /** Whether sync activity was detected */
+  syncDetected: boolean;
+
+  /** Number of items pending upload */
+  pendingUpload: number;
+
+  /** Whether there was recent database activity */
+  recentActivity: boolean;
+
+  /** Seconds since last database change */
+  secondsSinceLastChange: number;
+
+  /** Error message if status check failed */
+  error?: string;
 }
