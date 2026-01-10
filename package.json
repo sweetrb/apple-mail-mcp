@@ -1,6 +1,6 @@
 {
   "name": "apple-mail-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude",
   "type": "module",
   "main": "build/index.js",
@@ -26,7 +26,7 @@
     "format:check": "prettier --check src",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run lint && npm run test && npm run build",
-    "prepare": "husky"
+    "prepare": "husky && npm run build"
   },
   "keywords": [
     "mcp",
