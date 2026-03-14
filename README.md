@@ -85,6 +85,7 @@ On first use, macOS will ask for permission to automate Mail.app. Click "OK" to 
 | **Search Messages** | Search by sender, subject, content, date range, read/flagged status — across all accounts |
 | **Read Messages** | Get full email content (plain text or HTML) |
 | **Send Email** | Compose and send new emails |
+| **Send Serial Email** | Mail merge — send personalized emails to a list of recipients with {{placeholder}} support |
 | **Create Draft** | Save emails to Drafts folder |
 | **Reply** | Reply to messages (with reply-all support) |
 | **Forward** | Forward messages to new recipients |
@@ -200,6 +201,41 @@ Send a new email immediately.
   "account": "Work"
 }
 ```
+
+---
+
+#### `send-serial-email`
+
+Send individual personalized emails to a list of recipients (mail merge). Each recipient receives their own email — recipients don't see each other. Supports `{{placeholder}}` tokens in both subject and body.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `recipients` | object[] | Yes | List of recipients (see below) |
+| `subject` | string | Yes | Email subject — use `{{Key}}` for placeholders |
+| `body` | string | Yes | Email body — use `{{Key}}` for placeholders |
+| `account` | string | No | Send from specific account |
+| `delayMs` | number | No | Delay between sends in ms (default: 500) |
+
+Each recipient object:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | string | Yes | Recipient email address |
+| `variables` | object | Yes | Key-value pairs for placeholder replacement |
+
+**Example:**
+```json
+{
+  "recipients": [
+    { "email": "alice@example.com", "variables": { "Name": "Alice", "Company": "Acme" } },
+    { "email": "bob@example.com", "variables": { "Name": "Bob", "Company": "Globex" } }
+  ],
+  "subject": "Hello {{Name}}!",
+  "body": "Dear {{Name}},\n\nGreat to connect about {{Company}}.\n\nBest regards"
+}
+```
+
+**Returns:** Per-recipient success/failure results with a summary count.
 
 ---
 
@@ -604,6 +640,19 @@ AI: [calls create-draft with to=["team@..."], subject="...", body="..."]
 
 User: "Send it"
 AI: [User opens Mail.app and sends manually, or AI calls send-email]
+```
+
+### Sending Personalized Emails (Mail Merge)
+
+```
+User: "Send a personalized email to Alice (alice@acme.com), Bob (bob@globex.com),
+       and Carol (carol@initech.com). Subject: 'Project Update for {{Company}}',
+       Body: 'Hi {{Name}}, here is the latest update for {{Company}}.'"
+AI: [calls send-serial-email with recipients, subject template, and body template]
+    "Successfully sent 3 email(s):
+      - alice@acme.com: sent
+      - bob@globex.com: sent
+      - carol@initech.com: sent"
 ```
 
 ### Organizing Messages
