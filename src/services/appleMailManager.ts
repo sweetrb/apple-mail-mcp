@@ -592,7 +592,8 @@ export class AppleMailManager {
     body: string,
     cc?: string[],
     bcc?: string[],
-    account?: string
+    account?: string,
+    attachments?: string[]
   ): boolean {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScript(body);
@@ -613,6 +614,15 @@ export class AppleMailManager {
       }
     }
 
+    // Build attachment additions
+    let attachmentCommands = "";
+    if (attachments) {
+      for (const filePath of attachments) {
+        const safePath = escapeForAppleScript(filePath);
+        attachmentCommands += `make new attachment with properties {file name:POSIX file "${safePath}"} at after the last paragraph\n`;
+      }
+    }
+
     let sendCommand: string;
     if (account) {
       const safeAccount = escapeForAppleScript(account);
@@ -621,6 +631,7 @@ export class AppleMailManager {
         tell newMessage
           ${recipientCommands}
           set sender to "${safeAccount}"
+          ${attachmentCommands}
         end tell
         send newMessage
         return "sent"
@@ -630,6 +641,7 @@ export class AppleMailManager {
         set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:true}
         tell newMessage
           ${recipientCommands}
+          ${attachmentCommands}
         end tell
         send newMessage
         return "sent"
@@ -664,7 +676,8 @@ export class AppleMailManager {
     body: string,
     cc?: string[],
     bcc?: string[],
-    account?: string
+    account?: string,
+    attachments?: string[]
   ): boolean {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScript(body);
@@ -685,6 +698,15 @@ export class AppleMailManager {
       }
     }
 
+    // Build attachment additions
+    let attachmentCommands = "";
+    if (attachments) {
+      for (const filePath of attachments) {
+        const safePath = escapeForAppleScript(filePath);
+        attachmentCommands += `make new attachment with properties {file name:POSIX file "${safePath}"} at after the last paragraph\n`;
+      }
+    }
+
     let draftCommand: string;
     if (account) {
       const safeAccount = escapeForAppleScript(account);
@@ -693,6 +715,7 @@ export class AppleMailManager {
         tell newMessage
           ${recipientCommands}
           set sender to "${safeAccount}"
+          ${attachmentCommands}
         end tell
         return "draft created"
       `;
@@ -701,6 +724,7 @@ export class AppleMailManager {
         set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
         tell newMessage
           ${recipientCommands}
+          ${attachmentCommands}
         end tell
         return "draft created"
       `;

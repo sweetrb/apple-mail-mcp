@@ -191,15 +191,20 @@ server.tool(
     cc: z.array(z.string()).optional().describe("CC recipients"),
     bcc: z.array(z.string()).optional().describe("BCC recipients"),
     account: z.string().optional().describe("Account to send from"),
+    attachments: z
+      .array(z.string())
+      .optional()
+      .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, account }) => {
-    const success = mailManager.sendEmail(to, subject, body, cc, bcc, account);
+  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
+    const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
 
     if (!success) {
       return errorResponse("Failed to send email. Check Mail.app configuration.");
     }
 
-    return successResponse(`Email sent to ${to.join(", ")}`);
+    const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
+    return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`);
   }, "Error sending email")
 );
 
@@ -214,15 +219,20 @@ server.tool(
     cc: z.array(z.string()).optional().describe("CC recipients"),
     bcc: z.array(z.string()).optional().describe("BCC recipients"),
     account: z.string().optional().describe("Account to create draft in"),
+    attachments: z
+      .array(z.string())
+      .optional()
+      .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, account }) => {
-    const success = mailManager.createDraft(to, subject, body, cc, bcc, account);
+  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
+    const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
 
     if (!success) {
       return errorResponse("Failed to create draft. Check Mail.app configuration.");
     }
 
-    return successResponse(`Draft created for ${to.join(", ")}`);
+    const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
+    return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`);
   }, "Error creating draft")
 );
 
