@@ -84,8 +84,8 @@ On first use, macOS will ask for permission to automate Mail.app. Click "OK" to 
 | **List Messages** | List messages with pagination, sender filter, date display |
 | **Search Messages** | Search by sender, subject, content, date range, read/flagged status — across all accounts |
 | **Read Messages** | Get full email content (plain text or HTML) |
-| **Send Email** | Compose and send new emails |
-| **Create Draft** | Save emails to Drafts folder |
+| **Send Email** | Compose and send new emails (with optional file attachments) |
+| **Create Draft** | Save emails to Drafts folder (with optional file attachments) |
 | **Reply** | Reply to messages (with reply-all support) |
 | **Forward** | Forward messages to new recipients |
 | **Mark Read/Unread** | Change read status (single or batch) |
@@ -190,6 +190,7 @@ Send a new email immediately.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Send from specific account |
+| `attachments` | string[] | No | Absolute file paths to attach (e.g., `["/Users/me/report.pdf"]`) |
 
 **Example:**
 ```json
@@ -197,7 +198,8 @@ Send a new email immediately.
   "to": ["colleague@company.com"],
   "subject": "Meeting Tomorrow",
   "body": "Hi, just confirming our meeting at 2pm tomorrow.",
-  "account": "Work"
+  "account": "Work",
+  "attachments": ["/Users/me/Documents/agenda.pdf"]
 }
 ```
 
@@ -215,6 +217,7 @@ Save an email to Drafts without sending.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Account for draft |
+| `attachments` | string[] | No | Absolute file paths to attach |
 
 **Returns:** Confirmation that draft was created.
 
@@ -663,7 +666,7 @@ If installed from source, use this configuration:
 |------------|--------|
 | macOS only | Apple Mail and AppleScript are macOS-specific |
 | No sending HTML email | Emails are sent as plain text; reading HTML content is supported |
-| No adding attachments | Can list and save existing attachments, but cannot attach files to outgoing emails |
+| Attachments require absolute paths | File attachments must use full absolute paths (e.g., `/Users/me/file.pdf`) |
 | No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
 | In-memory templates | Email templates are not persisted across server restarts |
 
