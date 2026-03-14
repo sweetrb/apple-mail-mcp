@@ -203,6 +203,54 @@ server.tool(
   }, "Error sending email")
 );
 
+// --- send-serial-email ---
+
+server.tool(
+  "send-serial-email",
+  {
+    recipients: z
+      .array(
+        z.object({
+          email: z.string().min(1, "Recipient email is required"),
+          variables: z
+            .record(z.string())
+            .describe("Placeholder values, e.g. { Name: 'Alice', Company: 'Acme' }"),
+        })
+      )
+      .min(1, "At least one recipient is required")
+      .describe("List of recipients with personalization variables"),
+    subject: z
+      .string()
+      .min(1, "Subject is required")
+      .describe("Subject line — use {{Key}} for placeholders"),
+    body: z
+      .string()
+      .min(1, "Body is required")
+      .describe("Email body — use {{Key}} for placeholders"),
+    account: z.string().optional().describe("Account to send from"),
+    delayMs: z.number().optional().describe("Delay between sends in ms (default: 500)"),
+  },
+  withErrorHandling(({ recipients, subject, body, account, delayMs }) => {
+    const results = mailManager.sendSerialEmail(recipients, subject, body, account, delayMs);
+    const successCount = results.filter((r) => r.success).length;
+    const failCount = results.length - successCount;
+
+    const details = results
+      .map((r) => `  - ${r.email}: ${r.success ? "sent" : `FAILED (${r.error})`}`)
+      .join("\n");
+
+    if (failCount === 0) {
+      return successResponse(`Successfully sent ${successCount} email(s):\n${details}`);
+    } else if (successCount === 0) {
+      return errorResponse(`Failed to send all ${failCount} email(s):\n${details}`);
+    } else {
+      return successResponse(
+        `Sent ${successCount} of ${results.length} email(s), ${failCount} failed:\n${details}`
+      );
+    }
+  }, "Error sending serial emails")
+);
+
 // --- create-draft ---
 
 server.tool(

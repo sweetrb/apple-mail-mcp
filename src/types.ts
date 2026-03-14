@@ -287,6 +287,35 @@ export interface MoveMessageParams {
 }
 
 // =============================================================================
+// Serial Email (Mail Merge)
+// =============================================================================
+
+/**
+ * A single recipient in a serial email (mail merge) operation.
+ */
+export interface SerialEmailRecipient {
+  /** Recipient email address */
+  email: string;
+
+  /** Variable values for placeholder replacement (e.g., { Name: "Alice", Company: "Acme" }) */
+  variables: Record<string, string>;
+}
+
+/**
+ * Result of sending a serial email to a single recipient.
+ */
+export interface SerialEmailResult {
+  /** Recipient email address */
+  email: string;
+
+  /** Whether the email was sent successfully */
+  success: boolean;
+
+  /** Error message if sending failed */
+  error?: string;
+}
+
+// =============================================================================
 // Health Check
 // =============================================================================
 

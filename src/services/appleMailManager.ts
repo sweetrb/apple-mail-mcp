@@ -29,6 +29,8 @@ import type {
   MailRule,
   Contact,
   EmailTemplate,
+  SerialEmailRecipient,
+  SerialEmailResult,
 } from "@/types.js";
 
 // =============================================================================
@@ -645,6 +647,75 @@ export class AppleMailManager {
     }
 
     return result.output.includes("sent");
+  }
+
+  /**
+   * Send individual personalized emails to a list of recipients (mail merge).
+   *
+   * Replaces {{placeholder}} tokens in subject and body with per-recipient values.
+   * Each recipient receives their own individual email.
+   *
+   * @param recipients - List of recipient objects with email and variable values
+   * @param subject - Email subject (may contain {{placeholders}})
+   * @param body - Email body (may contain {{placeholders}})
+   * @param account - Account to send from
+   * @param attachments - Optional file paths to attach to each email
+   * @param delayMs - Delay between sends in milliseconds (default: 500)
+   * @returns Array of per-recipient results
+   */
+  sendSerialEmail(
+    recipients: SerialEmailRecipient[],
+    subject: string,
+    body: string,
+    account?: string,
+    delayMs: number = 500
+  ): SerialEmailResult[] {
+    const results: SerialEmailResult[] = [];
+
+    for (const recipient of recipients) {
+      try {
+        // Replace all {{Key}} placeholders with recipient's values
+        let personalizedSubject = subject;
+        let personalizedBody = body;
+        for (const [key, value] of Object.entries(recipient.variables)) {
+          const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const placeholder = new RegExp(`\\{\\{${safeKey}\\}\\}`, "g");
+          personalizedSubject = personalizedSubject.replace(placeholder, value);
+          personalizedBody = personalizedBody.replace(placeholder, value);
+        }
+
+        const success = this.sendEmail(
+          [recipient.email],
+          personalizedSubject,
+          personalizedBody,
+          undefined,
+          undefined,
+          account
+        );
+
+        results.push({
+          email: recipient.email,
+          success,
+          error: success ? undefined : "Failed to send email",
+        });
+      } catch (error) {
+        results.push({
+          email: recipient.email,
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+
+      // Brief delay between sends to avoid overwhelming Mail.app
+      if (delayMs > 0 && recipients.indexOf(recipient) < recipients.length - 1) {
+        const start = Date.now();
+        while (Date.now() - start < delayMs) {
+          /* busy wait - sync context */
+        }
+      }
+    }
+
+    return results;
   }
 
   /**
