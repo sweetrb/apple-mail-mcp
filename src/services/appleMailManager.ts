@@ -16,6 +16,7 @@
 import { spawnSync } from "child_process";
 import { existsSync } from "fs";
 import { isAbsolute } from "path";
+import { homedir } from "os";
 import { executeAppleScript } from "@/utils/applescript.js";
 import type {
   Message,
@@ -1248,6 +1249,23 @@ export class AppleMailManager {
    * Save an attachment from a message to disk.
    */
   saveAttachment(id: string, attachmentName: string, savePath: string): boolean {
+    // Validate attachmentName: must not contain path traversal characters or null bytes
+    if (
+      attachmentName.includes("/") ||
+      attachmentName.includes("..") ||
+      attachmentName.includes("\0")
+    ) {
+      console.error(`Invalid attachment name: "${attachmentName}"`);
+      return false;
+    }
+
+    // Validate savePath: must be absolute and within an allowed directory prefix
+    const ALLOWED_PREFIXES = [homedir(), "/tmp", "/private/tmp", "/Volumes"];
+    if (!isAbsolute(savePath) || !ALLOWED_PREFIXES.some((prefix) => savePath.startsWith(prefix))) {
+      console.error(`Save path "${savePath}" is not within an allowed directory`);
+      return false;
+    }
+
     const safeName = escapeForAppleScript(attachmentName);
     const safePath = escapeForAppleScript(savePath);
 
