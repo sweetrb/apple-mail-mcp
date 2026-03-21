@@ -301,9 +301,10 @@ export function executeAppleScript(
   // single quotes within the script itself
   const command = `osascript -e '${preparedScript}'`;
 
-  // Debug: Log the script being executed
+  // Debug: Log the script being executed (redact quoted strings to prevent PII leakage)
+  const redactedScript = script.trim().replace(/"[^"\n]+"/g, '"[...]"');
   debugLog("Executing AppleScript", {
-    scriptPreview: script.trim().substring(0, 200) + (script.length > 200 ? "..." : ""),
+    scriptPreview: redactedScript.substring(0, 200) + (redactedScript.length > 200 ? "..." : ""),
     timeout: timeoutMs,
     maxRetries,
   });

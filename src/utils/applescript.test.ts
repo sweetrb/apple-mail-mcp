@@ -409,3 +409,63 @@ describe("executeAppleScript", () => {
     });
   });
 });
+
+describe("debug log redaction", () => {
+  it("redacts double-quoted strings from the script preview", () => {
+    const originalDebug = process.env.DEBUG;
+    process.env.DEBUG = "1";
+
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockExecSync.mockReturnValue("output");
+
+    const scriptWithPII = `tell application "Mail" to send message to "alice@example.com" with subject "Secret Project"`;
+    executeAppleScript(scriptWithPII);
+
+    const previewCall = consoleSpy.mock.calls.find(
+      (call) =>
+        typeof call[1] === "object" && call[1] !== null && "scriptPreview" in (call[1] as object)
+    );
+
+    expect(previewCall).toBeDefined();
+    const preview = (previewCall![1] as { scriptPreview: string }).scriptPreview;
+
+    expect(preview).not.toContain("alice@example.com");
+    expect(preview).not.toContain("Secret Project");
+    expect(preview).toContain("tell application");
+    expect(preview).toContain("[...]");
+
+    consoleSpy.mockRestore();
+    if (originalDebug === undefined) {
+      delete process.env.DEBUG;
+    } else {
+      process.env.DEBUG = originalDebug;
+    }
+  });
+
+  it("does not replace non-string keywords", () => {
+    const originalDebug = process.env.DEBUG;
+    process.env.DEBUG = "1";
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockExecSync.mockReturnValue("output");
+
+    const scriptNoStrings = `tell application Mail\nget messages of inbox\nend tell`;
+    executeAppleScript(scriptNoStrings);
+
+    const previewCall = consoleSpy.mock.calls.find(
+      (call) =>
+        typeof call[1] === "object" && call[1] !== null && "scriptPreview" in (call[1] as object)
+    );
+    expect(previewCall).toBeDefined();
+    const preview = (previewCall![1] as { scriptPreview: string }).scriptPreview;
+
+    expect(preview).not.toContain("[...]");
+    expect(preview).toContain("tell application");
+
+    consoleSpy.mockRestore();
+    if (originalDebug === undefined) {
+      delete process.env.DEBUG;
+    } else {
+      process.env.DEBUG = originalDebug;
+    }
+  });
+});
