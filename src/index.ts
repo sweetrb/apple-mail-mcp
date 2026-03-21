@@ -30,6 +30,13 @@ import { AppleMailManager } from "@/services/appleMailManager.js";
 // Do NOT use this for template IDs — those use the "tmpl_N" format.
 export const MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
 
+// Allowlist for date filter strings passed to AppleScript's `date "..."` literal.
+// Permits only alphanumeric, spaces, commas, colons, and forward slashes —
+// the characters used by AppleScript date formats like "January 1, 2026 09:00:00".
+export const DATE_FILTER_SCHEMA = z
+  .string()
+  .regex(/^[A-Za-z0-9 ,:/]+$/, "Invalid date format — use formats like 'January 1, 2026'");
+
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -109,8 +116,8 @@ server.tool(
     account: z.string().optional().describe("Account to search in (omit to search all accounts)"),
     isRead: z.boolean().optional().describe("Filter by read status"),
     isFlagged: z.boolean().optional().describe("Filter by flagged status"),
-    dateFrom: z.string().optional().describe("Start date filter (e.g., 'January 1, 2026')"),
-    dateTo: z.string().optional().describe("End date filter (e.g., 'March 1, 2026')"),
+    dateFrom: DATE_FILTER_SCHEMA.optional().describe("Start date filter (e.g., 'January 1, 2026')"),
+    dateTo: DATE_FILTER_SCHEMA.optional().describe("End date filter (e.g., 'March 1, 2026')"),
     limit: z.number().optional().describe("Maximum number of results (default: 50)"),
   },
   withErrorHandling(({ query, mailbox, account, limit = 50, dateFrom, dateTo }) => {

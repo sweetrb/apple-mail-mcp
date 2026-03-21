@@ -379,10 +379,10 @@ export class AppleMailManager {
     if (dateFrom || dateTo) {
       const dateChecks: string[] = [];
       if (dateFrom) {
-        dateChecks.push(`date received of msg >= date "${dateFrom}"`);
+        dateChecks.push(`date received of msg >= date "${escapeForAppleScript(dateFrom)}"`);
       }
       if (dateTo) {
-        dateChecks.push(`date received of msg <= date "${dateTo}"`);
+        dateChecks.push(`date received of msg <= date "${escapeForAppleScript(dateTo)}"`);
       }
       dateFilter = dateChecks.join(" and ");
     }

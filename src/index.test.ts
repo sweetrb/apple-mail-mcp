@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { MESSAGE_ID_SCHEMA } from "./index.js";
+import { MESSAGE_ID_SCHEMA, DATE_FILTER_SCHEMA } from "./index.js";
 
 const TEMPLATE_ID_SCHEMA = z.string().min(1, "Template ID is required");
 
@@ -34,5 +34,29 @@ describe("MESSAGE_ID_SCHEMA", () => {
 describe("TEMPLATE_ID_SCHEMA (regression: must NOT use numeric regex)", () => {
   it("accepts a tmpl_ prefixed ID", () => {
     expect(() => TEMPLATE_ID_SCHEMA.parse("tmpl_1")).not.toThrow();
+  });
+});
+
+describe("DATE_FILTER_SCHEMA", () => {
+  it("accepts a valid AppleScript date string", () => {
+    expect(() => DATE_FILTER_SCHEMA.parse("January 1, 2026")).not.toThrow();
+  });
+
+  it("accepts a date with time", () => {
+    expect(() => DATE_FILTER_SCHEMA.parse("March 21, 2026 09:00:00")).not.toThrow();
+  });
+
+  it("rejects an injection payload", () => {
+    expect(() => DATE_FILTER_SCHEMA.parse('" & (do shell script "id") & "')).toThrow(
+      "Invalid date format"
+    );
+  });
+
+  it("rejects a string with quotes", () => {
+    expect(() => DATE_FILTER_SCHEMA.parse('"quoted"')).toThrow("Invalid date format");
+  });
+
+  it("accepts undefined (field is optional)", () => {
+    expect(() => DATE_FILTER_SCHEMA.optional().parse(undefined)).not.toThrow();
   });
 });
