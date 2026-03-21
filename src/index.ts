@@ -26,6 +26,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "@/services/appleMailManager.js";
 
+// Shared schema for Apple Mail message IDs (always numeric integers).
+// Do NOT use this for template IDs — those use the "tmpl_N" format.
+export const MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
+
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -132,7 +136,7 @@ server.tool(
 server.tool(
   "get-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     preferHtml: z.boolean().optional().describe("Return HTML source instead of plain text"),
   },
   withErrorHandling(({ id, preferHtml }) => {
@@ -295,7 +299,7 @@ server.tool(
 server.tool(
   "reply-to-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     body: z.string().min(1, "Reply body is required"),
     replyAll: z.boolean().optional().default(false).describe("Reply to all recipients"),
     send: z.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
@@ -316,7 +320,7 @@ server.tool(
 server.tool(
   "forward-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     to: z.array(z.string()).min(1, "At least one recipient is required"),
     body: z.string().optional().describe("Optional message to prepend"),
     send: z.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
@@ -339,7 +343,7 @@ server.tool(
 server.tool(
   "mark-as-read",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.markAsRead(id);
@@ -357,7 +361,7 @@ server.tool(
 server.tool(
   "mark-as-unread",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.markAsUnread(id);
@@ -375,7 +379,7 @@ server.tool(
 server.tool(
   "flag-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.flagMessage(id);
@@ -393,7 +397,7 @@ server.tool(
 server.tool(
   "unflag-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.unflagMessage(id);
@@ -411,7 +415,7 @@ server.tool(
 server.tool(
   "delete-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.deleteMessage(id);
@@ -429,7 +433,7 @@ server.tool(
 server.tool(
   "move-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     mailbox: z.string().min(1, "Destination mailbox is required"),
     account: z.string().optional().describe("Account containing the destination mailbox"),
   },
@@ -585,7 +589,7 @@ server.tool(
 server.tool(
   "list-attachments",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const attachments = mailManager.listAttachments(id);
@@ -610,7 +614,7 @@ server.tool(
 server.tool(
   "save-attachment",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     attachmentName: z.string().min(1, "Attachment name is required"),
     savePath: z.string().min(1, "Save directory path is required"),
   },
