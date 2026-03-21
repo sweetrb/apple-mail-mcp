@@ -37,6 +37,11 @@ export const DATE_FILTER_SCHEMA = z
   .string()
   .regex(/^[A-Za-z0-9 ,:/]+$/, "Invalid date format — use formats like 'January 1, 2026'");
 
+export const BATCH_IDS_SCHEMA = z
+  .array(MESSAGE_ID_SCHEMA)
+  .min(1, "At least one message ID is required")
+  .max(100, "Cannot process more than 100 messages at once");
+
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -460,7 +465,7 @@ server.tool(
 server.tool(
   "batch-delete-messages",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchDeleteMessages(ids);
@@ -482,7 +487,7 @@ server.tool(
 server.tool(
   "batch-move-messages",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
     mailbox: z.string().min(1, "Destination mailbox is required"),
     account: z.string().optional().describe("Account containing the destination mailbox"),
   },
@@ -508,7 +513,7 @@ server.tool(
 server.tool(
   "batch-mark-as-read",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchMarkAsRead(ids);
@@ -530,7 +535,7 @@ server.tool(
 server.tool(
   "batch-mark-as-unread",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchMarkAsUnread(ids);
@@ -552,7 +557,7 @@ server.tool(
 server.tool(
   "batch-flag-messages",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchFlagMessages(ids);
@@ -574,7 +579,7 @@ server.tool(
 server.tool(
   "batch-unflag-messages",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchUnflagMessages(ids);
