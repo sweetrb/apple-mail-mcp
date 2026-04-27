@@ -2,7 +2,7 @@
   "mcpServers": {
     "apple-mail": {
       "command": "node",
-      "args": ["build/index.js"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/build/index.js"]
     }
   }
 }
