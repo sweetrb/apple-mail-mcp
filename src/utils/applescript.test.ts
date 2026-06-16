@@ -209,6 +209,50 @@ describe("executeAppleScript", () => {
       const options = mockExecSync.mock.calls[0][1] as { encoding: string };
       expect(options.encoding).toBe("utf8");
     });
+
+    it("kills a timed-out osascript with SIGKILL, not SIGTERM (#11)", () => {
+      mockExecSync.mockReturnValue("ok");
+
+      executeAppleScript("test");
+
+      const options = mockExecSync.mock.calls[0][1] as { killSignal: string };
+      expect(options.killSignal).toBe("SIGKILL");
+    });
+  });
+
+  describe("with timeout wrapping (#11)", () => {
+    it("wraps the script in `with timeout … end timeout`", () => {
+      mockExecSync.mockReturnValue("ok");
+
+      executeAppleScript('tell application "Mail" to get name');
+
+      const command = mockExecSync.mock.calls[0][0] as string;
+      expect(command).toContain("with timeout of");
+      expect(command).toContain("end timeout");
+      // Original body is preserved inside the wrapper
+      expect(command).toContain('tell application "Mail" to get name');
+    });
+
+    it("sets the script timeout below the process timeout so Mail aborts first", () => {
+      mockExecSync.mockReturnValue("ok");
+
+      // Default 30s process timeout -> 25s script timeout (5s headroom)
+      executeAppleScript("test");
+      expect(mockExecSync.mock.calls[0][0] as string).toContain("with timeout of 25 seconds");
+
+      // 60s process timeout -> 55s script timeout
+      executeAppleScript("test", { timeoutMs: 60000 });
+      expect(mockExecSync.mock.calls[1][0] as string).toContain("with timeout of 55 seconds");
+    });
+
+    it("never emits a non-positive timeout for very short process timeouts", () => {
+      mockExecSync.mockReturnValue("ok");
+
+      executeAppleScript("test", { timeoutMs: 1000 });
+
+      const command = mockExecSync.mock.calls[0][0] as string;
+      expect(command).toContain("with timeout of 1 seconds");
+    });
   });
 
   describe("timeout handling", () => {
