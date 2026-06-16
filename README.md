@@ -192,8 +192,9 @@ Send a new email immediately.
 | `body` | string | Yes | Email body (plain text) |
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
-| `account` | string | No | Send from specific account |
+| `account` | string | No | Send from specific account (with `transport: "smtp"`, overrides the From address) |
 | `attachments` | string[] | No | Absolute file paths to attach, max 20 files (e.g., `["/Users/me/report.pdf"]`) |
+| `transport` | `"applescript"` \| `"smtp"` | No | Send transport (default `"applescript"`). Use `"smtp"` to send clean MIME directly, avoiding the macOS 15+ Mail.app `<blockquote>` wrapping — see [SMTP transport](#smtp-transport) |
 
 **Example:**
 ```json
@@ -205,6 +206,48 @@ Send a new email immediately.
   "attachments": ["/Users/me/Documents/agenda.pdf"]
 }
 ```
+
+##### SMTP transport
+
+On macOS 15+ (Sequoia/Tahoe), Mail.app wraps any AppleScript-injected body in
+`<blockquote type="cite">` under the `Apple-Mail-URLShareWrapperClass` template,
+so emails sent through the default `applescript` transport render to recipients
+as if they were quoted/forwarded (Apple radar **FB11734014**, open since
+Ventura). Passing `transport: "smtp"` bypasses Mail.app entirely and submits
+clean MIME via SMTP.
+
+Configure SMTP via environment variables on the MCP server. The password is
+read from the macOS **Keychain** by default, so no secret goes in config:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `APPLE_MAIL_MCP_SMTP_HOST` | Yes | — | SMTP server hostname (e.g. `smtp.fastmail.com`) |
+| `APPLE_MAIL_MCP_SMTP_USER` | Yes | — | SMTP username |
+| `APPLE_MAIL_MCP_SMTP_PORT` | No | `465` if secure, else `587` | SMTP port |
+| `APPLE_MAIL_MCP_SMTP_SECURE` | No | `false` | `true` for implicit TLS (port 465); otherwise STARTTLS |
+| `APPLE_MAIL_MCP_SMTP_FROM` | No | = user | From address |
+| `APPLE_MAIL_MCP_SMTP_PASSWORD` | No | — | Password (if set, used instead of the Keychain) |
+| `APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE` | No | = host | Keychain item service/server name |
+| `APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT` | No | = user | Keychain item account |
+
+Store the password in the Keychain once (an app-specific password for Gmail/
+iCloud), e.g.:
+
+```bash
+security add-internet-password -s smtp.fastmail.com -a you@example.com -w
+```
+
+Then send:
+```json
+{
+  "to": ["colleague@company.com"],
+  "subject": "Standings",
+  "body": "Plain body — no blockquote wrapping.",
+  "transport": "smtp"
+}
+```
+
+The default `applescript` transport is unchanged; SMTP is opt-in per call.
 
 ---
 
@@ -741,6 +784,17 @@ The entrypoint is written as:
 | Date filter format | Date filters must be valid parseable dates (e.g., "January 1, 2026" or "2026-03-15"); bare numbers or non-date strings are rejected |
 | Attachment save path restrictions | `save-attachment` only allows saving to home directory, `/tmp`, `/private/tmp`, and `/Volumes`; path traversal is blocked |
 | Attachment count limit | `send-email` and `create-draft` accept a maximum of 20 file attachments |
+
+### Mail.app `<blockquote>` wrapping on macOS 15+ (workaround in v1.6.0)
+
+On macOS 15+ Mail.app wraps AppleScript-injected message bodies in
+`<blockquote type="cite">` under the `Apple-Mail-URLShareWrapperClass` template,
+so mail sent via the default `applescript` transport renders to recipients as
+quoted/forwarded content (Apple radar **FB11734014**, open since Ventura, no
+fix). Since v1.6.0, `send-email` accepts `transport: "smtp"` to bypass Mail.app
+and send clean MIME directly — see [SMTP transport](#smtp-transport). The
+AppleScript path is still the default and still exhibits Apple's wrapping.
+([#12](https://github.com/sweetrb/apple-mail-mcp/issues/12))
 
 ### Reply / Forward from Background Processes (Fixed in v1.4.0)
 

@@ -25,6 +25,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AppleMailManager } from "@/services/appleMailManager.js";
+import { sendViaSmtp } from "@/services/smtpMailer.js";
 
 // =============================================================================
 // Shared Validation Schemas
@@ -99,16 +100,19 @@ function errorResponse(message: string) {
   };
 }
 
+type ToolResponse = ReturnType<typeof successResponse> | ReturnType<typeof errorResponse>;
+
 /**
- * Wraps a tool handler with consistent error handling.
+ * Wraps a tool handler with consistent error handling. Handlers may be
+ * synchronous or async (the SMTP send path in send-email is async).
  */
 function withErrorHandling<T extends Record<string, unknown>>(
-  handler: (params: T) => ReturnType<typeof successResponse>,
+  handler: (params: T) => ToolResponse | Promise<ToolResponse>,
   errorPrefix: string
 ) {
   return async (params: T) => {
     try {
-      return handler(params);
+      return await handler(params);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       return errorResponse(`${errorPrefix}: ${message}`);
@@ -259,15 +263,32 @@ server.tool(
       .max(20, "Cannot attach more than 20 files")
       .optional()
       .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
+    transport: z
+      .enum(["applescript", "smtp"])
+      .optional()
+      .describe(
+        "Send transport. 'applescript' (default) sends through Mail.app. " +
+          "'smtp' submits clean MIME directly via SMTP, avoiding the macOS 15+ " +
+          "Mail.app <blockquote> wrapping (issue #12); requires APPLE_MAIL_MCP_SMTP_* env config."
+      ),
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
+  withErrorHandling(async ({ to, subject, body, cc, bcc, account, attachments, transport }) => {
+    const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
+
+    if (transport === "smtp") {
+      const result = await sendViaSmtp({ to, subject, body, cc, bcc, from: account, attachments });
+      if (!result.success) {
+        return errorResponse(result.error ?? "Failed to send email via SMTP.");
+      }
+      return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}`);
+    }
+
     const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
 
     if (!success) {
       return errorResponse("Failed to send email. Check Mail.app configuration.");
     }
 
-    const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
     return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`);
   }, "Error sending email")
 );
