@@ -1929,22 +1929,53 @@ export class AppleMailManager {
         const safeOld = escapeForAppleScript(resolvedOld);
         const safeNew = escapeForAppleScript(resolvedNew);
         const safeAccount = escapeForAppleScript(targetAccount);
+        // Mail.app has no reliable in-place mailbox rename across account types, so
+        // rename is emulated as create-new + move-all + delete-old. The risk (issue
+        // #33) is that the old code iterated `messages of srcMailbox` *while moving*
+        // (mutating the collection it was iterating, which can skip messages) and
+        // then deleted the source unconditionally — so a move that errored or timed
+        // out part-way lost the un-moved remainder. This version:
+        //   - snapshots the message references up front (move can't disturb iteration),
+        //   - moves each within its own `try` so one bad message doesn't abort the rest,
+        //   - and deletes the source ONLY if it is empty afterwards (every message
+        //     moved). On a partial move the source is left intact and we report how
+        //     many remain, so no mail is lost.
         const moveScript = buildAppLevelScript(`
       try
         set srcMailbox to mailbox "${safeOld}" of account "${safeAccount}"
         set destMailbox to mailbox "${safeNew}" of account "${safeAccount}"
-        repeat with msg in messages of srcMailbox
-          move msg to destMailbox
+        set srcCount to count of messages of srcMailbox
+        set msgs to (every message of srcMailbox)
+        repeat with m in msgs
+          try
+            move m to destMailbox
+          end try
         end repeat
-        delete mailbox "${safeOld}" of account "${safeAccount}"
-        return "ok"
+        set srcAfter to count of messages of srcMailbox
+        if srcAfter is 0 then
+          delete mailbox "${safeOld}" of account "${safeAccount}"
+          return "ok${FIELD_SEP}" & srcCount
+        else
+          return "partial${FIELD_SEP}" & (srcCount - srcAfter) & "${FIELD_SEP}" & srcCount & "${FIELD_SEP}" & srcAfter
+        end if
       on error errMsg
         return "error:" & errMsg
       end try
     `);
-        const result = executeAppleScript(moveScript, { timeoutMs: 60000 });
+        // Moving a large source mailbox is slow; give it room. If it's still killed,
+        // the source is never deleted (delete only runs after a verified-empty
+        // check), so a truncated move is recoverable rather than lossy.
+        const result = executeAppleScript(moveScript, { timeoutMs: 120000 });
         if (!result.success || result.output.startsWith("error:")) {
             console.error(`Failed to rename mailbox: ${result.error || result.output}`);
+            return false;
+        }
+        if (result.output.startsWith("partial")) {
+            const parts = result.output.split(FIELD_SEP);
+            const remaining = parts[3] ?? "?";
+            const total = parts[2] ?? "?";
+            console.error(`Failed to rename mailbox: only ${parts[1] ?? "?"} of ${total} messages moved, ${remaining} remain in "${resolvedOld}"; source was NOT deleted (both mailboxes left intact). Retry to move the rest.`);
+            this.invalidateCache(); // the new mailbox now exists and holds the moved messages
             return false;
         }
         this.invalidateCache();
