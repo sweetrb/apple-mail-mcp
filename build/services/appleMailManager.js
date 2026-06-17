@@ -790,107 +790,172 @@ export class AppleMailManager {
      * @returns Array of messages
      */
     listMessages(mailbox, account, limit = 50, from, offset = 0) {
-        // If no account specified, list across all accounts
+        return this.listMessagesWithDiagnostics(mailbox, account, limit, from, offset).messages;
+    }
+    /**
+     * List messages, returning matches plus coverage diagnostics.
+     *
+     * Like `searchMessages`, the unscoped (all-mailboxes) path used to iterate
+     * `messages of mb` over every mailbox with a swallowing per-mailbox `try`,
+     * so a large IMAP/Gmail mailbox timed out and the method returned `[]` — a
+     * false "No messages found." This applies the same #24 discipline: skip
+     * mailboxes above the scan threshold (reported), enforce a per-account
+     * wall-clock budget, capture per-mailbox timeouts, and surface all of it as a
+     * partial result. (by-id lookups don't need this — `whose id is` is indexed
+     * and returns instantly even on a 44k-message mailbox.)
+     */
+    listMessagesWithDiagnostics(mailbox, account, limit = 50, from, offset = 0) {
+        // If no account specified, list across all accounts and merge diagnostics.
         if (!account) {
             const accounts = this.listAccounts();
             const allMessages = [];
+            const diagnostics = {
+                partial: false,
+                timedOutAccounts: [],
+                skippedLargeMailboxes: [],
+                notSearchedMailboxes: [],
+            };
             for (const acct of accounts) {
                 if (allMessages.length >= limit)
                     break;
                 const remaining = limit - allMessages.length;
-                const msgs = this.listMessages(mailbox, acct.name, remaining, from, offset);
-                allMessages.push(...msgs);
+                const res = this.listMessagesWithDiagnostics(mailbox, acct.name, remaining, from, offset);
+                allMessages.push(...res.messages);
+                mergeSearchDiagnostics(diagnostics, res.diagnostics);
             }
-            return allMessages.slice(0, limit);
+            return { messages: allMessages.slice(0, limit), diagnostics };
         }
         const targetAccount = this.resolveAccount(account);
         const safeFrom = from ? escapeForAppleScript(from) : "";
         const fromFilter = from ? `whose sender contains "${safeFrom}"` : "";
+        const scanThreshold = getMailboxScanThreshold();
         let listCommand;
         if (mailbox) {
-            // List from a specific mailbox
+            // List from a specific mailbox. Caller-scoped, so no count-guard skip, but
+            // wrap the scan so a timeout is reported as partial, not a false empty.
             const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
             listCommand = `
       set outputText to ""
+      set _timedOut to false
+      set _notSearched to ""
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
       set msgCount to 0
       set skipped to 0
-      repeat with msg in messages of theMailbox ${fromFilter}
-        if msgCount >= ${limit} then exit repeat
-        try
-          if skipped < ${offset} then
-            set skipped to skipped + 1
-          else
-            set msgId to id of msg as string
-            set msgSubject to subject of msg
-            set msgSender to sender of msg
-            set d to date received of msg
-            set msgDate to ${AS_DATE_TO_STRING}
-            set msgRead to read status of msg as string
-            set msgFlagged to flagged status of msg as string
-            set msgHasAtt to "false"
-            try
-              if (count of mail attachments of msg) > 0 then set msgHasAtt to "true"
-            end try
-            if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-            set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & msgHasAtt
-            set msgCount to msgCount + 1
-          end if
-        end try
-      end repeat
-      return outputText
+      try
+        repeat with msg in messages of theMailbox ${fromFilter}
+          if msgCount >= ${limit} then exit repeat
+          try
+            if skipped < ${offset} then
+              set skipped to skipped + 1
+            else
+              set msgId to id of msg as string
+              set msgSubject to subject of msg
+              set msgSender to sender of msg
+              set d to date received of msg
+              set msgDate to ${AS_DATE_TO_STRING}
+              set msgRead to read status of msg as string
+              set msgFlagged to flagged status of msg as string
+              set msgHasAtt to "false"
+              try
+                if (count of mail attachments of msg) > 0 then set msgHasAtt to "true"
+              end try
+              if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+              set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & msgHasAtt
+              set msgCount to msgCount + 1
+            end if
+          end try
+        end repeat
+      on error _errMsg number _errNum
+        set _timedOut to true
+        set _notSearched to "${escapeForAppleScript(targetMailbox)}|||M|||"
+      end try
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "|||F|||skipped=|||F|||notSearched=" & _notSearched
     `;
         }
         else {
-            // List from ALL mailboxes — iterate every mailbox in the account, dedup by message ID
+            // List from ALL mailboxes — skip mailboxes over the scan threshold, enforce
+            // the per-account budget, capture per-mailbox timeouts; dedup by message ID.
+            const scanGuard = scanThreshold > 0 ? `mbCount > ${scanThreshold}` : "false";
             listCommand = `
       set outputText to ""
       set msgCount to 0
       set skipped to 0
       set seenIds to {}
+      set _timedOut to false
+      set _skipped to ""
+      set _notSearched to ""
+      set _startedAt to current date
       repeat with mb in mailboxes
         if msgCount >= ${limit} then exit repeat
+        set mbName to ""
         try
-          repeat with msg in messages of mb ${fromFilter}
-            if msgCount >= ${limit} then exit repeat
-            try
-              set msgId to id of msg as string
-              if seenIds does not contain msgId then
-                set end of seenIds to msgId
-                if skipped < ${offset} then
-                  set skipped to skipped + 1
-                else
-                  set msgSubject to subject of msg
-                  set msgSender to sender of msg
-                  set d to date received of msg
-                  set msgDate to ${AS_DATE_TO_STRING}
-                  set msgRead to read status of msg as string
-                  set msgFlagged to flagged status of msg as string
-                  set msgHasAtt to "false"
-                  try
-                    if (count of mail attachments of msg) > 0 then set msgHasAtt to "true"
-                  end try
-                  if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-                  set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & name of mb & "|||" & msgHasAtt
-                  set msgCount to msgCount + 1
-                end if
-              end if
-            end try
-          end repeat
+          set mbName to name of mb
         end try
+        if ((current date) - _startedAt) > ${SEARCH_ACCOUNT_BUDGET_SECONDS} then
+          set _timedOut to true
+          set _notSearched to _notSearched & mbName & "|||M|||"
+        else
+          set mbCount to 0
+          try
+            set mbCount to count of messages of mb
+          end try
+          if (${scanGuard}) then
+            set _timedOut to true
+            set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")|||M|||"
+          else
+            try
+              repeat with msg in messages of mb ${fromFilter}
+                if msgCount >= ${limit} then exit repeat
+                try
+                  set msgId to id of msg as string
+                  if seenIds does not contain msgId then
+                    set end of seenIds to msgId
+                    if skipped < ${offset} then
+                      set skipped to skipped + 1
+                    else
+                      set msgSubject to subject of msg
+                      set msgSender to sender of msg
+                      set d to date received of msg
+                      set msgDate to ${AS_DATE_TO_STRING}
+                      set msgRead to read status of msg as string
+                      set msgFlagged to flagged status of msg as string
+                      set msgHasAtt to "false"
+                      try
+                        if (count of mail attachments of msg) > 0 then set msgHasAtt to "true"
+                      end try
+                      if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+                      set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & mbName & "|||" & msgHasAtt
+                      set msgCount to msgCount + 1
+                    end if
+                  end if
+                end try
+              end repeat
+            on error _errMsg number _errNum
+              set _timedOut to true
+              set _notSearched to _notSearched & mbName & "|||M|||"
+            end try
+          end if
+        end if
       end repeat
-      return outputText
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "|||F|||skipped=" & _skipped & "|||F|||notSearched=" & _notSearched
     `;
         }
         const script = buildAccountScopedScript(targetAccount, listCommand);
-        const result = executeAppleScript(script, { timeoutMs: 60000 });
+        const result = executeAppleScript(script, { timeoutMs: SEARCH_ACCOUNT_TIMEOUT_MS });
         if (!result.success) {
-            console.error(`Failed to list messages: ${result.error}`);
-            return [];
+            // Whole-account failure — surface as a timeout, not a false empty (#24/#29).
+            console.error(`Failed to list messages in "${targetAccount}": ${result.error}`);
+            return {
+                messages: [],
+                diagnostics: {
+                    partial: true,
+                    timedOutAccounts: [targetAccount],
+                    skippedLargeMailboxes: [],
+                    notSearchedMailboxes: [],
+                },
+            };
         }
-        if (!result.output.trim())
-            return [];
-        return this.parseMessageList(result.output, mailbox || "INBOX", targetAccount);
+        return this.parseSearchResult(result.output, mailbox || "INBOX", targetAccount);
     }
     /**
      * Parse message list output from AppleScript.
