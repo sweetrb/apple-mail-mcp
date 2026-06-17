@@ -21,11 +21,12 @@ import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheck
 export declare function mergeSearchDiagnostics(into: SearchDiagnostics, from: SearchDiagnostics): void;
 /**
  * Split a per-account search payload into its message-list portion and parsed
- * diagnostics. The AppleScript appends a trailer of the form:
+ * diagnostics. The AppleScript appends a trailer of the form (using the
+ * control-character separators defined above):
  *
- *   <messages>|||DIAG|||timedOut=true|||F|||skipped=Foo (9000)|||M||||||F|||notSearched=Bar|||M|||
+ *   <messages>{DIAG_MARKER}timedOut=true{DIAG_FIELD_SEP}skipped=Foo (9000){DIAG_ITEM_SEP}{DIAG_FIELD_SEP}notSearched=Bar{DIAG_ITEM_SEP}
  *
- * `skipped`/`notSearched` are `|||M|||`-separated mailbox names, each prefixed
+ * `skipped`/`notSearched` are DIAG_ITEM_SEP-separated mailbox names, each prefixed
  * with the account name on the way out so the aggregate result is unambiguous.
  *
  * Exported (pure, no Mail.app dependency) for unit testing — this is the logic

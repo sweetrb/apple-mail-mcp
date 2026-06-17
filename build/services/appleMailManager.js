@@ -50,8 +50,26 @@ function getMailboxScanThreshold() {
 const SEARCH_ACCOUNT_BUDGET_SECONDS = 30;
 /** osascript process timeout for a per-account search (ms). */
 const SEARCH_ACCOUNT_TIMEOUT_MS = 45000;
-/** Separator between the message payload and the diagnostics trailer. */
-const DIAG_MARKER = "|||DIAG|||";
+/**
+ * Result serialization separators (issue #30).
+ *
+ * AppleScript emits structured results as delimited strings that TS then splits.
+ * The original delimiters were printable triple-pipe tokens, so any field value
+ * that itself contained one — a subject, sender, attachment filename, or mailbox
+ * name with a triple-pipe in it — shifted every subsequent field and silently
+ * corrupted the parse. These are now ASCII control characters
+ * (Unit/Record/Group Separator) which cannot occur in mail field values, so the
+ * collision is structurally impossible. The same constant is used by the
+ * AppleScript emitter (interpolated into the script string) and the TS parser,
+ * so the two can never drift.
+ */
+const FIELD_SEP = "\x1f"; // US — between fields within a record
+const RECORD_SEP = "\x1e"; // RS — between records
+const DIAG_MARKER = "\x1dDIAG\x1d"; // GS-wrapped — payload/diagnostics boundary
+const DIAG_FIELD_SEP = "\x1dF\x1d"; // between diagnostics fields
+const DIAG_ITEM_SEP = "\x1dM\x1d"; // between diagnostics list items
+const CONTENT_MARKER = "\x1dCONTENT\x1d"; // subject/plain-text boundary
+const HTML_MARKER = "\x1dHTML\x1d"; // plain-text/source boundary
 /**
  * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
  *
@@ -66,11 +84,12 @@ export function mergeSearchDiagnostics(into, from) {
 }
 /**
  * Split a per-account search payload into its message-list portion and parsed
- * diagnostics. The AppleScript appends a trailer of the form:
+ * diagnostics. The AppleScript appends a trailer of the form (using the
+ * control-character separators defined above):
  *
- *   <messages>|||DIAG|||timedOut=true|||F|||skipped=Foo (9000)|||M||||||F|||notSearched=Bar|||M|||
+ *   <messages>{DIAG_MARKER}timedOut=true{DIAG_FIELD_SEP}skipped=Foo (9000){DIAG_ITEM_SEP}{DIAG_FIELD_SEP}notSearched=Bar{DIAG_ITEM_SEP}
  *
- * `skipped`/`notSearched` are `|||M|||`-separated mailbox names, each prefixed
+ * `skipped`/`notSearched` are DIAG_ITEM_SEP-separated mailbox names, each prefixed
  * with the account name on the way out so the aggregate result is unambiguous.
  *
  * Exported (pure, no Mail.app dependency) for unit testing — this is the logic
@@ -87,13 +106,13 @@ export function splitSearchDiagnostics(output, account) {
         notSearchedMailboxes: [],
     };
     if (trailer) {
-        const fields = trailer.split("|||F|||");
+        const fields = trailer.split(DIAG_FIELD_SEP);
         const getField = (key) => {
             const f = fields.find((x) => x.startsWith(`${key}=`));
             return f ? f.slice(key.length + 1) : "";
         };
         const splitList = (raw) => raw
-            .split("|||M|||")
+            .split(DIAG_ITEM_SEP)
             .map((s) => s.trim())
             .filter((s) => s.length > 0);
         diagnostics.skippedLargeMailboxes = splitList(getField("skipped")).map((mb) => `${account} / ${mb}`);
@@ -521,17 +540,17 @@ export class AppleMailManager {
             set msgDateStr to ${AS_DATE_TO_STRING}
             set msgRead to read status of msg as string
             set msgFlagged to flagged status of msg as string
-            if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-            set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDateStr & "|||" & msgRead & "|||" & msgFlagged
+            if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
+            set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged
             set msgCount to msgCount + 1
             ${dateFilter ? "end if" : ""}
           end try
         end repeat
       on error _errMsg number _errNum
         set _timedOut to true
-        set _notSearched to "${escapeForAppleScript(targetMailbox)}|||M|||"
+        set _notSearched to "${escapeForAppleScript(targetMailbox)}${DIAG_ITEM_SEP}"
       end try
-      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "|||F|||skipped=|||F|||notSearched=" & _notSearched
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=${DIAG_FIELD_SEP}notSearched=" & _notSearched
     `;
         }
         else {
@@ -556,7 +575,7 @@ export class AppleMailManager {
         end try
         if ((current date) - _startedAt) > ${SEARCH_ACCOUNT_BUDGET_SECONDS} then
           set _timedOut to true
-          set _notSearched to _notSearched & mbName & "|||M|||"
+          set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
         else
           set mbCount to 0
           try
@@ -564,7 +583,7 @@ export class AppleMailManager {
           end try
           if (${scanGuard}) then
             set _timedOut to true
-            set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")|||M|||"
+            set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")${DIAG_ITEM_SEP}"
           else
             try
               set allMessages to messages of mb ${searchCondition}
@@ -581,8 +600,8 @@ export class AppleMailManager {
                     set msgDateStr to ${AS_DATE_TO_STRING}
                     set msgRead to read status of msg as string
                     set msgFlagged to flagged status of msg as string
-                    if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-                    set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDateStr & "|||" & msgRead & "|||" & msgFlagged & "|||" & mbName
+                    if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
+                    set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & mbName
                     set msgCount to msgCount + 1
                     ${dateFilter ? "end if" : ""}
                   end if
@@ -590,12 +609,12 @@ export class AppleMailManager {
               end repeat
             on error _errMsg number _errNum
               set _timedOut to true
-              set _notSearched to _notSearched & mbName & "|||M|||"
+              set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
             end try
           end if
         end if
       end repeat
-      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "|||F|||skipped=" & _skipped & "|||F|||notSearched=" & _notSearched
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=" & _skipped & "${DIAG_FIELD_SEP}notSearched=" & _notSearched
     `;
         }
         const script = buildAccountScopedScript(targetAccount, searchCommand);
@@ -668,7 +687,7 @@ export class AppleMailManager {
                     if rawSrc contains "Content-Disposition: attachment" then set hasAtt to "true"
                   end try
                 end if
-                return msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & msgJunk & "|||" & msgDeleted & "|||" & msgMailbox & "|||" & msgAccount & "|||" & hasAtt
+                return msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgJunk & "${FIELD_SEP}" & msgDeleted & "${FIELD_SEP}" & msgMailbox & "${FIELD_SEP}" & msgAccount & "${FIELD_SEP}" & hasAtt
               end if
             end try
           end repeat
@@ -683,7 +702,7 @@ export class AppleMailManager {
             console.error(`Failed to get message ${id}: ${result.error}`);
             return null;
         }
-        const parts = result.output.split("|||");
+        const parts = result.output.split(FIELD_SEP);
         if (parts.length < 9)
             return null;
         return {
@@ -719,7 +738,7 @@ export class AppleMailManager {
                 try
                   set htmlContent to source of msg
                 end try
-                return msgSubject & "|||CONTENT|||" & msgContent & "|||HTML|||" & htmlContent
+                return msgSubject & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlContent
               end if
             end try
           end repeat
@@ -734,10 +753,10 @@ export class AppleMailManager {
             console.error(`Failed to get message content: ${result.error}`);
             return null;
         }
-        const htmlSplit = result.output.split("|||HTML|||");
+        const htmlSplit = result.output.split(HTML_MARKER);
         const contentPart = htmlSplit[0];
         const htmlContent = htmlSplit.length > 1 ? htmlSplit[1] : undefined;
-        const parts = contentPart.split("|||CONTENT|||");
+        const parts = contentPart.split(CONTENT_MARKER);
         if (parts.length < 2)
             return null;
         return {
@@ -859,17 +878,17 @@ export class AppleMailManager {
               try
                 if (count of mail attachments of msg) > 0 then set msgHasAtt to "true"
               end try
-              if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-              set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & msgHasAtt
+              if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
+              set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgHasAtt
               set msgCount to msgCount + 1
             end if
           end try
         end repeat
       on error _errMsg number _errNum
         set _timedOut to true
-        set _notSearched to "${escapeForAppleScript(targetMailbox)}|||M|||"
+        set _notSearched to "${escapeForAppleScript(targetMailbox)}${DIAG_ITEM_SEP}"
       end try
-      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "|||F|||skipped=|||F|||notSearched=" & _notSearched
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=${DIAG_FIELD_SEP}notSearched=" & _notSearched
     `;
         }
         else {
@@ -893,7 +912,7 @@ export class AppleMailManager {
         end try
         if ((current date) - _startedAt) > ${SEARCH_ACCOUNT_BUDGET_SECONDS} then
           set _timedOut to true
-          set _notSearched to _notSearched & mbName & "|||M|||"
+          set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
         else
           set mbCount to 0
           try
@@ -901,7 +920,7 @@ export class AppleMailManager {
           end try
           if (${scanGuard}) then
             set _timedOut to true
-            set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")|||M|||"
+            set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")${DIAG_ITEM_SEP}"
           else
             try
               repeat with msg in messages of mb ${fromFilter}
@@ -923,8 +942,8 @@ export class AppleMailManager {
                       try
                         if (count of mail attachments of msg) > 0 then set msgHasAtt to "true"
                       end try
-                      if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-                      set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & mbName & "|||" & msgHasAtt
+                      if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
+                      set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & mbName & "${FIELD_SEP}" & msgHasAtt
                       set msgCount to msgCount + 1
                     end if
                   end if
@@ -932,12 +951,12 @@ export class AppleMailManager {
               end repeat
             on error _errMsg number _errNum
               set _timedOut to true
-              set _notSearched to _notSearched & mbName & "|||M|||"
+              set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
             end try
           end if
         end if
       end repeat
-      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "|||F|||skipped=" & _skipped & "|||F|||notSearched=" & _notSearched
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=" & _skipped & "${DIAG_FIELD_SEP}notSearched=" & _notSearched
     `;
         }
         const script = buildAccountScopedScript(targetAccount, listCommand);
@@ -969,10 +988,10 @@ export class AppleMailManager {
      * limitation). Use getMessage or list-attachments for authoritative info.
      */
     parseMessageList(output, mailbox, account) {
-        const items = output.split("|||ITEM|||");
+        const items = output.split(RECORD_SEP);
         const messages = [];
         for (const item of items) {
-            const parts = item.split("|||");
+            const parts = item.split(FIELD_SEP);
             if (parts.length < 6)
                 continue;
             let msgMailbox = mailbox;
@@ -1553,8 +1572,8 @@ export class AppleMailManager {
                   set attName to name of att
                   set attType to MIME type of att
                   set attSize to file size of att as string
-                  if attCount > 0 then set outputText to outputText & "|||ITEM|||"
-                  set outputText to outputText & attName & "|||" & attType & "|||" & attSize
+                  if attCount > 0 then set outputText to outputText & "${RECORD_SEP}"
+                  set outputText to outputText & attName & "${FIELD_SEP}" & attType & "${FIELD_SEP}" & attSize
                   set attCount to attCount + 1
                 end repeat
                 return outputText
@@ -1569,10 +1588,10 @@ export class AppleMailManager {
     `);
         const result = executeAppleScript(script, { timeoutMs: 60000 });
         if (result.success && result.output.trim()) {
-            const items = result.output.split("|||ITEM|||");
+            const items = result.output.split(RECORD_SEP);
             const attachments = [];
             for (const item of items) {
-                const parts = item.split("|||");
+                const parts = item.split(FIELD_SEP);
                 if (parts.length < 3)
                     continue;
                 attachments.push({
@@ -1690,9 +1709,9 @@ export class AppleMailManager {
         set mbName to name of mb
         set mbUnread to unread count of mb
         set mbCount to count of messages of mb
-        set end of mailboxList to mbName & "|||" & mbUnread & "|||" & mbCount
+        set end of mailboxList to mbName & "${FIELD_SEP}" & mbUnread & "${FIELD_SEP}" & mbCount
       end repeat
-      set AppleScript's text item delimiters to "|||ITEM|||"
+      set AppleScript's text item delimiters to "${RECORD_SEP}"
       return mailboxList as text
     `;
         const script = buildAccountScopedScript(targetAccount, listCommand);
@@ -1703,10 +1722,10 @@ export class AppleMailManager {
         }
         if (!result.output.trim())
             return [];
-        const items = result.output.split("|||ITEM|||");
+        const items = result.output.split(RECORD_SEP);
         const mailboxes = [];
         for (const item of items) {
-            const parts = item.split("|||");
+            const parts = item.split(FIELD_SEP);
             if (parts.length < 3)
                 continue;
             mailboxes.push({
@@ -1854,9 +1873,9 @@ export class AppleMailManager {
         if (count of acctEmail) > 0 then
           set emailStr to item 1 of acctEmail
         end if
-        set end of accountList to acctName & "|||" & emailStr & "|||" & acctEnabled
+        set end of accountList to acctName & "${FIELD_SEP}" & emailStr & "${FIELD_SEP}" & acctEnabled
       end repeat
-      set AppleScript's text item delimiters to "|||ITEM|||"
+      set AppleScript's text item delimiters to "${RECORD_SEP}"
       return accountList as text
     `);
         const result = executeAppleScript(script);
@@ -1866,10 +1885,10 @@ export class AppleMailManager {
         }
         if (!result.output.trim())
             return [];
-        const items = result.output.split("|||ITEM|||");
+        const items = result.output.split(RECORD_SEP);
         const accounts = [];
         for (const item of items) {
-            const parts = item.split("|||");
+            const parts = item.split(FIELD_SEP);
             if (parts.length < 3)
                 continue;
             accounts.push({
@@ -1910,19 +1929,19 @@ export class AppleMailManager {
       repeat with r in rules
         set ruleName to name of r
         set ruleEnabled to enabled of r
-        set end of ruleList to ruleName & "|||" & (ruleEnabled as string)
+        set end of ruleList to ruleName & "${FIELD_SEP}" & (ruleEnabled as string)
       end repeat
-      set AppleScript's text item delimiters to "|||ITEM|||"
+      set AppleScript's text item delimiters to "${RECORD_SEP}"
       return ruleList as text
     `);
         const result = executeAppleScript(script);
         if (!result.success || !result.output.trim()) {
             return [];
         }
-        const items = result.output.split("|||ITEM|||");
+        const items = result.output.split(RECORD_SEP);
         const rules = [];
         for (const item of items) {
-            const parts = item.split("|||");
+            const parts = item.split(FIELD_SEP);
             if (parts.length < 2)
                 continue;
             rules.push({
@@ -1987,11 +2006,11 @@ export class AppleMailManager {
               if pPhones is not "" then set pPhones to pPhones & ","
               set pPhones to pPhones & (value of ph)
             end repeat
-            set end of matchedContacts to pName & "|||" & pEmails & "|||" & pPhones
+            set end of matchedContacts to pName & "${FIELD_SEP}" & pEmails & "${FIELD_SEP}" & pPhones
           end if
         end repeat
 
-        set AppleScript's text item delimiters to "|||ITEM|||"
+        set AppleScript's text item delimiters to "${RECORD_SEP}"
         return matchedContacts as text
       end tell
     `;
@@ -1999,10 +2018,10 @@ export class AppleMailManager {
         if (!result.success || !result.output.trim()) {
             return [];
         }
-        const items = result.output.split("|||ITEM|||");
+        const items = result.output.split(RECORD_SEP);
         const contacts = [];
         for (const item of items) {
-            const parts = item.split("|||");
+            const parts = item.split(FIELD_SEP);
             if (parts.length < 3)
                 continue;
             contacts.push({
@@ -2225,14 +2244,14 @@ export class AppleMailManager {
         end try
       end repeat
 
-      return (last24h as string) & "|||" & (last7d as string) & "|||" & (last30d as string)
+      return (last24h as string) & "${FIELD_SEP}" & (last7d as string) & "${FIELD_SEP}" & (last30d as string)
     `);
         const result = executeAppleScript(script, { timeoutMs: 60000 });
         if (!result.success || !result.output.trim()) {
             console.error(`Failed to get recently received stats: ${result.error}`);
             return { last24h: 0, last7d: 0, last30d: 0 };
         }
-        const parts = result.output.split("|||");
+        const parts = result.output.split(FIELD_SEP);
         if (parts.length < 3) {
             return { last24h: 0, last7d: 0, last30d: 0 };
         }
@@ -2276,7 +2295,7 @@ export class AppleMailManager {
         set totalMailboxes to totalMailboxes + (count of mailboxes of acct)
       end repeat
 
-      return "running|||" & accountCount & "|||" & totalMailboxes
+      return "running${FIELD_SEP}" & accountCount & "${FIELD_SEP}" & totalMailboxes
     `);
         const result = executeAppleScript(script);
         if (!result.success) {
@@ -2298,7 +2317,7 @@ export class AppleMailManager {
             };
         }
         // Parse the response
-        const parts = result.output.split("|||");
+        const parts = result.output.split(FIELD_SEP);
         const isRunning = parts[0] === "running";
         const accountCount = parseInt(parts[1]) || 0;
         // Mail.app is running with accounts configured - assume sync is active

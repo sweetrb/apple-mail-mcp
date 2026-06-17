@@ -2,23 +2,26 @@ import { describe, it, expect } from "vitest";
 import { splitSearchDiagnostics, mergeSearchDiagnostics } from "@/services/appleMailManager.js";
 import type { SearchDiagnostics } from "@/types.js";
 
-const DIAG = "|||DIAG|||";
+// Control-character separators must match the constants in appleMailManager.ts
+// (issue #30): GS-wrapped markers + RS/US field/record separators.
+const DIAG = "\x1dDIAG\x1d";
+const F = "\x1dF\x1d";
+const M = "\x1dM\x1d";
 
 /**
  * Build a DIAG trailer exactly the way the search AppleScript does: each list
- * entry is suffixed with `|||M|||`, entries are concatenated with no separator,
- * and the three fields are joined with `|||F|||`. Building it this way keeps the
- * fixtures locked to the real emission format.
+ * entry is suffixed with the item separator, entries are concatenated with no
+ * separator, and the three fields are joined with the field separator. Building
+ * it this way keeps the fixtures locked to the real emission format.
  */
 function buildTrailer(opts: {
   timedOut?: boolean;
   skipped?: string[];
   notSearched?: string[];
 }): string {
-  const M = "|||M|||";
   const skipped = (opts.skipped ?? []).map((e) => e + M).join("");
   const notSearched = (opts.notSearched ?? []).map((e) => e + M).join("");
-  return `${DIAG}timedOut=${opts.timedOut ? "true" : "false"}|||F|||skipped=${skipped}|||F|||notSearched=${notSearched}`;
+  return `${DIAG}timedOut=${opts.timedOut ? "true" : "false"}${F}skipped=${skipped}${F}notSearched=${notSearched}`;
 }
 
 /** A complete, clean diagnostics object. */
@@ -88,6 +91,14 @@ describe("splitSearchDiagnostics", () => {
     const { payload, diagnostics } = splitSearchDiagnostics(out, "iCloud");
     expect(payload).toBe(`weird${DIAG}leftover`);
     expect(diagnostics.partial).toBe(false);
+  });
+
+  it("does not corrupt when a mailbox name contains the old ||| delimiter (#30)", () => {
+    // The whole point of #30: a value containing the legacy printable delimiter
+    // is now harmless because the real separators are control characters.
+    const out = buildTrailer({ timedOut: true, skipped: ["Weird|||Box (9000)"] });
+    const { diagnostics } = splitSearchDiagnostics(out, "Gmail");
+    expect(diagnostics.skippedLargeMailboxes).toEqual(["Gmail / Weird|||Box (9000)"]);
   });
 });
 
