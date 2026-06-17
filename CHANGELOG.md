@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-06-17
+
+### Added
+- **`send-email` SMTP transport — bypasses the macOS 15+ `<blockquote>` wrapping** — outgoing messages built through Mail.app's AppleScript path get wrapped in `<blockquote type="cite">` (Apple-Mail-URLShareWrapperClass) on macOS 15+, mangling their formatting ([#12](https://github.com/sweetrb/apple-mail-mcp/issues/12)). `send-email` now accepts `transport: "smtp"`, which submits clean MIME directly via SMTP (using `nodemailer`, a new runtime dependency), skipping Mail.app entirely. Connection settings come from `APPLE_MAIL_MCP_SMTP_*` environment variables and the password is read from the macOS Keychain via the `security` CLI (`find-internet-password`, then `find-generic-password`), so no secret is placed in config; `secure=true` uses implicit TLS (port 465), otherwise STARTTLS (port 587). The default transport remains `applescript` for back-compat — SMTP is strictly opt-in per call. Verified end-to-end with a real authenticated send through `smtp.gmail.com` whose delivered copy is clean `text/plain`. See the README "SMTP transport" section. ([#12](https://github.com/sweetrb/apple-mail-mcp/issues/12))
+
 ## [1.5.7] - 2026-06-17
 
 ### Fixed
