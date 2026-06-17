@@ -177,7 +177,7 @@ server.tool(
       isRead,
       isFlagged,
     }) => {
-      const messages = mailManager.searchMessages(
+      const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
         query,
         mailbox,
         account,
@@ -190,8 +190,37 @@ server.tool(
         isFlagged
       );
 
+      // Build a coverage note when the search couldn't reach everything, so a
+      // caller never mistakes an incomplete search for a confirmed "no matches"
+      // (issue #24).
+      const coverageNotes: string[] = [];
+      if (diagnostics.timedOutAccounts.length > 0) {
+        coverageNotes.push(
+          `timed out (no results) for account(s): ${diagnostics.timedOutAccounts.join(", ")}`
+        );
+      }
+      if (diagnostics.skippedLargeMailboxes.length > 0) {
+        coverageNotes.push(
+          `skipped mailbox(es) too large to search via AppleScript: ${diagnostics.skippedLargeMailboxes.join(", ")} — scope the search with \`mailbox\` + a \`dateFrom\`/\`dateTo\` window to target them`
+        );
+      }
+      if (diagnostics.notSearchedMailboxes.length > 0) {
+        coverageNotes.push(
+          `could not finish searching mailbox(es): ${diagnostics.notSearchedMailboxes.join(", ")}`
+        );
+      }
+      const coverageBlock =
+        coverageNotes.length > 0
+          ? `\n\n⚠️  Partial results — this is NOT a confirmed "no such mail":\n${coverageNotes
+              .map((n) => `  - ${n}`)
+              .join("\n")}`
+          : "";
+
       if (messages.length === 0) {
-        return successResponse("No messages found matching criteria");
+        const base = diagnostics.partial
+          ? "No messages found in the portions that were searched."
+          : "No messages found matching criteria";
+        return successResponse(`${base}${coverageBlock}`);
       }
 
       const messageList = messages
@@ -201,7 +230,9 @@ server.tool(
         )
         .join("\n");
 
-      return successResponse(`Found ${messages.length} message(s):\n${messageList}`);
+      return successResponse(
+        `Found ${messages.length} message(s):\n${messageList}${coverageBlock}`
+      );
     },
     "Error searching messages"
   )
