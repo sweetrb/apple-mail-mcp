@@ -1,0 +1,162 @@
+/**
+ * Tests for the SMTP transport (issue #12).
+ *
+ * Config resolution and the send flow are tested without touching the network
+ * or the real Keychain: the transporter is injected and Keychain-free configs
+ * are passed explicitly.
+ */
+
+import { describe, it, expect, vi } from "vitest";
+import { resolveSmtpConfig, sendViaSmtp, SMTP_ENV, type SmtpConfig } from "./smtpMailer.js";
+
+const baseEnv = {
+  [SMTP_ENV.host]: "smtp.example.com",
+  [SMTP_ENV.user]: "alice@example.com",
+  [SMTP_ENV.password]: "s3cret",
+} as NodeJS.ProcessEnv;
+
+const testConfig: SmtpConfig = {
+  host: "smtp.example.com",
+  port: 587,
+  secure: false,
+  user: "alice@example.com",
+  pass: "s3cret",
+  from: "alice@example.com",
+};
+
+describe("resolveSmtpConfig", () => {
+  it("resolves host/user/password from env with sensible defaults", () => {
+    const cfg = resolveSmtpConfig(baseEnv);
+    expect(cfg.host).toBe("smtp.example.com");
+    expect(cfg.user).toBe("alice@example.com");
+    expect(cfg.pass).toBe("s3cret");
+    expect(cfg.port).toBe(587); // STARTTLS default
+    expect(cfg.secure).toBe(false);
+    expect(cfg.from).toBe("alice@example.com"); // defaults to user
+  });
+
+  it("defaults to port 465 when secure is set", () => {
+    const cfg = resolveSmtpConfig({ ...baseEnv, [SMTP_ENV.secure]: "true" });
+    expect(cfg.secure).toBe(true);
+    expect(cfg.port).toBe(465);
+  });
+
+  it("honors an explicit port and From override", () => {
+    const cfg = resolveSmtpConfig({
+      ...baseEnv,
+      [SMTP_ENV.port]: "2525",
+      [SMTP_ENV.from]: "noreply@example.com",
+    });
+    expect(cfg.port).toBe(2525);
+    expect(cfg.from).toBe("noreply@example.com");
+  });
+
+  it("throws an actionable error when host/user are missing", () => {
+    expect(() => resolveSmtpConfig({})).toThrow(/not configured/i);
+    expect(() => resolveSmtpConfig({})).toThrow(SMTP_ENV.host);
+    expect(() => resolveSmtpConfig({})).toThrow(SMTP_ENV.user);
+  });
+
+  it("throws when no password is available (env or Keychain)", () => {
+    // No password env and a host/user unlikely to exist in the Keychain.
+    expect(() =>
+      resolveSmtpConfig({
+        [SMTP_ENV.host]: "smtp.nonexistent.invalid",
+        [SMTP_ENV.user]: "nobody@nonexistent.invalid",
+      })
+    ).toThrow(/no smtp password/i);
+  });
+
+  it("rejects an invalid port", () => {
+    expect(() => resolveSmtpConfig({ ...baseEnv, [SMTP_ENV.port]: "not-a-port" })).toThrow(
+      /invalid/i
+    );
+  });
+});
+
+describe("sendViaSmtp", () => {
+  it("sends clean MIME via the injected transporter and reports success", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<abc@example.com>" });
+    const close = vi.fn();
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close });
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "Hi", body: "Plain body, no blockquote." },
+      testConfig,
+      createTransport as never
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.messageId).toBe("<abc@example.com>");
+
+    // Transporter built from the config
+    expect(createTransport).toHaveBeenCalledWith({
+      host: "smtp.example.com",
+      port: 587,
+      secure: false,
+      auth: { user: "alice@example.com", pass: "s3cret" },
+    });
+
+    // Body delivered as plain text (no HTML => no blockquote wrapping path)
+    const payload = sendMail.mock.calls[0][0];
+    expect(payload.text).toBe("Plain body, no blockquote.");
+    expect(payload.html).toBeUndefined();
+    expect(payload.from).toBe("alice@example.com");
+    expect(payload.to).toEqual(["bob@example.com"]);
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("uses the per-call from override when provided", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
+
+    await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b", from: "team@example.com" },
+      testConfig,
+      createTransport as never
+    );
+
+    expect(sendMail.mock.calls[0][0].from).toBe("team@example.com");
+  });
+
+  it("returns a clean error (not a throw) when the transport fails", async () => {
+    const sendMail = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const close = vi.fn();
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close });
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport as never
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/SMTP send failed: ECONNREFUSED/);
+    expect(close).toHaveBeenCalled(); // transporter closed even on failure
+  });
+
+  it("rejects a non-absolute attachment path before connecting", async () => {
+    const createTransport = vi.fn();
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b", attachments: ["relative/path.pdf"] },
+      testConfig,
+      createTransport as never
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/must be absolute/);
+    expect(createTransport).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a config error as a result rather than throwing", async () => {
+    // No config injected and empty env => resolveSmtpConfig throws, caught into result.
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      undefined,
+      vi.fn() as never
+    );
+    // In this environment env is unset for SMTP, so config resolution fails.
+    expect(result.success).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+});

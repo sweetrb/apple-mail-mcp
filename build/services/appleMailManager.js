@@ -789,13 +789,11 @@ export class AppleMailManager {
     // Discussion: https://forums.macrumors.com/threads/applescript-creating-a-
     //   new-message-in-mail-app-is-causing-weird-formatting-issues.2385052/
     //
-    // Workaround for callers who need clean emails today: use SMTP directly
-    // (Python smtplib). See e.g. sweetrb/nhl-bracket-tracker's send_email.py.
-    //
-    // Proper fix is probably to abandon `make new outgoing message` and either:
-    //   1. Build the .emlx file ourselves and drop it into a Drafts mailbox.
-    //   2. Switch to smtplib-style direct send with Keychain-stored creds.
-    //   3. Use Mail.app's NSSharingService rather than AppleScript.
+    // FIX (v1.6.0): send-email now accepts `transport: "smtp"`, which bypasses
+    // Mail.app and submits clean MIME directly via nodemailer (creds from the
+    // Keychain). See src/services/smtpMailer.ts. This AppleScript path remains
+    // the default for back-compat and for users who don't configure SMTP, so the
+    // wrapping behavior below is unchanged for them.
     // Tracking issue: https://github.com/sweetrb/apple-mail-mcp/issues/12
     // ───────────────────────────────────────────────────────────────────
     sendEmail(to, subject, body, cc, bcc, account, attachments) {
