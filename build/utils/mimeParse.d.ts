@@ -29,6 +29,21 @@ export interface MimeAttachmentData extends MimeAttachmentInfo {
  */
 export declare function parseMimeAttachments(source: string): MimeAttachmentInfo[];
 /**
+ * Extract the decoded `text/html` body from raw MIME source.
+ *
+ * Used by get-message's `preferHtml` path so it returns the actual HTML body
+ * rather than the entire raw MIME blob (headers + base64 attachments), which is
+ * both wrong and enormous (#32). Handles both multipart messages (walks leaf
+ * parts, descending into nested multipart/* containers) and a non-multipart
+ * message whose top-level Content-Type is text/html. Bodies are decoded per
+ * Content-Transfer-Encoding (base64 / quoted-printable / raw) and returned as
+ * UTF-8 text.
+ *
+ * @param source - Raw MIME source of the email
+ * @returns The decoded HTML body, or null if the message has no text/html part
+ */
+export declare function extractHtmlBody(source: string): string | null;
+/**
  * Extract and decode a specific attachment from MIME source by filename.
  * Supports base64, quoted-printable, and 7bit/8bit/binary transfer encodings.
  * Descends into nested multipart/* containers.

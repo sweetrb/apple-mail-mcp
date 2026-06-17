@@ -241,6 +241,45 @@ export function parseMimeAttachments(source: string): MimeAttachmentInfo[] {
 }
 
 /**
+ * Extract the decoded `text/html` body from raw MIME source.
+ *
+ * Used by get-message's `preferHtml` path so it returns the actual HTML body
+ * rather than the entire raw MIME blob (headers + base64 attachments), which is
+ * both wrong and enormous (#32). Handles both multipart messages (walks leaf
+ * parts, descending into nested multipart/* containers) and a non-multipart
+ * message whose top-level Content-Type is text/html. Bodies are decoded per
+ * Content-Transfer-Encoding (base64 / quoted-printable / raw) and returned as
+ * UTF-8 text.
+ *
+ * @param source - Raw MIME source of the email
+ * @returns The decoded HTML body, or null if the message has no text/html part
+ */
+export function extractHtmlBody(source: string): string | null {
+  if (!source || !source.trim()) return null;
+
+  const boundary = extractBoundary(source);
+
+  if (boundary) {
+    for (const part of walkLeafParts(source, boundary)) {
+      if (extractMimeType(part.headers) === "text/html") {
+        const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+        return decodeBody(part.body, encoding).toString("utf8");
+      }
+    }
+    return null;
+  }
+
+  // Non-multipart: split top headers from body and check the top Content-Type.
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  if (blankLineIdx === -1) return null;
+  const headers = source.substring(0, blankLineIdx);
+  if (extractMimeType(headers) !== "text/html") return null;
+  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
+  const encoding = getHeader(headers, "Content-Transfer-Encoding");
+  return decodeBody(body, encoding).toString("utf8");
+}
+
+/**
  * Extract and decode a specific attachment from MIME source by filename.
  * Supports base64, quoted-printable, and 7bit/8bit/binary transfer encodings.
  * Descends into nested multipart/* containers.

@@ -17,7 +17,7 @@ import { existsSync, writeFileSync } from "fs";
 import { isAbsolute, resolve } from "path";
 import { homedir } from "os";
 import { executeAppleScript } from "../utils/applescript.js";
-import { parseMimeAttachments, extractMimeAttachment } from "../utils/mimeParse.js";
+import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "../utils/mimeParse.js";
 // =============================================================================
 // Search Tuning (issue #24)
 // =============================================================================
@@ -652,7 +652,21 @@ export class AppleMailManager {
      * Note: Mail.app message IDs are unique per mailbox. This method searches
      * all mailboxes in all accounts to find the message.
      */
-    getMessageById(id) {
+    getMessageById(id, deepAttachmentCheck = false) {
+        // MIME-embedded attachments are invisible to AppleScript's `mail attachments`
+        // object, so the only way to detect them is to scan the raw `source of msg`.
+        // That reads the entire message (can be MB-sized), so it's the slowest part
+        // of this path — now opt-in via `deepAttachmentCheck` rather than run on
+        // every attachmentless message (#32). Default off: hasAttachments reflects
+        // the fast attachment count only.
+        const deepScan = deepAttachmentCheck
+            ? `if hasAtt is "false" then
+                  try
+                    set rawSrc to source of msg
+                    if rawSrc contains "Content-Disposition: attachment" then set hasAtt to "true"
+                  end try
+                end if`
+            : "";
         const script = buildAppLevelScript(`
       try
         repeat with acct in accounts
@@ -676,18 +690,7 @@ export class AppleMailManager {
                   set attCount to count of mail attachments of msg
                   if attCount > 0 then set hasAtt to "true"
                 end try
-                -- MIME-embedded attachments are invisible to AppleScript's
-                -- attachment object. Fall back to scanning the raw source.
-                -- This reads the full message source (can be MB-sized for
-                -- messages with large bodies), so it's the slowest part of
-                -- get-message for attachmentless messages. Accepted as the
-                -- cost of correct hasAttachments in the detail view.
-                if hasAtt is "false" then
-                  try
-                    set rawSrc to source of msg
-                    if rawSrc contains "Content-Disposition: attachment" then set hasAtt to "true"
-                  end try
-                end if
+                ${deepScan}
                 return msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgJunk & "${FIELD_SEP}" & msgDeleted & "${FIELD_SEP}" & msgMailbox & "${FIELD_SEP}" & msgAccount & "${FIELD_SEP}" & hasAtt
               end if
             end try
@@ -723,8 +726,20 @@ export class AppleMailManager {
     }
     /**
      * Get the content of a message.
+     *
+     * @param id - Message ID
+     * @param includeHtml - When true, also fetch the raw MIME source and extract
+     *   the `text/html` body part into `htmlContent`. This is opt-in because the
+     *   source can be MB-sized (it includes base64 attachments) and the plain-text
+     *   path doesn't need it; fetching it unconditionally was both slow and, worse,
+     *   returned the entire raw MIME blob mislabeled as HTML (#32).
      */
-    getMessageContent(id) {
+    getMessageContent(id, includeHtml = false) {
+        // Only `source of msg` is fetched when HTML is requested. `content of msg`
+        // is the plain-text body and is always cheap.
+        const sourceFetch = includeHtml
+            ? `set htmlSource to ""\n                try\n                  set htmlSource to source of msg\n                end try`
+            : `set htmlSource to ""`;
         const script = buildAppLevelScript(`
       try
         repeat with acct in accounts
@@ -735,11 +750,8 @@ export class AppleMailManager {
                 set msg to item 1 of matchingMsgs
                 set msgSubject to subject of msg
                 set msgContent to content of msg
-                set htmlContent to ""
-                try
-                  set htmlContent to source of msg
-                end try
-                return msgSubject & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlContent
+                ${sourceFetch}
+                return msgSubject & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource
               end if
             end try
           end repeat
@@ -756,15 +768,19 @@ export class AppleMailManager {
         }
         const htmlSplit = result.output.split(HTML_MARKER);
         const contentPart = htmlSplit[0];
-        const htmlContent = htmlSplit.length > 1 ? htmlSplit[1] : undefined;
+        const rawSource = htmlSplit.length > 1 ? htmlSplit[1] : "";
         const parts = contentPart.split(CONTENT_MARKER);
         if (parts.length < 2)
             return null;
+        // Extract the actual text/html body from the raw MIME source rather than
+        // returning the whole source. Falls back to undefined when the message has
+        // no HTML part (e.g. a plain-text-only email).
+        const htmlContent = includeHtml && rawSource ? extractHtmlBody(rawSource) || undefined : undefined;
         return {
             id: id.toString(),
             subject: parts[0],
             plainText: parts[1],
-            htmlContent: htmlContent || undefined,
+            htmlContent,
         };
     }
     /**

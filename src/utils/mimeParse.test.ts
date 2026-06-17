@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseMimeAttachments, extractMimeAttachment } from "./mimeParse.js";
+import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "./mimeParse.js";
 
 const MIME_WITH_PDF = `Content-Type: multipart/mixed;
 \tboundary="_004_TEST"
@@ -291,5 +291,61 @@ describe("parseMimeAttachments — transfer encodings", () => {
     const result = parseMimeAttachments(MIME_7BIT_ATTACH);
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe("data.csv");
+  });
+});
+
+describe("extractHtmlBody (#32)", () => {
+  it("extracts the text/html part from a multipart/alternative message", () => {
+    const src = `Content-Type: multipart/alternative;
+\tboundary="alt-bound"
+MIME-Version: 1.0
+
+--alt-bound
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hello in plain text
+
+--alt-bound
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body><p>Hello in <b>HTML</b></p></body></html>
+
+--alt-bound--`;
+    expect(extractHtmlBody(src)).toBe("<html><body><p>Hello in <b>HTML</b></p></body></html>");
+  });
+
+  it("decodes a quoted-printable HTML part", () => {
+    const src = `Content-Type: multipart/alternative; boundary="b"
+MIME-Version: 1.0
+
+--b
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<p>Caf=C3=A9 =26 tea</p>
+
+--b--`;
+    expect(extractHtmlBody(src)).toBe("<p>Café & tea</p>");
+  });
+
+  it("handles a non-multipart text/html message", () => {
+    const src = `Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<h1>Direct HTML</h1>`;
+    expect(extractHtmlBody(src)).toBe("<h1>Direct HTML</h1>");
+  });
+
+  it("returns null for a plain-text-only message", () => {
+    const src = `Content-Type: text/plain; charset="utf-8"
+
+just text, no html`;
+    expect(extractHtmlBody(src)).toBeNull();
+  });
+
+  it("returns null for empty input", () => {
+    expect(extractHtmlBody("")).toBeNull();
   });
 });
