@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Result parsing corrupted when a field value contained the `|||` delimiter** — AppleScript emitted structured results as `|||`-delimited (records `|||ITEM|||`) strings that TS split back apart, but field values were never sanitized first. Any subject, sender, attachment filename, or mailbox name that itself contained `|||` shifted every subsequent field and silently produced wrong structured output (e.g. an attachment named `report|||v2.pdf` parsed `v2.pdf` as the MIME type). All serialization separators are now ASCII control characters — Unit Separator (`\x1f`) for fields, Record Separator (`\x1e`) for records, Group Separator (`\x1d`) for the diagnostics/content markers — which cannot occur in mail field values, so the collision is structurally impossible. The same constants drive both the AppleScript emitter and the TS parser, so they can't drift. Verified across every parser (search, list, get-message, get-message-content, list-mailboxes, list-accounts, get-sync-status, get-mail-stats) on live Mail plus the full 44-test integration suite. ([#30](https://github.com/sweetrb/apple-mail-mcp/issues/30))
+
 ## [1.6.4] - 2026-06-17
 
 ### Fixed
