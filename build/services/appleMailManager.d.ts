@@ -37,6 +37,17 @@ export declare function splitSearchDiagnostics(output: string, account: string):
     diagnostics: SearchDiagnostics;
 };
 /**
+ * True if `resolvedPath` is one of the allowed roots or strictly inside one.
+ *
+ * Uses a path-segment boundary check rather than a bare `startsWith`, which
+ * would let a sibling whose name merely shares the prefix slip through —
+ * `/Volumes-evil` startsWith `/Volumes`, `/Users/robother` startsWith
+ * `/Users/rob` (audit finding #12). `resolvedPath` must already be absolute
+ * (caller passes `resolve(...)` output).
+ */
+export declare function isPathWithinAllowedRoots(resolvedPath: string): boolean;
+export declare function escapeForAppleScript(text: string): string;
+/**
  * Emits AppleScript that builds a date into the variable `varName` from numeric
  * components.
  *
