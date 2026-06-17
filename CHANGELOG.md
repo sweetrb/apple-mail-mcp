@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`get-message preferHtml` returned the raw MIME source, not the HTML body; and `get-message` always fetched that source even for plain-text reads** — `getMessageContent` unconditionally read `source of msg` and returned the entire raw MIME (headers + base64 attachments) as `htmlContent`, so `preferHtml:true` dumped a (potentially multi-MB) blob into the response instead of the HTML body, and every plain-text read paid the cost of fetching the source too. Now `get-message` fetches the source only when `preferHtml` is set, and extracts the actual `text/html` part from it via a new `extractHtmlBody()` MIME parser (decoding base64 / quoted-printable, descending into nested multipart containers); plain-text-only messages return no HTML rather than a mislabeled blob. Separately, `getMessageById`'s full-source scan for MIME-embedded attachments — the slowest part of that path — is now opt-in via a `deepAttachmentCheck` parameter (default off) instead of running on every attachmentless message. ([#32](https://github.com/sweetrb/apple-mail-mcp/issues/32))
+
 ## [1.6.6] - 2026-06-17
 
 ### Changed

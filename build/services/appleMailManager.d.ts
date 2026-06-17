@@ -180,11 +180,18 @@ export declare class AppleMailManager {
      * Note: Mail.app message IDs are unique per mailbox. This method searches
      * all mailboxes in all accounts to find the message.
      */
-    getMessageById(id: string): Message | null;
+    getMessageById(id: string, deepAttachmentCheck?: boolean): Message | null;
     /**
      * Get the content of a message.
+     *
+     * @param id - Message ID
+     * @param includeHtml - When true, also fetch the raw MIME source and extract
+     *   the `text/html` body part into `htmlContent`. This is opt-in because the
+     *   source can be MB-sized (it includes base64 attachments) and the plain-text
+     *   path doesn't need it; fetching it unconditionally was both slow and, worse,
+     *   returned the entire raw MIME blob mislabeled as HTML (#32).
      */
-    getMessageContent(id: string): MessageContent | null;
+    getMessageContent(id: string, includeHtml?: boolean): MessageContent | null;
     /**
      * Get the raw MIME source of a message.
      * Used as fallback for attachment extraction when AppleScript

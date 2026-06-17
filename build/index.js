@@ -174,9 +174,13 @@ server.tool("search-messages", {
 // --- get-message ---
 server.tool("get-message", {
     id: MESSAGE_ID_SCHEMA,
-    preferHtml: z.boolean().optional().describe("Return HTML source instead of plain text"),
+    preferHtml: z
+        .boolean()
+        .optional()
+        .describe("Return the HTML body (extracted from the message source) instead of plain text"),
 }, withErrorHandling(({ id, preferHtml }) => {
-    const content = mailManager.getMessageContent(id);
+    // Only fetch/parse the raw source when HTML is actually requested (#32).
+    const content = mailManager.getMessageContent(id, preferHtml === true);
     if (!content) {
         return errorResponse(`Message with ID "${id}" not found`);
     }
