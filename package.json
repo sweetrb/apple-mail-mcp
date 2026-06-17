@@ -1,6 +1,6 @@
 {
   "name": "apple-mail-mcp",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude",
   "type": "module",
   "main": "build/index.js",

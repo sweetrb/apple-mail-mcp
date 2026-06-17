@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.6] - 2026-06-17
 
 ### Changed
 - **Batch operations now run in a single AppleScript pass instead of N process spawns** — `batch-delete`, `batch-move`, `batch-mark-as-read`/`unread`, and `batch-flag`/`unflag` previously looped and invoked the per-message method once per ID, so a 100-ID batch spawned 100 osascript processes, each re-resolving accounts and walking the entire account→mailbox tree, all serialized through the gate (minutes of pure overhead at scale). They now walk the mailbox tree exactly once, probing the still-pending IDs in each mailbox with the indexed `whose id is` (effectively free) and stopping early once every ID is accounted for. Per-ID results are unchanged (`{ id, success, error }`, in input order); `batch-move` still resolves the destination once and refuses an ambiguous destination rather than guessing. ([#31](https://github.com/sweetrb/apple-mail-mcp/issues/31))
