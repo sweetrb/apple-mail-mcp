@@ -66,6 +66,29 @@ describe("executeAppleScript", () => {
       const calledCommand = mockExecSync.mock.calls[0][0] as string;
       expect(calledCommand).toContain("Rob'\\''s");
     });
+
+    it("passes a maxBuffer well above Node's 1MB default (#27)", () => {
+      mockExecSync.mockReturnValue("ok");
+      executeAppleScript('tell app "Mail" to return "ok"');
+      const opts = mockExecSync.mock.calls[0][1] as { maxBuffer?: number };
+      // Default is 64 MB; the only hard requirement is that it exceeds the 1 MB
+      // Node default that truncated large message sources (#27).
+      expect(opts.maxBuffer).toBeGreaterThan(1024 * 1024);
+    });
+
+    it("honors the APPLE_MAIL_MCP_MAX_BUFFER override (#27)", () => {
+      mockExecSync.mockReturnValue("ok");
+      const prev = process.env.APPLE_MAIL_MCP_MAX_BUFFER;
+      process.env.APPLE_MAIL_MCP_MAX_BUFFER = "12345";
+      try {
+        executeAppleScript('tell app "Mail" to return "ok"');
+        const opts = mockExecSync.mock.calls[0][1] as { maxBuffer?: number };
+        expect(opts.maxBuffer).toBe(12345);
+      } finally {
+        if (prev === undefined) delete process.env.APPLE_MAIL_MCP_MAX_BUFFER;
+        else process.env.APPLE_MAIL_MCP_MAX_BUFFER = prev;
+      }
+    });
   });
 
   describe("error handling", () => {

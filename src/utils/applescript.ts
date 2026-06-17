@@ -18,6 +18,33 @@ import type { AppleScriptResult, AppleScriptOptions } from "@/types.js";
 const DEFAULT_TIMEOUT_MS = 30000;
 
 /**
+ * Maximum stdout/stderr buffer (bytes) for an osascript invocation.
+ *
+ * Node's `execSync` defaults to a 1 MB `maxBuffer`; exceeding it throws
+ * `ENOBUFS`, which we surface as a failure and callers convert to `null`. Mail
+ * operations routinely exceed 1 MB — `getRawSource` reads the entire raw MIME
+ * (a 20 MB attachment is explicitly anticipated), `getMessageContent` returns
+ * the full source, and large `search`/`list` result sets accumulate — so the
+ * default silently breaks exactly the large / attachment-bearing messages where
+ * it matters most (issue #27). Default to 64 MB; override with
+ * `APPLE_MAIL_MCP_MAX_BUFFER` (bytes).
+ */
+const DEFAULT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Resolve the osascript output buffer size, honoring the
+ * `APPLE_MAIL_MCP_MAX_BUFFER` environment override (bytes).
+ */
+function getMaxBuffer(): number {
+  const raw = process.env.APPLE_MAIL_MCP_MAX_BUFFER;
+  if (raw !== undefined) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return DEFAULT_MAX_BUFFER_BYTES;
+}
+
+/**
  * Default retry configuration.
  * - 1 attempt means no retries (default behavior)
  * - Use maxRetries: 3 for exponential backoff with 1s/2s delays
@@ -354,6 +381,10 @@ export function executeAppleScript(
         // up and worsen the contention. SIGKILL guarantees the process is reaped
         // when the timeout fires. (#11)
         killSignal: "SIGKILL",
+        // Raise the output cap well above Node's 1 MB default so large message
+        // sources / attachment payloads aren't truncated into an ENOBUFS
+        // failure. (#27)
+        maxBuffer: getMaxBuffer(),
         // Capture stderr separately to get error details
         stdio: ["pipe", "pipe", "pipe"],
       });
