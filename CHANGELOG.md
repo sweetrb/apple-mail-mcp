@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.4] - 2026-06-17
 
 ### Fixed
 - **`list-messages` returned a false empty on large multi-account setups (the #24 pathology, untreated)** — the unscoped (all-mailboxes) `listMessages` path iterated `messages of mb` over every mailbox with a swallowing per-mailbox `try`, so a large IMAP/Gmail mailbox timed out and the tool returned a clean — but wrong — "No messages found." `listMessages` now gets the same treatment as `searchMessages`: a cheap count-guard that skips mailboxes above `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default 5000), a per-account wall-clock budget, per-mailbox timeout capture, and a partial-result warning naming the skipped/timed-out scopes instead of a silent empty. New `listMessagesWithDiagnostics()` returns `{ messages, diagnostics }`; `listMessages()` is unchanged for back-compat. The coverage-warning rendering is now shared between `search-messages` and `list-messages`. By-id lookups (`get-message`) were left unchanged: profiling shows `whose id is` is indexed and returns instantly even on a 44k-message mailbox, so they don't suffer the timeout/false-empty problem. ([#29](https://github.com/sweetrb/apple-mail-mcp/issues/29))
