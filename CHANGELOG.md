@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.8] - 2026-06-17
 
 ### Fixed
 - **`rename-mailbox` could lose messages on a partial move** — rename is emulated as create-new + move-all + delete-old. The old code iterated `messages of srcMailbox` *while moving* (mutating the collection it was iterating, which can skip messages) and then deleted the source unconditionally, so a move that errored or timed out part-way deleted the source along with its un-moved remainder. It now snapshots the message references up front, moves each in its own `try`, and deletes the source **only after verifying it is empty** (every message moved); on a partial move both mailboxes are left intact and the tool reports how many messages still remain in the source so the rename can be retried. The move timeout was also raised (60s → 120s) for large mailboxes, and because deletion is now gated on a verified-empty source, even a SIGKILLed move is recoverable rather than lossy. ([#33](https://github.com/sweetrb/apple-mail-mcp/issues/33))
