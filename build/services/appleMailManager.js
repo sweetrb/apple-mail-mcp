@@ -70,6 +70,7 @@ const DIAG_FIELD_SEP = "\x1dF\x1d"; // between diagnostics fields
 const DIAG_ITEM_SEP = "\x1dM\x1d"; // between diagnostics list items
 const CONTENT_MARKER = "\x1dCONTENT\x1d"; // subject/plain-text boundary
 const HTML_MARKER = "\x1dHTML\x1d"; // plain-text/source boundary
+const BATCH_FATAL = "\x1dFATAL\x1d"; // prefix for a whole-batch failure (e.g. bad destination)
 /**
  * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
  *
@@ -1466,90 +1467,174 @@ export class AppleMailManager {
     // Batch Operations
     // ===========================================================================
     /**
-     * Delete multiple messages at once.
+     * Run one operation over many message IDs in a SINGLE osascript invocation.
      *
-     * @param ids - Array of message IDs to delete
-     * @returns Array of results for each message
+     * Previously each batch method looped and called the per-id method, so a
+     * 100-id batch spawned 100 osascript processes — each one re-resolving
+     * accounts and walking the whole account→mailbox tree — all serialized
+     * through the gate (issue #31). This walks the tree exactly once: for each
+     * mailbox it probes the still-pending IDs with `whose id is` (indexed, so
+     * effectively free) and applies `operation` to any match, tracking found IDs
+     * so it can stop early once all are accounted for. Per-id outcomes come back
+     * as control-char-delimited `id<FS>status` records (status: `ok`,
+     * `notfound`, or `error:<msg>`), and results are returned in input order.
+     *
+     * `setup` runs once before the walk (used by move to resolve the destination);
+     * it may bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
+     */
+    runBatchOperation(ids, operation, setup = "") {
+        // Keep the numeric IDs paired with their original string form and 1-based
+        // position. The AppleScript reports outcomes by POSITION, not by id: a Mail
+        // id large enough to exceed AppleScript's 2^29 integer range coerces to
+        // scientific notation under `as string` (999999999 -> "9.99999999E+8"), so
+        // echoing the id back can't be matched to the input. Positions are always
+        // small integers, so they round-trip cleanly.
+        const valid = [];
+        for (const id of ids) {
+            const num = Number(id);
+            if (Number.isFinite(num))
+                valid.push({ id, num });
+        }
+        if (valid.length === 0) {
+            return ids.map((id) => ({ id, success: false, error: "Invalid message ID" }));
+        }
+        const script = buildAppLevelScript(`
+      try
+        ${setup}
+        set _out to ""
+        set _done to {}
+        set _ids to {${valid.map((v) => v.num).join(", ")}}
+        set _total to count of _ids
+        repeat with acct in accounts
+          if (count of _done) is _total then exit repeat
+          repeat with mb in (mailboxes of acct)
+            if (count of _done) is _total then exit repeat
+            repeat with _idx from 1 to _total
+              if _idx is not in _done then
+                set _theId to item _idx of _ids
+                try
+                  set _m to (messages of mb whose id is _theId)
+                  if (count of _m) > 0 then
+                    set _msg to item 1 of _m
+                    ${operation}
+                    set end of _done to _idx
+                    set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
+                  end if
+                on error _e
+                  set end of _done to _idx
+                  set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
+                end try
+              end if
+            end repeat
+          end repeat
+        end repeat
+        repeat with _idx from 1 to _total
+          if _idx is not in _done then set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+        end repeat
+        return _out
+      on error errMsg
+        return "${BATCH_FATAL}" & errMsg
+      end try
+    `);
+        // Generous timeout: one walk over the tree with indexed id probes. Scale a
+        // little with batch size, capped.
+        const timeoutMs = Math.min(180000, 60000 + valid.length * 500);
+        const result = executeAppleScript(script, { timeoutMs });
+        if (!result.success) {
+            const err = result.error || "Batch operation failed";
+            return ids.map((id) => ({ id, success: false, error: err }));
+        }
+        if (result.output.startsWith(BATCH_FATAL)) {
+            const err = result.output.slice(BATCH_FATAL.length);
+            return ids.map((id) => ({ id, success: false, error: err }));
+        }
+        // Map by-position outcomes back to the original id strings.
+        const byId = new Map();
+        for (const rec of result.output.split(RECORD_SEP)) {
+            if (!rec)
+                continue;
+            const sep = rec.indexOf(FIELD_SEP);
+            if (sep < 0)
+                continue;
+            const pos = Number(rec.slice(0, sep));
+            const status = rec.slice(sep + FIELD_SEP.length);
+            const entry = valid[pos - 1];
+            if (!entry)
+                continue;
+            const id = entry.id;
+            if (status === "ok") {
+                byId.set(id, { id, success: true });
+            }
+            else if (status === "notfound") {
+                byId.set(id, { id, success: false, error: "Message not found" });
+            }
+            else if (status.startsWith("error:")) {
+                byId.set(id, { id, success: false, error: status.slice("error:".length) });
+            }
+            else {
+                byId.set(id, { id, success: false, error: status || "Unknown error" });
+            }
+        }
+        return ids.map((id) => byId.get(id) ??
+            (Number.isFinite(Number(id))
+                ? { id, success: false, error: "No result returned" }
+                : { id, success: false, error: "Invalid message ID" }));
+    }
+    /**
+     * Delete multiple messages at once (single tree walk — see runBatchOperation).
      */
     batchDeleteMessages(ids) {
-        const results = [];
-        for (const id of ids) {
-            const success = this.deleteMessage(id);
-            results.push({
-                id,
-                success,
-                error: success ? undefined : "Failed to delete message",
-            });
-        }
-        return results;
+        return this.runBatchOperation(ids, "delete _msg");
     }
     /**
-     * Move multiple messages to a mailbox at once.
+     * Move multiple messages to a mailbox at once (single tree walk).
      *
-     * @param ids - Array of message IDs to move
-     * @param mailbox - Destination mailbox name
-     * @param account - Account containing the destination mailbox
-     * @returns Array of results for each message
+     * The destination is resolved once (account-scoped, ambiguity-aware — a name
+     * matching more than one mailbox fails the whole batch rather than guessing),
+     * then every matched message is moved in the same walk.
      */
     batchMoveMessages(ids, mailbox, account) {
-        const results = [];
-        for (const id of ids) {
-            const { success, error } = this.moveMessageInternal(id, mailbox, account);
-            results.push({
-                id,
-                success,
-                error: success ? undefined : error || "Failed to move message",
-            });
-        }
-        return results;
+        const targetAccount = this.resolveAccount(account);
+        const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
+        const safeMailbox = escapeForAppleScript(targetMailbox);
+        const safeAccount = escapeForAppleScript(targetAccount);
+        // Resolved once, before the walk. `mailboxes of account` is already flat
+        // (includes nested mailboxes by path), so we match by exact name and use the
+        // reference directly. A bad/ambiguous destination fails the whole batch.
+        const setup = `
+        set destName to "${safeMailbox}"
+        set destMatches to {}
+        repeat with _dmb in (mailboxes of account "${safeAccount}")
+          if (name of _dmb) is destName then set end of destMatches to _dmb
+        end repeat
+        if (count of destMatches) is 0 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" not found in account \\"${safeAccount}\\""
+        if (count of destMatches) > 1 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; move by full path"
+        set destMailbox to item 1 of destMatches`;
+        return this.runBatchOperation(ids, "move _msg to destMailbox", setup);
     }
     /**
-     * Mark multiple messages as read at once.
+     * Mark multiple messages as read at once (single tree walk).
      */
     batchMarkAsRead(ids) {
-        const results = [];
-        for (const id of ids) {
-            const success = this.markAsRead(id);
-            results.push({ id, success, error: success ? undefined : "Failed to mark message as read" });
-        }
-        return results;
+        return this.runBatchOperation(ids, "set read status of _msg to true");
     }
     /**
-     * Mark multiple messages as unread at once.
+     * Mark multiple messages as unread at once (single tree walk).
      */
     batchMarkAsUnread(ids) {
-        const results = [];
-        for (const id of ids) {
-            const success = this.markAsUnread(id);
-            results.push({
-                id,
-                success,
-                error: success ? undefined : "Failed to mark message as unread",
-            });
-        }
-        return results;
+        return this.runBatchOperation(ids, "set read status of _msg to false");
     }
     /**
-     * Flag multiple messages at once.
+     * Flag multiple messages at once (single tree walk).
      */
     batchFlagMessages(ids) {
-        const results = [];
-        for (const id of ids) {
-            const success = this.flagMessage(id);
-            results.push({ id, success, error: success ? undefined : "Failed to flag message" });
-        }
-        return results;
+        return this.runBatchOperation(ids, "set flagged status of _msg to true");
     }
     /**
-     * Unflag multiple messages at once.
+     * Unflag multiple messages at once (single tree walk).
      */
     batchUnflagMessages(ids) {
-        const results = [];
-        for (const id of ids) {
-            const success = this.unflagMessage(id);
-            results.push({ id, success, error: success ? undefined : "Failed to unflag message" });
-        }
-        return results;
+        return this.runBatchOperation(ids, "set flagged status of _msg to false");
     }
     /**
      * List attachments for a message.
