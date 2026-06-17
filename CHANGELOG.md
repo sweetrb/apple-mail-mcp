@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`get-mail-stats` / recently-received counts were silently `0/0/0` on non-English system locales** — `getRecentlyReceivedStats` built its 24h/7d/30d thresholds as `date "January 5, 2026"` English-month literals. On a non-English locale Mail.app's `date "…"` coercion throws *"Invalid date and time (-30720)"*; the throw was swallowed by the per-inbox `try`, so the method returned `{last24h:0, last7d:0, last30d:0}` as a clean success and fed those zeros into `get-mail-stats`. This is the same locale regression fixed for `search-messages` in #15. The thresholds are now built from numeric components via the locale-independent `buildAppleScriptDate` helper. ([#28](https://github.com/sweetrb/apple-mail-mcp/issues/28))
+
 ## [1.6.2] - 2026-06-17
 
 ### Fixed
