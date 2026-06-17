@@ -335,35 +335,48 @@ export declare class AppleMailManager {
     private moveMessageInternal;
     moveMessage(id: string, mailbox: string, account?: string): boolean;
     /**
-     * Delete multiple messages at once.
+     * Run one operation over many message IDs in a SINGLE osascript invocation.
      *
-     * @param ids - Array of message IDs to delete
-     * @returns Array of results for each message
+     * Previously each batch method looped and called the per-id method, so a
+     * 100-id batch spawned 100 osascript processes — each one re-resolving
+     * accounts and walking the whole account→mailbox tree — all serialized
+     * through the gate (issue #31). This walks the tree exactly once: for each
+     * mailbox it probes the still-pending IDs with `whose id is` (indexed, so
+     * effectively free) and applies `operation` to any match, tracking found IDs
+     * so it can stop early once all are accounted for. Per-id outcomes come back
+     * as control-char-delimited `id<FS>status` records (status: `ok`,
+     * `notfound`, or `error:<msg>`), and results are returned in input order.
+     *
+     * `setup` runs once before the walk (used by move to resolve the destination);
+     * it may bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
+     */
+    private runBatchOperation;
+    /**
+     * Delete multiple messages at once (single tree walk — see runBatchOperation).
      */
     batchDeleteMessages(ids: string[]): BatchOperationResult[];
     /**
-     * Move multiple messages to a mailbox at once.
+     * Move multiple messages to a mailbox at once (single tree walk).
      *
-     * @param ids - Array of message IDs to move
-     * @param mailbox - Destination mailbox name
-     * @param account - Account containing the destination mailbox
-     * @returns Array of results for each message
+     * The destination is resolved once (account-scoped, ambiguity-aware — a name
+     * matching more than one mailbox fails the whole batch rather than guessing),
+     * then every matched message is moved in the same walk.
      */
     batchMoveMessages(ids: string[], mailbox: string, account?: string): BatchOperationResult[];
     /**
-     * Mark multiple messages as read at once.
+     * Mark multiple messages as read at once (single tree walk).
      */
     batchMarkAsRead(ids: string[]): BatchOperationResult[];
     /**
-     * Mark multiple messages as unread at once.
+     * Mark multiple messages as unread at once (single tree walk).
      */
     batchMarkAsUnread(ids: string[]): BatchOperationResult[];
     /**
-     * Flag multiple messages at once.
+     * Flag multiple messages at once (single tree walk).
      */
     batchFlagMessages(ids: string[]): BatchOperationResult[];
     /**
-     * Unflag multiple messages at once.
+     * Unflag multiple messages at once (single tree walk).
      */
     batchUnflagMessages(ids: string[]): BatchOperationResult[];
     /**
