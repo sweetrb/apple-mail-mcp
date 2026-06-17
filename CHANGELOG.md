@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`osascript` output was capped at Node's 1 MB default `maxBuffer`, silently failing large messages** — `executeAppleScript` ran `execSync` without a `maxBuffer`, so any operation whose output exceeded 1 MB threw `ENOBUFS`, which surfaced as a failure and callers turned into `null`. This broke exactly the large / attachment-bearing operations where it mattered: `getRawSource` (which explicitly anticipates 20 MB raw sources for attachment extraction), `getMessageContent` (returns the full `source of msg`), and large `search-messages`/`list-messages` result sets — all appearing as "message not found" / "attachment not found" / missing body. The buffer is now 64 MB by default and overridable via the `APPLE_MAIL_MCP_MAX_BUFFER` environment variable (bytes). ([#27](https://github.com/sweetrb/apple-mail-mcp/issues/27))
+
 ## [1.6.1] - 2026-06-17
 
 ### Fixed
