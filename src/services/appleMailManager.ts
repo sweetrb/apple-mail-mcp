@@ -2510,33 +2510,21 @@ export class AppleMailManager {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    // Format dates for AppleScript comparison
-    const formatDate = (d: Date): string => {
-      const months = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-      ];
-      return `date "${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}"`;
-    };
+    // Thresholds are built from numeric components via buildAppleScriptDate
+    // rather than `date "January 5, 2026"` string coercion. The English-month
+    // literal throws "Invalid date and time (-30720)" on non-English system
+    // locales; that throw was swallowed by the per-inbox `try` below, so this
+    // method silently returned 0/0/0 on those Macs — the same locale regression
+    // fixed for searchMessages in #15 / surfaced again in #28.
 
     // Only scan INBOX for performance - scanning all mailboxes is too slow
     const script = buildAppLevelScript(`
       set last24h to 0
       set last7d to 0
       set last30d to 0
-      set oneDayAgo to ${formatDate(oneDayAgo)}
-      set sevenDaysAgo to ${formatDate(sevenDaysAgo)}
-      set thirtyDaysAgo to ${formatDate(thirtyDaysAgo)}
+      ${buildAppleScriptDate("oneDayAgo", oneDayAgo)}
+      ${buildAppleScriptDate("sevenDaysAgo", sevenDaysAgo)}
+      ${buildAppleScriptDate("thirtyDaysAgo", thirtyDaysAgo)}
 
       repeat with acct in accounts
         try
