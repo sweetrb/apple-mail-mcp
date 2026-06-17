@@ -73,6 +73,34 @@ function escapeForShell(script: string): string {
 }
 
 /**
+ * Headroom (ms) between the in-AppleScript `with timeout` and the outer
+ * osascript process timeout. The script-level timeout must fire *first* so
+ * Mail.app aborts the operation from inside its own AppleScript dispatch —
+ * cleanly releasing the event queue — before Node SIGKILLs the osascript
+ * process. Killing osascript alone does not stop work already dispatched into
+ * Mail.app, which is what wedges Mail.app for subsequent calls (issue #11).
+ */
+const SCRIPT_TIMEOUT_HEADROOM_MS = 5000;
+
+/**
+ * Wraps a script body in an AppleScript `with timeout` block so any Apple
+ * Event that honors timeouts (most Mail.app operations do) aborts cleanly
+ * rather than holding Mail.app's single-threaded AppleScript dispatch queue
+ * open indefinitely.
+ *
+ * The timeout is set a few seconds below the osascript process timeout so the
+ * in-Mail abort wins the race against the outer process kill.
+ *
+ * @param script - The AppleScript body
+ * @param processTimeoutMs - The outer osascript process timeout
+ * @returns The script wrapped in `with timeout … end timeout`
+ */
+function wrapWithTimeout(script: string, processTimeoutMs: number): string {
+  const seconds = Math.max(1, Math.ceil((processTimeoutMs - SCRIPT_TIMEOUT_HEADROOM_MS) / 1000));
+  return `with timeout of ${seconds} seconds\n${script}\nend timeout`;
+}
+
+/**
  * Checks if an error is a timeout error from execSync.
  *
  * Node.js throws errors with specific properties when a child process
@@ -293,8 +321,10 @@ export function executeAppleScript(
   // Prepare the script:
   // 1. Trim leading/trailing whitespace (cosmetic)
   // 2. Preserve internal newlines (required for AppleScript syntax)
-  // 3. Escape for shell execution
-  const preparedScript = escapeForShell(script.trim());
+  // 3. Wrap in `with timeout` so a stuck Mail.app operation aborts from
+  //    inside its own dispatch before the process timeout kills osascript (#11)
+  // 4. Escape for shell execution
+  const preparedScript = escapeForShell(wrapWithTimeout(script.trim(), timeoutMs));
 
   // Build the osascript command
   // We use single quotes to wrap the script, which is why we escape
@@ -319,6 +349,11 @@ export function executeAppleScript(
       const output = execSync(command, {
         encoding: "utf8",
         timeout: timeoutMs,
+        // SIGKILL (not the default SIGTERM): a wedged osascript blocked on an
+        // unresponsive Mail.app can ignore SIGTERM, leaking processes that pile
+        // up and worsen the contention. SIGKILL guarantees the process is reaped
+        // when the timeout fires. (#11)
+        killSignal: "SIGKILL",
         // Capture stderr separately to get error details
         stdio: ["pipe", "pipe", "pipe"],
       });

@@ -25,6 +25,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "./services/appleMailManager.js";
 import { sendViaSmtp } from "./services/smtpMailer.js";
+import { createSerialGate } from "./utils/serialize.js";
 // =============================================================================
 // Shared Validation Schemas
 // =============================================================================
@@ -85,18 +86,32 @@ function errorResponse(message) {
     };
 }
 /**
- * Wraps a tool handler with consistent error handling. Handlers may be
- * synchronous or async (the SMTP send path in send-email is async).
+ * Serial execution gate for AppleScript-backed tool calls (issue #11).
+ *
+ * Concurrent MCP tool calls are funneled through this single gate so only one
+ * osascript invocation hits Mail.app's single-threaded AppleScript dispatch at
+ * a time, with a short settle delay between calls so the dispatch queue drains.
+ * Without it, a concurrent batch races into Mail.app, the later calls blow past
+ * their timeouts, and Mail.app is left half-recovered for the next batch.
+ */
+const serializeAppleScript = createSerialGate();
+/**
+ * Wraps a tool handler with consistent error handling, serialized through the
+ * AppleScript gate so concurrent MCP tool calls don't race into Mail.app (#11).
+ * Handlers may be synchronous or async (the SMTP send path in send-email is
+ * async), so the handler result is awaited inside the gate.
  */
 function withErrorHandling(handler, errorPrefix) {
     return async (params) => {
-        try {
-            return await handler(params);
-        }
-        catch (error) {
-            const message = error instanceof Error ? error.message : "Unknown error";
-            return errorResponse(`${errorPrefix}: ${message}`);
-        }
+        return serializeAppleScript(async () => {
+            try {
+                return await handler(params);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : "Unknown error";
+                return errorResponse(`${errorPrefix}: ${message}`);
+            }
+        });
     };
 }
 // =============================================================================

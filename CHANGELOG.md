@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.7] - 2026-06-17
+
+### Fixed
+- **Concurrent tool calls cascaded into 30s timeouts and left Mail.app wedged** — parallel `tell application "Mail"` dispatches pile up inside Mail.app's single-threaded AppleScript handler; once enough stack up the later calls blow past their timeouts while earlier ones are still draining, so the client sees a cascade of "Request timed out" (`-32001`) errors and Mail.app is left half-recovered for the next batch. Mail-touching tool calls now run through a serial execution gate (`src/utils/serialize.ts`) that chains every task through a single promise with a 50ms settle delay, so only one AppleScript runs at a time and Mail.app's dispatch queue never piles up; awaiting the gate yields the event loop between calls, so the server stays responsive (a health-check issued mid-batch still returns). Each script is additionally wrapped in `with timeout of N seconds` (a few seconds below the osascript process timeout) so a stuck operation aborts cleanly from *inside* Mail.app's own dispatch before the process is killed, and osascript is reaped with `SIGKILL` so a wedged process can't leak and worsen the contention. ([#11](https://github.com/sweetrb/apple-mail-mcp/issues/11))
+
 ## [1.5.6] - 2026-06-16
 
 ### Security
