@@ -149,6 +149,27 @@ Search for messages matching criteria. Searches all accounts by default.
 | `dateTo` | string | No | End date filter (e.g., "March 1, 2026") |
 | `limit` | number | No | Max results (default: 50) |
 
+**Large mailboxes & partial results.** Apple Mail's AppleScript bridge cannot
+search very large IMAP/Gmail mailboxes (tens of thousands of messages) before
+the Apple Event times out — empirically even reading the newest 20 messages of
+a 44k-message mailbox takes ~45s. To avoid burning minutes only to return a
+misleading empty result, an unscoped (all-mailboxes) search **skips** mailboxes
+whose message count exceeds a threshold (default **5000**), enforces a
+per-account time budget, and **reports** anything it skipped or that timed out
+rather than silently returning nothing. When coverage is incomplete the result
+includes an explicit warning, e.g.:
+
+```
+⚠️  Partial results — this is NOT a confirmed "no such mail":
+  - skipped mailbox(es) too large to search via AppleScript: Gmail / All Mail (44287) — scope the search with `mailbox` + a `dateFrom`/`dateTo` window to target them
+```
+
+To search inside a large mailbox, scope the call with `mailbox` (and ideally a
+`dateFrom`/`dateTo` window). Tune or disable the skip threshold with the
+`APPLE_MAIL_MAX_SEARCH_MAILBOX` environment variable (default `5000`; set to `0`
+to disable the guard and attempt every mailbox regardless of size).
+([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24))
+
 ---
 
 #### `get-message`
@@ -778,6 +799,7 @@ The entrypoint is written as:
 | No sending HTML email | Emails are sent as plain text; reading HTML content is supported |
 | Attachments require absolute paths | File attachments must use full absolute paths (e.g., `/Users/me/file.pdf`) |
 | No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
+| Very large mailboxes not searchable | Apple Mail's AppleScript bridge times out on mailboxes with tens of thousands of messages, so unscoped `search-messages` skips mailboxes above `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default 5000) and reports them as a partial result. Scope with `mailbox` + a date window to search inside one. ([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)) |
 | In-memory templates | Email templates are not persisted across server restarts |
 | Numeric-only message IDs | Message IDs must contain only digits (validated by schema) |
 | Batch size cap | Batch operations are limited to 100 messages per request |
@@ -848,6 +870,12 @@ The `\\\\` in JSON becomes `\\` in the actual string, which represents a single 
 - Message may have been deleted or moved
 - Message IDs change if the message is moved between mailboxes
 - Use `search-messages` to find the current message ID
+
+### `search-messages` says "Partial results" or skips a mailbox
+- This is expected for very large IMAP/Gmail mailboxes (e.g. Gmail's `All Mail`, `Important`): Apple Mail can't scan them via AppleScript before timing out, so they're skipped and named in the result rather than silently returning empty.
+- To search inside one, scope the call with `mailbox` **and** a `dateFrom`/`dateTo` window.
+- Raise or disable the threshold with `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default `5000`; `0` disables the guard) — note that disabling it can make a single search take minutes.
+- A `Partial results` warning means coverage was incomplete; it is **not** a confirmed "no such mail."
 
 ### "Account not found"
 - Account names must match exactly (case-sensitive)

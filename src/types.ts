@@ -69,6 +69,41 @@ export interface Message {
 }
 
 /**
+ * Per-account / per-mailbox diagnostics for a search, so callers can tell a
+ * genuine "no matches" apart from "we couldn't finish searching."
+ *
+ * Apple Mail's AppleScript bridge is pathologically slow on large IMAP/Gmail
+ * mailboxes (tens of thousands of messages): a single `whose` predicate — or
+ * even reading the newest 20 messages by index — can blow past the Apple Event
+ * timeout. Before this was tracked, those timeouts were swallowed and the
+ * search returned a clean (but wrong) empty result. See issue #24.
+ */
+export interface SearchDiagnostics {
+  /** True if any account/mailbox could not be fully searched (timeout or skip). */
+  partial: boolean;
+  /** Accounts that timed out entirely (whole-account AppleScript was killed). */
+  timedOutAccounts: string[];
+  /**
+   * Mailboxes skipped because their message count exceeded the scan threshold,
+   * formatted as "Account / Mailbox (count)".
+   */
+  skippedLargeMailboxes: string[];
+  /**
+   * Mailboxes that were reached but timed out or errored mid-scan, formatted as
+   * "Account / Mailbox".
+   */
+  notSearchedMailboxes: string[];
+}
+
+/**
+ * A search result paired with diagnostics about coverage.
+ */
+export interface SearchResult {
+  messages: Message[];
+  diagnostics: SearchDiagnostics;
+}
+
+/**
  * Represents the content of an email message.
  */
 export interface MessageContent {

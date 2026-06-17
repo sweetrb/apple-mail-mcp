@@ -12,7 +12,29 @@
  *
  * @module services/appleMailManager
  */
-import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheckResult, MailStats, BatchOperationResult, SyncStatus, RecentlyReceivedStats, MailRule, Contact, EmailTemplate, SerialEmailRecipient, SerialEmailResult } from "../types.js";
+import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheckResult, MailStats, BatchOperationResult, SyncStatus, RecentlyReceivedStats, MailRule, Contact, EmailTemplate, SerialEmailRecipient, SerialEmailResult, SearchDiagnostics, SearchResult } from "../types.js";
+/**
+ * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
+ *
+ * Exported for unit testing.
+ */
+export declare function mergeSearchDiagnostics(into: SearchDiagnostics, from: SearchDiagnostics): void;
+/**
+ * Split a per-account search payload into its message-list portion and parsed
+ * diagnostics. The AppleScript appends a trailer of the form:
+ *
+ *   <messages>|||DIAG|||timedOut=true|||F|||skipped=Foo (9000)|||M||||||F|||notSearched=Bar|||M|||
+ *
+ * `skipped`/`notSearched` are `|||M|||`-separated mailbox names, each prefixed
+ * with the account name on the way out so the aggregate result is unambiguous.
+ *
+ * Exported (pure, no Mail.app dependency) for unit testing — this is the logic
+ * that turns a swallowed timeout into a visible partial result (issue #24).
+ */
+export declare function splitSearchDiagnostics(output: string, account: string): {
+    payload: string;
+    diagnostics: SearchDiagnostics;
+};
 /**
  * Emits AppleScript that builds a date into the variable `varName` from numeric
  * components.
@@ -127,6 +149,30 @@ export declare class AppleMailManager {
      * @returns Array of matching messages
      */
     searchMessages(query?: string, mailbox?: string, account?: string, limit?: number, dateFrom?: string, dateTo?: string, from?: string, subject?: string, isRead?: boolean, isFlagged?: boolean): Message[];
+    /**
+     * Search for messages, returning both the matches and diagnostics describing
+     * how complete the search was.
+     *
+     * This is the correctness fix for issue #24. The previous implementation ran
+     * an unbounded `messages of mb whose <predicate>` over every mailbox in an
+     * account; on large IMAP/Gmail mailboxes (tens of thousands of messages) that
+     * single Apple Event exceeded the timeout, the error was swallowed by a `try`,
+     * and the function returned a clean — but wrong — empty result. Callers/agents
+     * then confidently reported "no such mail."
+     *
+     * Two changes fix that:
+     *  1. Cheap count-guard: mailboxes larger than the scan threshold are skipped
+     *     (Apple Mail can't search them before timing out anyway) and reported.
+     *  2. Honest diagnostics: per-account/per-mailbox timeouts are surfaced as a
+     *     `partial` result with the affected scopes named, instead of an empty
+     *     "success."
+     */
+    searchMessagesWithDiagnostics(query?: string, mailbox?: string, account?: string, limit?: number, dateFrom?: string, dateTo?: string, from?: string, subject?: string, isRead?: boolean, isFlagged?: boolean): SearchResult;
+    /**
+     * Split a per-account search payload into its message list and the DIAG
+     * trailer, parse both, and return a SearchResult. See searchMessagesWithDiagnostics.
+     */
+    private parseSearchResult;
     /**
      * Get a message by ID.
      *

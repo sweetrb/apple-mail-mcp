@@ -36,7 +36,114 @@ import type {
   EmailTemplate,
   SerialEmailRecipient,
   SerialEmailResult,
+  SearchDiagnostics,
+  SearchResult,
 } from "@/types.js";
+
+// =============================================================================
+// Search Tuning (issue #24)
+// =============================================================================
+
+/**
+ * Mailboxes larger than this are skipped during an unscoped (all-mailboxes)
+ * search rather than scanned. Apple Mail's AppleScript bridge cannot search a
+ * mailbox of this size before the Apple Event timeout fires — empirically even
+ * reading the newest 20 messages of a 44k-message Gmail mailbox took ~47s — so
+ * attempting it only burns the time budget and yields a misleading empty
+ * result. `count of messages` is cheap (Mail keeps it cached), so the guard is
+ * effectively free. The skipped mailboxes are reported back to the caller.
+ *
+ * Override with APPLE_MAIL_MAX_SEARCH_MAILBOX (set to 0 to disable the guard).
+ */
+function getMailboxScanThreshold(): number {
+  const raw = process.env.APPLE_MAIL_MAX_SEARCH_MAILBOX;
+  if (raw !== undefined) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 5000;
+}
+
+/**
+ * Per-account wall-clock budget (seconds) enforced *inside* the AppleScript so
+ * a single account can't consume minutes. Kept comfortably below the osascript
+ * process timeout (see searchMessages) so the script exits and reports a
+ * partial result rather than being SIGKILLed with no diagnostics.
+ */
+const SEARCH_ACCOUNT_BUDGET_SECONDS = 30;
+
+/** osascript process timeout for a per-account search (ms). */
+const SEARCH_ACCOUNT_TIMEOUT_MS = 45000;
+
+/** Separator between the message payload and the diagnostics trailer. */
+const DIAG_MARKER = "|||DIAG|||";
+
+/**
+ * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
+ *
+ * Exported for unit testing.
+ */
+export function mergeSearchDiagnostics(into: SearchDiagnostics, from: SearchDiagnostics): void {
+  into.timedOutAccounts.push(...from.timedOutAccounts);
+  into.skippedLargeMailboxes.push(...from.skippedLargeMailboxes);
+  into.notSearchedMailboxes.push(...from.notSearchedMailboxes);
+  if (from.partial) into.partial = true;
+}
+
+/**
+ * Split a per-account search payload into its message-list portion and parsed
+ * diagnostics. The AppleScript appends a trailer of the form:
+ *
+ *   <messages>|||DIAG|||timedOut=true|||F|||skipped=Foo (9000)|||M||||||F|||notSearched=Bar|||M|||
+ *
+ * `skipped`/`notSearched` are `|||M|||`-separated mailbox names, each prefixed
+ * with the account name on the way out so the aggregate result is unambiguous.
+ *
+ * Exported (pure, no Mail.app dependency) for unit testing — this is the logic
+ * that turns a swallowed timeout into a visible partial result (issue #24).
+ */
+export function splitSearchDiagnostics(
+  output: string,
+  account: string
+): { payload: string; diagnostics: SearchDiagnostics } {
+  const markerIdx = output.lastIndexOf(DIAG_MARKER);
+  const payload = markerIdx >= 0 ? output.slice(0, markerIdx) : output;
+  const trailer = markerIdx >= 0 ? output.slice(markerIdx + DIAG_MARKER.length) : "";
+
+  const diagnostics: SearchDiagnostics = {
+    partial: false,
+    timedOutAccounts: [],
+    skippedLargeMailboxes: [],
+    notSearchedMailboxes: [],
+  };
+
+  if (trailer) {
+    const fields = trailer.split("|||F|||");
+    const getField = (key: string): string => {
+      const f = fields.find((x) => x.startsWith(`${key}=`));
+      return f ? f.slice(key.length + 1) : "";
+    };
+    const splitList = (raw: string): string[] =>
+      raw
+        .split("|||M|||")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+    diagnostics.skippedLargeMailboxes = splitList(getField("skipped")).map(
+      (mb) => `${account} / ${mb}`
+    );
+    diagnostics.notSearchedMailboxes = splitList(getField("notSearched")).map(
+      (mb) => `${account} / ${mb}`
+    );
+    if (getField("timedOut") === "true") diagnostics.partial = true;
+  }
+
+  if (diagnostics.skippedLargeMailboxes.length > 0 || diagnostics.notSearchedMailboxes.length > 0) {
+    diagnostics.partial = true;
+  }
+
+  return { payload, diagnostics };
+}
 
 // =============================================================================
 // Text Processing Utilities
@@ -428,14 +535,64 @@ export class AppleMailManager {
     isRead?: boolean,
     isFlagged?: boolean
   ): Message[] {
-    // If no account specified, search across all accounts
+    return this.searchMessagesWithDiagnostics(
+      query,
+      mailbox,
+      account,
+      limit,
+      dateFrom,
+      dateTo,
+      from,
+      subject,
+      isRead,
+      isFlagged
+    ).messages;
+  }
+
+  /**
+   * Search for messages, returning both the matches and diagnostics describing
+   * how complete the search was.
+   *
+   * This is the correctness fix for issue #24. The previous implementation ran
+   * an unbounded `messages of mb whose <predicate>` over every mailbox in an
+   * account; on large IMAP/Gmail mailboxes (tens of thousands of messages) that
+   * single Apple Event exceeded the timeout, the error was swallowed by a `try`,
+   * and the function returned a clean — but wrong — empty result. Callers/agents
+   * then confidently reported "no such mail."
+   *
+   * Two changes fix that:
+   *  1. Cheap count-guard: mailboxes larger than the scan threshold are skipped
+   *     (Apple Mail can't search them before timing out anyway) and reported.
+   *  2. Honest diagnostics: per-account/per-mailbox timeouts are surfaced as a
+   *     `partial` result with the affected scopes named, instead of an empty
+   *     "success."
+   */
+  searchMessagesWithDiagnostics(
+    query?: string,
+    mailbox?: string,
+    account?: string,
+    limit = 50,
+    dateFrom?: string,
+    dateTo?: string,
+    from?: string,
+    subject?: string,
+    isRead?: boolean,
+    isFlagged?: boolean
+  ): SearchResult {
+    // If no account specified, search across all accounts and merge diagnostics.
     if (!account) {
       const accounts = this.listAccounts();
       const allMessages: Message[] = [];
+      const diagnostics: SearchDiagnostics = {
+        partial: false,
+        timedOutAccounts: [],
+        skippedLargeMailboxes: [],
+        notSearchedMailboxes: [],
+      };
       for (const acct of accounts) {
         if (allMessages.length >= limit) break;
         const remaining = limit - allMessages.length;
-        const msgs = this.searchMessages(
+        const res = this.searchMessagesWithDiagnostics(
           query,
           mailbox,
           acct.name,
@@ -447,9 +604,10 @@ export class AppleMailManager {
           isRead,
           isFlagged
         );
-        allMessages.push(...msgs);
+        allMessages.push(...res.messages);
+        mergeSearchDiagnostics(diagnostics, res.diagnostics);
       }
-      return allMessages.slice(0, limit);
+      return { messages: allMessages.slice(0, limit), diagnostics };
     }
 
     const targetAccount = this.resolveAccount(account);
@@ -484,83 +642,142 @@ export class AppleMailManager {
       dateFilter = dateChecks.join(" and ");
     }
 
+    const scanThreshold = getMailboxScanThreshold();
+
     let searchCommand: string;
 
     if (mailbox) {
-      // Search a specific mailbox
+      // Search a specific mailbox. The caller explicitly chose this mailbox, so
+      // we don't apply the count-guard skip — but we still wrap the scan so a
+      // timeout is reported as a partial result rather than a false empty.
       const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
 
       searchCommand = `
       ${dateSetup}set outputText to ""
+      set _timedOut to false
+      set _notSearched to ""
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
-      set allMessages to messages of theMailbox ${searchCondition}
       set msgCount to 0
-      repeat with msg in allMessages
-        if msgCount >= ${limit} then exit repeat
-        try
-          ${dateFilter ? `set msgDate to date received of msg\n          if not (${dateFilter}) then\n            -- skip message outside date range\n          else` : ""}
-          set msgId to id of msg as string
-          set msgSubject to subject of msg
-          set msgSender to sender of msg
-          set d to date received of msg
-          set msgDateStr to ${AS_DATE_TO_STRING}
-          set msgRead to read status of msg as string
-          set msgFlagged to flagged status of msg as string
-          if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-          set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDateStr & "|||" & msgRead & "|||" & msgFlagged
-          set msgCount to msgCount + 1
-          ${dateFilter ? "end if" : ""}
-        end try
-      end repeat
-      return outputText
+      try
+        set allMessages to messages of theMailbox ${searchCondition}
+        repeat with msg in allMessages
+          if msgCount >= ${limit} then exit repeat
+          try
+            ${dateFilter ? `set msgDate to date received of msg\n            if not (${dateFilter}) then\n              -- skip message outside date range\n            else` : ""}
+            set msgId to id of msg as string
+            set msgSubject to subject of msg
+            set msgSender to sender of msg
+            set d to date received of msg
+            set msgDateStr to ${AS_DATE_TO_STRING}
+            set msgRead to read status of msg as string
+            set msgFlagged to flagged status of msg as string
+            if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+            set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDateStr & "|||" & msgRead & "|||" & msgFlagged
+            set msgCount to msgCount + 1
+            ${dateFilter ? "end if" : ""}
+          end try
+        end repeat
+      on error _errMsg number _errNum
+        set _timedOut to true
+        set _notSearched to "${escapeForAppleScript(targetMailbox)}|||M|||"
+      end try
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "|||F|||skipped=|||F|||notSearched=" & _notSearched
     `;
     } else {
-      // Search ALL mailboxes — iterate every mailbox in the account, dedup by message ID
+      // Search ALL mailboxes — iterate every mailbox in the account, dedup by
+      // message ID. Skip mailboxes that exceed the scan threshold (they can't be
+      // searched before timing out), enforce a per-account wall-clock budget, and
+      // capture per-mailbox timeouts. All three are reported via the DIAG trailer.
+      const scanGuard = scanThreshold > 0 ? `mbCount > ${scanThreshold}` : "false";
       searchCommand = `
       ${dateSetup}set outputText to ""
       set msgCount to 0
       set seenIds to {}
+      set _timedOut to false
+      set _skipped to ""
+      set _notSearched to ""
+      set _startedAt to current date
       repeat with mb in mailboxes
         if msgCount >= ${limit} then exit repeat
+        set mbName to ""
         try
-          set allMessages to messages of mb ${searchCondition}
-          repeat with msg in allMessages
-            if msgCount >= ${limit} then exit repeat
-            try
-              set msgId to id of msg as string
-              if seenIds does not contain msgId then
-                set end of seenIds to msgId
-                ${dateFilter ? `set msgDate to date received of msg\n                if not (${dateFilter}) then\n                  -- skip message outside date range\n                else` : ""}
-                set msgSubject to subject of msg
-                set msgSender to sender of msg
-                set d to date received of msg
-                set msgDateStr to ${AS_DATE_TO_STRING}
-                set msgRead to read status of msg as string
-                set msgFlagged to flagged status of msg as string
-                if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-                set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDateStr & "|||" & msgRead & "|||" & msgFlagged & "|||" & name of mb
-                set msgCount to msgCount + 1
-                ${dateFilter ? "end if" : ""}
-              end if
-            end try
-          end repeat
+          set mbName to name of mb
         end try
+        if ((current date) - _startedAt) > ${SEARCH_ACCOUNT_BUDGET_SECONDS} then
+          set _timedOut to true
+          set _notSearched to _notSearched & mbName & "|||M|||"
+        else
+          set mbCount to 0
+          try
+            set mbCount to count of messages of mb
+          end try
+          if (${scanGuard}) then
+            set _timedOut to true
+            set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")|||M|||"
+          else
+            try
+              set allMessages to messages of mb ${searchCondition}
+              repeat with msg in allMessages
+                if msgCount >= ${limit} then exit repeat
+                try
+                  set msgId to id of msg as string
+                  if seenIds does not contain msgId then
+                    set end of seenIds to msgId
+                    ${dateFilter ? `set msgDate to date received of msg\n                    if not (${dateFilter}) then\n                      -- skip message outside date range\n                    else` : ""}
+                    set msgSubject to subject of msg
+                    set msgSender to sender of msg
+                    set d to date received of msg
+                    set msgDateStr to ${AS_DATE_TO_STRING}
+                    set msgRead to read status of msg as string
+                    set msgFlagged to flagged status of msg as string
+                    if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+                    set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDateStr & "|||" & msgRead & "|||" & msgFlagged & "|||" & mbName
+                    set msgCount to msgCount + 1
+                    ${dateFilter ? "end if" : ""}
+                  end if
+                end try
+              end repeat
+            on error _errMsg number _errNum
+              set _timedOut to true
+              set _notSearched to _notSearched & mbName & "|||M|||"
+            end try
+          end if
+        end if
       end repeat
-      return outputText
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "|||F|||skipped=" & _skipped & "|||F|||notSearched=" & _notSearched
     `;
     }
 
     const script = buildAccountScopedScript(targetAccount, searchCommand);
-    const result = executeAppleScript(script, { timeoutMs: 60000 });
+    const result = executeAppleScript(script, { timeoutMs: SEARCH_ACCOUNT_TIMEOUT_MS });
 
     if (!result.success) {
-      console.error(`Failed to search messages: ${result.error}`);
-      return [];
+      // Whole-account script failed (most often the osascript process timeout /
+      // SIGKILL on an unresponsive account). Surface it as a timeout rather than
+      // a false empty result — that confusion is the heart of issue #24.
+      console.error(`Failed to search messages in "${targetAccount}": ${result.error}`);
+      return {
+        messages: [],
+        diagnostics: {
+          partial: true,
+          timedOutAccounts: [targetAccount],
+          skippedLargeMailboxes: [],
+          notSearchedMailboxes: [],
+        },
+      };
     }
 
-    if (!result.output.trim()) return [];
+    return this.parseSearchResult(result.output, mailbox || "INBOX", targetAccount);
+  }
 
-    return this.parseMessageList(result.output, mailbox || "INBOX", targetAccount);
+  /**
+   * Split a per-account search payload into its message list and the DIAG
+   * trailer, parse both, and return a SearchResult. See searchMessagesWithDiagnostics.
+   */
+  private parseSearchResult(output: string, mailbox: string, account: string): SearchResult {
+    const { payload, diagnostics } = splitSearchDiagnostics(output, account);
+    const messages = payload.trim() ? this.parseMessageList(payload, mailbox, account) : [];
+    return { messages, diagnostics };
   }
 
   /**
