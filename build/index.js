@@ -86,6 +86,28 @@ function errorResponse(message) {
     };
 }
 /**
+ * Render a partial-coverage warning from search/list diagnostics, so a caller
+ * never mistakes an incomplete scan for a confirmed "no matches" (#24/#29).
+ * Returns "" when coverage was complete.
+ */
+function partialCoverageBlock(diagnostics) {
+    const notes = [];
+    if (diagnostics.timedOutAccounts.length > 0) {
+        notes.push(`timed out (no results) for account(s): ${diagnostics.timedOutAccounts.join(", ")}`);
+    }
+    if (diagnostics.skippedLargeMailboxes.length > 0) {
+        notes.push(`skipped mailbox(es) too large to scan via AppleScript: ${diagnostics.skippedLargeMailboxes.join(", ")} — scope with \`mailbox\` (+ a \`dateFrom\`/\`dateTo\` window for search) to reach them`);
+    }
+    if (diagnostics.notSearchedMailboxes.length > 0) {
+        notes.push(`could not finish scanning mailbox(es): ${diagnostics.notSearchedMailboxes.join(", ")}`);
+    }
+    if (notes.length === 0)
+        return "";
+    return `\n\n⚠️  Partial results — this is NOT a confirmed "no such mail":\n${notes
+        .map((n) => `  - ${n}`)
+        .join("\n")}`;
+}
+/**
  * Serial execution gate for AppleScript-backed tool calls (issue #11).
  *
  * Concurrent MCP tool calls are funneled through this single gate so only one
@@ -137,24 +159,7 @@ server.tool("search-messages", {
     limit: z.number().optional().describe("Maximum number of results (default: 50)"),
 }, withErrorHandling(({ query, mailbox, account, limit = 50, dateFrom, dateTo, from, subject, isRead, isFlagged, }) => {
     const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(query, mailbox, account, limit, dateFrom, dateTo, from, subject, isRead, isFlagged);
-    // Build a coverage note when the search couldn't reach everything, so a
-    // caller never mistakes an incomplete search for a confirmed "no matches"
-    // (issue #24).
-    const coverageNotes = [];
-    if (diagnostics.timedOutAccounts.length > 0) {
-        coverageNotes.push(`timed out (no results) for account(s): ${diagnostics.timedOutAccounts.join(", ")}`);
-    }
-    if (diagnostics.skippedLargeMailboxes.length > 0) {
-        coverageNotes.push(`skipped mailbox(es) too large to search via AppleScript: ${diagnostics.skippedLargeMailboxes.join(", ")} — scope the search with \`mailbox\` + a \`dateFrom\`/\`dateTo\` window to target them`);
-    }
-    if (diagnostics.notSearchedMailboxes.length > 0) {
-        coverageNotes.push(`could not finish searching mailbox(es): ${diagnostics.notSearchedMailboxes.join(", ")}`);
-    }
-    const coverageBlock = coverageNotes.length > 0
-        ? `\n\n⚠️  Partial results — this is NOT a confirmed "no such mail":\n${coverageNotes
-            .map((n) => `  - ${n}`)
-            .join("\n")}`
-        : "";
+    const coverageBlock = partialCoverageBlock(diagnostics);
     if (messages.length === 0) {
         const base = diagnostics.partial
             ? "No messages found in the portions that were searched."
@@ -192,14 +197,18 @@ server.tool("list-messages", {
     from: z.string().optional().describe("Filter by sender email address or name"),
     unreadOnly: z.boolean().optional().describe("Only show unread messages"),
 }, withErrorHandling(({ mailbox, account, limit = 50, offset = 0, from }) => {
-    const messages = mailManager.listMessages(mailbox, account, limit, from, offset);
+    const { messages, diagnostics } = mailManager.listMessagesWithDiagnostics(mailbox, account, limit, from, offset);
+    const coverageBlock = partialCoverageBlock(diagnostics);
     if (messages.length === 0) {
-        return successResponse("No messages found");
+        const base = diagnostics.partial
+            ? "No messages found in the portions that were listed."
+            : "No messages found";
+        return successResponse(`${base}${coverageBlock}`);
     }
     const messageList = messages
         .map((m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender})`)
         .join("\n");
-    return successResponse(`Found ${messages.length} message(s):\n${messageList}`);
+    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`);
 }, "Error listing messages"));
 // --- send-email ---
 server.tool("send-email", {

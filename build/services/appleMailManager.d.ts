@@ -204,6 +204,19 @@ export declare class AppleMailManager {
      */
     listMessages(mailbox?: string, account?: string, limit?: number, from?: string, offset?: number): Message[];
     /**
+     * List messages, returning matches plus coverage diagnostics.
+     *
+     * Like `searchMessages`, the unscoped (all-mailboxes) path used to iterate
+     * `messages of mb` over every mailbox with a swallowing per-mailbox `try`,
+     * so a large IMAP/Gmail mailbox timed out and the method returned `[]` — a
+     * false "No messages found." This applies the same #24 discipline: skip
+     * mailboxes above the scan threshold (reported), enforce a per-account
+     * wall-clock budget, capture per-mailbox timeouts, and surface all of it as a
+     * partial result. (by-id lookups don't need this — `whose id is` is indexed
+     * and returns instantly even on a 44k-message mailbox.)
+     */
+    listMessagesWithDiagnostics(mailbox?: string, account?: string, limit?: number, from?: string, offset?: number): SearchResult;
+    /**
      * Parse message list output from AppleScript.
      *
      * Two emission schemas, disambiguated by length:
