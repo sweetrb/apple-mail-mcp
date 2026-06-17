@@ -8,6 +8,17 @@ on:
     types: [completed]
     branches: [main]
 
+# Each release lands two pushes on main (the PR merge commit, then the
+# `chore(release)` version-bump commit), so two CI runs complete and each
+# triggers a publish. Without serialization they race: both read the
+# pre-publish version, both attempt `npm publish`, and the loser fails with a
+# 403 "cannot publish over existing version" (noisy failure emails). A
+# concurrency group serializes them; the second then sees the version already
+# published and skips cleanly.
+concurrency:
+  group: publish-to-npm
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: macos-latest
