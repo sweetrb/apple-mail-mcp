@@ -5,6 +5,27 @@
 
 This audit looks only at robustness and speed; feature gaps and style are out of scope. Findings are ranked by **impact × likelihood**, with effort estimates so they can be scheduled. Line numbers are against `main` @ `4b5610d`.
 
+> **Resolution status (all items addressed 2026-06-17).** Every finding below has shipped or been explicitly deferred:
+>
+> | # | Finding | Status | Released |
+> |---|---------|--------|----------|
+> | 1 | execSync maxBuffer | Fixed ([#27](https://github.com/sweetrb/apple-mail-mcp/issues/27)) | 1.6.2 |
+> | 2 | stats locale + swallow | Fixed ([#28](https://github.com/sweetrb/apple-mail-mcp/issues/28)) | 1.6.3 |
+> | 3 | list-messages / by-id swallow | Fixed ([#29](https://github.com/sweetrb/apple-mail-mcp/issues/29)) | 1.6.4 |
+> | 4 | `\|\|\|` delimiter collisions | Fixed ([#30](https://github.com/sweetrb/apple-mail-mcp/issues/30)) | 1.6.5 |
+> | 5 | batch fan-out | Fixed ([#31](https://github.com/sweetrb/apple-mail-mcp/issues/31)) | 1.6.6 |
+> | 6+7 | get-message source scan / preferHtml | Fixed ([#32](https://github.com/sweetrb/apple-mail-mcp/issues/32)) | 1.6.7 |
+> | 9 | rename-mailbox partial-move | Fixed ([#33](https://github.com/sweetrb/apple-mail-mcp/issues/33)) | 1.6.8 |
+> | 10 | escape control chars | Fixed (audit hardening) | 1.6.9 |
+> | 8 | aggregate stat timeouts | Fixed (audit hardening) | 1.6.9 |
+> | 12 | saveAttachment prefix bypass | Fixed (audit hardening) | 1.6.9 |
+> | 13 | searchContacts per-person try | Fixed (audit hardening) | 1.6.9 |
+> | 14 | useTemplate empty override | Fixed (audit hardening) | 1.6.9 |
+> | 11 | per-message bulk reads | **Deferred** — the #24 count-guard now bounds scans to small mailboxes, so the refactor's regression risk on the hottest paths outweighs the gain | — |
+> | 15 | CI can't run integration suite | Addressed — `npm run test:all` documented as a pre-release gate in CONTRIBUTING; the release-publish race was also fixed with a `concurrency` guard on `publish.yml` | — |
+>
+> Known limitation surfaced during validation: Mail.app **cannot delete iCloud mailboxes via AppleScript** ("AppleEvent handler failed"), so `delete-mailbox` / `rename-mailbox` cannot complete on iCloud-account mailboxes. This is a platform constraint, not a code defect; the rename fix ensures it fails *safely* (source preserved).
+
 ## Summary
 
 The architecture is sound and several hard problems are already solved well (serial gate for Mail's single-threaded dispatch #11, the `with timeout`/SIGKILL executor, the `error:`-prefix protocol that surfaces AppleScript failures, the #24 search count-guard). The remaining risks cluster into four themes:
