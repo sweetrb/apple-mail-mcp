@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Hardening: assorted low-severity stability fixes from the 2026-06-17 audit.**
+  - `escapeForAppleScript` now strips ASCII control characters in addition to escaping `\` and `"`. A value containing a raw newline could otherwise terminate the AppleScript string literal early and inject a statement (audit #10).
+  - `save-attachment`'s allowed-directory check now uses a path-segment boundary test instead of a bare `startsWith`, so a sibling directory that merely shares the prefix (`/Volumes-evil` vs `/Volumes`, `/Users/robother` vs `/Users/rob`) is no longer accepted (audit #12).
+  - `search-contacts` wraps each contact read in its own `try`, so one malformed contact (e.g. no email) no longer aborts the whole search and returns an empty list (audit #13).
+  - `use-template` honors an intentional empty-string subject/body override (`??` instead of `||`) instead of falling back to the template value (audit #14).
+  - `list-mailboxes`, `get-unread-count`, and `get-sync-status` — which scan/count across every mailbox/account — now use a 60s timeout instead of the 30s default, so a slow account is less likely to silently degrade to an empty list / `0` unread / "not syncing" (audit #8).
+
 ## [1.6.8] - 2026-06-17
 
 ### Fixed

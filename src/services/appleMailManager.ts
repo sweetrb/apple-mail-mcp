@@ -15,7 +15,7 @@
 
 import { spawnSync } from "child_process";
 import { existsSync, writeFileSync } from "fs";
-import { isAbsolute, resolve } from "path";
+import { isAbsolute, resolve, sep } from "path";
 import { homedir } from "os";
 import { executeAppleScript } from "@/utils/applescript.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
@@ -179,9 +179,41 @@ export function splitSearchDiagnostics(
  * @param text - Raw text to escape
  * @returns Text safe for AppleScript string embedding
  */
-function escapeForAppleScript(text: string): string {
+/**
+ * Roots under which `save-attachment` is permitted to write.
+ */
+const ALLOWED_SAVE_ROOTS = [homedir(), "/tmp", "/private/tmp", "/Volumes"];
+
+/**
+ * True if `resolvedPath` is one of the allowed roots or strictly inside one.
+ *
+ * Uses a path-segment boundary check rather than a bare `startsWith`, which
+ * would let a sibling whose name merely shares the prefix slip through —
+ * `/Volumes-evil` startsWith `/Volumes`, `/Users/robother` startsWith
+ * `/Users/rob` (audit finding #12). `resolvedPath` must already be absolute
+ * (caller passes `resolve(...)` output).
+ */
+export function isPathWithinAllowedRoots(resolvedPath: string): boolean {
+  return ALLOWED_SAVE_ROOTS.some((root) => {
+    const base = root.endsWith(sep) ? root.slice(0, -1) : root;
+    return resolvedPath === base || resolvedPath.startsWith(base + sep);
+  });
+}
+
+export function escapeForAppleScript(text: string): string {
   if (!text) return "";
-  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  // Escape backslash and double-quote for the AppleScript string literal, and
+  // strip ASCII control characters. An AppleScript double-quoted literal cannot
+  // contain a raw newline, so an interpolated value with a `\n` (or other
+  // control char) would terminate the literal early and could inject a
+  // statement; stripping them closes that gap (audit finding #10).
+  return (
+    text
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1f\x7f]/g, "")
+  );
 }
 
 /**
@@ -2022,9 +2054,7 @@ export class AppleMailManager {
 
     // Resolve the save path to prevent symlink / ".." traversal bypass
     const resolvedPath = resolve(savePath);
-    const allowedPrefixes = [homedir(), "/tmp", "/private/tmp", "/Volumes"];
-    const isAllowed = allowedPrefixes.some((prefix) => resolvedPath.startsWith(prefix));
-    if (!isAllowed) {
+    if (!isPathWithinAllowedRoots(resolvedPath)) {
       console.error(`Save path "${savePath}" is outside allowed directories`);
       return false;
     }
@@ -2082,8 +2112,7 @@ export class AppleMailManager {
     try {
       const outPath = resolve(resolvedPath, attachmentName);
       // Verify the resolved output path is still within allowed directories
-      const isOutAllowed = allowedPrefixes.some((prefix) => outPath.startsWith(prefix));
-      if (!isOutAllowed) {
+      if (!isPathWithinAllowedRoots(outPath)) {
         console.error(`Output path "${outPath}" is outside allowed directories`);
         return false;
       }
@@ -2118,7 +2147,10 @@ export class AppleMailManager {
     `;
 
     const script = buildAccountScopedScript(targetAccount, listCommand);
-    const result = executeAppleScript(script);
+    // Counts every mailbox's message total, so it needs more than the default
+    // 30s on accounts with many/large mailboxes; a timeout here silently
+    // returned an empty list (audit finding #8).
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success) {
       console.error(`Failed to list mailboxes: ${result.error}`);
@@ -2168,7 +2200,9 @@ export class AppleMailManager {
     }
 
     const script = buildAccountScopedScript(targetAccount, command);
-    const result = executeAppleScript(script);
+    // Summing unread across every mailbox can exceed the default 30s; a timeout
+    // previously degraded silently to 0 ("all read") — audit finding #8.
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success) {
       console.error(`Failed to get unread count: ${result.error}`);
@@ -2485,18 +2519,22 @@ export class AppleMailManager {
           set pid to id of p
           if seenIds does not contain pid then
             set end of seenIds to pid
-            set pName to name of p
-            set pEmails to ""
-            repeat with e in emails of p
-              if pEmails is not "" then set pEmails to pEmails & ","
-              set pEmails to pEmails & (value of e)
-            end repeat
-            set pPhones to ""
-            repeat with ph in phones of p
-              if pPhones is not "" then set pPhones to pPhones & ","
-              set pPhones to pPhones & (value of ph)
-            end repeat
-            set end of matchedContacts to pName & "${FIELD_SEP}" & pEmails & "${FIELD_SEP}" & pPhones
+            -- Per-person try: one malformed contact (e.g. no emails) must not
+            -- abort the whole search and return an empty list (audit finding #13).
+            try
+              set pName to name of p
+              set pEmails to ""
+              repeat with e in emails of p
+                if pEmails is not "" then set pEmails to pEmails & ","
+                set pEmails to pEmails & (value of e)
+              end repeat
+              set pPhones to ""
+              repeat with ph in phones of p
+                if pPhones is not "" then set pPhones to pPhones & ","
+                set pPhones to pPhones & (value of ph)
+              end repeat
+              set end of matchedContacts to pName & "${FIELD_SEP}" & pEmails & "${FIELD_SEP}" & pPhones
+            end try
           end if
         end repeat
 
@@ -2582,10 +2620,13 @@ export class AppleMailManager {
     const template = this.templates.get(id);
     if (!template) return false;
 
-    const to = overrides?.to || template.to || [];
-    const cc = overrides?.cc || template.cc;
-    const subject = overrides?.subject || template.subject;
-    const body = overrides?.body || template.body;
+    // Use `??` (not `||`) for subject/body so an intentional empty-string
+    // override is honored rather than falling back to the template value
+    // (audit finding #14).
+    const to = overrides?.to ?? template.to ?? [];
+    const cc = overrides?.cc ?? template.cc;
+    const subject = overrides?.subject ?? template.subject;
+    const body = overrides?.body ?? template.body;
 
     if (to.length === 0) return false;
 
@@ -2830,7 +2871,9 @@ export class AppleMailManager {
       return "running${FIELD_SEP}" & accountCount & "${FIELD_SEP}" & totalMailboxes
     `);
 
-    const result = executeAppleScript(script);
+    // Counts mailboxes across every account; give it headroom over the 30s
+    // default so a slow account doesn't silently report "not syncing" (#8).
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success) {
       return {

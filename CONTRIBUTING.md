@@ -66,6 +66,20 @@ npm run test:all
 - **Unit tests:** `src/services/appleMailManager.test.ts` (core logic), `src/security.test.ts` (input validation and security schemas)
 - **Integration tests:** `test/integration.test.ts` (live Mail.app interaction)
 
+### Before cutting a release
+
+CI runs only the **unit** tests — the integration suite needs a live, configured
+Mail.app and so cannot run on the GitHub runners. The AppleScript paths (search,
+list, get-message, attachments, batch ops, rename) are therefore **only**
+covered by the local integration suite. Before bumping the version and pushing a
+`chore(release)` commit, run the full suite locally on a configured Mac:
+
+```bash
+npm run test:all   # unit + integration against real Mail.app
+```
+
+A green CI run alone does not exercise the live Mail.app behavior.
+
 ### Testing Guidelines
 
 - Tests mock the `executeAppleScript` function since AppleScript only works on macOS
