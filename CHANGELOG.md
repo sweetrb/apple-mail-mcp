@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.10] - 2026-06-18
 
 ### Changed
 - **Clear, non-retryable errors for operations Mail.app can't script** — `delete-mailbox`, `rename-mailbox`, `delete-message`, and `move-message` returned a generic `Failed to …` when the target was a server-side mailbox (IMAP / Gmail / Workspace / iCloud / Exchange) or a draft, where Mail.app's AppleScript bridge throws `AppleEvent handler failed` even though the GUI can do it. They now return an actionable message naming the limitation and the workaround — e.g. *"Mail.app cannot delete server-side … mailboxes via AppleScript — only local 'On My Mac' mailboxes support this. Delete it in Mail.app directly."*, and for drafts *"Mail.app cannot delete drafts via AppleScript; delete it in Mail.app directly."* Local "On My Mac" mailboxes are unaffected; genuine errors (not found, ambiguous destination) pass through unchanged. The four methods now return `{ success, error }` instead of a bare boolean. ([#42](https://github.com/sweetrb/apple-mail-mcp/issues/42))
