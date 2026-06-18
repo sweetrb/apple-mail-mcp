@@ -71,6 +71,10 @@ interface ImapMessage {
 interface MailboxLock {
   release: () => void;
 }
+interface ImapMailboxListing {
+  path: string;
+  name: string;
+}
 export interface ImapClientLike {
   connect(): Promise<void>;
   getMailboxLock(path: string): Promise<MailboxLock>;
@@ -80,6 +84,10 @@ export interface ImapClientLike {
     query: Record<string, unknown>,
     opts: { uid: true }
   ): AsyncIterable<ImapMessage>;
+  list(): Promise<ImapMailboxListing[]>;
+  mailboxCreate(path: string): Promise<{ path: string; created: boolean }>;
+  mailboxRename(path: string, newPath: string): Promise<{ path: string; newPath: string }>;
+  mailboxDelete(path: string): Promise<{ path: string }>;
   logout(): Promise<void>;
 }
 
@@ -244,4 +252,117 @@ export function imapListMessages(
   deps: { connect?: ImapConnect; config?: ImapConfig } = {}
 ): Promise<string> {
   return run(args, true, deps);
+}
+
+// ===========================================================================
+// Phase 2 — mailbox/folder operations (issue #43)
+//
+// IMAP's CREATE / RENAME / DELETE work on the real server-side folder
+// hierarchy, so they succeed on exactly the server-side mailboxes (iCloud /
+// Gmail / Workspace / Exchange) where Mail.app's AppleScript bridge throws
+// "AppleEvent handler failed" (#42). Routed only when the account is IMAP-
+// configured; AppleScript remains the path for everything else.
+// ===========================================================================
+
+export interface ImapOpResult {
+  success: boolean;
+  error?: string;
+  info?: string;
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Connect, run `fn`, always log out. */
+async function withClient<T>(
+  deps: { connect?: ImapConnect; config?: ImapConfig },
+  fn: (client: ImapClientLike, cfg: ImapConfig) => Promise<T>
+): Promise<T> {
+  const cfg = deps.config ?? resolveImapConfig();
+  const client = await (deps.connect ?? defaultConnect)(cfg);
+  try {
+    return await fn(client, cfg);
+  } finally {
+    await client.logout().catch(() => undefined);
+  }
+}
+
+/**
+ * Resolve a user-supplied mailbox name to an actual server path by listing the
+ * mailboxes and matching on full path, then leaf name (case-insensitive).
+ * Returns null when no such mailbox exists.
+ */
+async function findMailboxPath(client: ImapClientLike, name: string): Promise<string | null> {
+  const wanted = name.trim().toLowerCase();
+  const boxes = await client.list();
+  const byPath = boxes.find((b) => b.path.toLowerCase() === wanted);
+  if (byPath) return byPath.path;
+  const byName = boxes.find((b) => b.name.toLowerCase() === wanted);
+  return byName ? byName.path : null;
+}
+
+export function imapCreateMailbox(
+  name: string,
+  deps: { connect?: ImapConnect; config?: ImapConfig } = {}
+): Promise<ImapOpResult> {
+  return withClient(deps, async (client) => {
+    try {
+      const res = await client.mailboxCreate(name);
+      return res.created
+        ? { success: true, info: `Created mailbox "${res.path}".` }
+        : { success: true, info: `Mailbox "${res.path}" already existed.` };
+    } catch (e) {
+      return { success: false, error: `IMAP create failed for "${name}": ${errText(e)}` };
+    }
+  });
+}
+
+export function imapDeleteMailbox(
+  name: string,
+  deps: { connect?: ImapConnect; config?: ImapConfig } = {}
+): Promise<ImapOpResult> {
+  return withClient(deps, async (client, cfg) => {
+    const path = await findMailboxPath(client, name);
+    if (!path) {
+      return {
+        success: false,
+        error: `Mailbox "${name}" not found on IMAP account ${cfg.accountLabel}.`,
+      };
+    }
+    try {
+      await client.mailboxDelete(path);
+      return {
+        success: true,
+        info: `Deleted mailbox "${path}" via IMAP (account ${cfg.accountLabel}).`,
+      };
+    } catch (e) {
+      return { success: false, error: `IMAP delete failed for "${path}": ${errText(e)}` };
+    }
+  });
+}
+
+export function imapRenameMailbox(
+  oldName: string,
+  newName: string,
+  deps: { connect?: ImapConnect; config?: ImapConfig } = {}
+): Promise<ImapOpResult> {
+  return withClient(deps, async (client, cfg) => {
+    const path = await findMailboxPath(client, oldName);
+    if (!path) {
+      return {
+        success: false,
+        error: `Mailbox "${oldName}" not found on IMAP account ${cfg.accountLabel}.`,
+      };
+    }
+    try {
+      const res = await client.mailboxRename(path, newName);
+      return { success: true, info: `Renamed "${res.path}" to "${res.newPath}" via IMAP.` };
+    } catch (e) {
+      return {
+        success: false,
+        error: `IMAP rename failed for "${path}" -> "${newName}": ${errText(e)}`,
+      };
+    }
+  });
 }

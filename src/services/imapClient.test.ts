@@ -6,6 +6,9 @@ import {
   resolveMailboxPath,
   imapSearchMessages,
   imapListMessages,
+  imapCreateMailbox,
+  imapDeleteMailbox,
+  imapRenameMailbox,
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
@@ -50,6 +53,10 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
         };
       }
     },
+    list: async () => [],
+    mailboxCreate: async (path: string) => ({ path, created: true }),
+    mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),
+    mailboxDelete: async (path: string) => ({ path }),
     logout: async () => undefined,
   };
 }
@@ -141,5 +148,95 @@ describe("imapListMessages", () => {
     expect(rec.criteria).toEqual({ unseen: true });
     expect(out).toContain("UID: 8");
     expect(out).toContain("2 total listed");
+  });
+});
+
+// --- Phase 2: folder operations -------------------------------------------
+
+interface FolderRec {
+  created?: string;
+  deleted?: string;
+  renamed?: [string, string];
+}
+
+function makeFolderClient(
+  existing: { path: string; name: string }[],
+  rec: FolderRec
+): ImapClientLike {
+  const base = makeClient([], {});
+  return {
+    ...base,
+    list: async () => existing,
+    mailboxCreate: async (path: string) => {
+      rec.created = path;
+      return { path, created: true };
+    },
+    mailboxRename: async (path: string, newPath: string) => {
+      rec.renamed = [path, newPath];
+      return { path, newPath };
+    },
+    mailboxDelete: async (path: string) => {
+      rec.deleted = path;
+      return { path };
+    },
+  };
+}
+
+describe("imapCreateMailbox", () => {
+  it("creates a mailbox server-side", async () => {
+    const rec: FolderRec = {};
+    const r = await imapCreateMailbox("Projects", {
+      config: cfg,
+      connect: async () => makeFolderClient([], rec),
+    });
+    expect(r.success).toBe(true);
+    expect(rec.created).toBe("Projects");
+  });
+});
+
+describe("imapDeleteMailbox", () => {
+  it("resolves the path (by leaf name) and deletes it", async () => {
+    const rec: FolderRec = {};
+    const r = await imapDeleteMailbox("Old Stuff", {
+      config: cfg,
+      connect: async () =>
+        makeFolderClient([{ path: "Archive/Old Stuff", name: "Old Stuff" }], rec),
+    });
+    expect(r.success).toBe(true);
+    expect(rec.deleted).toBe("Archive/Old Stuff");
+  });
+
+  it("returns a not-found error (and does not delete) when the mailbox is absent", async () => {
+    const rec: FolderRec = {};
+    const r = await imapDeleteMailbox("Nope", {
+      config: cfg,
+      connect: async () => makeFolderClient([{ path: "INBOX", name: "INBOX" }], rec),
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/not found/i);
+    expect(rec.deleted).toBeUndefined();
+  });
+});
+
+describe("imapRenameMailbox", () => {
+  it("renames an existing mailbox to the new path", async () => {
+    const rec: FolderRec = {};
+    const r = await imapRenameMailbox("Temp", "Permanent", {
+      config: cfg,
+      connect: async () => makeFolderClient([{ path: "Temp", name: "Temp" }], rec),
+    });
+    expect(r.success).toBe(true);
+    expect(rec.renamed).toEqual(["Temp", "Permanent"]);
+  });
+
+  it("fails clearly when the source mailbox doesn't exist", async () => {
+    const rec: FolderRec = {};
+    const r = await imapRenameMailbox("Ghost", "Real", {
+      config: cfg,
+      connect: async () => makeFolderClient([], rec),
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/not found/i);
+    expect(rec.renamed).toBeUndefined();
   });
 });

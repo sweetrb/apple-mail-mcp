@@ -279,9 +279,15 @@ an account is configured for IMAP, `search-messages` and `list-messages` instead
 run a **server-side IMAP search** ([#43](https://github.com/sweetrb/apple-mail-mcp/issues/43)) —
 typically sub-second and correct on the same mailbox where AppleScript times out.
 This is **opt-in and additive**: any account without IMAP configured behaves
-exactly as before (AppleScript). Read-only for now — `get-message` and all
-mutations stay on AppleScript (the IMAP rows report message **UIDs**, noted in
-the output).
+exactly as before (AppleScript). When an account is IMAP-configured,
+`search-messages`/`list-messages` (read) and `create-mailbox`/`rename-mailbox`/
+`delete-mailbox` (folder ops) route to IMAP. The folder ops are the key win for
+server accounts: IMAP's `CREATE`/`RENAME`/`DELETE` succeed on exactly the
+iCloud/Gmail/Workspace/Exchange mailboxes where Mail.app's AppleScript bridge
+can't (#42). `get-message` and message-level mutations (mark/flag/move/delete-
+message) stay on AppleScript for now — they key off a message id, and the IMAP
+read rows report **UIDs** (a different, per-mailbox namespace), so routing them
+safely needs a UID-aware design (tracked on #43).
 
 Routing is conservative: only a call whose explicit `account` matches the
 configured IMAP account goes to IMAP; everything else falls through to
@@ -303,9 +309,15 @@ config. Gmail label semantics: common names (`All Mail`, `Sent`, `Trash`,
 `Spam`, `Important`, …) map to their `[Gmail]/…` IMAP paths automatically.
 
 > Note: each call currently opens its own IMAP connection (no pooling yet), so
-> expect a few seconds of connection overhead per call. Phase 2 (IMAP-backed
-> mutations + folder ops, which would also resolve the IMAP slice of
-> [#42](https://github.com/sweetrb/apple-mail-mcp/issues/42)) is not yet implemented.
+> expect a few seconds of connection overhead per call. Phase 2 added the folder
+> ops (create/rename/delete-mailbox) — resolving the IMAP slice of
+> [#42](https://github.com/sweetrb/apple-mail-mcp/issues/42). IMAP-backed
+> message-level mutations are still future work (see #43).
+>
+> **iCloud:** set `APPLE_MAIL_MCP_IMAP_HOST=imap.mail.me.com`, `APPLE_MAIL_MCP_IMAP_USER`
+> to your iCloud address, `APPLE_MAIL_MCP_IMAP_ACCOUNT` to the Mail account name
+> (e.g. `iCloud`), and use an **app-specific password** (from appleid.apple.com)
+> stored in the Keychain.
 
 ---
 
