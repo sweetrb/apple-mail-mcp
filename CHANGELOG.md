@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.9.0] - 2026-06-18
 
 ### Added
 - **IMAP backend Phase 3: message-level operations** — `get-message`, `mark-as-read`/`unread`, `flag-message`/`unflag-message`, `move-message`, and `delete-message` now route to IMAP when given an IMAP message id, completing the IMAP backend. The IMAP read path (`search-messages`/`list-messages`) now emits **self-describing `imap:<token>` ids** that encode the account, mailbox path, and UID; passing such an id to `get-message` or any message mutation routes it to IMAP automatically, while bare numeric ids continue to use AppleScript — so callers never need to know which backend a message came from. `MESSAGE_ID_SCHEMA` accepts the `imap:` form (base64url, injection-safe, never passed to AppleScript); batch operations stay AppleScript/numeric-only. Verified live against iCloud end-to-end (create mailbox → append → get-message → mark/flag → move → delete → cleanup). Only optional IMAP connection pooling remains open on #43. ([#43](https://github.com/sweetrb/apple-mail-mcp/issues/43))
