@@ -44,6 +44,12 @@ export declare function parseMimeAttachments(source: string): MimeAttachmentInfo
  */
 export declare function extractHtmlBody(source: string): string | null;
 /**
+ * Extract the decoded `text/plain` body from raw MIME source. Mirror of
+ * extractHtmlBody; used by the IMAP get-message path (#43 Phase 3) to render a
+ * message fetched by UID. Returns null when there's no text/plain part.
+ */
+export declare function extractTextBody(source: string): string | null;
+/**
  * Extract and decode a specific attachment from MIME source by filename.
  * Supports base64, quoted-printable, and 7bit/8bit/binary transfer encodings.
  * Descends into nested multipart/* containers.

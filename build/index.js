@@ -25,17 +25,25 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "./services/appleMailManager.js";
 import { sendViaSmtp } from "./services/smtpMailer.js";
-import { isImapAccount, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, } from "./services/imapClient.js";
+import { isImapAccount, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, decodeImapId, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
 import { createSerialGate } from "./utils/serialize.js";
 // =============================================================================
 // Shared Validation Schemas
 // =============================================================================
-/** Message IDs in Apple Mail are always numeric. Enforce this at the schema level
- *  to prevent AppleScript injection via the `whose id is ${id}` interpolation. */
-const MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
-/** Batch operations are capped to prevent unbounded loops / DoS. */
+/** AppleScript message IDs are always numeric. Enforced to prevent AppleScript
+ *  injection via the `whose id is ${id}` interpolation. */
+const NUMERIC_MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
+/** A single-message id is EITHER an AppleScript numeric id OR an IMAP composite
+ *  token (`imap:<base64url>`, emitted by the IMAP read path). The IMAP form is
+ *  base64url so it stays injection-safe; it never reaches AppleScript (it's
+ *  decoded and routed to IMAP instead). */
+const MESSAGE_ID_SCHEMA = z
+    .string()
+    .regex(/^(\d+|imap:[A-Za-z0-9_-]+)$/, "Message ID must be numeric or an IMAP id (imap:…)");
+/** Batch operations are AppleScript-only and capped to prevent unbounded loops /
+ *  DoS. IMAP ids are rejected here — use the single-message tools for those. */
 const BATCH_IDS_SCHEMA = z
-    .array(MESSAGE_ID_SCHEMA)
+    .array(NUMERIC_MESSAGE_ID_SCHEMA)
     .min(1, "At least one message ID is required")
     .max(100, "Cannot process more than 100 messages in a single batch");
 /** Date filter strings must look like natural-language dates (e.g. "March 1, 2026").
@@ -195,7 +203,14 @@ server.tool("get-message", {
         .boolean()
         .optional()
         .describe("Return the HTML body (extracted from the message source) instead of plain text"),
-}, withErrorHandling(({ id, preferHtml }) => {
+}, withErrorHandling(async ({ id, preferHtml }) => {
+    // IMAP id (imap:…) → fetch via IMAP (#43 Phase 3); else AppleScript.
+    if (decodeImapId(id)) {
+        const r = await imapGetMessage(id, preferHtml === true);
+        return r.success
+            ? successResponse(r.info ?? "")
+            : errorResponse(r.error ?? `Message with ID "${id}" not found`);
+    }
     // Only fetch/parse the raw source when HTML is actually requested (#32).
     const content = mailManager.getMessageContent(id, preferHtml === true);
     if (!content) {
@@ -364,7 +379,13 @@ server.tool("forward-message", {
 // --- mark-as-read ---
 server.tool("mark-as-read", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(({ id }) => {
+}, withErrorHandling(async ({ id }) => {
+    if (decodeImapId(id)) {
+        const r = await imapMarkRead(id);
+        return r.success
+            ? successResponse("Message marked as read")
+            : errorResponse(r.error ?? `Failed to mark message "${id}" as read`);
+    }
     const success = mailManager.markAsRead(id);
     if (!success) {
         return errorResponse(`Failed to mark message "${id}" as read`);
@@ -374,7 +395,13 @@ server.tool("mark-as-read", {
 // --- mark-as-unread ---
 server.tool("mark-as-unread", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(({ id }) => {
+}, withErrorHandling(async ({ id }) => {
+    if (decodeImapId(id)) {
+        const r = await imapMarkUnread(id);
+        return r.success
+            ? successResponse("Message marked as unread")
+            : errorResponse(r.error ?? `Failed to mark message "${id}" as unread`);
+    }
     const success = mailManager.markAsUnread(id);
     if (!success) {
         return errorResponse(`Failed to mark message "${id}" as unread`);
@@ -384,7 +411,13 @@ server.tool("mark-as-unread", {
 // --- flag-message ---
 server.tool("flag-message", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(({ id }) => {
+}, withErrorHandling(async ({ id }) => {
+    if (decodeImapId(id)) {
+        const r = await imapFlagMessage(id);
+        return r.success
+            ? successResponse("Message flagged")
+            : errorResponse(r.error ?? `Failed to flag message "${id}"`);
+    }
     const success = mailManager.flagMessage(id);
     if (!success) {
         return errorResponse(`Failed to flag message "${id}"`);
@@ -394,7 +427,13 @@ server.tool("flag-message", {
 // --- unflag-message ---
 server.tool("unflag-message", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(({ id }) => {
+}, withErrorHandling(async ({ id }) => {
+    if (decodeImapId(id)) {
+        const r = await imapUnflagMessage(id);
+        return r.success
+            ? successResponse("Message unflagged")
+            : errorResponse(r.error ?? `Failed to unflag message "${id}"`);
+    }
     const success = mailManager.unflagMessage(id);
     if (!success) {
         return errorResponse(`Failed to unflag message "${id}"`);
@@ -404,7 +443,13 @@ server.tool("unflag-message", {
 // --- delete-message ---
 server.tool("delete-message", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(({ id }) => {
+}, withErrorHandling(async ({ id }) => {
+    if (decodeImapId(id)) {
+        const r = await imapDeleteMessageById(id);
+        return r.success
+            ? successResponse("Message deleted")
+            : errorResponse(r.error ?? `Failed to delete message "${id}"`);
+    }
     const { success, error } = mailManager.deleteMessage(id);
     if (!success) {
         return errorResponse(error || `Failed to delete message "${id}"`);
@@ -416,7 +461,13 @@ server.tool("move-message", {
     id: MESSAGE_ID_SCHEMA,
     mailbox: z.string().min(1, "Destination mailbox is required"),
     account: z.string().optional().describe("Account containing the destination mailbox"),
-}, withErrorHandling(({ id, mailbox, account }) => {
+}, withErrorHandling(async ({ id, mailbox, account }) => {
+    if (decodeImapId(id)) {
+        const r = await imapMoveMessageById(id, mailbox);
+        return r.success
+            ? successResponse(`Message moved to "${mailbox}"`)
+            : errorResponse(r.error ?? `Failed to move message to "${mailbox}"`);
+    }
     const { success, error } = mailManager.moveMessage(id, mailbox, account);
     if (!success) {
         return errorResponse(error || `Failed to move message to "${mailbox}"`);

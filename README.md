@@ -270,24 +270,31 @@ Then send:
 
 The default `applescript` transport is unchanged; SMTP is opt-in per call.
 
-##### IMAP backend (read/search) — opt-in, Phase 1
+##### IMAP backend — opt-in
 
 AppleScript runs `search`/`list` predicates client-side over the Apple Event
 bridge, which is slow and can time out (false-empty) on large Gmail/IMAP
-mailboxes (see [#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)). When
-an account is configured for IMAP, `search-messages` and `list-messages` instead
-run a **server-side IMAP search** ([#43](https://github.com/sweetrb/apple-mail-mcp/issues/43)) —
-typically sub-second and correct on the same mailbox where AppleScript times out.
-This is **opt-in and additive**: any account without IMAP configured behaves
-exactly as before (AppleScript). When an account is IMAP-configured,
-`search-messages`/`list-messages` (read) and `create-mailbox`/`rename-mailbox`/
-`delete-mailbox` (folder ops) route to IMAP. The folder ops are the key win for
-server accounts: IMAP's `CREATE`/`RENAME`/`DELETE` succeed on exactly the
-iCloud/Gmail/Workspace/Exchange mailboxes where Mail.app's AppleScript bridge
-can't (#42). `get-message` and message-level mutations (mark/flag/move/delete-
-message) stay on AppleScript for now — they key off a message id, and the IMAP
-read rows report **UIDs** (a different, per-mailbox namespace), so routing them
-safely needs a UID-aware design (tracked on #43).
+mailboxes (see [#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)), and
+its `delete`/`rename mailbox` and draft handlers don't work on server-side
+accounts at all (#42). When an account is configured for IMAP, the MCP routes to
+a server-side IMAP backend ([#43](https://github.com/sweetrb/apple-mail-mcp/issues/43))
+that is fast and correct on exactly those mailboxes. This is **opt-in and
+additive**: any account without IMAP configured behaves exactly as before
+(AppleScript).
+
+What routes to IMAP when an account is IMAP-configured:
+
+- **Read:** `search-messages`, `list-messages` (server-side `SEARCH`, typically sub-second), and `get-message`.
+- **Folder ops:** `create-mailbox`, `rename-mailbox`, `delete-mailbox` — IMAP's `CREATE`/`RENAME`/`DELETE` succeed on the iCloud/Gmail/Workspace/Exchange mailboxes Mail.app's AppleScript bridge can't touch (#42).
+- **Message mutations:** `mark-as-read`/`unread`, `flag-message`/`unflag-message`, `move-message`, `delete-message`.
+
+**Message ids are backend-tagged.** The IMAP read path emits self-describing ids
+of the form `imap:<token>` (the token encodes the account, mailbox path, and
+UID). Pass that id back to `get-message` or any message mutation and it routes to
+IMAP automatically; bare numeric ids continue to use AppleScript. So an agent
+never has to know which backend a message came from — the id carries it. (Batch
+operations remain AppleScript-only and accept numeric ids; use the single-message
+tools for IMAP ids.)
 
 Routing is conservative: only a call whose explicit `account` matches the
 configured IMAP account goes to IMAP; everything else falls through to
@@ -309,10 +316,8 @@ config. Gmail label semantics: common names (`All Mail`, `Sent`, `Trash`,
 `Spam`, `Important`, …) map to their `[Gmail]/…` IMAP paths automatically.
 
 > Note: each call currently opens its own IMAP connection (no pooling yet), so
-> expect a few seconds of connection overhead per call. Phase 2 added the folder
-> ops (create/rename/delete-mailbox) — resolving the IMAP slice of
-> [#42](https://github.com/sweetrb/apple-mail-mcp/issues/42). IMAP-backed
-> message-level mutations are still future work (see #43).
+> expect a few seconds of connection overhead per call — the one remaining
+> follow-up on [#43](https://github.com/sweetrb/apple-mail-mcp/issues/43).
 >
 > **iCloud:** set `APPLE_MAIL_MCP_IMAP_HOST=imap.mail.me.com`, `APPLE_MAIL_MCP_IMAP_USER`
 > to your iCloud address, `APPLE_MAIL_MCP_IMAP_ACCOUNT` to the Mail account name
@@ -848,8 +853,8 @@ The entrypoint is written as:
 | No sending HTML email | Emails are sent as plain text; reading HTML content is supported |
 | Attachments require absolute paths | File attachments must use full absolute paths (e.g., `/Users/me/file.pdf`) |
 | No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
-| Very large mailboxes not searchable | Apple Mail's AppleScript bridge times out on mailboxes with tens of thousands of messages, so unscoped `search-messages` skips mailboxes above `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default 5000) and reports them as a partial result. Scope with `mailbox` + a date window to search inside one. ([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)) |
-| Can't delete/rename server-side mailboxes or mutate drafts | Mail.app's AppleScript bridge can only `delete`/`rename` **local "On My Mac"** mailboxes and cannot delete/move drafts — it throws `AppleEvent handler failed` for IMAP/Gmail/Workspace/iCloud/Exchange mailboxes and drafts (the GUI can do it). `delete-mailbox`/`rename-mailbox`/`delete-message`/`move-message` now return a clear "do it in Mail.app directly" error in that case instead of a generic failure. ([#42](https://github.com/sweetrb/apple-mail-mcp/issues/42)) |
+| Very large mailboxes not searchable *via AppleScript* | Apple Mail's AppleScript bridge times out on mailboxes with tens of thousands of messages, so unscoped `search-messages` skips mailboxes above `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default 5000) and reports them as a partial result. Scope with `mailbox` + a date window — or configure the [IMAP backend](#imap-backend--opt-in), which searches these server-side in well under a second. ([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)) |
+| Can't delete/rename server-side mailboxes or mutate drafts *via AppleScript* | Mail.app's AppleScript bridge can only `delete`/`rename` **local "On My Mac"** mailboxes and cannot delete/move drafts — it throws `AppleEvent handler failed` for IMAP/Gmail/Workspace/iCloud/Exchange mailboxes (the GUI can do it). Without IMAP configured, `delete-mailbox`/`rename-mailbox`/`delete-message`/`move-message` return a clear "do it in Mail.app directly" error instead of a generic failure. With the [IMAP backend](#imap-backend--opt-in) configured for the account, these operations run via IMAP and succeed. ([#42](https://github.com/sweetrb/apple-mail-mcp/issues/42)) |
 | In-memory templates | Email templates are not persisted across server restarts |
 | Numeric-only message IDs | Message IDs must contain only digits (validated by schema) |
 | Batch size cap | Batch operations are limited to 100 messages per request |

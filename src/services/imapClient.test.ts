@@ -9,6 +9,15 @@ import {
   imapCreateMailbox,
   imapDeleteMailbox,
   imapRenameMailbox,
+  encodeImapId,
+  decodeImapId,
+  imapGetMessage,
+  imapMarkRead,
+  imapMarkUnread,
+  imapFlagMessage,
+  imapUnflagMessage,
+  imapMoveMessageById,
+  imapDeleteMessageById,
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
@@ -53,10 +62,15 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
         };
       }
     },
+    fetchOne: async () => false,
     list: async () => [],
     mailboxCreate: async (path: string) => ({ path, created: true }),
     mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),
     mailboxDelete: async (path: string) => ({ path }),
+    messageFlagsAdd: async () => true,
+    messageFlagsRemove: async () => true,
+    messageMove: async () => ({}),
+    messageDelete: async () => true,
     logout: async () => undefined,
   };
 }
@@ -121,11 +135,15 @@ describe("imapSearchMessages", () => {
     expect(rec.criteria).toEqual({ or: [{ subject: "the" }, { from: "the" }] });
     expect(rec.range).toBe("5,4"); // newest two, newest first
     expect(out).toContain("via IMAP");
-    expect(out).toContain("UID: 5");
-    expect(out).toContain("UID: 4");
-    expect(out).not.toContain("UID: 3");
+    // Rows now carry composite imap: ids; decode them back to UIDs.
+    const uids = [...out.matchAll(/imap:[A-Za-z0-9_-]+/g)].map((m) => decodeImapId(m[0])?.uid);
+    expect(uids).toEqual([5, 4]); // newest two, newest first
+    expect(uids).not.toContain(3);
+    // The emitted ids encode the mailbox path so mutations can route back.
+    const first = decodeImapId([...out.matchAll(/imap:[A-Za-z0-9_-]+/g)][0][0]);
+    expect(first?.path).toBe("[Gmail]/All Mail");
     expect(out).toContain("5 total matched");
-    expect(out).toMatch(/Note: IDs are IMAP UIDs/);
+    expect(out).toMatch(/work with get-message/);
   });
 
   it("returns a clear empty message when nothing matches", async () => {
@@ -146,7 +164,8 @@ describe("imapListMessages", () => {
     );
     expect(rec.path).toBe("INBOX");
     expect(rec.criteria).toEqual({ unseen: true });
-    expect(out).toContain("UID: 8");
+    const uids = [...out.matchAll(/imap:[A-Za-z0-9_-]+/g)].map((m) => decodeImapId(m[0])?.uid);
+    expect(uids).toEqual([8, 7]); // newest-first
     expect(out).toContain("2 total listed");
   });
 });
@@ -238,5 +257,116 @@ describe("imapRenameMailbox", () => {
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/not found/i);
     expect(rec.renamed).toBeUndefined();
+  });
+});
+
+// --- Phase 3: composite id + message-level mutations -----------------------
+
+describe("encodeImapId / decodeImapId (#43 Phase 3)", () => {
+  it("round-trips account, path, and uid", () => {
+    const id = encodeImapId("iCloud", "[Gmail]/All Mail", 12345);
+    expect(id.startsWith("imap:")).toBe(true);
+    expect(decodeImapId(id)).toEqual({ account: "iCloud", path: "[Gmail]/All Mail", uid: 12345 });
+  });
+  it("returns null for a bare numeric (AppleScript) id and garbage", () => {
+    expect(decodeImapId("57820")).toBeNull();
+    expect(decodeImapId("imap:not-valid-base64-json")).toBeNull();
+  });
+});
+
+interface MsgRec {
+  opened?: string;
+  flagsAdded?: string[];
+  flagsRemoved?: string[];
+  moved?: [number[], string];
+  deleted?: number[];
+}
+
+function makeMsgClient(rec: MsgRec, source?: string): ImapClientLike {
+  const base = makeClient([], {});
+  return {
+    ...base,
+    getMailboxLock: async (path: string) => {
+      rec.opened = path;
+      return { release: () => undefined };
+    },
+    fetchOne: async () =>
+      source ? { uid: 1, envelope: { subject: "Hello" }, source: Buffer.from(source) } : false,
+    messageFlagsAdd: async (_r: number[], flags: string[]) => {
+      rec.flagsAdded = flags;
+      return true;
+    },
+    messageFlagsRemove: async (_r: number[], flags: string[]) => {
+      rec.flagsRemoved = flags;
+      return true;
+    },
+    messageMove: async (r: number[], dest: string) => {
+      rec.moved = [r, dest];
+      return {};
+    },
+    messageDelete: async (r: number[]) => {
+      rec.deleted = r;
+      return true;
+    },
+  };
+}
+
+const MID = encodeImapId("iCloud", "INBOX", 1);
+
+describe("IMAP message mutations (#43 Phase 3)", () => {
+  it("mark read / unread set and clear \\Seen on the right mailbox+uid", async () => {
+    const rec: MsgRec = {};
+    await imapMarkRead(MID, { config: cfg, connect: async () => makeMsgClient(rec) });
+    expect(rec.opened).toBe("INBOX");
+    expect(rec.flagsAdded).toEqual(["\\Seen"]);
+    const rec2: MsgRec = {};
+    await imapMarkUnread(MID, { config: cfg, connect: async () => makeMsgClient(rec2) });
+    expect(rec2.flagsRemoved).toEqual(["\\Seen"]);
+  });
+
+  it("flag / unflag toggle \\Flagged", async () => {
+    const recF: MsgRec = {};
+    await imapFlagMessage(MID, { config: cfg, connect: async () => makeMsgClient(recF) });
+    expect(recF.flagsAdded).toEqual(["\\Flagged"]);
+    const recU: MsgRec = {};
+    await imapUnflagMessage(MID, { config: cfg, connect: async () => makeMsgClient(recU) });
+    expect(recU.flagsRemoved).toEqual(["\\Flagged"]);
+  });
+
+  it("move routes the uid to the resolved destination", async () => {
+    const rec: MsgRec = {};
+    const r = await imapMoveMessageById(MID, "Archive", {
+      config: cfg,
+      connect: async () => makeMsgClient(rec),
+    });
+    expect(r.success).toBe(true);
+    expect(rec.moved).toEqual([[1], "Archive"]);
+  });
+
+  it("delete expunges the uid", async () => {
+    const rec: MsgRec = {};
+    const r = await imapDeleteMessageById(MID, {
+      config: cfg,
+      connect: async () => makeMsgClient(rec),
+    });
+    expect(r.success).toBe(true);
+    expect(rec.deleted).toEqual([1]);
+  });
+
+  it("get-message returns subject + decoded body", async () => {
+    const src = "Content-Type: text/plain\r\n\r\nHello body line";
+    const r = await imapGetMessage(MID, false, {
+      config: cfg,
+      connect: async () => makeMsgClient({}, src),
+    });
+    expect(r.success).toBe(true);
+    expect(r.info).toContain("Subject: Hello");
+    expect(r.info).toContain("Hello body line");
+  });
+
+  it("rejects a non-IMAP id", async () => {
+    const r = await imapDeleteMessageById("57820");
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/Not an IMAP message id/);
   });
 });

@@ -1,11 +1,16 @@
 /**
- * IMAP backend for read/search (issue #43, Phase 1).
+ * IMAP backend (issue #43).
  *
  * AppleScript-over-Mail.app is the default. When an account is explicitly
- * configured for IMAP (env below), `search-messages` and `list-messages` route
- * here instead, running a SERVER-SIDE search — orders of magnitude faster than
- * AppleScript's client-side `whose` enumeration on large Gmail mailboxes, and
- * correct (no false-empty on timeout). Read-only; mutations stay on AppleScript.
+ * configured for IMAP (env below), operations route here instead:
+ *   - read:    search-messages / list-messages (server-side SEARCH, orders of
+ *              magnitude faster and correct on large Gmail mailboxes where
+ *              AppleScript times out with a false-empty) and get-message;
+ *   - folders: create / rename / delete-mailbox (work on the server hierarchy
+ *              that AppleScript can't touch — #42);
+ *   - message: mark/flag/move/delete, keyed by the composite `imap:` id the
+ *              read path emits (see encodeImapId/decodeImapId below).
+ * Everything is opt-in and additive; un-configured accounts use AppleScript.
  *
  * Opt-in via env (mirrors the SMTP transport pattern):
  *   APPLE_MAIL_MCP_IMAP_USER      (required — enables IMAP; the login address)
@@ -19,6 +24,7 @@
  */
 import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
+import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
 
 export const IMAP_ENV = {
   user: "APPLE_MAIL_MCP_IMAP_USER",
@@ -67,6 +73,7 @@ interface ImapMessage {
   uid: number;
   envelope?: ImapEnvelope;
   flags?: Set<string>;
+  source?: Buffer | string;
 }
 interface MailboxLock {
   release: () => void;
@@ -75,6 +82,7 @@ interface ImapMailboxListing {
   path: string;
   name: string;
 }
+type FlagOpts = { uid: boolean };
 export interface ImapClientLike {
   connect(): Promise<void>;
   getMailboxLock(path: string): Promise<MailboxLock>;
@@ -84,11 +92,45 @@ export interface ImapClientLike {
     query: Record<string, unknown>,
     opts: { uid: true }
   ): AsyncIterable<ImapMessage>;
+  fetchOne(
+    range: string,
+    query: Record<string, unknown>,
+    opts: { uid: true }
+  ): Promise<ImapMessage | false>;
   list(): Promise<ImapMailboxListing[]>;
   mailboxCreate(path: string): Promise<{ path: string; created: boolean }>;
   mailboxRename(path: string, newPath: string): Promise<{ path: string; newPath: string }>;
   mailboxDelete(path: string): Promise<{ path: string }>;
+  messageFlagsAdd(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
+  messageFlagsRemove(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
+  messageMove(range: number[], destination: string, opts: FlagOpts): Promise<unknown>;
+  messageDelete(range: number[], opts: FlagOpts): Promise<boolean>;
   logout(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Composite IMAP message id (Phase 3): a self-describing token the IMAP read
+// path emits so the same id round-trips back to get-message and the message
+// mutations. AppleScript message ids are bare numbers; an IMAP id is
+// `imap:<base64url({a:account,p:mailboxPath,u:uid})>`. UIDs are per-mailbox, so
+// the mailbox path must travel with the uid. base64url keeps it schema-safe.
+// ---------------------------------------------------------------------------
+export function encodeImapId(account: string, path: string, uid: number): string {
+  const payload = Buffer.from(JSON.stringify({ a: account, p: path, u: uid }), "utf8").toString(
+    "base64url"
+  );
+  return `imap:${payload}`;
+}
+
+export function decodeImapId(id: string): { account: string; path: string; uid: number } | null {
+  if (!id || !id.startsWith("imap:")) return null;
+  try {
+    const obj = JSON.parse(Buffer.from(id.slice("imap:".length), "base64url").toString("utf8"));
+    if (typeof obj.u !== "number" || typeof obj.p !== "string") return null;
+    return { account: String(obj.a ?? ""), path: obj.p, uid: obj.u };
+  } catch {
+    return null;
+  }
 }
 
 export type ImapConnect = (cfg: ImapConfig) => Promise<ImapClientLike>;
@@ -180,7 +222,7 @@ function buildCriteria(a: ImapSearchArgs, listMode: boolean): Record<string, unk
   return c;
 }
 
-function formatRow(m: ImapMessage): string {
+function formatRow(m: ImapMessage, account: string, path: string): string {
   const env = m.envelope ?? {};
   const subject = env.subject || "(no subject)";
   const a = env.from?.[0];
@@ -191,7 +233,9 @@ function formatRow(m: ImapMessage): string {
     : "(unknown)";
   const date = env.date ? new Date(env.date).toLocaleDateString() : "";
   const read = m.flags?.has("\\Seen") ? "read" : "unread";
-  return `  - UID: ${m.uid} | ${date} | ${subject} (from: ${from}) [${read}]`;
+  // Emit the self-describing IMAP id so get-message and the message mutations
+  // can route this row back to IMAP (Phase 3).
+  return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]`;
 }
 
 async function run(
@@ -223,14 +267,14 @@ async function run(
         { envelope: true, flags: true },
         { uid: true }
       )) {
-        byUid.set(msg.uid, formatRow(msg));
+        byUid.set(msg.uid, formatRow(msg, cfg.accountLabel, path));
       }
       const rows = newest.map((u) => byUid.get(u)).filter((r): r is string => Boolean(r));
       const verb = listMode ? "listed" : "matched";
       return (
         `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, mailbox "${path}"; ${uids.length} total ${verb}):\n` +
         rows.join("\n") +
-        `\n\nNote: IDs are IMAP UIDs. get-message and message mutations still use the AppleScript path (Phase 1 is read/search only).`
+        `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`
       );
     } finally {
       lock.release();
@@ -363,6 +407,130 @@ export function imapRenameMailbox(
         success: false,
         error: `IMAP rename failed for "${path}" -> "${newName}": ${errText(e)}`,
       };
+    }
+  });
+}
+
+// ===========================================================================
+// Phase 3 — message-level operations by composite IMAP id (issue #43)
+//
+// get-message / mark / flag / move / delete-message route here when the message
+// id is an `imap:` token (emitted by the IMAP read path). The token carries the
+// mailbox path + UID, so the op opens that mailbox and acts on the UID.
+// ===========================================================================
+
+/** Connect, open the message's mailbox, run `fn`, release + log out. */
+async function withMailbox<T>(
+  path: string,
+  deps: { connect?: ImapConnect; config?: ImapConfig },
+  fn: (client: ImapClientLike) => Promise<T>
+): Promise<T> {
+  return withClient(deps, async (client) => {
+    const lock = await client.getMailboxLock(path);
+    try {
+      return await fn(client);
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+/** Read a message by composite IMAP id; returns "Subject: …\n\n<body>". */
+export async function imapGetMessage(
+  id: string,
+  preferHtml: boolean,
+  deps: { connect?: ImapConnect; config?: ImapConfig } = {}
+): Promise<ImapOpResult> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, deps, async (client) => {
+    const msg = await client.fetchOne(
+      String(ref.uid),
+      { envelope: true, source: true },
+      { uid: true }
+    );
+    if (!msg)
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    const subject = msg.envelope?.subject || "(no subject)";
+    const src = msg.source ? msg.source.toString() : "";
+    const body =
+      (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ??
+      extractTextBody(src) ??
+      extractHtmlBody(src) ??
+      "(no readable body)";
+    return { success: true, info: `Subject: ${subject}\n\n${body}` };
+  });
+}
+
+function flagOp(
+  id: string,
+  flag: string,
+  add: boolean,
+  deps: { connect?: ImapConnect; config?: ImapConfig }
+): Promise<ImapOpResult> {
+  const ref = decodeImapId(id);
+  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
+  return withMailbox(ref.path, deps, async (client) => {
+    try {
+      const ok = add
+        ? await client.messageFlagsAdd([ref.uid], [flag], { uid: true })
+        : await client.messageFlagsRemove([ref.uid], [flag], { uid: true });
+      if (!ok)
+        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}` };
+    }
+  });
+}
+
+export const imapMarkRead = (id: string, deps = {}): Promise<ImapOpResult> =>
+  flagOp(id, "\\Seen", true, deps);
+export const imapMarkUnread = (id: string, deps = {}): Promise<ImapOpResult> =>
+  flagOp(id, "\\Seen", false, deps);
+export const imapFlagMessage = (id: string, deps = {}): Promise<ImapOpResult> =>
+  flagOp(id, "\\Flagged", true, deps);
+export const imapUnflagMessage = (id: string, deps = {}): Promise<ImapOpResult> =>
+  flagOp(id, "\\Flagged", false, deps);
+
+export async function imapMoveMessageById(
+  id: string,
+  destMailbox: string,
+  deps: { connect?: ImapConnect; config?: ImapConfig } = {}
+): Promise<ImapOpResult> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withClient(deps, async (client) => {
+    const destPath =
+      (await findMailboxPath(client, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
+    const lock = await client.getMailboxLock(ref.path);
+    try {
+      await client.messageMove([ref.uid], destPath, { uid: true });
+      return { success: true, info: `Moved UID ${ref.uid} to "${destPath}" via IMAP.` };
+    } catch (e) {
+      return {
+        success: false,
+        error: `IMAP move failed for UID ${ref.uid} -> "${destPath}": ${errText(e)}`,
+      };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+export async function imapDeleteMessageById(
+  id: string,
+  deps: { connect?: ImapConnect; config?: ImapConfig } = {}
+): Promise<ImapOpResult> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, deps, async (client) => {
+    try {
+      const ok = await client.messageDelete([ref.uid], { uid: true });
+      if (!ok) return { success: false, error: `IMAP delete returned false for UID ${ref.uid}.` };
+      return { success: true, info: `Deleted UID ${ref.uid} from "${ref.path}" via IMAP.` };
+    } catch (e) {
+      return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
     }
   });
 }
