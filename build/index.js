@@ -25,6 +25,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "./services/appleMailManager.js";
 import { sendViaSmtp } from "./services/smtpMailer.js";
+import { isImapAccount, imapSearchMessages, imapListMessages } from "./services/imapClient.js";
 import { createSerialGate } from "./utils/serialize.js";
 // =============================================================================
 // Shared Validation Schemas
@@ -157,7 +158,23 @@ server.tool("search-messages", {
     dateFrom: DATE_FILTER_SCHEMA.describe("Start date filter (e.g., 'January 1, 2026')"),
     dateTo: DATE_FILTER_SCHEMA.describe("End date filter (e.g., 'March 1, 2026')"),
     limit: z.number().optional().describe("Maximum number of results (default: 50)"),
-}, withErrorHandling(({ query, mailbox, account, limit = 50, dateFrom, dateTo, from, subject, isRead, isFlagged, }) => {
+}, withErrorHandling(async ({ query, mailbox, account, limit = 50, dateFrom, dateTo, from, subject, isRead, isFlagged, }) => {
+    // IMAP backend (issue #43): server-side search when this account is
+    // explicitly configured for IMAP; otherwise fall through to AppleScript.
+    if (isImapAccount(account)) {
+        return successResponse(await imapSearchMessages({
+            query,
+            mailbox,
+            account,
+            limit,
+            dateFrom,
+            dateTo,
+            from,
+            subject,
+            isRead,
+            isFlagged,
+        }));
+    }
     const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(query, mailbox, account, limit, dateFrom, dateTo, from, subject, isRead, isFlagged);
     const coverageBlock = partialCoverageBlock(diagnostics);
     if (messages.length === 0) {
@@ -200,7 +217,12 @@ server.tool("list-messages", {
     offset: z.number().optional().describe("Number of messages to skip (for pagination)"),
     from: z.string().optional().describe("Filter by sender email address or name"),
     unreadOnly: z.boolean().optional().describe("Only show unread messages"),
-}, withErrorHandling(({ mailbox, account, limit = 50, offset = 0, from }) => {
+}, withErrorHandling(async ({ mailbox, account, limit = 50, offset = 0, from, unreadOnly }) => {
+    // IMAP backend (issue #43): server-side listing when this account is
+    // explicitly configured for IMAP; otherwise fall through to AppleScript.
+    if (isImapAccount(account)) {
+        return successResponse(await imapListMessages({ mailbox, account, limit, offset, from, unreadOnly }));
+    }
     const { messages, diagnostics } = mailManager.listMessagesWithDiagnostics(mailbox, account, limit, from, offset);
     const coverageBlock = partialCoverageBlock(diagnostics);
     if (messages.length === 0) {

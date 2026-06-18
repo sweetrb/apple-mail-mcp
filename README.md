@@ -270,6 +270,43 @@ Then send:
 
 The default `applescript` transport is unchanged; SMTP is opt-in per call.
 
+##### IMAP backend (read/search) — opt-in, Phase 1
+
+AppleScript runs `search`/`list` predicates client-side over the Apple Event
+bridge, which is slow and can time out (false-empty) on large Gmail/IMAP
+mailboxes (see [#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)). When
+an account is configured for IMAP, `search-messages` and `list-messages` instead
+run a **server-side IMAP search** ([#43](https://github.com/sweetrb/apple-mail-mcp/issues/43)) —
+typically sub-second and correct on the same mailbox where AppleScript times out.
+This is **opt-in and additive**: any account without IMAP configured behaves
+exactly as before (AppleScript). Read-only for now — `get-message` and all
+mutations stay on AppleScript (the IMAP rows report message **UIDs**, noted in
+the output).
+
+Routing is conservative: only a call whose explicit `account` matches the
+configured IMAP account goes to IMAP; everything else falls through to
+AppleScript.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `APPLE_MAIL_MCP_IMAP_USER` | Yes | — | Login address; setting it enables IMAP |
+| `APPLE_MAIL_MCP_IMAP_ACCOUNT` | No | = user | Mail account name to match for routing |
+| `APPLE_MAIL_MCP_IMAP_HOST` | No | `imap.gmail.com` | IMAP server hostname |
+| `APPLE_MAIL_MCP_IMAP_PORT` | No | `993` | IMAP port (993 = implicit TLS) |
+| `APPLE_MAIL_MCP_IMAP_PASSWORD` | No | — | Password (if set, used instead of the Keychain) |
+| `APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE` | No | — | Keychain item service/server name |
+| `APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT` | No | = user | Keychain item account |
+
+As with SMTP, the password is read from the macOS **Keychain** by default (use
+an app-specific password for Gmail/Workspace/iCloud), so no secret goes in
+config. Gmail label semantics: common names (`All Mail`, `Sent`, `Trash`,
+`Spam`, `Important`, …) map to their `[Gmail]/…` IMAP paths automatically.
+
+> Note: each call currently opens its own IMAP connection (no pooling yet), so
+> expect a few seconds of connection overhead per call. Phase 2 (IMAP-backed
+> mutations + folder ops, which would also resolve the IMAP slice of
+> [#42](https://github.com/sweetrb/apple-mail-mcp/issues/42)) is not yet implemented.
+
 ---
 
 #### `send-serial-email`
