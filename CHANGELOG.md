@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Default-account resolution could fall back to a *disabled* account** — when a tool call omitted `account`, `resolveAccount()` fell back to `accounts[0]` (and a hardcoded `return "iCloud"`) without checking whether that account is enabled. On a setup where the first-listed account is a disabled, unused iCloud account, operations could silently target it (this is how the `_amcp_rename_test_*` orphans landed in an invisible account). Resolution now goes through a pure, tested `chooseDefaultAccount()` helper: explicit `APPLE_MAIL_MCP_DEFAULT_ACCOUNT` override (by name or email) → Mail's default-send account *if enabled* → first **enabled** account. A disabled account is never chosen implicitly. ([#47](https://github.com/sweetrb/apple-mail-mcp/issues/47))
+
+### Added
+- **`APPLE_MAIL_MCP_DEFAULT_ACCOUNT` env** to pin the default account (matched by account name or email) regardless of Mail's compose setting. ([#47](https://github.com/sweetrb/apple-mail-mcp/issues/47))
+
 ## [1.8.0] - 2026-06-18
 
 ### Added
