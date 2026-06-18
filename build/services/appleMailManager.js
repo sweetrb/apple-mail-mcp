@@ -181,6 +181,41 @@ export function describeMailboxOpError(op, raw) {
     }
     return trimmed || `Failed to ${op} mailbox`;
 }
+/** Env var to pin the default account (matched by account name or email). */
+export const DEFAULT_ACCOUNT_ENV = "APPLE_MAIL_MCP_DEFAULT_ACCOUNT";
+/**
+ * Choose the account to use when a tool call omits `account`.
+ *
+ * Priority: explicit `override` (by name or email) → Mail's default-send
+ * account *if enabled* → first enabled account → first account → null. The key
+ * guarantee (issue #47): a **disabled** account is never chosen implicitly — it
+ * can only be selected via an explicit override (deliberate user intent) or as
+ * a last resort when no account is enabled. This prevents operations silently
+ * landing in a configured-but-disabled account (e.g. an unused iCloud account
+ * that's still addressable via AppleScript).
+ *
+ * Pure/exported for unit testing.
+ */
+export function chooseDefaultAccount(accounts, opts = {}) {
+    const norm = (s) => s.trim().toLowerCase();
+    const override = opts.override?.trim();
+    if (override) {
+        const o = norm(override);
+        const m = accounts.find((a) => norm(a.name) === o || norm(a.email) === o);
+        if (m)
+            return m.name; // honor an explicit pin even if that account is disabled
+    }
+    if (opts.defaultSendEmail) {
+        const e = norm(opts.defaultSendEmail);
+        const m = accounts.find((a) => norm(a.email) === e);
+        if (m && m.enabled)
+            return m.name;
+    }
+    const firstEnabled = accounts.find((a) => a.enabled);
+    if (firstEnabled)
+        return firstEnabled.name;
+    return accounts[0]?.name ?? null;
+}
 export function escapeForAppleScript(text) {
     if (!text)
         return "";
@@ -396,16 +431,20 @@ export class AppleMailManager {
         this.cache.mailboxNames.clear();
     }
     /**
-     * Resolves the account to use for an operation.
-     * Queries Mail.app's configured default send account, then falls back
-     * to the first available account.
+     * Resolves the account to use for an operation when the caller omits one.
+     *
+     * Order (see chooseDefaultAccount): the APPLE_MAIL_MCP_DEFAULT_ACCOUNT env
+     * override → Mail.app's configured default-send account (if enabled) → the
+     * first enabled account. A disabled account is never chosen implicitly (#47).
      */
     resolveAccount(account) {
         if (account)
             return account;
         if (this.defaultAccount)
             return this.defaultAccount;
-        // Query Mail.app's default send account by inspecting a temporary outgoing message
+        const accounts = this.getCachedAccounts();
+        // Mail.app's default send account (inspect a throwaway outgoing message).
+        let defaultSendEmail;
         const defaultResult = executeAppleScript(buildAppLevelScript(`
         set newMsg to make new outgoing message
         set fromAddr to sender of newMsg
@@ -413,24 +452,22 @@ export class AppleMailManager {
         return fromAddr
       `));
         if (defaultResult.success && defaultResult.output.trim()) {
-            // sender returns "Name <email>" — match to account by email address
+            // sender returns "Name <email>" — pull out the address
             const senderOutput = defaultResult.output.trim();
             const emailMatch = senderOutput.match(/<([^>]+)>/);
-            const defaultEmail = emailMatch ? emailMatch[1] : senderOutput;
-            const accounts = this.getCachedAccounts();
-            const matchedAccount = accounts.find((a) => a.email.toLowerCase() === defaultEmail.toLowerCase());
-            if (matchedAccount) {
-                this.defaultAccount = matchedAccount.name;
-                return this.defaultAccount;
-            }
+            defaultSendEmail = emailMatch ? emailMatch[1] : senderOutput;
         }
-        // Fall back to first available account
-        const accounts = this.getCachedAccounts();
-        if (accounts.length > 0) {
-            this.defaultAccount = accounts[0].name;
-            return this.defaultAccount;
+        const chosen = chooseDefaultAccount(accounts, {
+            override: process.env[DEFAULT_ACCOUNT_ENV],
+            defaultSendEmail,
+        });
+        if (chosen) {
+            this.defaultAccount = chosen;
+            return chosen;
         }
-        return "iCloud"; // Last resort fallback
+        // No accounts at all — return something rather than throw; downstream
+        // AppleScript will surface a clear "account not found".
+        return accounts[0]?.name ?? "iCloud";
     }
     /**
      * Resolves a mailbox name to its actual name in the account.

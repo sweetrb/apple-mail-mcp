@@ -54,6 +54,25 @@ export declare function isPathWithinAllowedRoots(resolvedPath: string): boolean;
  * Exported for unit testing.
  */
 export declare function describeMailboxOpError(op: "delete" | "rename", raw: string): string;
+/** Env var to pin the default account (matched by account name or email). */
+export declare const DEFAULT_ACCOUNT_ENV = "APPLE_MAIL_MCP_DEFAULT_ACCOUNT";
+/**
+ * Choose the account to use when a tool call omits `account`.
+ *
+ * Priority: explicit `override` (by name or email) → Mail's default-send
+ * account *if enabled* → first enabled account → first account → null. The key
+ * guarantee (issue #47): a **disabled** account is never chosen implicitly — it
+ * can only be selected via an explicit override (deliberate user intent) or as
+ * a last resort when no account is enabled. This prevents operations silently
+ * landing in a configured-but-disabled account (e.g. an unused iCloud account
+ * that's still addressable via AppleScript).
+ *
+ * Pure/exported for unit testing.
+ */
+export declare function chooseDefaultAccount(accounts: Account[], opts?: {
+    override?: string;
+    defaultSendEmail?: string;
+}): string | null;
 export declare function escapeForAppleScript(text: string): string;
 /**
  * Emits AppleScript that builds a date into the variable `varName` from numeric
@@ -135,9 +154,11 @@ export declare class AppleMailManager {
      */
     private invalidateCache;
     /**
-     * Resolves the account to use for an operation.
-     * Queries Mail.app's configured default send account, then falls back
-     * to the first available account.
+     * Resolves the account to use for an operation when the caller omits one.
+     *
+     * Order (see chooseDefaultAccount): the APPLE_MAIL_MCP_DEFAULT_ACCOUNT env
+     * override → Mail.app's configured default-send account (if enabled) → the
+     * first enabled account. A disabled account is never chosen implicitly (#47).
      */
     private resolveAccount;
     /**
