@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.7.0] - 2026-06-18
 
 ### Added
 - **Opt-in IMAP backend for `search-messages` / `list-messages` (Phase 1)** — when an account is configured for IMAP, these two read paths run a **server-side IMAP search** (via `imapflow`) instead of AppleScript's client-side `whose` enumeration. On large Gmail/IMAP mailboxes where AppleScript times out with a false-empty (#24), IMAP returns correct results in well under a second. Strictly additive and opt-in (mirrors the `transport:"smtp"` pattern from #12): any account *without* IMAP configured behaves exactly as before, and routing only sends a call to IMAP when its explicit `account` matches the configured one. Read-only for now — `get-message` and all mutations stay on AppleScript (IMAP rows report message UIDs, noted in the output). Config via `APPLE_MAIL_MCP_IMAP_*` env with the password read from the macOS Keychain (same pattern as SMTP); Gmail label names map to their `[Gmail]/…` paths automatically. New runtime dependency `imapflow`. See the README "IMAP backend" section. Phase 2 (IMAP-backed mutations + folder ops, addressing the IMAP slice of #42) is future work. ([#43](https://github.com/sweetrb/apple-mail-mcp/issues/43))
