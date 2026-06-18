@@ -593,10 +593,10 @@ server.tool(
     id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
-    const success = mailManager.deleteMessage(id);
+    const { success, error } = mailManager.deleteMessage(id);
 
     if (!success) {
-      return errorResponse(`Failed to delete message "${id}"`);
+      return errorResponse(error || `Failed to delete message "${id}"`);
     }
 
     return successResponse("Message deleted");
@@ -613,10 +613,10 @@ server.tool(
     account: z.string().optional().describe("Account containing the destination mailbox"),
   },
   withErrorHandling(({ id, mailbox, account }) => {
-    const success = mailManager.moveMessage(id, mailbox, account);
+    const { success, error } = mailManager.moveMessage(id, mailbox, account);
 
     if (!success) {
-      return errorResponse(`Failed to move message to "${mailbox}"`);
+      return errorResponse(error || `Failed to move message to "${mailbox}"`);
     }
 
     return successResponse(`Message moved to "${mailbox}"`);
@@ -872,10 +872,10 @@ server.tool(
     account: z.string().optional().describe("Account containing the mailbox"),
   },
   withErrorHandling(({ name, account }) => {
-    const success = mailManager.deleteMailbox(name, account);
+    const { success, error } = mailManager.deleteMailbox(name, account);
 
     if (!success) {
-      return errorResponse(`Failed to delete mailbox "${name}"`);
+      return errorResponse(error || `Failed to delete mailbox "${name}"`);
     }
 
     return successResponse(`Mailbox "${name}" deleted`);
@@ -892,10 +892,10 @@ server.tool(
     account: z.string().optional().describe("Account containing the mailbox"),
   },
   withErrorHandling(({ oldName, newName, account }) => {
-    const success = mailManager.renameMailbox(oldName, newName, account);
+    const { success, error } = mailManager.renameMailbox(oldName, newName, account);
 
     if (!success) {
-      return errorResponse(`Failed to rename mailbox "${oldName}" to "${newName}"`);
+      return errorResponse(error || `Failed to rename mailbox "${oldName}" to "${newName}"`);
     }
 
     return successResponse(`Mailbox renamed from "${oldName}" to "${newName}"`);
