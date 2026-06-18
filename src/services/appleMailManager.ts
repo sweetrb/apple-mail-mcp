@@ -200,6 +200,31 @@ export function isPathWithinAllowedRoots(resolvedPath: string): boolean {
   });
 }
 
+/**
+ * Pattern in a raw AppleScript error that indicates an operation Mail.app's
+ * scripting interface simply cannot perform on this target — most often a
+ * server-side (IMAP / Gmail / Workspace / iCloud / Exchange) mailbox or a draft.
+ * Mail throws `AppleEvent handler failed` (-10000) for these; the GUI can do
+ * them, the scripting bridge cannot. See issue #42 and the audit doc.
+ */
+const UNSUPPORTED_APPLESCRIPT_OP = /AppleEvent handler failed|-10000/i;
+
+/**
+ * Turn a raw mailbox delete/rename failure into an actionable, non-retryable
+ * message when it's the known server-side-mailbox limitation (#42); otherwise
+ * return the raw error unchanged.
+ *
+ * Exported for unit testing.
+ */
+export function describeMailboxOpError(op: "delete" | "rename", raw: string): string {
+  const trimmed = (raw || "").trim();
+  if (UNSUPPORTED_APPLESCRIPT_OP.test(trimmed)) {
+    const verb = op === "delete" ? "Delete" : "Rename";
+    return `Mail.app cannot ${op} server-side (IMAP / Gmail / Workspace / iCloud / Exchange) mailboxes via AppleScript — only local "On My Mac" mailboxes support this. ${verb} it in Mail.app directly. (Mail.app error: ${trimmed})`;
+  }
+  return trimmed || `Failed to ${op} mailbox`;
+}
+
 export function escapeForAppleScript(text: string): string {
   if (!text) return "";
   // Escape backslash and double-quote for the AppleScript string literal, and
@@ -1689,16 +1714,48 @@ export class AppleMailManager {
   /**
    * Delete a message.
    */
-  deleteMessage(id: string): boolean {
+  deleteMessage(id: string): { success: boolean; error?: string } {
     const script = this.findMessageScript(id, "delete msg");
     const result = executeAppleScript(script, { timeoutMs: 60000 });
 
-    if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to delete message: ${result.error || result.output}`);
-      return false;
+    if (result.success && !result.output.startsWith("error:")) {
+      return { success: true };
     }
 
-    return true;
+    const raw = result.success
+      ? result.output.replace(/^error:/, "")
+      : result.error || "Unknown error";
+    const error = this.classifyMessageMutationError(id, raw, "delete");
+    console.error(`Failed to delete message: ${error}`);
+    return { success: false, error };
+  }
+
+  /**
+   * Classify a failed message mutation (delete/move) into an actionable error.
+   *
+   * Mail.app's scripting bridge cannot delete or move drafts, and cannot mutate
+   * messages in some server-side special mailboxes — it throws `AppleEvent
+   * handler failed` rather than a useful message (#42). When that pattern is
+   * seen, look up the message's mailbox (cheap, indexed `whose id is`) to give a
+   * draft-specific or server-specific hint. Other errors (e.g. "Message not
+   * found", "ambiguous destination") pass through unchanged.
+   */
+  private classifyMessageMutationError(id: string, raw: string, op: "delete" | "move"): string {
+    const trimmed = (raw || "").trim();
+    if (!UNSUPPORTED_APPLESCRIPT_OP.test(trimmed)) return trimmed || `Failed to ${op} message`;
+
+    let mailbox = "";
+    try {
+      mailbox = this.getMessageById(id)?.mailbox ?? "";
+    } catch {
+      /* best-effort; fall through to the generic server-side message */
+    }
+    if (/draft/i.test(mailbox)) {
+      return `Mail.app cannot ${op} drafts via AppleScript; ${op} it in Mail.app directly. (Mail.app error: ${trimmed})`;
+    }
+    return `Mail.app cannot ${op} this message via AppleScript (server-side or special mailbox${
+      mailbox ? ` "${mailbox}"` : ""
+    }); ${op} it in Mail.app directly. (Mail.app error: ${trimmed})`;
   }
 
   /**
@@ -1778,12 +1835,16 @@ export class AppleMailManager {
     return { success: true };
   }
 
-  moveMessage(id: string, mailbox: string, account?: string): boolean {
-    const { success, error } = this.moveMessageInternal(id, mailbox, account);
-    if (!success) {
-      console.error(`Failed to move message: ${error}`);
-    }
-    return success;
+  moveMessage(id: string, mailbox: string, account?: string): { success: boolean; error?: string } {
+    const res = this.moveMessageInternal(id, mailbox, account);
+    if (res.success) return { success: true };
+    const error = this.classifyMessageMutationError(
+      id,
+      res.error || "Failed to move message",
+      "move"
+    );
+    console.error(`Failed to move message: ${error}`);
+    return { success: false, error };
   }
 
   // ===========================================================================
@@ -2243,7 +2304,7 @@ export class AppleMailManager {
   /**
    * Delete a mailbox.
    */
-  deleteMailbox(name: string, account?: string): boolean {
+  deleteMailbox(name: string, account?: string): { success: boolean; error?: string } {
     const targetAccount = this.resolveAccount(account);
     const targetMailbox = this.resolveMailbox(name, targetAccount);
     const safeName = escapeForAppleScript(targetMailbox);
@@ -2261,23 +2322,34 @@ export class AppleMailManager {
     const result = executeAppleScript(script);
 
     if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to delete mailbox: ${result.error || result.output}`);
-      return false;
+      const raw = result.success
+        ? result.output.replace(/^error:/, "")
+        : result.error || "Unknown error";
+      const error = describeMailboxOpError("delete", raw);
+      console.error(`Failed to delete mailbox: ${error}`);
+      return { success: false, error };
     }
 
     this.invalidateCache();
-    return true;
+    return { success: true };
   }
 
   /**
    * Rename a mailbox by creating a new one, moving messages, and deleting the old one.
    */
-  renameMailbox(oldName: string, newName: string, account?: string): boolean {
+  renameMailbox(
+    oldName: string,
+    newName: string,
+    account?: string
+  ): { success: boolean; error?: string } {
     const targetAccount = this.resolveAccount(account);
 
     // Create the new mailbox
     if (!this.createMailbox(newName, targetAccount)) {
-      return false;
+      return {
+        success: false,
+        error: `Could not create the destination mailbox "${newName}" needed for the rename.`,
+      };
     }
 
     // Move all messages from old to new
@@ -2327,23 +2399,31 @@ export class AppleMailManager {
     const result = executeAppleScript(moveScript, { timeoutMs: 120000 });
 
     if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to rename mailbox: ${result.error || result.output}`);
-      return false;
+      const raw = result.success
+        ? result.output.replace(/^error:/, "")
+        : result.error || "Unknown error";
+      // The empty destination mailbox we just created is now an orphan; the
+      // source is untouched (delete only runs after a verified-empty move).
+      const error = describeMailboxOpError("rename", raw);
+      console.error(`Failed to rename mailbox: ${error}`);
+      this.invalidateCache();
+      return { success: false, error };
     }
 
     if (result.output.startsWith("partial")) {
       const parts = result.output.split(FIELD_SEP);
       const remaining = parts[3] ?? "?";
       const total = parts[2] ?? "?";
-      console.error(
-        `Failed to rename mailbox: only ${parts[1] ?? "?"} of ${total} messages moved, ${remaining} remain in "${resolvedOld}"; source was NOT deleted (both mailboxes left intact). Retry to move the rest.`
-      );
+      const error = `Only ${
+        parts[1] ?? "?"
+      } of ${total} messages moved, ${remaining} remain in "${resolvedOld}"; the source was NOT deleted (both mailboxes left intact). Retry to move the rest.`;
+      console.error(`Failed to rename mailbox: ${error}`);
       this.invalidateCache(); // the new mailbox now exists and holds the moved messages
-      return false;
+      return { success: false, error };
     }
 
     this.invalidateCache();
-    return true;
+    return { success: true };
   }
 
   // ===========================================================================
