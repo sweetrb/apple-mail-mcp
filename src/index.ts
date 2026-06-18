@@ -26,6 +26,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "@/services/appleMailManager.js";
 import { sendViaSmtp } from "@/services/smtpMailer.js";
+import { isImapAccount, imapSearchMessages, imapListMessages } from "@/services/imapClient.js";
 import { createSerialGate } from "@/utils/serialize.js";
 import type { SearchDiagnostics } from "@/types.js";
 
@@ -192,7 +193,7 @@ server.tool(
     limit: z.number().optional().describe("Maximum number of results (default: 50)"),
   },
   withErrorHandling(
-    ({
+    async ({
       query,
       mailbox,
       account,
@@ -204,6 +205,25 @@ server.tool(
       isRead,
       isFlagged,
     }) => {
+      // IMAP backend (issue #43): server-side search when this account is
+      // explicitly configured for IMAP; otherwise fall through to AppleScript.
+      if (isImapAccount(account)) {
+        return successResponse(
+          await imapSearchMessages({
+            query,
+            mailbox,
+            account,
+            limit,
+            dateFrom,
+            dateTo,
+            from,
+            subject,
+            isRead,
+            isFlagged,
+          })
+        );
+      }
+
       const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
         query,
         mailbox,
@@ -283,7 +303,15 @@ server.tool(
     from: z.string().optional().describe("Filter by sender email address or name"),
     unreadOnly: z.boolean().optional().describe("Only show unread messages"),
   },
-  withErrorHandling(({ mailbox, account, limit = 50, offset = 0, from }) => {
+  withErrorHandling(async ({ mailbox, account, limit = 50, offset = 0, from, unreadOnly }) => {
+    // IMAP backend (issue #43): server-side listing when this account is
+    // explicitly configured for IMAP; otherwise fall through to AppleScript.
+    if (isImapAccount(account)) {
+      return successResponse(
+        await imapListMessages({ mailbox, account, limit, offset, from, unreadOnly })
+      );
+    }
+
     const { messages, diagnostics } = mailManager.listMessagesWithDiagnostics(
       mailbox,
       account,
