@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] - 2026-06-18
 
 ### Added
 - **IMAP backend Phase 2: folder operations** — when an account is IMAP-configured, `create-mailbox`, `rename-mailbox`, and `delete-mailbox` now run via IMAP (`imapflow` `mailboxCreate`/`mailboxRename`/`mailboxDelete`) instead of AppleScript. IMAP's `CREATE`/`RENAME`/`DELETE` operate on the real server folder hierarchy, so they succeed on exactly the iCloud/Gmail/Workspace/Exchange mailboxes where Mail.app's AppleScript bridge throws `AppleEvent handler failed` — closing the IMAP slice of #42. Delete/rename resolve the target by listing mailboxes and matching on full path then leaf name, and fail clearly ("not found") without acting if the mailbox is absent. Still opt-in/additive: accounts without IMAP configured use AppleScript (and get the #42 actionable error). Message-level mutations (mark/flag/move/delete-message) remain on AppleScript pending a UID-aware design (the IMAP read path reports per-mailbox UIDs, a different namespace from Mail ids). ([#43](https://github.com/sweetrb/apple-mail-mcp/issues/43))
