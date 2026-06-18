@@ -175,3 +175,86 @@ export function imapSearchMessages(args, deps = {}) {
 export function imapListMessages(args, deps = {}) {
     return run(args, true, deps);
 }
+function errText(e) {
+    return e instanceof Error ? e.message : String(e);
+}
+/** Connect, run `fn`, always log out. */
+async function withClient(deps, fn) {
+    const cfg = deps.config ?? resolveImapConfig();
+    const client = await (deps.connect ?? defaultConnect)(cfg);
+    try {
+        return await fn(client, cfg);
+    }
+    finally {
+        await client.logout().catch(() => undefined);
+    }
+}
+/**
+ * Resolve a user-supplied mailbox name to an actual server path by listing the
+ * mailboxes and matching on full path, then leaf name (case-insensitive).
+ * Returns null when no such mailbox exists.
+ */
+async function findMailboxPath(client, name) {
+    const wanted = name.trim().toLowerCase();
+    const boxes = await client.list();
+    const byPath = boxes.find((b) => b.path.toLowerCase() === wanted);
+    if (byPath)
+        return byPath.path;
+    const byName = boxes.find((b) => b.name.toLowerCase() === wanted);
+    return byName ? byName.path : null;
+}
+export function imapCreateMailbox(name, deps = {}) {
+    return withClient(deps, async (client) => {
+        try {
+            const res = await client.mailboxCreate(name);
+            return res.created
+                ? { success: true, info: `Created mailbox "${res.path}".` }
+                : { success: true, info: `Mailbox "${res.path}" already existed.` };
+        }
+        catch (e) {
+            return { success: false, error: `IMAP create failed for "${name}": ${errText(e)}` };
+        }
+    });
+}
+export function imapDeleteMailbox(name, deps = {}) {
+    return withClient(deps, async (client, cfg) => {
+        const path = await findMailboxPath(client, name);
+        if (!path) {
+            return {
+                success: false,
+                error: `Mailbox "${name}" not found on IMAP account ${cfg.accountLabel}.`,
+            };
+        }
+        try {
+            await client.mailboxDelete(path);
+            return {
+                success: true,
+                info: `Deleted mailbox "${path}" via IMAP (account ${cfg.accountLabel}).`,
+            };
+        }
+        catch (e) {
+            return { success: false, error: `IMAP delete failed for "${path}": ${errText(e)}` };
+        }
+    });
+}
+export function imapRenameMailbox(oldName, newName, deps = {}) {
+    return withClient(deps, async (client, cfg) => {
+        const path = await findMailboxPath(client, oldName);
+        if (!path) {
+            return {
+                success: false,
+                error: `Mailbox "${oldName}" not found on IMAP account ${cfg.accountLabel}.`,
+            };
+        }
+        try {
+            const res = await client.mailboxRename(path, newName);
+            return { success: true, info: `Renamed "${res.path}" to "${res.newPath}" via IMAP.` };
+        }
+        catch (e) {
+            return {
+                success: false,
+                error: `IMAP rename failed for "${path}" -> "${newName}": ${errText(e)}`,
+            };
+        }
+    });
+}

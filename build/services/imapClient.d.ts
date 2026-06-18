@@ -46,6 +46,10 @@ interface ImapMessage {
 interface MailboxLock {
     release: () => void;
 }
+interface ImapMailboxListing {
+    path: string;
+    name: string;
+}
 export interface ImapClientLike {
     connect(): Promise<void>;
     getMailboxLock(path: string): Promise<MailboxLock>;
@@ -55,6 +59,18 @@ export interface ImapClientLike {
     fetch(range: string, query: Record<string, unknown>, opts: {
         uid: true;
     }): AsyncIterable<ImapMessage>;
+    list(): Promise<ImapMailboxListing[]>;
+    mailboxCreate(path: string): Promise<{
+        path: string;
+        created: boolean;
+    }>;
+    mailboxRename(path: string, newPath: string): Promise<{
+        path: string;
+        newPath: string;
+    }>;
+    mailboxDelete(path: string): Promise<{
+        path: string;
+    }>;
     logout(): Promise<void>;
 }
 export type ImapConnect = (cfg: ImapConfig) => Promise<ImapClientLike>;
@@ -71,5 +87,22 @@ export declare function imapListMessages(args: ImapSearchArgs, deps?: {
     connect?: ImapConnect;
     config?: ImapConfig;
 }): Promise<string>;
+export interface ImapOpResult {
+    success: boolean;
+    error?: string;
+    info?: string;
+}
+export declare function imapCreateMailbox(name: string, deps?: {
+    connect?: ImapConnect;
+    config?: ImapConfig;
+}): Promise<ImapOpResult>;
+export declare function imapDeleteMailbox(name: string, deps?: {
+    connect?: ImapConnect;
+    config?: ImapConfig;
+}): Promise<ImapOpResult>;
+export declare function imapRenameMailbox(oldName: string, newName: string, deps?: {
+    connect?: ImapConnect;
+    config?: ImapConfig;
+}): Promise<ImapOpResult>;
 export {};
 //# sourceMappingURL=imapClient.d.ts.map

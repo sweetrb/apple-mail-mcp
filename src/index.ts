@@ -26,7 +26,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "@/services/appleMailManager.js";
 import { sendViaSmtp } from "@/services/smtpMailer.js";
-import { isImapAccount, imapSearchMessages, imapListMessages } from "@/services/imapClient.js";
+import {
+  isImapAccount,
+  imapSearchMessages,
+  imapListMessages,
+  imapCreateMailbox,
+  imapDeleteMailbox,
+  imapRenameMailbox,
+} from "@/services/imapClient.js";
 import { createSerialGate } from "@/utils/serialize.js";
 import type { SearchDiagnostics } from "@/types.js";
 
@@ -852,7 +859,15 @@ server.tool(
     name: z.string().min(1, "Mailbox name is required"),
     account: z.string().optional().describe("Account to create the mailbox in"),
   },
-  withErrorHandling(({ name, account }) => {
+  withErrorHandling(async ({ name, account }) => {
+    // IMAP backend (issue #43, Phase 2): server-side folder op when this account
+    // is IMAP-configured; otherwise AppleScript.
+    if (isImapAccount(account)) {
+      const r = await imapCreateMailbox(name);
+      if (!r.success) return errorResponse(r.error || `Failed to create mailbox "${name}"`);
+      return successResponse(r.info || `Mailbox "${name}" created`);
+    }
+
     const success = mailManager.createMailbox(name, account);
 
     if (!success) {
@@ -871,7 +886,13 @@ server.tool(
     name: z.string().min(1, "Mailbox name is required"),
     account: z.string().optional().describe("Account containing the mailbox"),
   },
-  withErrorHandling(({ name, account }) => {
+  withErrorHandling(async ({ name, account }) => {
+    if (isImapAccount(account)) {
+      const r = await imapDeleteMailbox(name);
+      if (!r.success) return errorResponse(r.error || `Failed to delete mailbox "${name}"`);
+      return successResponse(r.info || `Mailbox "${name}" deleted`);
+    }
+
     const { success, error } = mailManager.deleteMailbox(name, account);
 
     if (!success) {
@@ -891,7 +912,15 @@ server.tool(
     newName: z.string().min(1, "New mailbox name is required"),
     account: z.string().optional().describe("Account containing the mailbox"),
   },
-  withErrorHandling(({ oldName, newName, account }) => {
+  withErrorHandling(async ({ oldName, newName, account }) => {
+    if (isImapAccount(account)) {
+      const r = await imapRenameMailbox(oldName, newName);
+      if (!r.success) {
+        return errorResponse(r.error || `Failed to rename mailbox "${oldName}" to "${newName}"`);
+      }
+      return successResponse(r.info || `Mailbox renamed from "${oldName}" to "${newName}"`);
+    }
+
     const { success, error } = mailManager.renameMailbox(oldName, newName, account);
 
     if (!success) {
