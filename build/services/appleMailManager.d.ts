@@ -46,6 +46,14 @@ export declare function splitSearchDiagnostics(output: string, account: string):
  * (caller passes `resolve(...)` output).
  */
 export declare function isPathWithinAllowedRoots(resolvedPath: string): boolean;
+/**
+ * Turn a raw mailbox delete/rename failure into an actionable, non-retryable
+ * message when it's the known server-side-mailbox limitation (#42); otherwise
+ * return the raw error unchanged.
+ *
+ * Exported for unit testing.
+ */
+export declare function describeMailboxOpError(op: "delete" | "rename", raw: string): string;
 export declare function escapeForAppleScript(text: string): string;
 /**
  * Emits AppleScript that builds a date into the variable `varName` from numeric
@@ -328,7 +336,21 @@ export declare class AppleMailManager {
     /**
      * Delete a message.
      */
-    deleteMessage(id: string): boolean;
+    deleteMessage(id: string): {
+        success: boolean;
+        error?: string;
+    };
+    /**
+     * Classify a failed message mutation (delete/move) into an actionable error.
+     *
+     * Mail.app's scripting bridge cannot delete or move drafts, and cannot mutate
+     * messages in some server-side special mailboxes — it throws `AppleEvent
+     * handler failed` rather than a useful message (#42). When that pattern is
+     * seen, look up the message's mailbox (cheap, indexed `whose id is`) to give a
+     * draft-specific or server-specific hint. Other errors (e.g. "Message not
+     * found", "ambiguous destination") pass through unchanged.
+     */
+    private classifyMessageMutationError;
     /**
      * Move a message to a different mailbox.
      */
@@ -351,7 +373,10 @@ export declare class AppleMailManager {
      * (destination not found / ambiguous / message not found).
      */
     private moveMessageInternal;
-    moveMessage(id: string, mailbox: string, account?: string): boolean;
+    moveMessage(id: string, mailbox: string, account?: string): {
+        success: boolean;
+        error?: string;
+    };
     /**
      * Run one operation over many message IDs in a SINGLE osascript invocation.
      *
@@ -424,11 +449,17 @@ export declare class AppleMailManager {
     /**
      * Delete a mailbox.
      */
-    deleteMailbox(name: string, account?: string): boolean;
+    deleteMailbox(name: string, account?: string): {
+        success: boolean;
+        error?: string;
+    };
     /**
      * Rename a mailbox by creating a new one, moving messages, and deleting the old one.
      */
-    renameMailbox(oldName: string, newName: string, account?: string): boolean;
+    renameMailbox(oldName: string, newName: string, account?: string): {
+        success: boolean;
+        error?: string;
+    };
     /**
      * List all mail accounts (uses cache).
      */

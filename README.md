@@ -800,6 +800,7 @@ The entrypoint is written as:
 | Attachments require absolute paths | File attachments must use full absolute paths (e.g., `/Users/me/file.pdf`) |
 | No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
 | Very large mailboxes not searchable | Apple Mail's AppleScript bridge times out on mailboxes with tens of thousands of messages, so unscoped `search-messages` skips mailboxes above `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default 5000) and reports them as a partial result. Scope with `mailbox` + a date window to search inside one. ([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)) |
+| Can't delete/rename server-side mailboxes or mutate drafts | Mail.app's AppleScript bridge can only `delete`/`rename` **local "On My Mac"** mailboxes and cannot delete/move drafts — it throws `AppleEvent handler failed` for IMAP/Gmail/Workspace/iCloud/Exchange mailboxes and drafts (the GUI can do it). `delete-mailbox`/`rename-mailbox`/`delete-message`/`move-message` now return a clear "do it in Mail.app directly" error in that case instead of a generic failure. ([#42](https://github.com/sweetrb/apple-mail-mcp/issues/42)) |
 | In-memory templates | Email templates are not persisted across server restarts |
 | Numeric-only message IDs | Message IDs must contain only digits (validated by schema) |
 | Batch size cap | Batch operations are limited to 100 messages per request |
