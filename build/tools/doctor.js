@@ -1,4 +1,4 @@
-import { imapHealthCheck, IMAP_ENV } from "../services/imapClient.js";
+import { imapHealthCheck, IMAP_ENV, listImapAccountLabels } from "../services/imapClient.js";
 import { SMTP_ENV } from "../services/smtpMailer.js";
 export async function runDoctor(mailManager) {
     const checks = [];
@@ -31,23 +31,26 @@ export async function runDoctor(mailManager) {
             detail: `could not list accounts: ${String(e)}`,
         });
     }
-    // 3. IMAP backend (optional) — configured? connects?
-    const imap = await imapHealthCheck();
-    if (!imap.configured) {
+    // 3. IMAP backend (optional) — check every configured account (C2).
+    const imapAccounts = listImapAccountLabels();
+    if (imapAccounts.length === 0) {
         checks.push({
             name: "IMAP backend",
             status: "warn",
-            detail: `not configured — AppleScript is used for all accounts. Set ${IMAP_ENV.user} (+ Keychain/password) to enable server-side search and server-mailbox ops.`,
+            detail: `not configured — AppleScript is used for all accounts. Set ${IMAP_ENV.user} (+ Keychain/password), or ${IMAP_ENV.accounts} for multiple accounts, to enable server-side search and server-mailbox ops.`,
         });
     }
     else {
-        checks.push({
-            name: "IMAP backend",
-            status: imap.ok ? "ok" : "fail",
-            detail: imap.ok
-                ? `connected to ${imap.host} as ${imap.account}`
-                : `configured but the connection failed: ${imap.error}. Check the app-specific password in the Keychain and the host/port.`,
-        });
+        for (const label of imapAccounts) {
+            const h = await imapHealthCheck({ account: label });
+            checks.push({
+                name: `IMAP: ${label}`,
+                status: h.ok ? "ok" : "fail",
+                detail: h.ok
+                    ? `connected to ${h.host}`
+                    : `connection failed: ${h.error}. Check the Keychain password and host/port.`,
+            });
+        }
     }
     // 4. SMTP transport (optional) — configured?
     const smtpHost = process.env[SMTP_ENV.host]?.trim();

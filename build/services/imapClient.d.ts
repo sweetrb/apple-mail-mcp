@@ -6,6 +6,7 @@ export declare const IMAP_ENV: {
     readonly password: "APPLE_MAIL_MCP_IMAP_PASSWORD";
     readonly keychainService: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE";
     readonly keychainAccount: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT";
+    readonly accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS";
 };
 export interface ImapConfig {
     host: string;
@@ -92,19 +93,30 @@ export declare function decodeImapId(id: string): {
     uid: number;
 } | null;
 export type ImapConnect = (cfg: ImapConfig) => Promise<ImapClientLike>;
-/** True only when IMAP is configured AND the explicit `account` matches it. */
+/**
+ * Dependencies threaded through every IMAP op. `account` selects which
+ * configured IMAP account to use (C2 multi-account); `config`/`connect` are
+ * test seams. When `account` is omitted the default/first account is used.
+ */
+export interface ImapDeps {
+    connect?: ImapConnect;
+    config?: ImapConfig;
+    account?: string;
+}
+/** True when `account` matches any configured IMAP account (label or user). */
 export declare function isImapAccount(account: string | undefined, env?: NodeJS.ProcessEnv): boolean;
-export declare function resolveImapConfig(env?: NodeJS.ProcessEnv): ImapConfig;
+/** Account labels of every configured IMAP account (C2), for diagnostics. */
+export declare function listImapAccountLabels(env?: NodeJS.ProcessEnv): string[];
+/**
+ * Resolve the full IMAP config (password included) for `account`. With no
+ * `account`, returns the default/first configured account. Throws if IMAP is
+ * unconfigured or no account matches.
+ */
+export declare function resolveImapConfig(env?: NodeJS.ProcessEnv, account?: string): ImapConfig;
 /** Map common (Gmail) mailbox names to their IMAP paths. */
 export declare function resolveMailboxPath(mailbox: string | undefined, mode: "search" | "list"): string;
-export declare function imapSearchMessages(args: ImapSearchArgs, deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<string>;
-export declare function imapListMessages(args: ImapSearchArgs, deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<string>;
+export declare function imapSearchMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<string>;
+export declare function imapListMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<string>;
 export interface ImapOpResult {
     success: boolean;
     error?: string;
@@ -114,10 +126,7 @@ export interface ImapOpResult {
  * Health probe for the setup doctor (C3): reports whether IMAP is configured and,
  * if so, whether a connection + NOOP succeeds (auth/network/Keychain all good).
  */
-export declare function imapHealthCheck(deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<{
+export declare function imapHealthCheck(deps?: ImapDeps): Promise<{
     configured: boolean;
     ok: boolean;
     account?: string;
@@ -126,36 +135,18 @@ export declare function imapHealthCheck(deps?: {
 }>;
 /** Test seam: override the pool's connect factory; pass null to restore. */
 export declare function __setPoolConnect(fn: ImapConnect | null): void;
-/** Test seam: close and clear the pooled connection. */
+/** Test seam: close and clear all pooled connections. */
 export declare function __resetPool(): Promise<void>;
-export declare function imapCreateMailbox(name: string, deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<ImapOpResult>;
-export declare function imapDeleteMailbox(name: string, deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<ImapOpResult>;
-export declare function imapRenameMailbox(oldName: string, newName: string, deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<ImapOpResult>;
+export declare function imapCreateMailbox(name: string, deps?: ImapDeps): Promise<ImapOpResult>;
+export declare function imapDeleteMailbox(name: string, deps?: ImapDeps): Promise<ImapOpResult>;
+export declare function imapRenameMailbox(oldName: string, newName: string, deps?: ImapDeps): Promise<ImapOpResult>;
 /** Read a message by composite IMAP id; returns "Subject: …\n\n<body>". */
-export declare function imapGetMessage(id: string, preferHtml: boolean, deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<ImapOpResult>;
+export declare function imapGetMessage(id: string, preferHtml: boolean, deps?: ImapDeps): Promise<ImapOpResult>;
 export declare const imapMarkRead: (id: string, deps?: {}) => Promise<ImapOpResult>;
 export declare const imapMarkUnread: (id: string, deps?: {}) => Promise<ImapOpResult>;
 export declare const imapFlagMessage: (id: string, deps?: {}) => Promise<ImapOpResult>;
 export declare const imapUnflagMessage: (id: string, deps?: {}) => Promise<ImapOpResult>;
-export declare function imapMoveMessageById(id: string, destMailbox: string, deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<ImapOpResult>;
-export declare function imapDeleteMessageById(id: string, deps?: {
-    connect?: ImapConnect;
-    config?: ImapConfig;
-}): Promise<ImapOpResult>;
+export declare function imapMoveMessageById(id: string, destMailbox: string, deps?: ImapDeps): Promise<ImapOpResult>;
+export declare function imapDeleteMessageById(id: string, deps?: ImapDeps): Promise<ImapOpResult>;
 export {};
 //# sourceMappingURL=imapClient.d.ts.map

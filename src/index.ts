@@ -871,7 +871,7 @@ server.tool(
     // IMAP backend (issue #43, Phase 2): server-side folder op when this account
     // is IMAP-configured; otherwise AppleScript.
     if (isImapAccount(account)) {
-      const r = await imapCreateMailbox(name);
+      const r = await imapCreateMailbox(name, { account });
       if (!r.success) return errorResponse(r.error || `Failed to create mailbox "${name}"`);
       return successResponse(r.info || `Mailbox "${name}" created`);
     }
@@ -896,7 +896,7 @@ server.tool(
   },
   withErrorHandling(async ({ name, account }) => {
     if (isImapAccount(account)) {
-      const r = await imapDeleteMailbox(name);
+      const r = await imapDeleteMailbox(name, { account });
       if (!r.success) return errorResponse(r.error || `Failed to delete mailbox "${name}"`);
       return successResponse(r.info || `Mailbox "${name}" deleted`);
     }
@@ -922,7 +922,7 @@ server.tool(
   },
   withErrorHandling(async ({ oldName, newName, account }) => {
     if (isImapAccount(account)) {
-      const r = await imapRenameMailbox(oldName, newName);
+      const r = await imapRenameMailbox(oldName, newName, { account });
       if (!r.success) {
         return errorResponse(r.error || `Failed to rename mailbox "${oldName}" to "${newName}"`);
       }

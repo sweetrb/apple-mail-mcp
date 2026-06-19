@@ -18,6 +18,7 @@ import {
   imapUnflagMessage,
   imapMoveMessageById,
   imapDeleteMessageById,
+  listImapAccountLabels,
   __setPoolConnect,
   __resetPool,
   type ImapClientLike,
@@ -111,6 +112,49 @@ describe("resolveImapConfig", () => {
     expect(() => resolveImapConfig({ [IMAP_ENV.user]: "rob@example.com" })).toThrow(
       /No IMAP password/
     );
+  });
+});
+
+describe("multi-account IMAP (C2)", () => {
+  const multiEnv: NodeJS.ProcessEnv = {
+    [IMAP_ENV.user]: "primary@gmail.com",
+    [IMAP_ENV.password]: "pw1",
+    [IMAP_ENV.account]: "Personal",
+    [IMAP_ENV.accounts]: JSON.stringify([
+      { account: "Work", user: "me@work.com", host: "imap.work.com", password: "pw2" },
+    ]),
+  };
+
+  it("lists all configured account labels (legacy + JSON array)", () => {
+    expect(listImapAccountLabels(multiEnv)).toEqual(["Personal", "Work"]);
+  });
+
+  it("isImapAccount matches any configured account by label or user", () => {
+    expect(isImapAccount("Personal", multiEnv)).toBe(true);
+    expect(isImapAccount("me@work.com", multiEnv)).toBe(true);
+    expect(isImapAccount("Work", multiEnv)).toBe(true);
+    expect(isImapAccount("nobody@x.com", multiEnv)).toBe(false);
+  });
+
+  it("resolveImapConfig selects by account and defaults to the first", () => {
+    expect(resolveImapConfig(multiEnv).accountLabel).toBe("Personal");
+    const work = resolveImapConfig(multiEnv, "Work");
+    expect(work.host).toBe("imap.work.com");
+    expect(work.user).toBe("me@work.com");
+    expect(work.pass).toBe("pw2");
+  });
+
+  it("throws for an unknown account and lists the configured ones", () => {
+    expect(() => resolveImapConfig(multiEnv, "Ghost")).toThrow(/Personal, Work/);
+  });
+
+  it("ignores malformed ACCOUNTS json and keeps the legacy account", () => {
+    const env: NodeJS.ProcessEnv = {
+      [IMAP_ENV.user]: "a@b.com",
+      [IMAP_ENV.password]: "p",
+      [IMAP_ENV.accounts]: "{not json",
+    };
+    expect(listImapAccountLabels(env)).toEqual(["a@b.com"]);
   });
 });
 
@@ -423,6 +467,20 @@ describe("connection pooling (#50 / A3)", () => {
     await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
     await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
     expect(connects).toBe(2);
+  });
+
+  it("keeps a separate pooled connection per account", async () => {
+    let connects = 0;
+    __setPoolConnect(async () => {
+      connects++;
+      return makeClient([1], {});
+    });
+    const cfgA: ImapConfig = { ...cfg, user: "a@x.com" };
+    const cfgB: ImapConfig = { ...cfg, user: "b@x.com" };
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgA });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgB });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgA }); // reuse A
+    expect(connects).toBe(2); // one connection per distinct account; A reused
   });
 
   it("does not pool when a connect is injected (per-call logout)", async () => {
