@@ -840,3 +840,72 @@ export function imapBatchMove(ids, destMailbox, deps = {}) {
         await c.messageMove(uids, dest, { uid: true });
     });
 }
+function senderName(from) {
+    const a = from?.[0];
+    if (!a)
+        return "(unknown)";
+    return a.name ? `${a.name} <${a.address ?? ""}>` : (a.address ?? "(unknown)");
+}
+function dateMs(m) {
+    return m.envelope?.date ? new Date(m.envelope.date).getTime() : 0;
+}
+export async function imapThread(id, deps = {}, limit = 50) {
+    const ref = decodeImapId(id);
+    if (!ref)
+        return null;
+    return useClient({ ...deps, account: deps.account ?? ref.account }, async (client) => {
+        const lock = await client.getMailboxLock(ref.path);
+        try {
+            const seed = await client.fetchOne(String(ref.uid), { envelope: true, headers: ["references", "in-reply-to", "message-id"] }, { uid: true });
+            if (!seed)
+                return null;
+            const seedMsgId = seed.envelope?.messageId;
+            const refIds = new Set();
+            const hdr = seed.headers ? seed.headers.toString() : "";
+            for (const m of hdr.matchAll(/<[^>]+>/g))
+                refIds.add(m[0]);
+            if (seed.envelope?.inReplyTo)
+                refIds.add(seed.envelope.inReplyTo);
+            const uidSet = new Set([ref.uid]);
+            const addFound = (found) => {
+                if (Array.isArray(found))
+                    found.forEach((u) => uidSet.add(u));
+            };
+            // Descendants: anything referencing the seed.
+            if (seedMsgId) {
+                addFound(await client.search({ header: { references: seedMsgId } }, { uid: true }));
+                addFound(await client.search({ header: { "in-reply-to": seedMsgId } }, { uid: true }));
+            }
+            // Ancestors: messages whose Message-ID is in the seed's References (bounded).
+            for (const mid of [...refIds].slice(0, 20)) {
+                addFound(await client.search({ header: { "message-id": mid } }, { uid: true }));
+            }
+            if (uidSet.size <= 1)
+                return null; // only the seed → caller falls back to subject
+            const uids = [...uidSet].slice(0, limit);
+            const msgs = [];
+            for await (const msg of client.fetch(uids.join(","), { envelope: true, flags: true }, { uid: true })) {
+                msgs.push(msg);
+            }
+            msgs.sort((a, b) => dateMs(a) - dateMs(b)); // oldest first
+            const subject = seed.envelope?.subject || "(no subject)";
+            const structured = {
+                subject,
+                count: msgs.length,
+                messages: msgs.map((m) => ({
+                    id: encodeImapId(ref.account, ref.path, m.uid),
+                    subject: m.envelope?.subject || "(no subject)",
+                    sender: senderName(m.envelope?.from),
+                    date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : "",
+                    isRead: m.flags?.has("\\Seen") ?? false,
+                })),
+            };
+            const text = `Thread "${subject}" — ${msgs.length} message(s) via IMAP (References-linked, oldest first):\n` +
+                msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n");
+            return { count: msgs.length, text, structured };
+        }
+        finally {
+            lock.release();
+        }
+    }, true);
+}

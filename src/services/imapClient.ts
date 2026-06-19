@@ -71,6 +71,8 @@ interface ImapEnvelope {
   subject?: string;
   date?: Date | string;
   from?: ImapAddress[];
+  messageId?: string;
+  inReplyTo?: string;
 }
 export interface ImapBodyStructure {
   part?: string; // IMAP section id, e.g. "2" or "1.2"
@@ -88,6 +90,7 @@ interface ImapMessage {
   flags?: Set<string>;
   source?: Buffer | string;
   bodyStructure?: ImapBodyStructure;
+  headers?: Buffer | string;
 }
 interface ImapDownload {
   meta?: { filename?: string; contentType?: string };
@@ -1138,4 +1141,109 @@ export function imapBatchMove(
     const dest = (await findMailboxPath(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
     await c.messageMove(uids, dest, { uid: true });
   });
+}
+
+// ===========================================================================
+// True threading via References / Message-ID (2.1 optimization I5)
+//
+// For an imap: seed id, assemble the conversation from RFC 5322 References /
+// In-Reply-To headers (descendants reference the seed; ancestors are the seed's
+// References) using IMAP HEADER SEARCH — more accurate than subject grouping.
+// Returns null when nothing beyond the seed is found, so get-thread falls back
+// to subject grouping (and for servers without HEADER search support).
+// ===========================================================================
+
+export interface ImapThreadMessage {
+  id: string;
+  subject: string;
+  sender: string;
+  date: string;
+  isRead: boolean;
+}
+export interface ImapThreadResult {
+  count: number;
+  text: string;
+  structured: { subject: string; messages: ImapThreadMessage[]; count: number };
+}
+
+function senderName(from?: ImapAddress[]): string {
+  const a = from?.[0];
+  if (!a) return "(unknown)";
+  return a.name ? `${a.name} <${a.address ?? ""}>` : (a.address ?? "(unknown)");
+}
+function dateMs(m: ImapMessage): number {
+  return m.envelope?.date ? new Date(m.envelope.date).getTime() : 0;
+}
+
+export async function imapThread(
+  id: string,
+  deps: ImapDeps = {},
+  limit = 50
+): Promise<ImapThreadResult | null> {
+  const ref = decodeImapId(id);
+  if (!ref) return null;
+  return useClient(
+    { ...deps, account: deps.account ?? ref.account },
+    async (client) => {
+      const lock = await client.getMailboxLock(ref.path);
+      try {
+        const seed = await client.fetchOne(
+          String(ref.uid),
+          { envelope: true, headers: ["references", "in-reply-to", "message-id"] },
+          { uid: true }
+        );
+        if (!seed) return null;
+        const seedMsgId = seed.envelope?.messageId;
+        const refIds = new Set<string>();
+        const hdr = seed.headers ? seed.headers.toString() : "";
+        for (const m of hdr.matchAll(/<[^>]+>/g)) refIds.add(m[0]);
+        if (seed.envelope?.inReplyTo) refIds.add(seed.envelope.inReplyTo);
+
+        const uidSet = new Set<number>([ref.uid]);
+        const addFound = (found: number[] | false): void => {
+          if (Array.isArray(found)) found.forEach((u) => uidSet.add(u));
+        };
+        // Descendants: anything referencing the seed.
+        if (seedMsgId) {
+          addFound(await client.search({ header: { references: seedMsgId } }, { uid: true }));
+          addFound(await client.search({ header: { "in-reply-to": seedMsgId } }, { uid: true }));
+        }
+        // Ancestors: messages whose Message-ID is in the seed's References (bounded).
+        for (const mid of [...refIds].slice(0, 20)) {
+          addFound(await client.search({ header: { "message-id": mid } }, { uid: true }));
+        }
+        if (uidSet.size <= 1) return null; // only the seed → caller falls back to subject
+
+        const uids = [...uidSet].slice(0, limit);
+        const msgs: ImapMessage[] = [];
+        for await (const msg of client.fetch(
+          uids.join(","),
+          { envelope: true, flags: true },
+          { uid: true }
+        )) {
+          msgs.push(msg);
+        }
+        msgs.sort((a, b) => dateMs(a) - dateMs(b)); // oldest first
+        const subject = seed.envelope?.subject || "(no subject)";
+        const structured = {
+          subject,
+          count: msgs.length,
+          messages: msgs.map((m) => ({
+            id: encodeImapId(ref.account, ref.path, m.uid),
+            subject: m.envelope?.subject || "(no subject)",
+            sender: senderName(m.envelope?.from),
+            date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : "",
+            isRead: m.flags?.has("\\Seen") ?? false,
+          })),
+        };
+        const text =
+          `Thread "${subject}" — ${msgs.length} message(s) via IMAP (References-linked, oldest first):\n` +
+          msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n");
+        return { count: msgs.length, text, structured };
+      } finally {
+        lock.release();
+      }
+    },
+    true
+  );
 }

@@ -25,6 +25,7 @@ import {
   imapFetchAttachment,
   imapBatchMarkRead,
   imapBatchMove,
+  imapThread,
   listImapAccountLabels,
   __setPoolConnect,
   __resetPool,
@@ -429,6 +430,64 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/Not an IMAP message id/);
+  });
+});
+
+describe("true threading via References (I5)", () => {
+  const MID = encodeImapId("acct", "INBOX", 10);
+  function threadClient(): ImapClientLike {
+    return {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 10,
+        envelope: { subject: "Re: Plan", messageId: "<b@x>", inReplyTo: "<a@x>" },
+        headers: Buffer.from("References: <a@x>\r\nIn-Reply-To: <a@x>\r\n"),
+      }),
+      search: async (q: Record<string, unknown>) => {
+        const h = (q.header as Record<string, string>) || {};
+        if (h.references === "<b@x>" || h["in-reply-to"] === "<b@x>") return [11];
+        if (h["message-id"] === "<a@x>") return [9];
+        return [];
+      },
+      fetch: async function* (range: string) {
+        for (const u of range.split(",").map(Number)) {
+          yield {
+            uid: u,
+            envelope: {
+              subject: u === 9 ? "Plan" : "Re: Plan",
+              date: new Date(2026, 0, u),
+              from: [{ address: `p${u}@x` }],
+            },
+            flags: new Set<string>(),
+          };
+        }
+      },
+    };
+  }
+
+  it("assembles ancestors + descendants oldest-first", async () => {
+    const t = await imapThread(MID, { config: cfg, connect: async () => threadClient() }, 50);
+    expect(t).not.toBeNull();
+    expect(t?.count).toBe(3); // seed 10 + descendant 11 + ancestor 9
+    expect(t?.structured.messages.map((m) => m.subject)).toEqual(["Plan", "Re: Plan", "Re: Plan"]);
+    expect(t?.text).toMatch(/References-linked/);
+  });
+
+  it("returns null when only the seed is found (caller falls back to subject)", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 10,
+        envelope: { subject: "x", messageId: "<b@x>" },
+        headers: Buffer.from(""),
+      }),
+      search: async () => [],
+    };
+    expect(await imapThread(MID, { config: cfg, connect: async () => client }, 50)).toBeNull();
+  });
+
+  it("returns null for a non-IMAP id", async () => {
+    expect(await imapThread("12345")).toBeNull();
   });
 });
 

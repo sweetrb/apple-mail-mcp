@@ -27,7 +27,7 @@ import { AppleMailManager, isPathWithinAllowedRoots } from "./services/appleMail
 import { writeFileSync } from "fs";
 import { resolve as resolvePath, join as joinPath } from "path";
 import { sendViaSmtp } from "./services/smtpMailer.js";
-import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapListAttachments, imapFetchAttachment, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete, imapBatchMove, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
+import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapListAttachments, imapFetchAttachment, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete, imapBatchMove, imapThread, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
 import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
 import { routeMessage } from "./services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
@@ -217,6 +217,14 @@ server.tool("get-thread", {
     mailbox: z.string().optional().describe("Mailbox to search (omit to search all)"),
     limit: z.number().optional().describe("Max messages in the thread (default 50)"),
 }, withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
+    // True threading via References/Message-ID when we have an imap: id (I5);
+    // falls through to subject grouping if the server lacks HEADER search or
+    // nothing References-linked is found.
+    if (id.startsWith("imap:")) {
+        const t = await imapThread(id, { account }, limit);
+        if (t && t.count > 1)
+            return successResponse(t.text, { ...t.structured });
+    }
     // Resolve the seed message's subject, then gather the conversation by
     // normalized subject (B1). Works across the AppleScript and IMAP backends.
     let seedSubject = null;

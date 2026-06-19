@@ -38,6 +38,8 @@ interface ImapEnvelope {
     subject?: string;
     date?: Date | string;
     from?: ImapAddress[];
+    messageId?: string;
+    inReplyTo?: string;
 }
 export interface ImapBodyStructure {
     part?: string;
@@ -55,6 +57,7 @@ interface ImapMessage {
     flags?: Set<string>;
     source?: Buffer | string;
     bodyStructure?: ImapBodyStructure;
+    headers?: Buffer | string;
 }
 interface ImapDownload {
     meta?: {
@@ -242,5 +245,22 @@ export declare const imapBatchFlag: (ids: string[], deps?: ImapDeps) => Promise<
 export declare const imapBatchUnflag: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
 export declare const imapBatchDelete: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
 export declare function imapBatchMove(ids: string[], destMailbox: string, deps?: ImapDeps): Promise<ImapBatchResult>;
+export interface ImapThreadMessage {
+    id: string;
+    subject: string;
+    sender: string;
+    date: string;
+    isRead: boolean;
+}
+export interface ImapThreadResult {
+    count: number;
+    text: string;
+    structured: {
+        subject: string;
+        messages: ImapThreadMessage[];
+        count: number;
+    };
+}
+export declare function imapThread(id: string, deps?: ImapDeps, limit?: number): Promise<ImapThreadResult | null>;
 export {};
 //# sourceMappingURL=imapClient.d.ts.map
