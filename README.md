@@ -348,6 +348,29 @@ config. Gmail label semantics: common names (`All Mail`, `Sent`, `Trash`,
 > (e.g. `iCloud`), and use an **app-specific password** (from appleid.apple.com)
 > stored in the Keychain.
 
+##### Configuration file (when the host strips `env`)
+
+Some host apps (e.g. Claude Desktop) launch the MCP server with a scrubbed
+environment and ignore the `env` block in their server config, so there's no way
+to pass `APPLE_MAIL_MCP_*` settings through it. In that case, put them in a JSON
+file the host doesn't manage — `APPLE_MAIL_MCP_CONFIG_FILE`, or by default
+`~/Library/Application Support/apple-mail-mcp/config.json`:
+
+```json
+{
+  "APPLE_MAIL_MCP_IMAP_USER": "you@gmail.com",
+  "APPLE_MAIL_MCP_IMAP_HOST": "imap.gmail.com",
+  "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE": "imap.gmail.com",
+  "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT": "you@gmail.com",
+  "APPLE_MAIL_MCP_IMAP_IDLE": "1"
+}
+```
+
+The server reads it at startup and merges values into the environment **without
+overriding** anything already set there (so an explicit `env` still wins). Store
+only non-secret config here — **passwords belong in the Keychain**, never in this
+file.
+
 ##### Push notifications (IMAP IDLE) — opt-in
 
 When `APPLE_MAIL_MCP_IMAP_IDLE=1`, the server opens a dedicated, long-lived
