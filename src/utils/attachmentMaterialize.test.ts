@@ -39,8 +39,12 @@ describe("materializeAttachments (B4)", () => {
     );
   });
 
-  it("handles the empty/undefined case", () => {
-    expect(materializeAttachments().paths).toEqual([]);
-    expect(materializeAttachments([]).paths).toEqual([]);
+  it("handles the empty/undefined case (incl. its no-op cleanup)", () => {
+    const a = materializeAttachments();
+    expect(a.paths).toEqual([]);
+    expect(() => a.cleanup()).not.toThrow(); // exercise the no-op cleanup path
+    const b = materializeAttachments([]);
+    expect(b.paths).toEqual([]);
+    b.cleanup();
   });
 });

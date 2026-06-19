@@ -82,7 +82,9 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        # --force bypasses EBADPLATFORM: package.json declares os:["darwin"], but
+        # the IMAP code path is platform-agnostic and runs fine on Linux here.
+        run: npm ci --force
 
       - name: Wait for GreenMail IMAP (localhost:3143)
         run: |
