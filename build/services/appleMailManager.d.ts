@@ -507,8 +507,7 @@ export declare class AppleMailManager {
      * Search contacts by name or email.
      */
     searchContacts(query: string): Contact[];
-    private templates;
-    private nextTemplateId;
+    private templateStore;
     /**
      * List all stored templates.
      */
@@ -518,11 +517,11 @@ export declare class AppleMailManager {
      */
     getTemplate(id: string): EmailTemplate | null;
     /**
-     * Create or update a template.
+     * Create or update a template (persisted).
      */
     saveTemplate(name: string, subject: string, body: string, to?: string[], cc?: string[], id?: string): EmailTemplate;
     /**
-     * Delete a template.
+     * Delete a template (persisted).
      */
     deleteTemplate(id: string): boolean;
     /**

@@ -19,6 +19,7 @@ import { isAbsolute, resolve, sep } from "path";
 import { homedir } from "os";
 import { executeAppleScript } from "@/utils/applescript.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
+import { TemplateStore } from "@/services/templateStore.js";
 import type {
   Message,
   MessageContent,
@@ -2685,25 +2686,25 @@ export class AppleMailManager {
   // Email Templates
   // ===========================================================================
 
-  private templates: Map<string, EmailTemplate> = new Map();
-  private nextTemplateId = 1;
+  // Templates persist to disk (B3 / #14) so they survive server restarts.
+  private templateStore = new TemplateStore();
 
   /**
    * List all stored templates.
    */
   listTemplates(): EmailTemplate[] {
-    return Array.from(this.templates.values());
+    return this.templateStore.list();
   }
 
   /**
    * Get a template by ID.
    */
   getTemplate(id: string): EmailTemplate | null {
-    return this.templates.get(id) || null;
+    return this.templateStore.get(id);
   }
 
   /**
-   * Create or update a template.
+   * Create or update a template (persisted).
    */
   saveTemplate(
     name: string,
@@ -2713,17 +2714,14 @@ export class AppleMailManager {
     cc?: string[],
     id?: string
   ): EmailTemplate {
-    const templateId = id || `tmpl_${this.nextTemplateId++}`;
-    const template: EmailTemplate = { id: templateId, name, subject, body, to, cc };
-    this.templates.set(templateId, template);
-    return template;
+    return this.templateStore.save(name, subject, body, to, cc, id);
   }
 
   /**
-   * Delete a template.
+   * Delete a template (persisted).
    */
   deleteTemplate(id: string): boolean {
-    return this.templates.delete(id);
+    return this.templateStore.delete(id);
   }
 
   /**
@@ -2733,7 +2731,7 @@ export class AppleMailManager {
     id: string,
     overrides?: { to?: string[]; cc?: string[]; subject?: string; body?: string }
   ): boolean {
-    const template = this.templates.get(id);
+    const template = this.templateStore.get(id);
     if (!template) return false;
 
     // Use `??` (not `||`) for subject/body so an intentional empty-string
