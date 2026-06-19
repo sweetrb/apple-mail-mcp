@@ -18,6 +18,9 @@ import {
   imapUnflagMessage,
   imapMoveMessageById,
   imapDeleteMessageById,
+  imapUnreadCount,
+  imapListMailboxes,
+  imapMailStats,
   listImapAccountLabels,
   __setPoolConnect,
   __resetPool,
@@ -67,6 +70,7 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
     },
     fetchOne: async () => false,
     list: async () => [],
+    status: async (path: string) => ({ path, messages: 0, unseen: 0, recent: 0 }),
     mailboxCreate: async (path: string) => ({ path, created: true }),
     mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),
     mailboxDelete: async (path: string) => ({ path }),
@@ -415,6 +419,64 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/Not an IMAP message id/);
+  });
+});
+
+describe("STATUS-based counts (I3/I4/I6)", () => {
+  const boxes = [
+    { path: "INBOX", name: "INBOX" },
+    { path: "[Gmail]/Sent Mail", name: "Sent Mail" },
+  ];
+  function statusClient(
+    map: Record<string, { messages?: number; unseen?: number }>
+  ): ImapClientLike {
+    return {
+      ...makeClient([], {}),
+      list: async () => boxes,
+      status: async (path: string) => ({ path, messages: 0, unseen: 0, ...(map[path] || {}) }),
+    };
+  }
+
+  it("imapUnreadCount returns UNSEEN for a specific mailbox", async () => {
+    const n = await imapUnreadCount("INBOX", {
+      config: cfg,
+      connect: async () => statusClient({ INBOX: { unseen: 7 } }),
+    });
+    expect(n).toBe(7);
+  });
+
+  it("imapUnreadCount sums UNSEEN across all mailboxes when none given", async () => {
+    const n = await imapUnreadCount(undefined, {
+      config: cfg,
+      connect: async () =>
+        statusClient({ INBOX: { unseen: 7 }, "[Gmail]/Sent Mail": { unseen: 2 } }),
+    });
+    expect(n).toBe(9);
+  });
+
+  it("imapListMailboxes returns per-mailbox message/unseen counts", async () => {
+    const r = await imapListMailboxes({
+      config: cfg,
+      connect: async () => statusClient({ INBOX: { messages: 10, unseen: 7 } }),
+    });
+    expect(r.find((b) => b.path === "INBOX")).toMatchObject({ messages: 10, unseen: 7 });
+    expect(r).toHaveLength(2);
+  });
+
+  it("imapMailStats aggregates STATUS totals and recent SEARCH counts", async () => {
+    const client: ImapClientLike = {
+      ...statusClient({
+        INBOX: { messages: 10, unseen: 7 },
+        "[Gmail]/Sent Mail": { messages: 5, unseen: 0 },
+      }),
+      getMailboxLock: async () => ({ release: () => undefined }),
+      search: async () => [1, 2, 3],
+    };
+    const s = await imapMailStats({ config: cfg, connect: async () => client });
+    expect(s.totalMessages).toBe(15);
+    expect(s.totalUnread).toBe(7);
+    expect(s.recent.last24h).toBe(3);
+    expect(s.recent.last7d).toBe(3);
   });
 });
 

@@ -294,6 +294,97 @@ export function imapSearchMessages(args, deps = {}) {
 export function imapListMessages(args, deps = {}) {
     return run(args, true, deps);
 }
+// ===========================================================================
+// Counts & stats via IMAP STATUS (2.1 optimizations I3/I4/I6)
+//
+// STATUS is a single server round-trip that returns authoritative message/unseen
+// counts without enumerating messages — far faster and more reliable than
+// AppleScript on large mailboxes (where the per-message walk times out, #8/#24).
+// ===========================================================================
+/** Unread count via IMAP STATUS (UNSEEN). No mailbox → sum across all mailboxes. */
+export function imapUnreadCount(mailbox, deps = {}) {
+    return useClient(deps, async (client) => {
+        if (mailbox) {
+            const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
+            return s.unseen ?? 0;
+        }
+        let total = 0;
+        for (const b of await client.list()) {
+            try {
+                const s = await client.status(b.path, { unseen: true });
+                total += s.unseen ?? 0;
+            }
+            catch {
+                // skip mailboxes that can't be STATUS'd (e.g. \Noselect parents)
+            }
+        }
+        return total;
+    }, true);
+}
+/** List mailboxes with per-mailbox message/unseen counts via LIST + STATUS (I6). */
+export function imapListMailboxes(deps = {}) {
+    return useClient(deps, async (client) => {
+        const out = [];
+        for (const b of await client.list()) {
+            let messages = 0;
+            let unseen = 0;
+            try {
+                const s = await client.status(b.path, { messages: true, unseen: true });
+                messages = s.messages ?? 0;
+                unseen = s.unseen ?? 0;
+            }
+            catch {
+                // \Noselect or otherwise un-status-able mailbox → report zeros
+            }
+            out.push({ path: b.path, name: b.name, messages, unseen });
+        }
+        return out;
+    }, true);
+}
+/** Aggregate stats via STATUS (counts) + INBOX SEARCH SINCE (recent) (I3). */
+export function imapMailStats(deps = {}) {
+    return useClient(deps, async (client) => {
+        const perMailbox = [];
+        let totalMessages = 0;
+        let totalUnread = 0;
+        for (const b of await client.list()) {
+            try {
+                const s = await client.status(b.path, { messages: true, unseen: true });
+                const messages = s.messages ?? 0;
+                const unseen = s.unseen ?? 0;
+                totalMessages += messages;
+                totalUnread += unseen;
+                perMailbox.push({ mailbox: b.path, messages, unseen });
+            }
+            catch {
+                // skip un-status-able mailbox
+            }
+        }
+        // Recent counts against INBOX (the meaningful "received" surface).
+        const since = (days) => new Date(Date.now() - days * 86_400_000);
+        const countSince = async (days) => {
+            try {
+                const lock = await client.getMailboxLock("INBOX");
+                try {
+                    const found = await client.search({ since: since(days) }, { uid: true });
+                    return Array.isArray(found) ? found.length : 0;
+                }
+                finally {
+                    lock.release();
+                }
+            }
+            catch {
+                return 0;
+            }
+        };
+        const [last24h, last7d, last30d] = await Promise.all([
+            countSince(1),
+            countSince(7),
+            countSince(30),
+        ]);
+        return { totalMessages, totalUnread, perMailbox, recent: { last24h, last7d, last30d } };
+    }, true);
+}
 function errText(e) {
     return e instanceof Error ? e.message : String(e);
 }

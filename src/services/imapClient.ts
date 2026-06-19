@@ -101,6 +101,10 @@ export interface ImapClientLike {
     opts: { uid: true }
   ): Promise<ImapMessage | false>;
   list(): Promise<ImapMailboxListing[]>;
+  status(
+    path: string,
+    query: { messages?: boolean; unseen?: boolean; recent?: boolean }
+  ): Promise<{ path: string; messages?: number; unseen?: number; recent?: number }>;
   mailboxCreate(path: string): Promise<{ path: string; created: boolean }>;
   mailboxRename(path: string, newPath: string): Promise<{ path: string; newPath: string }>;
   mailboxDelete(path: string): Promise<{ path: string }>;
@@ -410,6 +414,122 @@ export function imapSearchMessages(args: ImapSearchArgs, deps: ImapDeps = {}): P
 
 export function imapListMessages(args: ImapSearchArgs, deps: ImapDeps = {}): Promise<string> {
   return run(args, true, deps);
+}
+
+// ===========================================================================
+// Counts & stats via IMAP STATUS (2.1 optimizations I3/I4/I6)
+//
+// STATUS is a single server round-trip that returns authoritative message/unseen
+// counts without enumerating messages — far faster and more reliable than
+// AppleScript on large mailboxes (where the per-message walk times out, #8/#24).
+// ===========================================================================
+
+/** Unread count via IMAP STATUS (UNSEEN). No mailbox → sum across all mailboxes. */
+export function imapUnreadCount(mailbox: string | undefined, deps: ImapDeps = {}): Promise<number> {
+  return useClient(
+    deps,
+    async (client) => {
+      if (mailbox) {
+        const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
+        return s.unseen ?? 0;
+      }
+      let total = 0;
+      for (const b of await client.list()) {
+        try {
+          const s = await client.status(b.path, { unseen: true });
+          total += s.unseen ?? 0;
+        } catch {
+          // skip mailboxes that can't be STATUS'd (e.g. \Noselect parents)
+        }
+      }
+      return total;
+    },
+    true
+  );
+}
+
+export interface ImapMailboxInfo {
+  path: string;
+  name: string;
+  messages: number;
+  unseen: number;
+}
+
+/** List mailboxes with per-mailbox message/unseen counts via LIST + STATUS (I6). */
+export function imapListMailboxes(deps: ImapDeps = {}): Promise<ImapMailboxInfo[]> {
+  return useClient(
+    deps,
+    async (client) => {
+      const out: ImapMailboxInfo[] = [];
+      for (const b of await client.list()) {
+        let messages = 0;
+        let unseen = 0;
+        try {
+          const s = await client.status(b.path, { messages: true, unseen: true });
+          messages = s.messages ?? 0;
+          unseen = s.unseen ?? 0;
+        } catch {
+          // \Noselect or otherwise un-status-able mailbox → report zeros
+        }
+        out.push({ path: b.path, name: b.name, messages, unseen });
+      }
+      return out;
+    },
+    true
+  );
+}
+
+export interface ImapStats {
+  totalMessages: number;
+  totalUnread: number;
+  perMailbox: { mailbox: string; messages: number; unseen: number }[];
+  recent: { last24h: number; last7d: number; last30d: number };
+}
+
+/** Aggregate stats via STATUS (counts) + INBOX SEARCH SINCE (recent) (I3). */
+export function imapMailStats(deps: ImapDeps = {}): Promise<ImapStats> {
+  return useClient(
+    deps,
+    async (client) => {
+      const perMailbox: ImapStats["perMailbox"] = [];
+      let totalMessages = 0;
+      let totalUnread = 0;
+      for (const b of await client.list()) {
+        try {
+          const s = await client.status(b.path, { messages: true, unseen: true });
+          const messages = s.messages ?? 0;
+          const unseen = s.unseen ?? 0;
+          totalMessages += messages;
+          totalUnread += unseen;
+          perMailbox.push({ mailbox: b.path, messages, unseen });
+        } catch {
+          // skip un-status-able mailbox
+        }
+      }
+      // Recent counts against INBOX (the meaningful "received" surface).
+      const since = (days: number): Date => new Date(Date.now() - days * 86_400_000);
+      const countSince = async (days: number): Promise<number> => {
+        try {
+          const lock = await client.getMailboxLock("INBOX");
+          try {
+            const found = await client.search({ since: since(days) }, { uid: true });
+            return Array.isArray(found) ? found.length : 0;
+          } finally {
+            lock.release();
+          }
+        } catch {
+          return 0;
+        }
+      };
+      const [last24h, last7d, last30d] = await Promise.all([
+        countSince(1),
+        countSince(7),
+        countSince(30),
+      ]);
+      return { totalMessages, totalUnread, perMailbox, recent: { last24h, last7d, last30d } };
+    },
+    true
+  );
 }
 
 // ===========================================================================

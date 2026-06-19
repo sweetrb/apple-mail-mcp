@@ -25,7 +25,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "./services/appleMailManager.js";
 import { sendViaSmtp } from "./services/smtpMailer.js";
-import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
+import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
 import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
 import { routeMessage } from "./services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
@@ -617,7 +617,24 @@ server.tool("fetch-attachment", {
 // --- list-mailboxes ---
 server.tool("list-mailboxes", {
     account: z.string().optional().describe("Account to list mailboxes from"),
-}, withErrorHandling(({ account }) => {
+}, withErrorHandling(async ({ account }) => {
+    // IMAP (I6): LIST + per-mailbox STATUS — sees the true server hierarchy and
+    // authoritative counts; falls back to AppleScript for non-IMAP accounts.
+    if (isImapAccount(account)) {
+        const boxes = await imapListMailboxes({ account });
+        const structured = {
+            mailboxes: boxes.map((b) => ({
+                name: b.path,
+                unreadCount: b.unseen,
+                messageCount: b.messages,
+            })),
+            count: boxes.length,
+        };
+        if (boxes.length === 0)
+            return successResponse("No mailboxes found", structured);
+        const list = boxes.map((b) => `  - ${b.path} (${b.unseen} unread)`).join("\n");
+        return successResponse(`Found ${boxes.length} mailbox(es):\n${list}`, structured);
+    }
     const mailboxes = mailManager.listMailboxes(account);
     const structured = { mailboxes, count: mailboxes.length };
     if (mailboxes.length === 0) {
@@ -630,8 +647,12 @@ server.tool("list-mailboxes", {
 server.tool("get-unread-count", {
     mailbox: z.string().optional().describe("Mailbox to check (default: all)"),
     account: z.string().optional().describe("Account to check"),
-}, withErrorHandling(({ mailbox, account }) => {
-    const count = mailManager.getUnreadCount(mailbox, account);
+}, withErrorHandling(async ({ mailbox, account }) => {
+    // IMAP (I4): STATUS (UNSEEN) is authoritative and fast even on huge
+    // mailboxes; falls back to AppleScript for non-IMAP accounts.
+    const count = isImapAccount(account)
+        ? await imapUnreadCount(mailbox, { account })
+        : mailManager.getUnreadCount(mailbox, account);
     const location = mailbox ? ` in "${mailbox}"` : "";
     return successResponse(`${count} unread message(s)${location}`, {
         unread: count,
@@ -893,7 +914,29 @@ server.tool("doctor", {}, withErrorHandling(async () => {
     return successResponse(formatDoctorReport(report), { ...report });
 }, "Error running doctor"));
 // --- get-mail-stats ---
-server.tool("get-mail-stats", {}, withErrorHandling(() => {
+server.tool("get-mail-stats", {
+    account: z
+        .string()
+        .optional()
+        .describe("Limit to one account; uses fast IMAP STATUS if that account is IMAP-configured"),
+}, withErrorHandling(async ({ account }) => {
+    // IMAP (I3): for a named IMAP account, STATUS gives authoritative counts and
+    // SEARCH SINCE gives recent activity — fast even on huge mailboxes.
+    if (account && isImapAccount(account)) {
+        const s = await imapMailStats({ account });
+        const lines = [
+            `📊 Mail Statistics — ${account} (IMAP)`,
+            `══════════════════`,
+            `Total messages: ${s.totalMessages}`,
+            `Unread messages: ${s.totalUnread}`,
+            ``,
+            `📥 Recently Received (INBOX):`,
+            `  Last 24 hours: ${s.recent.last24h}`,
+            `  Last 7 days: ${s.recent.last7d}`,
+            `  Last 30 days: ${s.recent.last30d}`,
+        ];
+        return successResponse(lines.join("\n"), { account, ...s });
+    }
     const stats = mailManager.getMailStats();
     const lines = [];
     lines.push(`📊 Mail Statistics`);

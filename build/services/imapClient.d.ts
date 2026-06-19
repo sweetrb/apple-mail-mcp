@@ -68,6 +68,16 @@ export interface ImapClientLike {
         uid: true;
     }): Promise<ImapMessage | false>;
     list(): Promise<ImapMailboxListing[]>;
+    status(path: string, query: {
+        messages?: boolean;
+        unseen?: boolean;
+        recent?: boolean;
+    }): Promise<{
+        path: string;
+        messages?: number;
+        unseen?: number;
+        recent?: number;
+    }>;
     mailboxCreate(path: string): Promise<{
         path: string;
         created: boolean;
@@ -123,6 +133,32 @@ export declare function resolveImapConfig(env?: NodeJS.ProcessEnv, account?: str
 export declare function resolveMailboxPath(mailbox: string | undefined, mode: "search" | "list"): string;
 export declare function imapSearchMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<string>;
 export declare function imapListMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<string>;
+/** Unread count via IMAP STATUS (UNSEEN). No mailbox → sum across all mailboxes. */
+export declare function imapUnreadCount(mailbox: string | undefined, deps?: ImapDeps): Promise<number>;
+export interface ImapMailboxInfo {
+    path: string;
+    name: string;
+    messages: number;
+    unseen: number;
+}
+/** List mailboxes with per-mailbox message/unseen counts via LIST + STATUS (I6). */
+export declare function imapListMailboxes(deps?: ImapDeps): Promise<ImapMailboxInfo[]>;
+export interface ImapStats {
+    totalMessages: number;
+    totalUnread: number;
+    perMailbox: {
+        mailbox: string;
+        messages: number;
+        unseen: number;
+    }[];
+    recent: {
+        last24h: number;
+        last7d: number;
+        last30d: number;
+    };
+}
+/** Aggregate stats via STATUS (counts) + INBOX SEARCH SINCE (recent) (I3). */
+export declare function imapMailStats(deps?: ImapDeps): Promise<ImapStats>;
 export interface ImapOpResult {
     success: boolean;
     error?: string;
