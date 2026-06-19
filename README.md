@@ -299,14 +299,17 @@ What routes to IMAP when an account is IMAP-configured:
 - **Read:** `search-messages`, `list-messages` (server-side `SEARCH`, typically sub-second), and `get-message`.
 - **Folder ops:** `create-mailbox`, `rename-mailbox`, `delete-mailbox` — IMAP's `CREATE`/`RENAME`/`DELETE` succeed on the iCloud/Gmail/Workspace/Exchange mailboxes Mail.app's AppleScript bridge can't touch (#42).
 - **Message mutations:** `mark-as-read`/`unread`, `flag-message`/`unflag-message`, `move-message`, `delete-message`.
+- **Batch mutations (2.1):** `batch-mark-as-read`/`unread`, `batch-flag`/`unflag-messages`, `batch-move-messages`, `batch-delete-messages` — `imap:` ids are grouped by mailbox and applied as a single `UID STORE`/`UID MOVE`; numeric ids in the same batch still use AppleScript.
+- **Counts & stats (2.1):** `get-unread-count` and `list-mailboxes` use `STATUS`; `get-mail-stats` (with an `account`) uses `STATUS` + `SEARCH SINCE` — authoritative and fast even on huge mailboxes.
+- **Attachments (2.1):** `list-attachments`, `save-attachment`, `fetch-attachment` use `BODYSTRUCTURE` + `FETCH BODY[part]` for `imap:` ids — faster and able to see MIME-embedded attachments AppleScript misses.
+- **Threading (2.1):** `get-thread` links a conversation via `References`/`Message-ID` (`HEADER SEARCH`) for an `imap:` seed, falling back to subject grouping otherwise.
 
 **Message ids are backend-tagged.** The IMAP read path emits self-describing ids
 of the form `imap:<token>` (the token encodes the account, mailbox path, and
-UID). Pass that id back to `get-message` or any message mutation and it routes to
-IMAP automatically; bare numeric ids continue to use AppleScript. So an agent
-never has to know which backend a message came from — the id carries it. (Batch
-operations remain AppleScript-only and accept numeric ids; use the single-message
-tools for IMAP ids.)
+UID). Pass that id back to `get-message`, a message mutation, a batch op, or the
+attachment/thread tools and it routes to IMAP automatically; bare numeric ids
+continue to use AppleScript. So an agent never has to know which backend a
+message came from — the id carries it.
 
 Routing is conservative: only a call whose explicit `account` matches the
 configured IMAP account goes to IMAP; everything else falls through to

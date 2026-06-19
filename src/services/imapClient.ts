@@ -71,12 +71,30 @@ interface ImapEnvelope {
   subject?: string;
   date?: Date | string;
   from?: ImapAddress[];
+  messageId?: string;
+  inReplyTo?: string;
+}
+export interface ImapBodyStructure {
+  part?: string; // IMAP section id, e.g. "2" or "1.2"
+  type?: string; // MIME type, e.g. "image/png" or "multipart/mixed"
+  disposition?: string; // "attachment" | "inline"
+  dispositionParameters?: Record<string, string>;
+  parameters?: Record<string, string>;
+  size?: number;
+  encoding?: string;
+  childNodes?: ImapBodyStructure[];
 }
 interface ImapMessage {
   uid: number;
   envelope?: ImapEnvelope;
   flags?: Set<string>;
   source?: Buffer | string;
+  bodyStructure?: ImapBodyStructure;
+  headers?: Buffer | string;
+}
+interface ImapDownload {
+  meta?: { filename?: string; contentType?: string };
+  content: AsyncIterable<Uint8Array>;
 }
 interface MailboxLock {
   release: () => void;
@@ -101,6 +119,11 @@ export interface ImapClientLike {
     opts: { uid: true }
   ): Promise<ImapMessage | false>;
   list(): Promise<ImapMailboxListing[]>;
+  status(
+    path: string,
+    query: { messages?: boolean; unseen?: boolean; recent?: boolean }
+  ): Promise<{ path: string; messages?: number; unseen?: number; recent?: number }>;
+  download(range: string, part: string, opts: { uid: true }): Promise<ImapDownload>;
   mailboxCreate(path: string): Promise<{ path: string; created: boolean }>;
   mailboxRename(path: string, newPath: string): Promise<{ path: string; newPath: string }>;
   mailboxDelete(path: string): Promise<{ path: string }>;
@@ -410,6 +433,122 @@ export function imapSearchMessages(args: ImapSearchArgs, deps: ImapDeps = {}): P
 
 export function imapListMessages(args: ImapSearchArgs, deps: ImapDeps = {}): Promise<string> {
   return run(args, true, deps);
+}
+
+// ===========================================================================
+// Counts & stats via IMAP STATUS (2.1 optimizations I3/I4/I6)
+//
+// STATUS is a single server round-trip that returns authoritative message/unseen
+// counts without enumerating messages — far faster and more reliable than
+// AppleScript on large mailboxes (where the per-message walk times out, #8/#24).
+// ===========================================================================
+
+/** Unread count via IMAP STATUS (UNSEEN). No mailbox → sum across all mailboxes. */
+export function imapUnreadCount(mailbox: string | undefined, deps: ImapDeps = {}): Promise<number> {
+  return useClient(
+    deps,
+    async (client) => {
+      if (mailbox) {
+        const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
+        return s.unseen ?? 0;
+      }
+      let total = 0;
+      for (const b of await client.list()) {
+        try {
+          const s = await client.status(b.path, { unseen: true });
+          total += s.unseen ?? 0;
+        } catch {
+          // skip mailboxes that can't be STATUS'd (e.g. \Noselect parents)
+        }
+      }
+      return total;
+    },
+    true
+  );
+}
+
+export interface ImapMailboxInfo {
+  path: string;
+  name: string;
+  messages: number;
+  unseen: number;
+}
+
+/** List mailboxes with per-mailbox message/unseen counts via LIST + STATUS (I6). */
+export function imapListMailboxes(deps: ImapDeps = {}): Promise<ImapMailboxInfo[]> {
+  return useClient(
+    deps,
+    async (client) => {
+      const out: ImapMailboxInfo[] = [];
+      for (const b of await client.list()) {
+        let messages = 0;
+        let unseen = 0;
+        try {
+          const s = await client.status(b.path, { messages: true, unseen: true });
+          messages = s.messages ?? 0;
+          unseen = s.unseen ?? 0;
+        } catch {
+          // \Noselect or otherwise un-status-able mailbox → report zeros
+        }
+        out.push({ path: b.path, name: b.name, messages, unseen });
+      }
+      return out;
+    },
+    true
+  );
+}
+
+export interface ImapStats {
+  totalMessages: number;
+  totalUnread: number;
+  perMailbox: { mailbox: string; messages: number; unseen: number }[];
+  recent: { last24h: number; last7d: number; last30d: number };
+}
+
+/** Aggregate stats via STATUS (counts) + INBOX SEARCH SINCE (recent) (I3). */
+export function imapMailStats(deps: ImapDeps = {}): Promise<ImapStats> {
+  return useClient(
+    deps,
+    async (client) => {
+      const perMailbox: ImapStats["perMailbox"] = [];
+      let totalMessages = 0;
+      let totalUnread = 0;
+      for (const b of await client.list()) {
+        try {
+          const s = await client.status(b.path, { messages: true, unseen: true });
+          const messages = s.messages ?? 0;
+          const unseen = s.unseen ?? 0;
+          totalMessages += messages;
+          totalUnread += unseen;
+          perMailbox.push({ mailbox: b.path, messages, unseen });
+        } catch {
+          // skip un-status-able mailbox
+        }
+      }
+      // Recent counts against INBOX (the meaningful "received" surface).
+      const since = (days: number): Date => new Date(Date.now() - days * 86_400_000);
+      const countSince = async (days: number): Promise<number> => {
+        try {
+          const lock = await client.getMailboxLock("INBOX");
+          try {
+            const found = await client.search({ since: since(days) }, { uid: true });
+            return Array.isArray(found) ? found.length : 0;
+          } finally {
+            lock.release();
+          }
+        } catch {
+          return 0;
+        }
+      };
+      const [last24h, last7d, last30d] = await Promise.all([
+        countSince(1),
+        countSince(7),
+        countSince(30),
+      ]);
+      return { totalMessages, totalUnread, perMailbox, recent: { last24h, last7d, last30d } };
+    },
+    true
+  );
 }
 
 // ===========================================================================
@@ -799,5 +938,312 @@ export async function imapDeleteMessageById(
         return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
       }
     }
+  );
+}
+
+// ===========================================================================
+// Attachments via BODYSTRUCTURE (2.1 optimization I1)
+//
+// AppleScript's `mail attachments` can't see MIME-embedded attachments, forcing
+// a full raw-source scan. IMAP BODYSTRUCTURE enumerates parts without
+// downloading the message, and FETCH BODY[part] pulls a single part — faster
+// and it sees the attachments AppleScript misses. Routed for `imap:` ids.
+// ===========================================================================
+
+interface AttachmentPart {
+  part: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
+export interface ImapAttachmentInfo {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+/** Walk a BODYSTRUCTURE tree collecting attachment parts (disposition or filename). */
+function collectAttachments(node: ImapBodyStructure, out: AttachmentPart[] = []): AttachmentPart[] {
+  if (!node) return out;
+  const filename = node.dispositionParameters?.filename || node.parameters?.name;
+  const disposition = node.disposition?.toLowerCase();
+  const isAttachment =
+    !!node.part && (disposition === "attachment" || (!!filename && disposition !== "inline"));
+  if (isAttachment) {
+    out.push({
+      part: node.part as string,
+      filename: filename || `part-${node.part}`,
+      mimeType: node.type || "application/octet-stream",
+      size: node.size ?? 0,
+    });
+  }
+  for (const child of node.childNodes ?? []) collectAttachments(child, out);
+  return out;
+}
+
+async function streamToBuffer(content: AsyncIterable<Uint8Array>): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of content) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+/** List a message's attachments via IMAP BODYSTRUCTURE (no full download). */
+export async function imapListAttachments(
+  id: string,
+  deps: ImapDeps = {}
+): Promise<{ success: boolean; attachments?: ImapAttachmentInfo[]; error?: string }> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(
+    ref.path,
+    { ...deps, account: deps.account ?? ref.account },
+    async (client) => {
+      const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+      if (!msg || !msg.bodyStructure) {
+        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+      }
+      const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
+        id: `${id}#${a.part}`,
+        name: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+      }));
+      return { success: true, attachments };
+    }
+  );
+}
+
+/** Fetch one attachment's bytes (base64) via IMAP, matched by filename. */
+export async function imapFetchAttachment(
+  id: string,
+  attachmentName: string,
+  deps: ImapDeps = {}
+): Promise<{
+  success: boolean;
+  base64?: string;
+  bytes?: number;
+  mimeType?: string;
+  error?: string;
+}> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(
+    ref.path,
+    { ...deps, account: deps.account ?? ref.account },
+    async (client) => {
+      const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+      if (!msg || !msg.bodyStructure) {
+        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+      }
+      const atts = collectAttachments(msg.bodyStructure);
+      const match = atts.find((a) => a.filename === attachmentName);
+      if (!match) {
+        const names = atts.map((a) => a.filename).join(", ") || "none";
+        return {
+          success: false,
+          error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`,
+        };
+      }
+      const dl = await client.download(String(ref.uid), match.part, { uid: true });
+      const buf = await streamToBuffer(dl.content);
+      return {
+        success: true,
+        base64: buf.toString("base64"),
+        bytes: buf.length,
+        mimeType: match.mimeType,
+      };
+    }
+  );
+}
+
+// ===========================================================================
+// Batch message operations via UID STORE / MOVE (2.1 optimization I2)
+//
+// AppleScript applies batch mark/flag/move/delete one message at a time. For
+// imap: ids we group by mailbox and apply the whole UID set in a single IMAP
+// command — dramatically fewer round-trips on large batches.
+// ===========================================================================
+
+export interface ImapBatchResult {
+  success: number;
+  failed: number;
+  errors: string[];
+}
+
+async function imapBatch(
+  ids: string[],
+  deps: ImapDeps,
+  op: (client: ImapClientLike, uids: number[], path: string) => Promise<void>
+): Promise<ImapBatchResult> {
+  const groups = new Map<string, { account: string; path: string; uids: number[] }>();
+  const errors: string[] = [];
+  let failed = 0;
+  for (const id of ids) {
+    const ref = decodeImapId(id);
+    if (!ref) {
+      failed++;
+      errors.push(`Not an IMAP id: "${id}"`);
+      continue;
+    }
+    const key = `${ref.account} ${ref.path}`;
+    const g = groups.get(key) ?? { account: ref.account, path: ref.path, uids: [] };
+    g.uids.push(ref.uid);
+    groups.set(key, g);
+  }
+  let success = 0;
+  for (const g of groups.values()) {
+    try {
+      await useClient({ ...deps, account: deps.account ?? g.account }, async (client) => {
+        const lock = await client.getMailboxLock(g.path);
+        try {
+          await op(client, g.uids, g.path);
+        } finally {
+          lock.release();
+        }
+      });
+      success += g.uids.length;
+    } catch (e) {
+      failed += g.uids.length;
+      errors.push(`${g.path}: ${errText(e)}`);
+    }
+  }
+  return { success, failed, errors };
+}
+
+export const imapBatchMarkRead = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+  });
+export const imapBatchMarkUnread = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+  });
+export const imapBatchFlag = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+  });
+export const imapBatchUnflag = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsRemove(uids, ["\\Flagged"], { uid: true });
+  });
+export const imapBatchDelete = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageDelete(uids, { uid: true });
+  });
+export function imapBatchMove(
+  ids: string[],
+  destMailbox: string,
+  deps: ImapDeps = {}
+): Promise<ImapBatchResult> {
+  return imapBatch(ids, deps, async (c, uids) => {
+    const dest = (await findMailboxPath(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
+    await c.messageMove(uids, dest, { uid: true });
+  });
+}
+
+// ===========================================================================
+// True threading via References / Message-ID (2.1 optimization I5)
+//
+// For an imap: seed id, assemble the conversation from RFC 5322 References /
+// In-Reply-To headers (descendants reference the seed; ancestors are the seed's
+// References) using IMAP HEADER SEARCH — more accurate than subject grouping.
+// Returns null when nothing beyond the seed is found, so get-thread falls back
+// to subject grouping (and for servers without HEADER search support).
+// ===========================================================================
+
+export interface ImapThreadMessage {
+  id: string;
+  subject: string;
+  sender: string;
+  date: string;
+  isRead: boolean;
+}
+export interface ImapThreadResult {
+  count: number;
+  text: string;
+  structured: { subject: string; messages: ImapThreadMessage[]; count: number };
+}
+
+function senderName(from?: ImapAddress[]): string {
+  const a = from?.[0];
+  if (!a) return "(unknown)";
+  return a.name ? `${a.name} <${a.address ?? ""}>` : (a.address ?? "(unknown)");
+}
+function dateMs(m: ImapMessage): number {
+  return m.envelope?.date ? new Date(m.envelope.date).getTime() : 0;
+}
+
+export async function imapThread(
+  id: string,
+  deps: ImapDeps = {},
+  limit = 50
+): Promise<ImapThreadResult | null> {
+  const ref = decodeImapId(id);
+  if (!ref) return null;
+  return useClient(
+    { ...deps, account: deps.account ?? ref.account },
+    async (client) => {
+      const lock = await client.getMailboxLock(ref.path);
+      try {
+        const seed = await client.fetchOne(
+          String(ref.uid),
+          { envelope: true, headers: ["references", "in-reply-to", "message-id"] },
+          { uid: true }
+        );
+        if (!seed) return null;
+        const seedMsgId = seed.envelope?.messageId;
+        const refIds = new Set<string>();
+        const hdr = seed.headers ? seed.headers.toString() : "";
+        for (const m of hdr.matchAll(/<[^>]+>/g)) refIds.add(m[0]);
+        if (seed.envelope?.inReplyTo) refIds.add(seed.envelope.inReplyTo);
+
+        const uidSet = new Set<number>([ref.uid]);
+        const addFound = (found: number[] | false): void => {
+          if (Array.isArray(found)) found.forEach((u) => uidSet.add(u));
+        };
+        // Descendants: anything referencing the seed.
+        if (seedMsgId) {
+          addFound(await client.search({ header: { references: seedMsgId } }, { uid: true }));
+          addFound(await client.search({ header: { "in-reply-to": seedMsgId } }, { uid: true }));
+        }
+        // Ancestors: messages whose Message-ID is in the seed's References (bounded).
+        for (const mid of [...refIds].slice(0, 20)) {
+          addFound(await client.search({ header: { "message-id": mid } }, { uid: true }));
+        }
+        if (uidSet.size <= 1) return null; // only the seed → caller falls back to subject
+
+        const uids = [...uidSet].slice(0, limit);
+        const msgs: ImapMessage[] = [];
+        for await (const msg of client.fetch(
+          uids.join(","),
+          { envelope: true, flags: true },
+          { uid: true }
+        )) {
+          msgs.push(msg);
+        }
+        msgs.sort((a, b) => dateMs(a) - dateMs(b)); // oldest first
+        const subject = seed.envelope?.subject || "(no subject)";
+        const structured = {
+          subject,
+          count: msgs.length,
+          messages: msgs.map((m) => ({
+            id: encodeImapId(ref.account, ref.path, m.uid),
+            subject: m.envelope?.subject || "(no subject)",
+            sender: senderName(m.envelope?.from),
+            date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : "",
+            isRead: m.flags?.has("\\Seen") ?? false,
+          })),
+        };
+        const text =
+          `Thread "${subject}" — ${msgs.length} message(s) via IMAP (References-linked, oldest first):\n` +
+          msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n");
+        return { count: msgs.length, text, structured };
+      } finally {
+        lock.release();
+      }
+    },
+    true
   );
 }

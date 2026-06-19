@@ -38,12 +38,33 @@ interface ImapEnvelope {
     subject?: string;
     date?: Date | string;
     from?: ImapAddress[];
+    messageId?: string;
+    inReplyTo?: string;
+}
+export interface ImapBodyStructure {
+    part?: string;
+    type?: string;
+    disposition?: string;
+    dispositionParameters?: Record<string, string>;
+    parameters?: Record<string, string>;
+    size?: number;
+    encoding?: string;
+    childNodes?: ImapBodyStructure[];
 }
 interface ImapMessage {
     uid: number;
     envelope?: ImapEnvelope;
     flags?: Set<string>;
     source?: Buffer | string;
+    bodyStructure?: ImapBodyStructure;
+    headers?: Buffer | string;
+}
+interface ImapDownload {
+    meta?: {
+        filename?: string;
+        contentType?: string;
+    };
+    content: AsyncIterable<Uint8Array>;
 }
 interface MailboxLock {
     release: () => void;
@@ -68,6 +89,19 @@ export interface ImapClientLike {
         uid: true;
     }): Promise<ImapMessage | false>;
     list(): Promise<ImapMailboxListing[]>;
+    status(path: string, query: {
+        messages?: boolean;
+        unseen?: boolean;
+        recent?: boolean;
+    }): Promise<{
+        path: string;
+        messages?: number;
+        unseen?: number;
+        recent?: number;
+    }>;
+    download(range: string, part: string, opts: {
+        uid: true;
+    }): Promise<ImapDownload>;
     mailboxCreate(path: string): Promise<{
         path: string;
         created: boolean;
@@ -123,6 +157,32 @@ export declare function resolveImapConfig(env?: NodeJS.ProcessEnv, account?: str
 export declare function resolveMailboxPath(mailbox: string | undefined, mode: "search" | "list"): string;
 export declare function imapSearchMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<string>;
 export declare function imapListMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<string>;
+/** Unread count via IMAP STATUS (UNSEEN). No mailbox → sum across all mailboxes. */
+export declare function imapUnreadCount(mailbox: string | undefined, deps?: ImapDeps): Promise<number>;
+export interface ImapMailboxInfo {
+    path: string;
+    name: string;
+    messages: number;
+    unseen: number;
+}
+/** List mailboxes with per-mailbox message/unseen counts via LIST + STATUS (I6). */
+export declare function imapListMailboxes(deps?: ImapDeps): Promise<ImapMailboxInfo[]>;
+export interface ImapStats {
+    totalMessages: number;
+    totalUnread: number;
+    perMailbox: {
+        mailbox: string;
+        messages: number;
+        unseen: number;
+    }[];
+    recent: {
+        last24h: number;
+        last7d: number;
+        last30d: number;
+    };
+}
+/** Aggregate stats via STATUS (counts) + INBOX SEARCH SINCE (recent) (I3). */
+export declare function imapMailStats(deps?: ImapDeps): Promise<ImapStats>;
 export interface ImapOpResult {
     success: boolean;
     error?: string;
@@ -154,5 +214,53 @@ export declare const imapFlagMessage: (id: string, deps?: {}) => Promise<ImapOpR
 export declare const imapUnflagMessage: (id: string, deps?: {}) => Promise<ImapOpResult>;
 export declare function imapMoveMessageById(id: string, destMailbox: string, deps?: ImapDeps): Promise<ImapOpResult>;
 export declare function imapDeleteMessageById(id: string, deps?: ImapDeps): Promise<ImapOpResult>;
+export interface ImapAttachmentInfo {
+    id: string;
+    name: string;
+    mimeType: string;
+    size: number;
+}
+/** List a message's attachments via IMAP BODYSTRUCTURE (no full download). */
+export declare function imapListAttachments(id: string, deps?: ImapDeps): Promise<{
+    success: boolean;
+    attachments?: ImapAttachmentInfo[];
+    error?: string;
+}>;
+/** Fetch one attachment's bytes (base64) via IMAP, matched by filename. */
+export declare function imapFetchAttachment(id: string, attachmentName: string, deps?: ImapDeps): Promise<{
+    success: boolean;
+    base64?: string;
+    bytes?: number;
+    mimeType?: string;
+    error?: string;
+}>;
+export interface ImapBatchResult {
+    success: number;
+    failed: number;
+    errors: string[];
+}
+export declare const imapBatchMarkRead: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare const imapBatchMarkUnread: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare const imapBatchFlag: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare const imapBatchUnflag: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare const imapBatchDelete: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare function imapBatchMove(ids: string[], destMailbox: string, deps?: ImapDeps): Promise<ImapBatchResult>;
+export interface ImapThreadMessage {
+    id: string;
+    subject: string;
+    sender: string;
+    date: string;
+    isRead: boolean;
+}
+export interface ImapThreadResult {
+    count: number;
+    text: string;
+    structured: {
+        subject: string;
+        messages: ImapThreadMessage[];
+        count: number;
+    };
+}
+export declare function imapThread(id: string, deps?: ImapDeps, limit?: number): Promise<ImapThreadResult | null>;
 export {};
 //# sourceMappingURL=imapClient.d.ts.map

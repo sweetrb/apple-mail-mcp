@@ -23,9 +23,11 @@ import { createRequire } from "module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { AppleMailManager } from "./services/appleMailManager.js";
+import { AppleMailManager, isPathWithinAllowedRoots } from "./services/appleMailManager.js";
+import { writeFileSync } from "fs";
+import { resolve as resolvePath, join as joinPath } from "path";
 import { sendViaSmtp } from "./services/smtpMailer.js";
-import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
+import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapListAttachments, imapFetchAttachment, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete, imapBatchMove, imapThread, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
 import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
 import { routeMessage } from "./services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
@@ -35,9 +37,6 @@ import { ImapIdleWatcher } from "./services/imapIdle.js";
 // =============================================================================
 // Shared Validation Schemas
 // =============================================================================
-/** AppleScript message IDs are always numeric. Enforced to prevent AppleScript
- *  injection via the `whose id is ${id}` interpolation. */
-const NUMERIC_MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
 /** A single-message id is EITHER an AppleScript numeric id OR an IMAP composite
  *  token (`imap:<base64url>`, emitted by the IMAP read path). The IMAP form is
  *  base64url so it stays injection-safe; it never reaches AppleScript (it's
@@ -45,10 +44,11 @@ const NUMERIC_MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be 
 const MESSAGE_ID_SCHEMA = z
     .string()
     .regex(/^(\d+|imap:[A-Za-z0-9_-]+)$/, "Message ID must be numeric or an IMAP id (imap:…)");
-/** Batch operations are AppleScript-only and capped to prevent unbounded loops /
- *  DoS. IMAP ids are rejected here — use the single-message tools for those. */
+/** Batch operations accept numeric (AppleScript) and/or imap: ids (I2) and are
+ *  capped to prevent unbounded loops / DoS. Numeric ids run via AppleScript;
+ *  imap: ids are grouped by mailbox and applied in a single UID command. */
 const BATCH_IDS_SCHEMA = z
-    .array(NUMERIC_MESSAGE_ID_SCHEMA)
+    .array(MESSAGE_ID_SCHEMA)
     .min(1, "At least one message ID is required")
     .max(100, "Cannot process more than 100 messages in a single batch");
 /** Date filter strings must look like natural-language dates (e.g. "March 1, 2026").
@@ -99,6 +99,31 @@ const mailManager = new AppleMailManager();
 registerResourcesAndPrompts(server, mailManager);
 // Response helpers, the AppleScript serial gate, withErrorHandling, and the
 // message backend router now live in @/tools/respond and @/services/messageRouter.
+/**
+ * Split a batch of ids into numeric (AppleScript) and imap: (IMAP) groups, run
+ * each path, and merge into success/fail counts (I2). imap: ids apply in a
+ * single UID command per mailbox; numeric ids use the existing AppleScript batch.
+ */
+async function hybridBatchCounts(ids, appleFn, imapFn) {
+    const imapIds = ids.filter((i) => i.startsWith("imap:"));
+    const numericIds = ids.filter((i) => !i.startsWith("imap:"));
+    let success = 0;
+    let fail = 0;
+    const errors = [];
+    if (numericIds.length > 0) {
+        const res = appleFn(numericIds);
+        const s = res.filter((r) => r.success).length;
+        success += s;
+        fail += res.length - s;
+    }
+    if (imapIds.length > 0) {
+        const r = await imapFn(imapIds);
+        success += r.success;
+        fail += r.failed;
+        errors.push(...r.errors);
+    }
+    return { success, fail, errors };
+}
 // =============================================================================
 // Message Tools
 // =============================================================================
@@ -192,6 +217,14 @@ server.tool("get-thread", {
     mailbox: z.string().optional().describe("Mailbox to search (omit to search all)"),
     limit: z.number().optional().describe("Max messages in the thread (default 50)"),
 }, withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
+    // True threading via References/Message-ID when we have an imap: id (I5);
+    // falls through to subject grouping if the server lacks HEADER search or
+    // nothing References-linked is found.
+    if (id.startsWith("imap:")) {
+        const t = await imapThread(id, { account }, limit);
+        if (t && t.count > 1)
+            return successResponse(t.text, { ...t.structured });
+    }
     // Resolve the seed message's subject, then gather the conversation by
     // normalized subject (B1). Works across the AppleScript and IMAP backends.
     let seedSubject = null;
@@ -467,10 +500,8 @@ server.tool("move-message", {
 // --- batch-delete-messages ---
 server.tool("batch-delete-messages", {
     ids: BATCH_IDS_SCHEMA,
-}, withErrorHandling(({ ids }) => {
-    const results = mailManager.batchDeleteMessages(ids);
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.length - successCount;
+}, withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchDeleteMessages(n), (im) => imapBatchDelete(im));
     if (failCount === 0) {
         return successResponse(`Successfully deleted ${successCount} message(s)`);
     }
@@ -486,10 +517,8 @@ server.tool("batch-move-messages", {
     ids: BATCH_IDS_SCHEMA,
     mailbox: z.string().min(1, "Destination mailbox is required"),
     account: z.string().optional().describe("Account containing the destination mailbox"),
-}, withErrorHandling(({ ids, mailbox, account }) => {
-    const results = mailManager.batchMoveMessages(ids, mailbox, account);
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.length - successCount;
+}, withErrorHandling(async ({ ids, mailbox, account }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchMoveMessages(n, mailbox, account), (im) => imapBatchMove(im, mailbox, { account }));
     if (failCount === 0) {
         return successResponse(`Successfully moved ${successCount} message(s) to "${mailbox}"`);
     }
@@ -503,10 +532,8 @@ server.tool("batch-move-messages", {
 // --- batch-mark-as-read ---
 server.tool("batch-mark-as-read", {
     ids: BATCH_IDS_SCHEMA,
-}, withErrorHandling(({ ids }) => {
-    const results = mailManager.batchMarkAsRead(ids);
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.length - successCount;
+}, withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchMarkAsRead(n), (im) => imapBatchMarkRead(im));
     if (failCount === 0) {
         return successResponse(`Successfully marked ${successCount} message(s) as read`);
     }
@@ -520,10 +547,8 @@ server.tool("batch-mark-as-read", {
 // --- batch-mark-as-unread ---
 server.tool("batch-mark-as-unread", {
     ids: BATCH_IDS_SCHEMA,
-}, withErrorHandling(({ ids }) => {
-    const results = mailManager.batchMarkAsUnread(ids);
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.length - successCount;
+}, withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchMarkAsUnread(n), (im) => imapBatchMarkUnread(im));
     if (failCount === 0) {
         return successResponse(`Successfully marked ${successCount} message(s) as unread`);
     }
@@ -537,10 +562,8 @@ server.tool("batch-mark-as-unread", {
 // --- batch-flag-messages ---
 server.tool("batch-flag-messages", {
     ids: BATCH_IDS_SCHEMA,
-}, withErrorHandling(({ ids }) => {
-    const results = mailManager.batchFlagMessages(ids);
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.length - successCount;
+}, withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchFlagMessages(n), (im) => imapBatchFlag(im));
     if (failCount === 0) {
         return successResponse(`Successfully flagged ${successCount} message(s)`);
     }
@@ -554,10 +577,8 @@ server.tool("batch-flag-messages", {
 // --- batch-unflag-messages ---
 server.tool("batch-unflag-messages", {
     ids: BATCH_IDS_SCHEMA,
-}, withErrorHandling(({ ids }) => {
-    const results = mailManager.batchUnflagMessages(ids);
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.length - successCount;
+}, withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchUnflagMessages(n), (im) => imapBatchUnflag(im));
     if (failCount === 0) {
         return successResponse(`Successfully unflagged ${successCount} message(s)`);
     }
@@ -571,8 +592,17 @@ server.tool("batch-unflag-messages", {
 // --- list-attachments ---
 server.tool("list-attachments", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(({ id }) => {
-    const attachments = mailManager.listAttachments(id);
+}, withErrorHandling(async ({ id }) => {
+    // IMAP (I1): BODYSTRUCTURE enumerates parts (incl. MIME attachments
+    // AppleScript can't see) without downloading the message.
+    const attachments = id.startsWith("imap:")
+        ? await (async () => {
+            const r = await imapListAttachments(id);
+            if (!r.success)
+                throw new Error(r.error || "Failed to list attachments via IMAP");
+            return r.attachments ?? [];
+        })()
+        : mailManager.listAttachments(id);
     const structured = { attachments, count: attachments.length };
     if (attachments.length === 0) {
         return successResponse("No attachments found", structured);
@@ -590,7 +620,25 @@ server.tool("save-attachment", {
     id: MESSAGE_ID_SCHEMA,
     attachmentName: z.string().min(1, "Attachment name is required"),
     savePath: z.string().min(1, "Save directory path is required"),
-}, withErrorHandling(({ id, attachmentName, savePath }) => {
+}, withErrorHandling(async ({ id, attachmentName, savePath }) => {
+    // IMAP (I1): fetch the part's bytes via IMAP, then write into savePath (a
+    // directory) as savePath/attachmentName — mirroring the AppleScript path,
+    // with the same name + allowed-roots validation.
+    if (id.startsWith("imap:")) {
+        if (/[/\\\0]/.test(attachmentName) || attachmentName.includes("..")) {
+            return errorResponse(`Invalid attachment name: "${attachmentName}"`);
+        }
+        const resolvedDir = resolvePath(savePath);
+        if (!isPathWithinAllowedRoots(resolvedDir)) {
+            return errorResponse(`Save path "${savePath}" is outside allowed directories`);
+        }
+        const r = await imapFetchAttachment(id, attachmentName);
+        if (!r.success || !r.base64) {
+            return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
+        }
+        writeFileSync(joinPath(resolvedDir, attachmentName), Buffer.from(r.base64, "base64"));
+        return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`);
+    }
     const success = mailManager.saveAttachment(id, attachmentName, savePath);
     if (!success) {
         return errorResponse(`Failed to save attachment "${attachmentName}"`);
@@ -599,12 +647,19 @@ server.tool("save-attachment", {
 }, "Error saving attachment"));
 // --- fetch-attachment ---
 server.tool("fetch-attachment", {
-    id: NUMERIC_MESSAGE_ID_SCHEMA,
+    id: MESSAGE_ID_SCHEMA,
     attachmentName: z.string().min(1, "Attachment name is required"),
-}, withErrorHandling(({ id, attachmentName }) => {
+}, withErrorHandling(async ({ id, attachmentName }) => {
     // Returns the attachment bytes as base64 (B4) — the read counterpart to
-    // sending inline base64 content, for clients that want the bytes directly
-    // rather than writing to disk via save-attachment.
+    // sending inline base64 content. IMAP (I1) fetches the part directly; numeric
+    // ids fall back to the AppleScript/MIME path.
+    if (id.startsWith("imap:")) {
+        const r = await imapFetchAttachment(id, attachmentName);
+        if (!r.success || !r.base64) {
+            return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
+        }
+        return successResponse(`Fetched "${attachmentName}" (${r.bytes} bytes, base64-encoded below).\n\n${r.base64}`, { attachmentName, bytes: r.bytes, mimeType: r.mimeType, contentBase64: r.base64 });
+    }
     const r = mailManager.getAttachmentBase64(id, attachmentName);
     if (!r.success) {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
@@ -617,7 +672,24 @@ server.tool("fetch-attachment", {
 // --- list-mailboxes ---
 server.tool("list-mailboxes", {
     account: z.string().optional().describe("Account to list mailboxes from"),
-}, withErrorHandling(({ account }) => {
+}, withErrorHandling(async ({ account }) => {
+    // IMAP (I6): LIST + per-mailbox STATUS — sees the true server hierarchy and
+    // authoritative counts; falls back to AppleScript for non-IMAP accounts.
+    if (isImapAccount(account)) {
+        const boxes = await imapListMailboxes({ account });
+        const structured = {
+            mailboxes: boxes.map((b) => ({
+                name: b.path,
+                unreadCount: b.unseen,
+                messageCount: b.messages,
+            })),
+            count: boxes.length,
+        };
+        if (boxes.length === 0)
+            return successResponse("No mailboxes found", structured);
+        const list = boxes.map((b) => `  - ${b.path} (${b.unseen} unread)`).join("\n");
+        return successResponse(`Found ${boxes.length} mailbox(es):\n${list}`, structured);
+    }
     const mailboxes = mailManager.listMailboxes(account);
     const structured = { mailboxes, count: mailboxes.length };
     if (mailboxes.length === 0) {
@@ -630,8 +702,12 @@ server.tool("list-mailboxes", {
 server.tool("get-unread-count", {
     mailbox: z.string().optional().describe("Mailbox to check (default: all)"),
     account: z.string().optional().describe("Account to check"),
-}, withErrorHandling(({ mailbox, account }) => {
-    const count = mailManager.getUnreadCount(mailbox, account);
+}, withErrorHandling(async ({ mailbox, account }) => {
+    // IMAP (I4): STATUS (UNSEEN) is authoritative and fast even on huge
+    // mailboxes; falls back to AppleScript for non-IMAP accounts.
+    const count = isImapAccount(account)
+        ? await imapUnreadCount(mailbox, { account })
+        : mailManager.getUnreadCount(mailbox, account);
     const location = mailbox ? ` in "${mailbox}"` : "";
     return successResponse(`${count} unread message(s)${location}`, {
         unread: count,
@@ -893,7 +969,29 @@ server.tool("doctor", {}, withErrorHandling(async () => {
     return successResponse(formatDoctorReport(report), { ...report });
 }, "Error running doctor"));
 // --- get-mail-stats ---
-server.tool("get-mail-stats", {}, withErrorHandling(() => {
+server.tool("get-mail-stats", {
+    account: z
+        .string()
+        .optional()
+        .describe("Limit to one account; uses fast IMAP STATUS if that account is IMAP-configured"),
+}, withErrorHandling(async ({ account }) => {
+    // IMAP (I3): for a named IMAP account, STATUS gives authoritative counts and
+    // SEARCH SINCE gives recent activity — fast even on huge mailboxes.
+    if (account && isImapAccount(account)) {
+        const s = await imapMailStats({ account });
+        const lines = [
+            `📊 Mail Statistics — ${account} (IMAP)`,
+            `══════════════════`,
+            `Total messages: ${s.totalMessages}`,
+            `Unread messages: ${s.totalUnread}`,
+            ``,
+            `📥 Recently Received (INBOX):`,
+            `  Last 24 hours: ${s.recent.last24h}`,
+            `  Last 7 days: ${s.recent.last7d}`,
+            `  Last 30 days: ${s.recent.last30d}`,
+        ];
+        return successResponse(lines.join("\n"), { account, ...s });
+    }
     const stats = mailManager.getMailStats();
     const lines = [];
     lines.push(`📊 Mail Statistics`);

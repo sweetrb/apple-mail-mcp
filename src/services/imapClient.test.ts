@@ -18,6 +18,14 @@ import {
   imapUnflagMessage,
   imapMoveMessageById,
   imapDeleteMessageById,
+  imapUnreadCount,
+  imapListMailboxes,
+  imapMailStats,
+  imapListAttachments,
+  imapFetchAttachment,
+  imapBatchMarkRead,
+  imapBatchMove,
+  imapThread,
   listImapAccountLabels,
   __setPoolConnect,
   __resetPool,
@@ -67,6 +75,13 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
     },
     fetchOne: async () => false,
     list: async () => [],
+    status: async (path: string) => ({ path, messages: 0, unseen: 0, recent: 0 }),
+    download: async () => ({
+      meta: { filename: "file.bin" },
+      content: (async function* () {
+        yield Buffer.from("attachment-bytes");
+      })(),
+    }),
     mailboxCreate: async (path: string) => ({ path, created: true }),
     mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),
     mailboxDelete: async (path: string) => ({ path }),
@@ -415,6 +430,243 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/Not an IMAP message id/);
+  });
+});
+
+describe("true threading via References (I5)", () => {
+  const MID = encodeImapId("acct", "INBOX", 10);
+  function threadClient(): ImapClientLike {
+    return {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 10,
+        envelope: { subject: "Re: Plan", messageId: "<b@x>", inReplyTo: "<a@x>" },
+        headers: Buffer.from("References: <a@x>\r\nIn-Reply-To: <a@x>\r\n"),
+      }),
+      search: async (q: Record<string, unknown>) => {
+        const h = (q.header as Record<string, string>) || {};
+        if (h.references === "<b@x>" || h["in-reply-to"] === "<b@x>") return [11];
+        if (h["message-id"] === "<a@x>") return [9];
+        return [];
+      },
+      fetch: async function* (range: string) {
+        for (const u of range.split(",").map(Number)) {
+          yield {
+            uid: u,
+            envelope: {
+              subject: u === 9 ? "Plan" : "Re: Plan",
+              date: new Date(2026, 0, u),
+              from: [{ address: `p${u}@x` }],
+            },
+            flags: new Set<string>(),
+          };
+        }
+      },
+    };
+  }
+
+  it("assembles ancestors + descendants oldest-first", async () => {
+    const t = await imapThread(MID, { config: cfg, connect: async () => threadClient() }, 50);
+    expect(t).not.toBeNull();
+    expect(t?.count).toBe(3); // seed 10 + descendant 11 + ancestor 9
+    expect(t?.structured.messages.map((m) => m.subject)).toEqual(["Plan", "Re: Plan", "Re: Plan"]);
+    expect(t?.text).toMatch(/References-linked/);
+  });
+
+  it("returns null when only the seed is found (caller falls back to subject)", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 10,
+        envelope: { subject: "x", messageId: "<b@x>" },
+        headers: Buffer.from(""),
+      }),
+      search: async () => [],
+    };
+    expect(await imapThread(MID, { config: cfg, connect: async () => client }, 50)).toBeNull();
+  });
+
+  it("returns null for a non-IMAP id", async () => {
+    expect(await imapThread("12345")).toBeNull();
+  });
+});
+
+describe("batch ops via UID STORE/MOVE (I2)", () => {
+  it("groups ids by mailbox and applies flags as one UID set per mailbox", async () => {
+    const calls: { path: string; uids: number[]; flags: string[] }[] = [];
+    let opens = 0;
+    let lastPath = "";
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      getMailboxLock: async (path: string) => {
+        opens++;
+        lastPath = path;
+        return { release: () => undefined };
+      },
+      messageFlagsAdd: async (uids: number[], flags: string[]) => {
+        calls.push({ path: lastPath, uids, flags });
+        return true;
+      },
+    };
+    const ids = [
+      encodeImapId("acct", "INBOX", 1),
+      encodeImapId("acct", "INBOX", 2),
+      encodeImapId("acct", "Archive", 9),
+    ];
+    const r = await imapBatchMarkRead(ids, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(3);
+    expect(r.failed).toBe(0);
+    expect(opens).toBe(2); // one lock per distinct mailbox
+    expect(calls).toEqual([
+      { path: "INBOX", uids: [1, 2], flags: ["\\Seen"] },
+      { path: "Archive", uids: [9], flags: ["\\Seen"] },
+    ]);
+  });
+
+  it("counts non-IMAP ids as failures", async () => {
+    const r = await imapBatchMarkRead(["12345"], {
+      config: cfg,
+      connect: async () => makeClient([], {}),
+    });
+    expect(r.success).toBe(0);
+    expect(r.failed).toBe(1);
+    expect(r.errors[0]).toMatch(/Not an IMAP id/);
+  });
+
+  it("moves a UID set to a resolved destination mailbox", async () => {
+    let moved: { uids: number[]; dest: string } | null = null;
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+      messageMove: async (uids: number[], dest: string) => {
+        moved = { uids, dest };
+        return {};
+      },
+    };
+    const ids = [encodeImapId("acct", "INBOX", 5), encodeImapId("acct", "INBOX", 6)];
+    const r = await imapBatchMove(ids, "Archive", { config: cfg, connect: async () => client });
+    expect(r.success).toBe(2);
+    expect(moved).toEqual({ uids: [5, 6], dest: "Archive" });
+  });
+});
+
+describe("attachments via BODYSTRUCTURE (I1)", () => {
+  const MID = encodeImapId("acct", "INBOX", 9);
+  function attClient(): ImapClientLike {
+    return {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 9,
+        bodyStructure: {
+          type: "multipart/mixed",
+          childNodes: [
+            { part: "1", type: "text/plain", size: 100 }, // body, not an attachment
+            {
+              part: "2",
+              type: "application/pdf",
+              disposition: "attachment",
+              dispositionParameters: { filename: "report.pdf" },
+              size: 2048,
+            },
+            { part: "3", type: "image/png", parameters: { name: "logo.png" }, size: 512 },
+          ],
+        },
+      }),
+      download: async (_range: string, part: string) => ({
+        meta: {},
+        content: (async function* () {
+          yield Buffer.from(`bytes-of-${part}`);
+        })(),
+      }),
+    };
+  }
+
+  it("lists only attachment parts from BODYSTRUCTURE", async () => {
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => attClient() });
+    expect(r.success).toBe(true);
+    expect(r.attachments?.map((a) => a.name)).toEqual(["report.pdf", "logo.png"]);
+    expect(r.attachments?.[0]).toMatchObject({ mimeType: "application/pdf", size: 2048 });
+  });
+
+  it("fetches an attachment's bytes by filename", async () => {
+    const r = await imapFetchAttachment(MID, "report.pdf", {
+      config: cfg,
+      connect: async () => attClient(),
+    });
+    expect(r.success).toBe(true);
+    expect(Buffer.from(r.base64 as string, "base64").toString()).toBe("bytes-of-2");
+    expect(r.mimeType).toBe("application/pdf");
+  });
+
+  it("errors clearly when the attachment name isn't found", async () => {
+    const r = await imapFetchAttachment(MID, "missing.txt", {
+      config: cfg,
+      connect: async () => attClient(),
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/not found/i);
+  });
+
+  it("rejects a non-IMAP id", async () => {
+    expect((await imapListAttachments("12345")).success).toBe(false);
+  });
+});
+
+describe("STATUS-based counts (I3/I4/I6)", () => {
+  const boxes = [
+    { path: "INBOX", name: "INBOX" },
+    { path: "[Gmail]/Sent Mail", name: "Sent Mail" },
+  ];
+  function statusClient(
+    map: Record<string, { messages?: number; unseen?: number }>
+  ): ImapClientLike {
+    return {
+      ...makeClient([], {}),
+      list: async () => boxes,
+      status: async (path: string) => ({ path, messages: 0, unseen: 0, ...(map[path] || {}) }),
+    };
+  }
+
+  it("imapUnreadCount returns UNSEEN for a specific mailbox", async () => {
+    const n = await imapUnreadCount("INBOX", {
+      config: cfg,
+      connect: async () => statusClient({ INBOX: { unseen: 7 } }),
+    });
+    expect(n).toBe(7);
+  });
+
+  it("imapUnreadCount sums UNSEEN across all mailboxes when none given", async () => {
+    const n = await imapUnreadCount(undefined, {
+      config: cfg,
+      connect: async () =>
+        statusClient({ INBOX: { unseen: 7 }, "[Gmail]/Sent Mail": { unseen: 2 } }),
+    });
+    expect(n).toBe(9);
+  });
+
+  it("imapListMailboxes returns per-mailbox message/unseen counts", async () => {
+    const r = await imapListMailboxes({
+      config: cfg,
+      connect: async () => statusClient({ INBOX: { messages: 10, unseen: 7 } }),
+    });
+    expect(r.find((b) => b.path === "INBOX")).toMatchObject({ messages: 10, unseen: 7 });
+    expect(r).toHaveLength(2);
+  });
+
+  it("imapMailStats aggregates STATUS totals and recent SEARCH counts", async () => {
+    const client: ImapClientLike = {
+      ...statusClient({
+        INBOX: { messages: 10, unseen: 7 },
+        "[Gmail]/Sent Mail": { messages: 5, unseen: 0 },
+      }),
+      getMailboxLock: async () => ({ release: () => undefined }),
+      search: async () => [1, 2, 3],
+    };
+    const s = await imapMailStats({ config: cfg, connect: async () => client });
+    expect(s.totalMessages).toBe(15);
+    expect(s.totalUnread).toBe(7);
+    expect(s.recent.last24h).toBe(3);
+    expect(s.recent.last7d).toBe(3);
   });
 });
 

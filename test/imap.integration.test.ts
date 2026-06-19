@@ -24,6 +24,15 @@ import {
   imapFlagMessage,
   imapMoveMessageById,
   imapDeleteMessageById,
+  imapUnreadCount,
+  imapListMailboxes,
+  imapMailStats,
+  imapListAttachments,
+  imapFetchAttachment,
+  imapBatchMarkRead,
+  imapBatchMove,
+  imapThread,
+  encodeImapId,
   decodeImapId,
 } from "@/services/imapClient.js";
 
@@ -121,5 +130,86 @@ run("IMAP backend (GreenMail) integration", () => {
     expect((await imapDeleteMessageById(destId, deps)).success).toBe(true);
     await imapDeleteMailbox("Dest", deps);
     expect(list).toMatch(/via IMAP/);
+  });
+});
+
+/** Append a raw MIME message and return its assigned UID. */
+async function appendRaw(mime: string): Promise<number> {
+  const c = raw();
+  await c.connect();
+  const res = await c.append("INBOX", Buffer.from(mime.replace(/\n/g, "\r\n")));
+  await c.logout();
+  return (res as { uid: number }).uid;
+}
+
+run("IMAP 2.1 optimizations (GreenMail) integration", () => {
+  it("STATUS-based unread count, mailbox list, and stats (I3/I4/I6)", async () => {
+    const c = raw();
+    await c.connect();
+    await c.append("INBOX", Buffer.from("From: s@x.com\r\nSubject: status-test\r\n\r\nhi"));
+    await c.logout();
+    expect(await imapUnreadCount("INBOX", deps)).toBeGreaterThan(0);
+    const boxes = await imapListMailboxes(deps);
+    expect(boxes.find((b) => b.path === "INBOX")).toBeTruthy();
+    const stats = await imapMailStats(deps);
+    expect(stats.totalMessages).toBeGreaterThan(0);
+    expect(stats.recent.last24h).toBeGreaterThan(0);
+  });
+
+  it("attachments via BODYSTRUCTURE: list + fetch (I1)", async () => {
+    const pdf = Buffer.from("PDF-BYTES-HERE").toString("base64");
+    const uid = await appendRaw(
+      [
+        "From: a@x.com",
+        "Subject: with-attachment",
+        "MIME-Version: 1.0",
+        'Content-Type: multipart/mixed; boundary="B"',
+        "",
+        "--B",
+        "Content-Type: text/plain",
+        "",
+        "body",
+        "--B",
+        'Content-Type: application/pdf; name="doc.pdf"',
+        'Content-Disposition: attachment; filename="doc.pdf"',
+        "Content-Transfer-Encoding: base64",
+        "",
+        pdf,
+        "--B--",
+        "",
+      ].join("\n")
+    );
+    const id = encodeImapId("greenmail", "INBOX", uid);
+    const list = await imapListAttachments(id, deps);
+    expect(list.success).toBe(true);
+    expect(list.attachments?.map((a) => a.name)).toContain("doc.pdf");
+    const fetched = await imapFetchAttachment(id, "doc.pdf", deps);
+    expect(fetched.success).toBe(true);
+    expect(Buffer.from(fetched.base64 as string, "base64").toString()).toBe("PDF-BYTES-HERE");
+  });
+
+  it("batch mark-read + move over a UID set (I2)", async () => {
+    await imapCreateMailbox("BatchDest", deps);
+    const u1 = await appendRaw("From: a@x.com\nSubject: batch-1\n\nb");
+    const u2 = await appendRaw("From: a@x.com\nSubject: batch-2\n\nb");
+    const ids = [
+      encodeImapId("greenmail", "INBOX", u1),
+      encodeImapId("greenmail", "INBOX", u2),
+    ];
+    const mr = await imapBatchMarkRead(ids, deps);
+    expect(mr.success).toBe(2);
+    const mv = await imapBatchMove(ids, "BatchDest", deps);
+    expect(mv.success).toBe(2);
+    await imapDeleteMailbox("BatchDest", deps);
+  });
+
+  it("true threading links a reply to its root via References (I5)", async () => {
+    await appendRaw("From: a@x.com\nSubject: Thread Root\nMessage-ID: <r1@test>\n\nroot");
+    const replyUid = await appendRaw(
+      "From: b@x.com\nSubject: Re: Thread Root\nMessage-ID: <r2@test>\nIn-Reply-To: <r1@test>\nReferences: <r1@test>\n\nreply"
+    );
+    const t = await imapThread(encodeImapId("greenmail", "INBOX", replyUid), deps, 50);
+    expect(t).not.toBeNull();
+    expect(t?.count).toBeGreaterThanOrEqual(2);
   });
 });
