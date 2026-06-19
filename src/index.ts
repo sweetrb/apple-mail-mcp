@@ -49,6 +49,7 @@ import {
   messageSummary,
 } from "@/tools/respond.js";
 import { routeMessage } from "@/services/messageRouter.js";
+import { runDoctor, formatDoctorReport } from "@/tools/doctor.js";
 
 // =============================================================================
 // Shared Validation Schemas
@@ -1184,6 +1185,19 @@ server.tool(
 
     return successResponse(`${statusIcon} ${statusText}\n\n${checkLines}`);
   }, "Error running health check")
+);
+
+// --- doctor ---
+
+server.tool(
+  "doctor",
+  {},
+  withErrorHandling(async () => {
+    // Diagnoses Mail.app permission, account state, and the IMAP/SMTP backends
+    // with actionable messages (C3). structuredContent carries the raw checks.
+    const report = await runDoctor(mailManager);
+    return successResponse(formatDoctorReport(report), { ...report });
+  }, "Error running doctor")
 );
 
 // --- get-mail-stats ---

@@ -28,6 +28,7 @@ import { sendViaSmtp } from "./services/smtpMailer.js";
 import { isImapAccount, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
 import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
 import { routeMessage } from "./services/messageRouter.js";
+import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
 // =============================================================================
 // Shared Validation Schemas
 // =============================================================================
@@ -767,6 +768,13 @@ server.tool("health-check", {}, withErrorHandling(() => {
         .join("\n");
     return successResponse(`${statusIcon} ${statusText}\n\n${checkLines}`);
 }, "Error running health check"));
+// --- doctor ---
+server.tool("doctor", {}, withErrorHandling(async () => {
+    // Diagnoses Mail.app permission, account state, and the IMAP/SMTP backends
+    // with actionable messages (C3). structuredContent carries the raw checks.
+    const report = await runDoctor(mailManager);
+    return successResponse(formatDoctorReport(report), { ...report });
+}, "Error running doctor"));
 // --- get-mail-stats ---
 server.tool("get-mail-stats", {}, withErrorHandling(() => {
     const stats = mailManager.getMailStats();

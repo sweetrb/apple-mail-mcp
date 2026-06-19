@@ -110,6 +110,20 @@ export interface ImapOpResult {
     error?: string;
     info?: string;
 }
+/**
+ * Health probe for the setup doctor (C3): reports whether IMAP is configured and,
+ * if so, whether a connection + NOOP succeeds (auth/network/Keychain all good).
+ */
+export declare function imapHealthCheck(deps?: {
+    connect?: ImapConnect;
+    config?: ImapConfig;
+}): Promise<{
+    configured: boolean;
+    ok: boolean;
+    account?: string;
+    host?: string;
+    error?: string;
+}>;
 /** Test seam: override the pool's connect factory; pass null to restore. */
 export declare function __setPoolConnect(fn: ImapConnect | null): void;
 /** Test seam: close and clear the pooled connection. */

@@ -266,6 +266,37 @@ async function acquirePooled(cfg) {
     pool = { client, key };
     return client;
 }
+/**
+ * Health probe for the setup doctor (C3): reports whether IMAP is configured and,
+ * if so, whether a connection + NOOP succeeds (auth/network/Keychain all good).
+ */
+export async function imapHealthCheck(deps = {}) {
+    if (!deps.config && !process.env[IMAP_ENV.user]?.trim()) {
+        return { configured: false, ok: false };
+    }
+    let cfg;
+    try {
+        cfg = deps.config ?? resolveImapConfig();
+    }
+    catch (e) {
+        return { configured: true, ok: false, error: errText(e) };
+    }
+    try {
+        await useClient(deps, async (client) => {
+            await client.noop();
+        });
+        return { configured: true, ok: true, account: cfg.accountLabel, host: cfg.host };
+    }
+    catch (e) {
+        return {
+            configured: true,
+            ok: false,
+            account: cfg.accountLabel,
+            host: cfg.host,
+            error: errText(e),
+        };
+    }
+}
 /** Test seam: override the pool's connect factory; pass null to restore. */
 export function __setPoolConnect(fn) {
     poolConnect = fn ?? defaultConnect;
