@@ -481,6 +481,45 @@ export interface MailRule {
   enabled: boolean;
 }
 
+/** Header/field a rule condition tests (B2). */
+export type RuleConditionField = "from" | "to" | "cc" | "subject" | "content";
+
+/** How a rule condition compares the field to its value (B2). */
+export type RuleConditionOperator =
+  | "contains"
+  | "notContains"
+  | "equals"
+  | "beginsWith"
+  | "endsWith";
+
+export interface RuleCondition {
+  field: RuleConditionField;
+  operator: RuleConditionOperator;
+  value: string;
+}
+
+export interface RuleActions {
+  markRead?: boolean;
+  markFlagged?: boolean;
+  /** Move matched messages to trash. */
+  delete?: boolean;
+  /** Move matched messages to this mailbox (by name). */
+  moveTo?: string;
+  /** Account that owns `moveTo` (disambiguates same-named mailboxes). */
+  moveToAccount?: string;
+}
+
+/** Specification for creating a mail rule (B2). */
+export interface RuleSpec {
+  name: string;
+  conditions: RuleCondition[];
+  actions?: RuleActions;
+  /** true (default) = all conditions must match; false = any. */
+  matchAll?: boolean;
+  /** Whether the rule is enabled on creation (default true). */
+  enabled?: boolean;
+}
+
 // =============================================================================
 // Contacts
 // =============================================================================

@@ -12,7 +12,7 @@
  *
  * @module services/appleMailManager
  */
-import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheckResult, MailStats, BatchOperationResult, SyncStatus, RecentlyReceivedStats, MailRule, Contact, EmailTemplate, SerialEmailRecipient, SerialEmailResult, SearchDiagnostics, SearchResult } from "../types.js";
+import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheckResult, MailStats, BatchOperationResult, SyncStatus, RecentlyReceivedStats, MailRule, RuleSpec, Contact, EmailTemplate, SerialEmailRecipient, SerialEmailResult, SearchDiagnostics, SearchResult } from "../types.js";
 /**
  * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
  *
@@ -503,6 +503,19 @@ export declare class AppleMailManager {
      * Enable or disable a mail rule.
      */
     setRuleEnabled(ruleName: string, enabled: boolean): boolean;
+    /**
+     * Create a mail rule (B2). Builds conditions (from/to/cc/subject/content with
+     * a match operator) and actions (mark read/flagged, delete, move to a
+     * mailbox) on a real Mail.app rule. Returns an error string on failure.
+     */
+    createRule(opts: RuleSpec): {
+        success: boolean;
+        error?: string;
+    };
+    /**
+     * Delete a mail rule by name (B2). Returns false if no such rule exists.
+     */
+    deleteRule(ruleName: string): boolean;
     /**
      * Search contacts by name or email.
      */

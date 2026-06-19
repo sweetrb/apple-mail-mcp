@@ -2245,6 +2245,104 @@ export class AppleMailManager {
         }
         return true;
     }
+    /**
+     * Create a mail rule (B2). Builds conditions (from/to/cc/subject/content with
+     * a match operator) and actions (mark read/flagged, delete, move to a
+     * mailbox) on a real Mail.app rule. Returns an error string on failure.
+     */
+    createRule(opts) {
+        const safeName = escapeForAppleScript(opts.name);
+        if (!opts.conditions?.length) {
+            return { success: false, error: "A rule needs at least one condition." };
+        }
+        const ruleTypeMap = {
+            from: "from header",
+            to: "to header",
+            cc: "cc header",
+            subject: "subject header",
+            content: "message content",
+        };
+        const qualifierMap = {
+            contains: "does contain value",
+            notContains: "does not contain value",
+            equals: "equal to value",
+            beginsWith: "begins with value",
+            endsWith: "ends with value",
+        };
+        const conditionStmts = opts.conditions
+            .map((c) => {
+            const rt = ruleTypeMap[c.field];
+            const q = qualifierMap[c.operator];
+            return `        make new rule condition at end of rule conditions of newRule with properties {rule type:${rt}, qualifier:${q}, expression:"${escapeForAppleScript(c.value)}"}`;
+        })
+            .join("\n");
+        const actionStmts = [];
+        const a = opts.actions ?? {};
+        if (a.markRead)
+            actionStmts.push(`        set mark read of newRule to true`);
+        if (a.markFlagged)
+            actionStmts.push(`        set mark flagged of newRule to true`);
+        if (a.delete)
+            actionStmts.push(`        set delete message of newRule to true`);
+        if (a.moveTo) {
+            const safeMbox = escapeForAppleScript(a.moveTo);
+            const mboxRef = a.moveToAccount
+                ? `mailbox "${safeMbox}" of account "${escapeForAppleScript(a.moveToAccount)}"`
+                : `mailbox "${safeMbox}"`;
+            actionStmts.push(`        set should move message of newRule to true`);
+            actionStmts.push(`        set move message of newRule to ${mboxRef}`);
+        }
+        if (!actionStmts.length) {
+            return { success: false, error: "A rule needs at least one action." };
+        }
+        const enabled = opts.enabled !== false;
+        const matchAll = opts.matchAll !== false; // default: all conditions must match
+        const script = buildAppLevelScript(`
+      try
+        repeat with existing in rules
+          if name of existing is "${safeName}" then return "error:A rule named '${safeName}' already exists."
+        end repeat
+        set newRule to make new rule at end of rules with properties {name:"${safeName}", enabled:${enabled}}
+        set all conditions must be met of newRule to ${matchAll}
+${conditionStmts}
+${actionStmts.join("\n")}
+        return "ok"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+        const result = executeAppleScript(script);
+        if (!result.success || result.output.startsWith("error:")) {
+            const error = result.output?.replace(/^error:/, "") || result.error || "Unknown error";
+            return { success: false, error };
+        }
+        return { success: true };
+    }
+    /**
+     * Delete a mail rule by name (B2). Returns false if no such rule exists.
+     */
+    deleteRule(ruleName) {
+        const safeName = escapeForAppleScript(ruleName);
+        // Delete via a `whose` filter rather than iterating + `delete r`: mutating
+        // the rules collection mid-`repeat` invalidates the loop reference
+        // ("Can't get item N of every rule").
+        const script = buildAppLevelScript(`
+      try
+        set matches to (every rule whose name is "${safeName}")
+        if (count of matches) is 0 then return "error:Rule not found"
+        delete (every rule whose name is "${safeName}")
+        return "ok"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+        const result = executeAppleScript(script);
+        if (!result.success || result.output.startsWith("error:")) {
+            console.error(`Failed to delete rule: ${result.error || result.output}`);
+            return false;
+        }
+        return true;
+    }
     // ===========================================================================
     // Contacts Integration
     // ===========================================================================

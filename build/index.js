@@ -664,6 +664,46 @@ server.tool("disable-rule", {
     }
     return successResponse(`Rule "${name}" disabled`);
 }, "Error disabling rule"));
+// --- create-rule ---
+server.tool("create-rule", {
+    name: z.string().min(1, "Rule name is required"),
+    conditions: z
+        .array(z.object({
+        field: z.enum(["from", "to", "cc", "subject", "content"]),
+        operator: z
+            .enum(["contains", "notContains", "equals", "beginsWith", "endsWith"])
+            .default("contains"),
+        value: z.string().min(1, "Condition value is required"),
+    }))
+        .min(1, "At least one condition is required"),
+    actions: z
+        .object({
+        markRead: z.boolean().optional(),
+        markFlagged: z.boolean().optional(),
+        delete: z.boolean().optional(),
+        moveTo: z.string().optional(),
+        moveToAccount: z.string().optional(),
+    })
+        .refine((a) => a.markRead || a.markFlagged || a.delete || a.moveTo, "At least one action is required (markRead, markFlagged, delete, or moveTo)"),
+    matchAll: z.boolean().default(true),
+    enabled: z.boolean().default(true),
+}, withErrorHandling((args) => {
+    const result = mailManager.createRule(args);
+    if (!result.success) {
+        return errorResponse(`Failed to create rule "${args.name}": ${result.error}`);
+    }
+    return successResponse(`Rule "${args.name}" created with ${args.conditions.length} condition(s).`, { name: args.name, created: true });
+}, "Error creating rule"));
+// --- delete-rule ---
+server.tool("delete-rule", {
+    name: z.string().min(1, "Rule name is required"),
+}, withErrorHandling(({ name }) => {
+    const success = mailManager.deleteRule(name);
+    if (!success) {
+        return errorResponse(`Failed to delete rule "${name}" (not found?)`);
+    }
+    return successResponse(`Rule "${name}" deleted`, { name, deleted: true });
+}, "Error deleting rule"));
 // =============================================================================
 // Contacts Tools
 // =============================================================================
