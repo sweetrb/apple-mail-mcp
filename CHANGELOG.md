@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-06-19
+
+Major feature release. Thirteen enhancements landed on a single `v2` branch, each
+tested and validated before merge. Fully backward compatible — every new
+capability is additive or opt-in — but the major bump reflects the breadth of new
+surface (5 new tools, MCP resources & prompts, multi-account IMAP, IDLE push).
+
+### Added
+
+- **`get-thread` tool (B1)** — group a conversation by normalized subject. Resolves the seed message's subject (numeric or `imap:` id), strips reply/forward prefixes (stacked, numbered, and localized — `Re:`, `Fwd:`, `RE[2]:`, `AW:`, `WG:`, …) and gathers the conversation across the AppleScript or IMAP backend, oldest-first.
+- **`create-rule` / `delete-rule` tools (B2)** — create Mail rules with conditions (from/to/cc/subject/content × contains/equals/begins/ends) and actions (mark read, mark flagged, delete, move to mailbox), and delete rules by name. Built on Mail.app's AppleScript rule model.
+- **Persistent email templates (B3)** — templates now survive server restarts, stored as JSON at `APPLE_MAIL_MCP_TEMPLATES_FILE` (default `~/Library/Application Support/apple-mail-mcp/templates.json`). Previously in-memory only, and template ids reset/collided on restart.
+- **Attachment byte parity (B4)** — `send-email` and `create-draft` now accept inline `{filename, contentBase64}` attachments in addition to absolute file paths (over both SMTP and AppleScript). New **`fetch-attachment`** tool returns an attachment's bytes as base64 — the read counterpart to inline send.
+- **IMAP IDLE push notifications (B5, opt-in)** — set `APPLE_MAIL_MCP_IMAP_IDLE=1` to watch every configured IMAP account's INBOX and receive an MCP logging message + resource-updated notification on new mail. Real-time via IDLE where the server pushes it, with a polling fallback for servers that don't; reconnect-with-backoff and clean shutdown on SIGINT/SIGTERM.
+- **Structured tool output (A1)** — read/list/get tools now return `structuredContent` (typed JSON) alongside the human-readable text, so agents can consume results without parsing prose.
+- **Multi-account IMAP (C2)** — configure additional IMAP accounts via the `APPLE_MAIL_MCP_IMAP_ACCOUNTS` JSON array (alongside the legacy single-account env). Account is routed through search/list, folder ops, and message ops; the connection pool keeps one connection per account.
+- **`doctor` tool (C3)** — one diagnostic that checks Mail.app automation permission, account state (flagging disabled accounts), and each configured IMAP/SMTP backend, with actionable messages.
+- **MCP resources & prompts (D2)** — resources `mail://accounts`, `mail://templates`, and a `mail://mailboxes/{account}` template; prompts `triage-inbox`, `compose-reply`, `weekly-summary`.
+- **IMAP integration tests in CI (A2)** — the IMAP backend is now exercised end-to-end against a real IMAP server (GreenMail) in a Linux CI job (`imap-integration`), with a local `npm run test:imap`.
+
+### Changed
+
+- **IMAP connection pooling (A3, #50)** — instead of connecting and logging out on every IMAP call, one connection is kept alive per account and reused (NOOP liveness check, idle timeout via `APPLE_MAIL_MCP_IMAP_IDLE_MS` default 60s, reconnect-once for idempotent reads). Cut the IMAP integration suite from ~6.2s to ~2.3s.
+- **Bulk AppleScript property reads (C1, #11)** — `search-messages`/`list-messages` read message properties for the whole matched set in a few Apple Events instead of ~6 per message, with an automatic per-message fallback that preserves malformed-message isolation (#13).
+- **Internal: `index.ts` split + central message router (D1)** — shared response helpers extracted to `src/tools/respond.ts`; backend routing (AppleScript vs IMAP) centralized in `src/services/messageRouter.ts`.
+
 ## [1.9.0] - 2026-06-18
 
 ### Added
