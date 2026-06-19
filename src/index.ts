@@ -51,6 +51,7 @@ import {
 import { routeMessage } from "@/services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "@/tools/doctor.js";
 import { registerResourcesAndPrompts } from "@/tools/resourcesAndPrompts.js";
+import { normalizeSubject, subjectFromGetMessage } from "@/tools/thread.js";
 
 // =============================================================================
 // Shared Validation Schemas
@@ -258,6 +259,75 @@ server.tool(
       }),
     "Error retrieving message"
   )
+);
+
+// --- get-thread ---
+
+server.tool(
+  "get-thread",
+  {
+    id: MESSAGE_ID_SCHEMA.describe("A message ID in the conversation (numeric or imap:…)"),
+    account: z.string().optional().describe("Account to search (omit to search all)"),
+    mailbox: z.string().optional().describe("Mailbox to search (omit to search all)"),
+    limit: z.number().optional().describe("Max messages in the thread (default 50)"),
+  },
+  withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
+    // Resolve the seed message's subject, then gather the conversation by
+    // normalized subject (B1). Works across the AppleScript and IMAP backends.
+    let seedSubject: string | null = null;
+    if (id.startsWith("imap:")) {
+      const r = await imapGetMessage(id, false, { account });
+      if (!r.success || !r.info) return errorResponse(r.error || `Message "${id}" not found`);
+      seedSubject = subjectFromGetMessage(r.info);
+    } else {
+      const msg = mailManager.getMessageById(id);
+      if (!msg) return errorResponse(`Message with ID "${id}" not found`);
+      seedSubject = msg.subject;
+    }
+    if (!seedSubject) return errorResponse(`Could not determine the subject of message "${id}"`);
+    const base = normalizeSubject(seedSubject);
+
+    // IMAP backend: server-side subject search.
+    if (isImapAccount(account)) {
+      const text = await imapSearchMessages({ subject: base, mailbox, account, limit });
+      return successResponse(`Thread "${base}":\n${text}`, { subject: base });
+    }
+
+    const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
+      undefined,
+      mailbox,
+      account,
+      limit,
+      undefined,
+      undefined,
+      undefined,
+      base
+    );
+    // Oldest-first is the natural reading order for a conversation.
+    const ordered = messages
+      .slice()
+      .sort((a, b) => a.dateReceived.getTime() - b.dateReceived.getTime());
+    const coverageBlock = partialCoverageBlock(diagnostics);
+    const structured = {
+      subject: base,
+      messages: ordered.map(messageSummary),
+      count: ordered.length,
+      partial: diagnostics.partial,
+    };
+    if (ordered.length === 0) {
+      return successResponse(`No messages found in thread "${base}".${coverageBlock}`, structured);
+    }
+    const list = ordered
+      .map(
+        (m) =>
+          `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
+      )
+      .join("\n");
+    return successResponse(
+      `Thread "${base}" — ${ordered.length} message(s), oldest first:\n${list}${coverageBlock}`,
+      structured
+    );
+  }, "Error retrieving thread")
 );
 
 // --- list-messages ---
