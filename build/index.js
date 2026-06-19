@@ -151,8 +151,14 @@ server.tool("get-message", {
         const content = mailManager.getMessageContent(id, preferHtml === true);
         if (!content)
             return errorResponse(`Message with ID "${id}" not found`);
-        const body = preferHtml && content.htmlContent ? content.htmlContent : content.plainText;
-        return successResponse(`Subject: ${content.subject}\n\n${body}`);
+        const isHtml = preferHtml === true && !!content.htmlContent;
+        const body = isHtml ? content.htmlContent : content.plainText;
+        return successResponse(`Subject: ${content.subject}\n\n${body}`, {
+            id,
+            subject: content.subject,
+            body,
+            isHtml,
+        });
     },
     ok: "",
     fail: `Message with ID "${id}" not found`,
@@ -503,8 +509,9 @@ server.tool("list-attachments", {
     id: MESSAGE_ID_SCHEMA,
 }, withErrorHandling(({ id }) => {
     const attachments = mailManager.listAttachments(id);
+    const structured = { attachments, count: attachments.length };
     if (attachments.length === 0) {
-        return successResponse("No attachments found");
+        return successResponse("No attachments found", structured);
     }
     const attachmentList = attachments
         .map((a) => {
@@ -512,7 +519,7 @@ server.tool("list-attachments", {
         return `  - ${a.name} (${a.mimeType}, ${sizeKb} KB)`;
     })
         .join("\n");
-    return successResponse(`Found ${attachments.length} attachment(s):\n${attachmentList}`);
+    return successResponse(`Found ${attachments.length} attachment(s):\n${attachmentList}`, structured);
 }, "Error listing attachments"));
 // --- save-attachment ---
 server.tool("save-attachment", {
@@ -782,7 +789,7 @@ server.tool("get-mail-stats", {}, withErrorHandling(() => {
             lines.push(`  ${account.name}: ${account.totalMessages} messages (${account.unreadMessages} unread)`);
         }
     }
-    return successResponse(lines.join("\n"));
+    return successResponse(lines.join("\n"), { ...stats });
 }, "Error getting mail statistics"));
 // --- get-sync-status ---
 server.tool("get-sync-status", {}, withErrorHandling(() => {
@@ -797,7 +804,7 @@ server.tool("get-sync-status", {}, withErrorHandling(() => {
         lines.push(`Mail.app: ${status.recentActivity ? "Running" : "Not running"}`);
         lines.push(`Sync active: ${status.syncDetected ? "Yes" : "No"}`);
     }
-    return successResponse(lines.join("\n"));
+    return successResponse(lines.join("\n"), { ...status });
 }, "Error getting sync status"));
 // =============================================================================
 // Server Startup

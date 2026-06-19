@@ -238,8 +238,14 @@ server.tool(
           // Only fetch/parse the raw source when HTML is actually requested (#32).
           const content = mailManager.getMessageContent(id, preferHtml === true);
           if (!content) return errorResponse(`Message with ID "${id}" not found`);
-          const body = preferHtml && content.htmlContent ? content.htmlContent : content.plainText;
-          return successResponse(`Subject: ${content.subject}\n\n${body}`);
+          const isHtml = preferHtml === true && !!content.htmlContent;
+          const body = isHtml ? content.htmlContent! : content.plainText;
+          return successResponse(`Subject: ${content.subject}\n\n${body}`, {
+            id,
+            subject: content.subject,
+            body,
+            isHtml,
+          });
         },
         ok: "",
         fail: `Message with ID "${id}" not found`,
@@ -767,9 +773,10 @@ server.tool(
   },
   withErrorHandling(({ id }) => {
     const attachments = mailManager.listAttachments(id);
+    const structured = { attachments, count: attachments.length };
 
     if (attachments.length === 0) {
-      return successResponse("No attachments found");
+      return successResponse("No attachments found", structured);
     }
 
     const attachmentList = attachments
@@ -779,7 +786,10 @@ server.tool(
       })
       .join("\n");
 
-    return successResponse(`Found ${attachments.length} attachment(s):\n${attachmentList}`);
+    return successResponse(
+      `Found ${attachments.length} attachment(s):\n${attachmentList}`,
+      structured
+    );
   }, "Error listing attachments")
 );
 
@@ -1208,7 +1218,7 @@ server.tool(
       }
     }
 
-    return successResponse(lines.join("\n"));
+    return successResponse(lines.join("\n"), { ...stats });
   }, "Error getting mail statistics")
 );
 
@@ -1231,7 +1241,7 @@ server.tool(
       lines.push(`Sync active: ${status.syncDetected ? "Yes" : "No"}`);
     }
 
-    return successResponse(lines.join("\n"));
+    return successResponse(lines.join("\n"), { ...status });
   }, "Error getting sync status")
 );
 
