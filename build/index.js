@@ -34,6 +34,10 @@ import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
 import { registerResourcesAndPrompts } from "./tools/resourcesAndPrompts.js";
 import { normalizeSubject, subjectFromGetMessage } from "./tools/thread.js";
 import { ImapIdleWatcher } from "./services/imapIdle.js";
+import { loadFileConfig } from "./services/fileConfig.js";
+// Load file-based config FIRST (2.1.1) — before anything reads APPLE_MAIL_MCP_*.
+// Lets users configure the server when the host app strips the MCP env block.
+loadFileConfig();
 // =============================================================================
 // Shared Validation Schemas
 // =============================================================================

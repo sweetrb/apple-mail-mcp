@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-06-19
+
+### Added
+
+- **File-based configuration** — the server now reads `APPLE_MAIL_MCP_*` settings from a JSON file (`APPLE_MAIL_MCP_CONFIG_FILE`, default `~/Library/Application Support/apple-mail-mcp/config.json`) at startup, merging them into the environment **without overriding** anything already set. This is for host apps (e.g. Claude Desktop) that spawn the server with a scrubbed environment and ignore the `env` block in their MCP config, leaving no other way to pass configuration. The file holds only non-secret config (account/host/Keychain-service names, flags); **passwords stay in the macOS Keychain**. Verified: with the env scrubbed, the server self-configures from the file and all accounts authenticate.
+
 ## [2.1.0] - 2026-06-19
 
 IMAP acceleration release. Six more tools now use IMAP when the account is
