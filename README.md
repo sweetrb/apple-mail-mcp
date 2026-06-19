@@ -284,6 +284,8 @@ The default `applescript` transport is unchanged; SMTP is opt-in per call.
 
 ##### IMAP backend — opt-in
 
+> 📘 **For step-by-step setup (app passwords, Keychain, config methods, multi-account, upgrading, troubleshooting), see the [IMAP / SMTP Setup Guide](docs/IMAP-SETUP.md).** The summary below is the reference; the guide is the walkthrough.
+
 AppleScript runs `search`/`list` predicates client-side over the Apple Event
 bridge, which is slow and can time out (false-empty) on large Gmail/IMAP
 mailboxes (see [#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)), and
