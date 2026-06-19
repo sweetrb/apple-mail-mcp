@@ -26,7 +26,7 @@ import { z } from "zod";
 import { AppleMailManager } from "./services/appleMailManager.js";
 import { sendViaSmtp } from "./services/smtpMailer.js";
 import { isImapAccount, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
-import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, } from "./tools/respond.js";
+import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
 import { routeMessage } from "./services/messageRouter.js";
 // =============================================================================
 // Shared Validation Schemas
@@ -117,16 +117,24 @@ server.tool("search-messages", {
     }
     const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(query, mailbox, account, limit, dateFrom, dateTo, from, subject, isRead, isFlagged);
     const coverageBlock = partialCoverageBlock(diagnostics);
+    const structured = {
+        messages: messages.map(messageSummary),
+        count: messages.length,
+        partial: diagnostics.partial,
+        skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
+        notSearchedMailboxes: diagnostics.notSearchedMailboxes,
+        timedOutAccounts: diagnostics.timedOutAccounts,
+    };
     if (messages.length === 0) {
         const base = diagnostics.partial
             ? "No messages found in the portions that were searched."
             : "No messages found matching criteria";
-        return successResponse(`${base}${coverageBlock}`);
+        return successResponse(`${base}${coverageBlock}`, structured);
     }
     const messageList = messages
         .map((m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`)
         .join("\n");
-    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`);
+    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`, structured);
 }, "Error searching messages"));
 // --- get-message ---
 server.tool("get-message", {
@@ -168,16 +176,24 @@ server.tool("list-messages", {
     }
     const { messages, diagnostics } = mailManager.listMessagesWithDiagnostics(mailbox, account, limit, from, offset);
     const coverageBlock = partialCoverageBlock(diagnostics);
+    const structured = {
+        messages: messages.map(messageSummary),
+        count: messages.length,
+        partial: diagnostics.partial,
+        skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
+        notSearchedMailboxes: diagnostics.notSearchedMailboxes,
+        timedOutAccounts: diagnostics.timedOutAccounts,
+    };
     if (messages.length === 0) {
         const base = diagnostics.partial
             ? "No messages found in the portions that were listed."
             : "No messages found";
-        return successResponse(`${base}${coverageBlock}`);
+        return successResponse(`${base}${coverageBlock}`, structured);
     }
     const messageList = messages
         .map((m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender})`)
         .join("\n");
-    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`);
+    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`, structured);
 }, "Error listing messages"));
 // --- send-email ---
 server.tool("send-email", {
@@ -518,11 +534,12 @@ server.tool("list-mailboxes", {
     account: z.string().optional().describe("Account to list mailboxes from"),
 }, withErrorHandling(({ account }) => {
     const mailboxes = mailManager.listMailboxes(account);
+    const structured = { mailboxes, count: mailboxes.length };
     if (mailboxes.length === 0) {
-        return successResponse("No mailboxes found");
+        return successResponse("No mailboxes found", structured);
     }
     const mailboxList = mailboxes.map((m) => `  - ${m.name} (${m.unreadCount} unread)`).join("\n");
-    return successResponse(`Found ${mailboxes.length} mailbox(es):\n${mailboxList}`);
+    return successResponse(`Found ${mailboxes.length} mailbox(es):\n${mailboxList}`, structured);
 }, "Error listing mailboxes"));
 // --- get-unread-count ---
 server.tool("get-unread-count", {
@@ -531,7 +548,11 @@ server.tool("get-unread-count", {
 }, withErrorHandling(({ mailbox, account }) => {
     const count = mailManager.getUnreadCount(mailbox, account);
     const location = mailbox ? ` in "${mailbox}"` : "";
-    return successResponse(`${count} unread message(s)${location}`);
+    return successResponse(`${count} unread message(s)${location}`, {
+        unread: count,
+        mailbox,
+        account,
+    });
 }, "Error getting unread count"));
 // --- create-mailbox ---
 server.tool("create-mailbox", {
@@ -594,11 +615,12 @@ server.tool("rename-mailbox", {
 // --- list-accounts ---
 server.tool("list-accounts", {}, withErrorHandling(() => {
     const accounts = mailManager.listAccounts();
+    const structured = { accounts, count: accounts.length };
     if (accounts.length === 0) {
-        return successResponse("No Mail accounts found");
+        return successResponse("No Mail accounts found", structured);
     }
     const accountList = accounts.map((a) => `  - ${a.name}`).join("\n");
-    return successResponse(`Found ${accounts.length} account(s):\n${accountList}`);
+    return successResponse(`Found ${accounts.length} account(s):\n${accountList}`, structured);
 }, "Error listing accounts"));
 // =============================================================================
 // Mail Rules Tools

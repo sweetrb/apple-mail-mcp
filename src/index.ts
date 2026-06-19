@@ -46,6 +46,7 @@ import {
   errorResponse,
   partialCoverageBlock,
   withErrorHandling,
+  messageSummary,
 } from "@/tools/respond.js";
 import { routeMessage } from "@/services/messageRouter.js";
 
@@ -185,12 +186,20 @@ server.tool(
       );
 
       const coverageBlock = partialCoverageBlock(diagnostics);
+      const structured = {
+        messages: messages.map(messageSummary),
+        count: messages.length,
+        partial: diagnostics.partial,
+        skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
+        notSearchedMailboxes: diagnostics.notSearchedMailboxes,
+        timedOutAccounts: diagnostics.timedOutAccounts,
+      };
 
       if (messages.length === 0) {
         const base = diagnostics.partial
           ? "No messages found in the portions that were searched."
           : "No messages found matching criteria";
-        return successResponse(`${base}${coverageBlock}`);
+        return successResponse(`${base}${coverageBlock}`, structured);
       }
 
       const messageList = messages
@@ -201,7 +210,8 @@ server.tool(
         .join("\n");
 
       return successResponse(
-        `Found ${messages.length} message(s):\n${messageList}${coverageBlock}`
+        `Found ${messages.length} message(s):\n${messageList}${coverageBlock}`,
+        structured
       );
     },
     "Error searching messages"
@@ -271,12 +281,20 @@ server.tool(
     );
 
     const coverageBlock = partialCoverageBlock(diagnostics);
+    const structured = {
+      messages: messages.map(messageSummary),
+      count: messages.length,
+      partial: diagnostics.partial,
+      skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
+      notSearchedMailboxes: diagnostics.notSearchedMailboxes,
+      timedOutAccounts: diagnostics.timedOutAccounts,
+    };
 
     if (messages.length === 0) {
       const base = diagnostics.partial
         ? "No messages found in the portions that were listed."
         : "No messages found";
-      return successResponse(`${base}${coverageBlock}`);
+      return successResponse(`${base}${coverageBlock}`, structured);
     }
 
     const messageList = messages
@@ -286,7 +304,10 @@ server.tool(
       )
       .join("\n");
 
-    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`);
+    return successResponse(
+      `Found ${messages.length} message(s):\n${messageList}${coverageBlock}`,
+      structured
+    );
   }, "Error listing messages")
 );
 
@@ -795,14 +816,15 @@ server.tool(
   },
   withErrorHandling(({ account }) => {
     const mailboxes = mailManager.listMailboxes(account);
+    const structured = { mailboxes, count: mailboxes.length };
 
     if (mailboxes.length === 0) {
-      return successResponse("No mailboxes found");
+      return successResponse("No mailboxes found", structured);
     }
 
     const mailboxList = mailboxes.map((m) => `  - ${m.name} (${m.unreadCount} unread)`).join("\n");
 
-    return successResponse(`Found ${mailboxes.length} mailbox(es):\n${mailboxList}`);
+    return successResponse(`Found ${mailboxes.length} mailbox(es):\n${mailboxList}`, structured);
   }, "Error listing mailboxes")
 );
 
@@ -818,7 +840,11 @@ server.tool(
     const count = mailManager.getUnreadCount(mailbox, account);
     const location = mailbox ? ` in "${mailbox}"` : "";
 
-    return successResponse(`${count} unread message(s)${location}`);
+    return successResponse(`${count} unread message(s)${location}`, {
+      unread: count,
+      mailbox,
+      account,
+    });
   }, "Error getting unread count")
 );
 
@@ -913,13 +939,14 @@ server.tool(
   {},
   withErrorHandling(() => {
     const accounts = mailManager.listAccounts();
+    const structured = { accounts, count: accounts.length };
 
     if (accounts.length === 0) {
-      return successResponse("No Mail accounts found");
+      return successResponse("No Mail accounts found", structured);
     }
 
     const accountList = accounts.map((a) => `  - ${a.name}`).join("\n");
-    return successResponse(`Found ${accounts.length} account(s):\n${accountList}`);
+    return successResponse(`Found ${accounts.length} account(s):\n${accountList}`, structured);
   }, "Error listing accounts")
 );
 

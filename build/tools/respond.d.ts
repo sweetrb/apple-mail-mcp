@@ -1,4 +1,10 @@
-import type { SearchDiagnostics } from "../types.js";
+import type { SearchDiagnostics, Message } from "../types.js";
+/**
+ * Plain, JSON-friendly summary of a Message for `structuredContent` (A1) — dates
+ * as ISO strings, only the fields an agent needs to act (id is the key it passes
+ * back to get-message / mutations).
+ */
+export declare function messageSummary(m: Message): Record<string, unknown>;
 /**
  * Creates a successful MCP tool response. When `structured` is provided it is
  * returned as `structuredContent` so callers can consume typed data instead of

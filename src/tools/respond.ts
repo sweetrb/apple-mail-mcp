@@ -6,7 +6,26 @@
  * @module tools/respond
  */
 import { createSerialGate } from "@/utils/serialize.js";
-import type { SearchDiagnostics } from "@/types.js";
+import type { SearchDiagnostics, Message } from "@/types.js";
+
+/**
+ * Plain, JSON-friendly summary of a Message for `structuredContent` (A1) — dates
+ * as ISO strings, only the fields an agent needs to act (id is the key it passes
+ * back to get-message / mutations).
+ */
+export function messageSummary(m: Message): Record<string, unknown> {
+  return {
+    id: m.id,
+    subject: m.subject,
+    sender: m.sender,
+    dateReceived: m.dateReceived instanceof Date ? m.dateReceived.toISOString() : m.dateReceived,
+    isRead: m.isRead,
+    isFlagged: m.isFlagged,
+    mailbox: m.mailbox,
+    account: m.account,
+    hasAttachments: m.hasAttachments,
+  };
+}
 
 /**
  * Creates a successful MCP tool response. When `structured` is provided it is
