@@ -86,17 +86,21 @@ On first use, macOS will ask for permission to automate Mail.app. Click "OK" to 
 | **List Messages** | List messages with pagination, sender filter, date display |
 | **Search Messages** | Search by sender, subject, content, date range, read/flagged status — across all accounts |
 | **Read Messages** | Get full email content (plain text or HTML) |
-| **Send Email** | Compose and send new emails (with optional file attachments) |
+| **Send Email** | Compose and send new emails (attach by file path or inline base64 content) |
 | **Send Serial Email** | Mail merge — send personalized emails to a list of recipients with {{placeholder}} support |
-| **Create Draft** | Save emails to Drafts folder (with optional file attachments) |
+| **Create Draft** | Save emails to Drafts folder (attach by file path or inline base64 content) |
 | **Reply** | Reply to messages (with reply-all support) |
 | **Forward** | Forward messages to new recipients |
+| **Get Thread** | Group a conversation by normalized subject (across AppleScript or IMAP) |
 | **Mark Read/Unread** | Change read status (single or batch) |
 | **Flag/Unflag** | Flag or unflag messages (single or batch) |
 | **Delete Messages** | Move messages to trash (single or batch) |
 | **Move Messages** | Organize into mailboxes (single or batch) |
 | **List Attachments** | View attachment metadata (name, type, size) |
 | **Save Attachment** | Save attachments to disk |
+| **Fetch Attachment** | Get an attachment's bytes as base64 (no disk write) |
+
+Read/list/get tools also return **structured JSON** (`structuredContent`) alongside the text, so agents can consume results without parsing prose.
 
 ### Mailbox & Account Management
 
@@ -113,16 +117,24 @@ On first use, macOS will ask for permission to automate Mail.app. Click "OK" to 
 |---------|-------------|
 | **List Rules** | View all mail rules and their enabled status |
 | **Enable/Disable Rules** | Toggle mail rules on or off |
+| **Create/Delete Rules** | Create rules with conditions + actions, or delete by name |
 | **Search Contacts** | Look up contacts from Contacts.app by name |
-| **Email Templates** | Save, list, use, and delete reusable email templates |
+| **Email Templates** | Save, list, use, and delete reusable email templates (persisted to disk across restarts) |
 
 ### Diagnostics
 
 | Feature | Description |
 |---------|-------------|
 | **Health Check** | Verify Mail.app connectivity |
+| **Doctor** | Diagnose Mail permission, account state, and each IMAP/SMTP backend with actionable messages |
 | **Statistics** | Message and unread counts per account, recently received stats |
 | **Sync Status** | Check if Mail.app is actively syncing |
+
+### MCP resources & prompts
+
+Resources expose read-only context the client can attach without a tool call:
+`mail://accounts`, `mail://templates`, and `mail://mailboxes/{account}`. Prompts
+package common workflows: `triage-inbox`, `compose-reply`, `weekly-summary`.
 
 ---
 
@@ -214,7 +226,7 @@ Send a new email immediately.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Send from specific account (with `transport: "smtp"`, overrides the From address) |
-| `attachments` | string[] | No | Absolute file paths to attach, max 20 files (e.g., `["/Users/me/report.pdf"]`) |
+| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths (e.g., `"/Users/me/report.pdf"`) and/or inline `{filename, contentBase64}` objects for content not on disk |
 | `transport` | `"applescript"` \| `"smtp"` | No | Send transport (default `"applescript"`). Use `"smtp"` to send clean MIME directly, avoiding the macOS 15+ Mail.app `<blockquote>` wrapping — see [SMTP transport](#smtp-transport) |
 
 **Example:**
@@ -309,6 +321,20 @@ AppleScript.
 | `APPLE_MAIL_MCP_IMAP_PASSWORD` | No | — | Password (if set, used instead of the Keychain) |
 | `APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE` | No | — | Keychain item service/server name |
 | `APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT` | No | = user | Keychain item account |
+| `APPLE_MAIL_MCP_IMAP_ACCOUNTS` | No | — | JSON array of **additional** IMAP accounts for multi-account setups (see below) |
+| `APPLE_MAIL_MCP_IMAP_IDLE` | No | `0` | Set `1` to enable IMAP IDLE push notifications (new-mail alerts) for every configured account |
+| `APPLE_MAIL_MCP_IMAP_IDLE_MS` | No | `60000` | Idle timeout (ms) before a pooled IMAP connection is closed |
+
+**Multiple IMAP accounts (C2):** set `APPLE_MAIL_MCP_IMAP_ACCOUNTS` to a JSON array, e.g.
+`[{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]`.
+Each entry accepts `account`, `user`, `host`, `port`, `password`, `keychainService`,
+`keychainAccount`. Calls route to the account matching their `account` argument (or the
+decoded `imap:` id), and each account keeps its own pooled connection.
+
+**Push notifications (B5):** with `APPLE_MAIL_MCP_IMAP_IDLE=1`, the server watches each
+account's INBOX and emits an MCP logging message + `notifications/resources/updated` for
+`mail://mailboxes/{account}` when new mail arrives (real-time IDLE where the server
+supports it, polling fallback otherwise).
 
 As with SMTP, the password is read from the macOS **Keychain** by default (use
 an app-specific password for Gmail/Workspace/iCloud), so no secret goes in
@@ -373,9 +399,43 @@ Save an email to Drafts without sending.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Account for draft |
-| `attachments` | string[] | No | Absolute file paths to attach, max 20 files |
+| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths and/or inline `{filename, contentBase64}` objects |
 
 **Returns:** Confirmation that draft was created.
+
+#### `get-thread`
+
+Group a conversation by normalized subject (across the AppleScript or IMAP backend).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | A message ID in the conversation (numeric or `imap:…`) |
+| `account` | string | No | Account to search (omit to search all) |
+| `mailbox` | string | No | Mailbox to search (omit to search all) |
+| `limit` | number | No | Max messages in the thread (default 50) |
+
+**Returns:** The conversation's messages, oldest-first.
+
+#### `fetch-attachment`
+
+Return an attachment's bytes as base64 (the read counterpart to inline-base64 send).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Numeric message ID |
+| `attachmentName` | string | Yes | Attachment filename (from `list-attachments`) |
+
+**Returns:** The attachment bytes, base64-encoded (also in `structuredContent.contentBase64`).
+
+#### `create-rule` / `delete-rule`
+
+Create a Mail rule with conditions and actions, or delete a rule by name.
+
+`create-rule` parameters: `name` (string), `conditions` (array of `{field: from|to|cc|subject|content, operator: contains|notContains|equals|beginsWith|endsWith, value}`), `actions` (`{markRead?, markFlagged?, delete?, moveTo?, moveToAccount?}`), `matchAll` (default true), `enabled` (default true). `delete-rule` parameters: `name`.
+
+#### `doctor`
+
+Run a full setup diagnostic: Mail.app automation permission, account state (flags disabled accounts), and each configured IMAP/SMTP backend, each reported as ok / warn / fail with an actionable message. No parameters.
 
 ---
 

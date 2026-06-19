@@ -19,6 +19,7 @@ import nodemailer from "nodemailer";
 import { execFileSync } from "child_process";
 import { isAbsolute } from "path";
 import { existsSync } from "fs";
+import type { AttachmentInput } from "@/types.js";
 
 /** Options for an SMTP send, mirroring the AppleScript send-email surface. */
 export interface SmtpSendOptions {
@@ -29,8 +30,8 @@ export interface SmtpSendOptions {
   bcc?: string[];
   /** Overrides the configured From address (must be allowed by the SMTP server). */
   from?: string;
-  /** Absolute paths to files to attach. */
-  attachments?: string[];
+  /** Files to attach: absolute paths and/or inline base64 content (B4). */
+  attachments?: AttachmentInput[];
 }
 
 /** Resolved SMTP connection configuration. */
@@ -149,17 +150,19 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
  * Validates attachment paths the same way the AppleScript path does: absolute
  * and existing. Returns nodemailer attachment descriptors.
  */
-function buildAttachments(attachments?: string[]) {
+function buildAttachments(attachments?: AttachmentInput[]) {
   if (!attachments || attachments.length === 0) return undefined;
-  for (const filePath of attachments) {
-    if (!isAbsolute(filePath)) {
-      throw new Error(`Attachment path must be absolute: "${filePath}"`);
+  return attachments.map((a) => {
+    if (typeof a === "string") {
+      if (!isAbsolute(a)) throw new Error(`Attachment path must be absolute: "${a}"`);
+      if (!existsSync(a)) throw new Error(`Attachment file not found: "${a}"`);
+      return { path: a };
     }
-    if (!existsSync(filePath)) {
-      throw new Error(`Attachment file not found: "${filePath}"`);
+    if (!a.filename || !a.contentBase64) {
+      throw new Error("Inline attachment requires both filename and contentBase64.");
     }
-  }
-  return attachments.map((path) => ({ path }));
+    return { filename: a.filename, content: Buffer.from(a.contentBase64, "base64") };
+  });
 }
 
 /**

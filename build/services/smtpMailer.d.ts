@@ -15,6 +15,7 @@
  * @module services/smtpMailer
  */
 import nodemailer from "nodemailer";
+import type { AttachmentInput } from "../types.js";
 /** Options for an SMTP send, mirroring the AppleScript send-email surface. */
 export interface SmtpSendOptions {
     to: string[];
@@ -24,8 +25,8 @@ export interface SmtpSendOptions {
     bcc?: string[];
     /** Overrides the configured From address (must be allowed by the SMTP server). */
     from?: string;
-    /** Absolute paths to files to attach. */
-    attachments?: string[];
+    /** Files to attach: absolute paths and/or inline base64 content (B4). */
+    attachments?: AttachmentInput[];
 }
 /** Resolved SMTP connection configuration. */
 export interface SmtpConfig {

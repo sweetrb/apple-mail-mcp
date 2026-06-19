@@ -54,3 +54,49 @@ jobs:
             git --no-pager diff --stat build/
             exit 1
           fi
+
+  # IMAP backend integration tests run against a real IMAP server (GreenMail).
+  # Unlike the Mail.app integration suite, the IMAP code path needs no macOS, so
+  # this runs on Linux with GreenMail as a service container. (#43 / A2)
+  imap-integration:
+    runs-on: ubuntu-latest
+    services:
+      greenmail:
+        image: greenmail/standalone:2.1.0
+        ports:
+          - 3143:3143
+        env:
+          GREENMAIL_OPTS: >-
+            -Dgreenmail.setup.test.imap
+            -Dgreenmail.hostname=0.0.0.0
+            -Dgreenmail.users=tester:secret@example.com
+            -Dgreenmail.verbose
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Wait for GreenMail IMAP (localhost:3143)
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/3143) >/dev/null 2>&1; then echo "IMAP up"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::GreenMail IMAP did not become ready"; exit 1
+
+      - name: Run IMAP integration tests
+        run: npm run test:imap
+        env:
+          RUN_IMAP_IT: "1"
+          GREENMAIL_HOST: 127.0.0.1
+          GREENMAIL_IMAP_PORT: "3143"
+          GREENMAIL_USER: tester
+          GREENMAIL_PASS: secret

@@ -25,8 +25,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "./services/appleMailManager.js";
 import { sendViaSmtp } from "./services/smtpMailer.js";
-import { isImapAccount, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, decodeImapId, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
-import { createSerialGate } from "./utils/serialize.js";
+import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
+import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
+import { routeMessage } from "./services/messageRouter.js";
+import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
+import { registerResourcesAndPrompts } from "./tools/resourcesAndPrompts.js";
+import { normalizeSubject, subjectFromGetMessage } from "./tools/thread.js";
+import { ImapIdleWatcher } from "./services/imapIdle.js";
 // =============================================================================
 // Shared Validation Schemas
 // =============================================================================
@@ -55,6 +60,19 @@ const DATE_FILTER_SCHEMA = z
     message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')",
 })
     .optional();
+// Attachments: absolute file paths and/or inline base64 content (B4).
+const ATTACHMENTS_SCHEMA = z
+    .array(z.union([
+    z.string().describe("Absolute path to an existing file"),
+    z.object({
+        filename: z.string().min(1).describe("Filename to give the attachment"),
+        contentBase64: z.string().min(1).describe("Base64-encoded file content"),
+    }),
+]))
+    .max(20, "Cannot attach more than 20 files")
+    .optional()
+    .describe("Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or " +
+    "inline {filename, contentBase64} objects for content not on disk.");
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -68,83 +86,19 @@ const server = new McpServer({
     name: "apple-mail",
     version,
     description: "MCP server for managing Apple Mail - read, search, send, and organize emails",
-});
+}, 
+// logging capability lets the IMAP IDLE watcher push new-mail notifications (B5).
+{ capabilities: { logging: {} } });
 /**
  * Singleton instance of the Apple Mail manager.
  * Handles all AppleScript execution and mail operations.
  */
 const mailManager = new AppleMailManager();
-// =============================================================================
-// Response Helpers
-// =============================================================================
-/**
- * Creates a successful MCP tool response.
- */
-function successResponse(message) {
-    return {
-        content: [{ type: "text", text: message }],
-    };
-}
-/**
- * Creates an error MCP tool response.
- */
-function errorResponse(message) {
-    return {
-        content: [{ type: "text", text: message }],
-        isError: true,
-    };
-}
-/**
- * Render a partial-coverage warning from search/list diagnostics, so a caller
- * never mistakes an incomplete scan for a confirmed "no matches" (#24/#29).
- * Returns "" when coverage was complete.
- */
-function partialCoverageBlock(diagnostics) {
-    const notes = [];
-    if (diagnostics.timedOutAccounts.length > 0) {
-        notes.push(`timed out (no results) for account(s): ${diagnostics.timedOutAccounts.join(", ")}`);
-    }
-    if (diagnostics.skippedLargeMailboxes.length > 0) {
-        notes.push(`skipped mailbox(es) too large to scan via AppleScript: ${diagnostics.skippedLargeMailboxes.join(", ")} — scope with \`mailbox\` (+ a \`dateFrom\`/\`dateTo\` window for search) to reach them`);
-    }
-    if (diagnostics.notSearchedMailboxes.length > 0) {
-        notes.push(`could not finish scanning mailbox(es): ${diagnostics.notSearchedMailboxes.join(", ")}`);
-    }
-    if (notes.length === 0)
-        return "";
-    return `\n\n⚠️  Partial results — this is NOT a confirmed "no such mail":\n${notes
-        .map((n) => `  - ${n}`)
-        .join("\n")}`;
-}
-/**
- * Serial execution gate for AppleScript-backed tool calls (issue #11).
- *
- * Concurrent MCP tool calls are funneled through this single gate so only one
- * osascript invocation hits Mail.app's single-threaded AppleScript dispatch at
- * a time, with a short settle delay between calls so the dispatch queue drains.
- * Without it, a concurrent batch races into Mail.app, the later calls blow past
- * their timeouts, and Mail.app is left half-recovered for the next batch.
- */
-const serializeAppleScript = createSerialGate();
-/**
- * Wraps a tool handler with consistent error handling, serialized through the
- * AppleScript gate so concurrent MCP tool calls don't race into Mail.app (#11).
- * Handlers may be synchronous or async (the SMTP send path in send-email is
- * async), so the handler result is awaited inside the gate.
- */
-function withErrorHandling(handler, errorPrefix) {
-    return async (params) => {
-        return serializeAppleScript(async () => {
-            try {
-                return await handler(params);
-            }
-            catch (error) {
-                const message = error instanceof Error ? error.message : "Unknown error";
-                return errorResponse(`${errorPrefix}: ${message}`);
-            }
-        });
-    };
-}
+// MCP resources (accounts/templates/mailboxes) and prompts (triage/reply/
+// summary) — additive context + workflows alongside the tools (D2).
+registerResourcesAndPrompts(server, mailManager);
+// Response helpers, the AppleScript serial gate, withErrorHandling, and the
+// message backend router now live in @/tools/respond and @/services/messageRouter.
 // =============================================================================
 // Message Tools
 // =============================================================================
@@ -185,16 +139,24 @@ server.tool("search-messages", {
     }
     const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(query, mailbox, account, limit, dateFrom, dateTo, from, subject, isRead, isFlagged);
     const coverageBlock = partialCoverageBlock(diagnostics);
+    const structured = {
+        messages: messages.map(messageSummary),
+        count: messages.length,
+        partial: diagnostics.partial,
+        skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
+        notSearchedMailboxes: diagnostics.notSearchedMailboxes,
+        timedOutAccounts: diagnostics.timedOutAccounts,
+    };
     if (messages.length === 0) {
         const base = diagnostics.partial
             ? "No messages found in the portions that were searched."
             : "No messages found matching criteria";
-        return successResponse(`${base}${coverageBlock}`);
+        return successResponse(`${base}${coverageBlock}`, structured);
     }
     const messageList = messages
         .map((m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`)
         .join("\n");
-    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`);
+    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`, structured);
 }, "Error searching messages"));
 // --- get-message ---
 server.tool("get-message", {
@@ -203,24 +165,76 @@ server.tool("get-message", {
         .boolean()
         .optional()
         .describe("Return the HTML body (extracted from the message source) instead of plain text"),
-}, withErrorHandling(async ({ id, preferHtml }) => {
+}, withErrorHandling(({ id, preferHtml }) => routeMessage(id, {
     // IMAP id (imap:…) → fetch via IMAP (#43 Phase 3); else AppleScript.
-    if (decodeImapId(id)) {
-        const r = await imapGetMessage(id, preferHtml === true);
-        return r.success
-            ? successResponse(r.info ?? "")
-            : errorResponse(r.error ?? `Message with ID "${id}" not found`);
+    imap: () => imapGetMessage(id, preferHtml === true),
+    apple: () => {
+        // Only fetch/parse the raw source when HTML is actually requested (#32).
+        const content = mailManager.getMessageContent(id, preferHtml === true);
+        if (!content)
+            return errorResponse(`Message with ID "${id}" not found`);
+        const isHtml = preferHtml === true && !!content.htmlContent;
+        const body = isHtml ? content.htmlContent : content.plainText;
+        return successResponse(`Subject: ${content.subject}\n\n${body}`, {
+            id,
+            subject: content.subject,
+            body,
+            isHtml,
+        });
+    },
+    ok: "",
+    fail: `Message with ID "${id}" not found`,
+}), "Error retrieving message"));
+// --- get-thread ---
+server.tool("get-thread", {
+    id: MESSAGE_ID_SCHEMA.describe("A message ID in the conversation (numeric or imap:…)"),
+    account: z.string().optional().describe("Account to search (omit to search all)"),
+    mailbox: z.string().optional().describe("Mailbox to search (omit to search all)"),
+    limit: z.number().optional().describe("Max messages in the thread (default 50)"),
+}, withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
+    // Resolve the seed message's subject, then gather the conversation by
+    // normalized subject (B1). Works across the AppleScript and IMAP backends.
+    let seedSubject = null;
+    if (id.startsWith("imap:")) {
+        const r = await imapGetMessage(id, false, { account });
+        if (!r.success || !r.info)
+            return errorResponse(r.error || `Message "${id}" not found`);
+        seedSubject = subjectFromGetMessage(r.info);
     }
-    // Only fetch/parse the raw source when HTML is actually requested (#32).
-    const content = mailManager.getMessageContent(id, preferHtml === true);
-    if (!content) {
-        return errorResponse(`Message with ID "${id}" not found`);
+    else {
+        const msg = mailManager.getMessageById(id);
+        if (!msg)
+            return errorResponse(`Message with ID "${id}" not found`);
+        seedSubject = msg.subject;
     }
-    if (preferHtml && content.htmlContent) {
-        return successResponse(`Subject: ${content.subject}\n\n${content.htmlContent}`);
+    if (!seedSubject)
+        return errorResponse(`Could not determine the subject of message "${id}"`);
+    const base = normalizeSubject(seedSubject);
+    // IMAP backend: server-side subject search.
+    if (isImapAccount(account)) {
+        const text = await imapSearchMessages({ subject: base, mailbox, account, limit });
+        return successResponse(`Thread "${base}":\n${text}`, { subject: base });
     }
-    return successResponse(`Subject: ${content.subject}\n\n${content.plainText}`);
-}, "Error retrieving message"));
+    const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(undefined, mailbox, account, limit, undefined, undefined, undefined, base);
+    // Oldest-first is the natural reading order for a conversation.
+    const ordered = messages
+        .slice()
+        .sort((a, b) => a.dateReceived.getTime() - b.dateReceived.getTime());
+    const coverageBlock = partialCoverageBlock(diagnostics);
+    const structured = {
+        subject: base,
+        messages: ordered.map(messageSummary),
+        count: ordered.length,
+        partial: diagnostics.partial,
+    };
+    if (ordered.length === 0) {
+        return successResponse(`No messages found in thread "${base}".${coverageBlock}`, structured);
+    }
+    const list = ordered
+        .map((m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`)
+        .join("\n");
+    return successResponse(`Thread "${base}" — ${ordered.length} message(s), oldest first:\n${list}${coverageBlock}`, structured);
+}, "Error retrieving thread"));
 // --- list-messages ---
 server.tool("list-messages", {
     mailbox: z
@@ -240,16 +254,24 @@ server.tool("list-messages", {
     }
     const { messages, diagnostics } = mailManager.listMessagesWithDiagnostics(mailbox, account, limit, from, offset);
     const coverageBlock = partialCoverageBlock(diagnostics);
+    const structured = {
+        messages: messages.map(messageSummary),
+        count: messages.length,
+        partial: diagnostics.partial,
+        skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
+        notSearchedMailboxes: diagnostics.notSearchedMailboxes,
+        timedOutAccounts: diagnostics.timedOutAccounts,
+    };
     if (messages.length === 0) {
         const base = diagnostics.partial
             ? "No messages found in the portions that were listed."
             : "No messages found";
-        return successResponse(`${base}${coverageBlock}`);
+        return successResponse(`${base}${coverageBlock}`, structured);
     }
     const messageList = messages
         .map((m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender})`)
         .join("\n");
-    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`);
+    return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`, structured);
 }, "Error listing messages"));
 // --- send-email ---
 server.tool("send-email", {
@@ -259,11 +281,7 @@ server.tool("send-email", {
     cc: z.array(z.string()).optional().describe("CC recipients"),
     bcc: z.array(z.string()).optional().describe("BCC recipients"),
     account: z.string().optional().describe("Account to send from"),
-    attachments: z
-        .array(z.string())
-        .max(20, "Cannot attach more than 20 files")
-        .optional()
-        .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
+    attachments: ATTACHMENTS_SCHEMA,
     transport: z
         .enum(["applescript", "smtp"])
         .optional()
@@ -337,11 +355,7 @@ server.tool("create-draft", {
     cc: z.array(z.string()).optional().describe("CC recipients"),
     bcc: z.array(z.string()).optional().describe("BCC recipients"),
     account: z.string().optional().describe("Account to create draft in"),
-    attachments: z
-        .array(z.string())
-        .max(20, "Cannot attach more than 20 files")
-        .optional()
-        .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
+    attachments: ATTACHMENTS_SCHEMA,
 }, withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
     const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
     if (!success) {
@@ -379,101 +393,77 @@ server.tool("forward-message", {
 // --- mark-as-read ---
 server.tool("mark-as-read", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-        const r = await imapMarkRead(id);
-        return r.success
-            ? successResponse("Message marked as read")
-            : errorResponse(r.error ?? `Failed to mark message "${id}" as read`);
-    }
-    const success = mailManager.markAsRead(id);
-    if (!success) {
-        return errorResponse(`Failed to mark message "${id}" as read`);
-    }
-    return successResponse("Message marked as read");
-}, "Error marking message as read"));
+}, withErrorHandling(({ id }) => routeMessage(id, {
+    imap: () => imapMarkRead(id),
+    apple: () => mailManager.markAsRead(id)
+        ? successResponse("Message marked as read")
+        : errorResponse(`Failed to mark message "${id}" as read`),
+    ok: "Message marked as read",
+    fail: `Failed to mark message "${id}" as read`,
+}), "Error marking message as read"));
 // --- mark-as-unread ---
 server.tool("mark-as-unread", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-        const r = await imapMarkUnread(id);
-        return r.success
-            ? successResponse("Message marked as unread")
-            : errorResponse(r.error ?? `Failed to mark message "${id}" as unread`);
-    }
-    const success = mailManager.markAsUnread(id);
-    if (!success) {
-        return errorResponse(`Failed to mark message "${id}" as unread`);
-    }
-    return successResponse("Message marked as unread");
-}, "Error marking message as unread"));
+}, withErrorHandling(({ id }) => routeMessage(id, {
+    imap: () => imapMarkUnread(id),
+    apple: () => mailManager.markAsUnread(id)
+        ? successResponse("Message marked as unread")
+        : errorResponse(`Failed to mark message "${id}" as unread`),
+    ok: "Message marked as unread",
+    fail: `Failed to mark message "${id}" as unread`,
+}), "Error marking message as unread"));
 // --- flag-message ---
 server.tool("flag-message", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-        const r = await imapFlagMessage(id);
-        return r.success
-            ? successResponse("Message flagged")
-            : errorResponse(r.error ?? `Failed to flag message "${id}"`);
-    }
-    const success = mailManager.flagMessage(id);
-    if (!success) {
-        return errorResponse(`Failed to flag message "${id}"`);
-    }
-    return successResponse("Message flagged");
-}, "Error flagging message"));
+}, withErrorHandling(({ id }) => routeMessage(id, {
+    imap: () => imapFlagMessage(id),
+    apple: () => mailManager.flagMessage(id)
+        ? successResponse("Message flagged")
+        : errorResponse(`Failed to flag message "${id}"`),
+    ok: "Message flagged",
+    fail: `Failed to flag message "${id}"`,
+}), "Error flagging message"));
 // --- unflag-message ---
 server.tool("unflag-message", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-        const r = await imapUnflagMessage(id);
-        return r.success
-            ? successResponse("Message unflagged")
-            : errorResponse(r.error ?? `Failed to unflag message "${id}"`);
-    }
-    const success = mailManager.unflagMessage(id);
-    if (!success) {
-        return errorResponse(`Failed to unflag message "${id}"`);
-    }
-    return successResponse("Message unflagged");
-}, "Error unflagging message"));
+}, withErrorHandling(({ id }) => routeMessage(id, {
+    imap: () => imapUnflagMessage(id),
+    apple: () => mailManager.unflagMessage(id)
+        ? successResponse("Message unflagged")
+        : errorResponse(`Failed to unflag message "${id}"`),
+    ok: "Message unflagged",
+    fail: `Failed to unflag message "${id}"`,
+}), "Error unflagging message"));
 // --- delete-message ---
 server.tool("delete-message", {
     id: MESSAGE_ID_SCHEMA,
-}, withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-        const r = await imapDeleteMessageById(id);
-        return r.success
+}, withErrorHandling(({ id }) => routeMessage(id, {
+    imap: () => imapDeleteMessageById(id),
+    apple: () => {
+        const { success, error } = mailManager.deleteMessage(id);
+        return success
             ? successResponse("Message deleted")
-            : errorResponse(r.error ?? `Failed to delete message "${id}"`);
-    }
-    const { success, error } = mailManager.deleteMessage(id);
-    if (!success) {
-        return errorResponse(error || `Failed to delete message "${id}"`);
-    }
-    return successResponse("Message deleted");
-}, "Error deleting message"));
+            : errorResponse(error || `Failed to delete message "${id}"`);
+    },
+    ok: "Message deleted",
+    fail: `Failed to delete message "${id}"`,
+}), "Error deleting message"));
 // --- move-message ---
 server.tool("move-message", {
     id: MESSAGE_ID_SCHEMA,
     mailbox: z.string().min(1, "Destination mailbox is required"),
     account: z.string().optional().describe("Account containing the destination mailbox"),
-}, withErrorHandling(async ({ id, mailbox, account }) => {
-    if (decodeImapId(id)) {
-        const r = await imapMoveMessageById(id, mailbox);
-        return r.success
+}, withErrorHandling(({ id, mailbox, account }) => routeMessage(id, {
+    imap: () => imapMoveMessageById(id, mailbox),
+    apple: () => {
+        const { success, error } = mailManager.moveMessage(id, mailbox, account);
+        return success
             ? successResponse(`Message moved to "${mailbox}"`)
-            : errorResponse(r.error ?? `Failed to move message to "${mailbox}"`);
-    }
-    const { success, error } = mailManager.moveMessage(id, mailbox, account);
-    if (!success) {
-        return errorResponse(error || `Failed to move message to "${mailbox}"`);
-    }
-    return successResponse(`Message moved to "${mailbox}"`);
-}, "Error moving message"));
+            : errorResponse(error || `Failed to move message to "${mailbox}"`);
+    },
+    ok: `Message moved to "${mailbox}"`,
+    fail: `Failed to move message to "${mailbox}"`,
+}), "Error moving message"));
 // --- batch-delete-messages ---
 server.tool("batch-delete-messages", {
     ids: BATCH_IDS_SCHEMA,
@@ -583,8 +573,9 @@ server.tool("list-attachments", {
     id: MESSAGE_ID_SCHEMA,
 }, withErrorHandling(({ id }) => {
     const attachments = mailManager.listAttachments(id);
+    const structured = { attachments, count: attachments.length };
     if (attachments.length === 0) {
-        return successResponse("No attachments found");
+        return successResponse("No attachments found", structured);
     }
     const attachmentList = attachments
         .map((a) => {
@@ -592,7 +583,7 @@ server.tool("list-attachments", {
         return `  - ${a.name} (${a.mimeType}, ${sizeKb} KB)`;
     })
         .join("\n");
-    return successResponse(`Found ${attachments.length} attachment(s):\n${attachmentList}`);
+    return successResponse(`Found ${attachments.length} attachment(s):\n${attachmentList}`, structured);
 }, "Error listing attachments"));
 // --- save-attachment ---
 server.tool("save-attachment", {
@@ -606,6 +597,20 @@ server.tool("save-attachment", {
     }
     return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`);
 }, "Error saving attachment"));
+// --- fetch-attachment ---
+server.tool("fetch-attachment", {
+    id: NUMERIC_MESSAGE_ID_SCHEMA,
+    attachmentName: z.string().min(1, "Attachment name is required"),
+}, withErrorHandling(({ id, attachmentName }) => {
+    // Returns the attachment bytes as base64 (B4) — the read counterpart to
+    // sending inline base64 content, for clients that want the bytes directly
+    // rather than writing to disk via save-attachment.
+    const r = mailManager.getAttachmentBase64(id, attachmentName);
+    if (!r.success) {
+        return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
+    }
+    return successResponse(`Fetched "${attachmentName}" (${r.bytes} bytes, base64-encoded below).\n\n${r.base64}`, { attachmentName, bytes: r.bytes, contentBase64: r.base64 });
+}, "Error fetching attachment"));
 // =============================================================================
 // Mailbox Tools
 // =============================================================================
@@ -614,11 +619,12 @@ server.tool("list-mailboxes", {
     account: z.string().optional().describe("Account to list mailboxes from"),
 }, withErrorHandling(({ account }) => {
     const mailboxes = mailManager.listMailboxes(account);
+    const structured = { mailboxes, count: mailboxes.length };
     if (mailboxes.length === 0) {
-        return successResponse("No mailboxes found");
+        return successResponse("No mailboxes found", structured);
     }
     const mailboxList = mailboxes.map((m) => `  - ${m.name} (${m.unreadCount} unread)`).join("\n");
-    return successResponse(`Found ${mailboxes.length} mailbox(es):\n${mailboxList}`);
+    return successResponse(`Found ${mailboxes.length} mailbox(es):\n${mailboxList}`, structured);
 }, "Error listing mailboxes"));
 // --- get-unread-count ---
 server.tool("get-unread-count", {
@@ -627,7 +633,11 @@ server.tool("get-unread-count", {
 }, withErrorHandling(({ mailbox, account }) => {
     const count = mailManager.getUnreadCount(mailbox, account);
     const location = mailbox ? ` in "${mailbox}"` : "";
-    return successResponse(`${count} unread message(s)${location}`);
+    return successResponse(`${count} unread message(s)${location}`, {
+        unread: count,
+        mailbox,
+        account,
+    });
 }, "Error getting unread count"));
 // --- create-mailbox ---
 server.tool("create-mailbox", {
@@ -637,7 +647,7 @@ server.tool("create-mailbox", {
     // IMAP backend (issue #43, Phase 2): server-side folder op when this account
     // is IMAP-configured; otherwise AppleScript.
     if (isImapAccount(account)) {
-        const r = await imapCreateMailbox(name);
+        const r = await imapCreateMailbox(name, { account });
         if (!r.success)
             return errorResponse(r.error || `Failed to create mailbox "${name}"`);
         return successResponse(r.info || `Mailbox "${name}" created`);
@@ -654,7 +664,7 @@ server.tool("delete-mailbox", {
     account: z.string().optional().describe("Account containing the mailbox"),
 }, withErrorHandling(async ({ name, account }) => {
     if (isImapAccount(account)) {
-        const r = await imapDeleteMailbox(name);
+        const r = await imapDeleteMailbox(name, { account });
         if (!r.success)
             return errorResponse(r.error || `Failed to delete mailbox "${name}"`);
         return successResponse(r.info || `Mailbox "${name}" deleted`);
@@ -672,7 +682,7 @@ server.tool("rename-mailbox", {
     account: z.string().optional().describe("Account containing the mailbox"),
 }, withErrorHandling(async ({ oldName, newName, account }) => {
     if (isImapAccount(account)) {
-        const r = await imapRenameMailbox(oldName, newName);
+        const r = await imapRenameMailbox(oldName, newName, { account });
         if (!r.success) {
             return errorResponse(r.error || `Failed to rename mailbox "${oldName}" to "${newName}"`);
         }
@@ -690,11 +700,12 @@ server.tool("rename-mailbox", {
 // --- list-accounts ---
 server.tool("list-accounts", {}, withErrorHandling(() => {
     const accounts = mailManager.listAccounts();
+    const structured = { accounts, count: accounts.length };
     if (accounts.length === 0) {
-        return successResponse("No Mail accounts found");
+        return successResponse("No Mail accounts found", structured);
     }
     const accountList = accounts.map((a) => `  - ${a.name}`).join("\n");
-    return successResponse(`Found ${accounts.length} account(s):\n${accountList}`);
+    return successResponse(`Found ${accounts.length} account(s):\n${accountList}`, structured);
 }, "Error listing accounts"));
 // =============================================================================
 // Mail Rules Tools
@@ -730,6 +741,46 @@ server.tool("disable-rule", {
     }
     return successResponse(`Rule "${name}" disabled`);
 }, "Error disabling rule"));
+// --- create-rule ---
+server.tool("create-rule", {
+    name: z.string().min(1, "Rule name is required"),
+    conditions: z
+        .array(z.object({
+        field: z.enum(["from", "to", "cc", "subject", "content"]),
+        operator: z
+            .enum(["contains", "notContains", "equals", "beginsWith", "endsWith"])
+            .default("contains"),
+        value: z.string().min(1, "Condition value is required"),
+    }))
+        .min(1, "At least one condition is required"),
+    actions: z
+        .object({
+        markRead: z.boolean().optional(),
+        markFlagged: z.boolean().optional(),
+        delete: z.boolean().optional(),
+        moveTo: z.string().optional(),
+        moveToAccount: z.string().optional(),
+    })
+        .refine((a) => a.markRead || a.markFlagged || a.delete || a.moveTo, "At least one action is required (markRead, markFlagged, delete, or moveTo)"),
+    matchAll: z.boolean().default(true),
+    enabled: z.boolean().default(true),
+}, withErrorHandling((args) => {
+    const result = mailManager.createRule(args);
+    if (!result.success) {
+        return errorResponse(`Failed to create rule "${args.name}": ${result.error}`);
+    }
+    return successResponse(`Rule "${args.name}" created with ${args.conditions.length} condition(s).`, { name: args.name, created: true });
+}, "Error creating rule"));
+// --- delete-rule ---
+server.tool("delete-rule", {
+    name: z.string().min(1, "Rule name is required"),
+}, withErrorHandling(({ name }) => {
+    const success = mailManager.deleteRule(name);
+    if (!success) {
+        return errorResponse(`Failed to delete rule "${name}" (not found?)`);
+    }
+    return successResponse(`Rule "${name}" deleted`, { name, deleted: true });
+}, "Error deleting rule"));
 // =============================================================================
 // Contacts Tools
 // =============================================================================
@@ -834,6 +885,13 @@ server.tool("health-check", {}, withErrorHandling(() => {
         .join("\n");
     return successResponse(`${statusIcon} ${statusText}\n\n${checkLines}`);
 }, "Error running health check"));
+// --- doctor ---
+server.tool("doctor", {}, withErrorHandling(async () => {
+    // Diagnoses Mail.app permission, account state, and the IMAP/SMTP backends
+    // with actionable messages (C3). structuredContent carries the raw checks.
+    const report = await runDoctor(mailManager);
+    return successResponse(formatDoctorReport(report), { ...report });
+}, "Error running doctor"));
 // --- get-mail-stats ---
 server.tool("get-mail-stats", {}, withErrorHandling(() => {
     const stats = mailManager.getMailStats();
@@ -856,7 +914,7 @@ server.tool("get-mail-stats", {}, withErrorHandling(() => {
             lines.push(`  ${account.name}: ${account.totalMessages} messages (${account.unreadMessages} unread)`);
         }
     }
-    return successResponse(lines.join("\n"));
+    return successResponse(lines.join("\n"), { ...stats });
 }, "Error getting mail statistics"));
 // --- get-sync-status ---
 server.tool("get-sync-status", {}, withErrorHandling(() => {
@@ -871,7 +929,7 @@ server.tool("get-sync-status", {}, withErrorHandling(() => {
         lines.push(`Mail.app: ${status.recentActivity ? "Running" : "Not running"}`);
         lines.push(`Sync active: ${status.syncDetected ? "Yes" : "No"}`);
     }
-    return successResponse(lines.join("\n"));
+    return successResponse(lines.join("\n"), { ...status });
 }, "Error getting sync status"));
 // =============================================================================
 // Server Startup
@@ -881,3 +939,40 @@ server.tool("get-sync-status", {}, withErrorHandling(() => {
  */
 const transport = new StdioServerTransport();
 await server.connect(transport);
+// IMAP IDLE push notifications (B5) — opt-in. When enabled, watch every
+// configured IMAP account's INBOX and notify the client on new mail via a
+// logging message + a resource-updated signal for the account's mailbox.
+let idleWatcher;
+if (/^(1|true|yes|on)$/i.test(process.env.APPLE_MAIL_MCP_IMAP_IDLE?.trim() ?? "")) {
+    try {
+        const configs = resolveImapConfigs();
+        if (configs.length > 0) {
+            idleWatcher = new ImapIdleWatcher({
+                configs,
+                onNewMail: (e) => {
+                    const newCount = e.count - e.prevCount;
+                    void server.server
+                        .sendLoggingMessage({
+                        level: "info",
+                        logger: "apple-mail-mcp",
+                        data: `New mail in "${e.account}": ${newCount} new message(s) (INBOX now ${e.count}).`,
+                    })
+                        .catch(() => undefined);
+                    void server.server
+                        .sendResourceUpdated({ uri: `mail://mailboxes/${encodeURIComponent(e.account)}` })
+                        .catch(() => undefined);
+                },
+            });
+            await idleWatcher.start();
+        }
+    }
+    catch (e) {
+        console.error(`IMAP IDLE watcher failed to start: ${String(e)}`);
+    }
+}
+// Clean up the long-lived IDLE connections on shutdown.
+for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => {
+        void idleWatcher?.stop().finally(() => process.exit(0));
+    });
+}

@@ -110,15 +110,19 @@ export function resolveSmtpConfig(env = process.env) {
 function buildAttachments(attachments) {
     if (!attachments || attachments.length === 0)
         return undefined;
-    for (const filePath of attachments) {
-        if (!isAbsolute(filePath)) {
-            throw new Error(`Attachment path must be absolute: "${filePath}"`);
+    return attachments.map((a) => {
+        if (typeof a === "string") {
+            if (!isAbsolute(a))
+                throw new Error(`Attachment path must be absolute: "${a}"`);
+            if (!existsSync(a))
+                throw new Error(`Attachment file not found: "${a}"`);
+            return { path: a };
         }
-        if (!existsSync(filePath)) {
-            throw new Error(`Attachment file not found: "${filePath}"`);
+        if (!a.filename || !a.contentBase64) {
+            throw new Error("Inline attachment requires both filename and contentBase64.");
         }
-    }
-    return attachments.map((path) => ({ path }));
+        return { filename: a.filename, content: Buffer.from(a.contentBase64, "base64") };
+    });
 }
 /**
  * Sends an email over SMTP, producing clean MIME with no blockquote wrapping.

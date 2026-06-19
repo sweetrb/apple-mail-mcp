@@ -1,6 +1,6 @@
 {
   "name": "apple-mail-mcp",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude",
   "type": "module",
   "main": "build/index.js",
@@ -19,6 +19,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:imap": "vitest run --config vitest.imap.config.ts",
     "test:all": "vitest run && vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

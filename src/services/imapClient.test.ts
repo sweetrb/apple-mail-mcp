@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   IMAP_ENV,
   isImapAccount,
@@ -18,6 +18,9 @@ import {
   imapUnflagMessage,
   imapMoveMessageById,
   imapDeleteMessageById,
+  listImapAccountLabels,
+  __setPoolConnect,
+  __resetPool,
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
@@ -71,6 +74,7 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
     messageFlagsRemove: async () => true,
     messageMove: async () => ({}),
     messageDelete: async () => true,
+    noop: async () => undefined,
     logout: async () => undefined,
   };
 }
@@ -108,6 +112,49 @@ describe("resolveImapConfig", () => {
     expect(() => resolveImapConfig({ [IMAP_ENV.user]: "rob@example.com" })).toThrow(
       /No IMAP password/
     );
+  });
+});
+
+describe("multi-account IMAP (C2)", () => {
+  const multiEnv: NodeJS.ProcessEnv = {
+    [IMAP_ENV.user]: "primary@gmail.com",
+    [IMAP_ENV.password]: "pw1",
+    [IMAP_ENV.account]: "Personal",
+    [IMAP_ENV.accounts]: JSON.stringify([
+      { account: "Work", user: "me@work.com", host: "imap.work.com", password: "pw2" },
+    ]),
+  };
+
+  it("lists all configured account labels (legacy + JSON array)", () => {
+    expect(listImapAccountLabels(multiEnv)).toEqual(["Personal", "Work"]);
+  });
+
+  it("isImapAccount matches any configured account by label or user", () => {
+    expect(isImapAccount("Personal", multiEnv)).toBe(true);
+    expect(isImapAccount("me@work.com", multiEnv)).toBe(true);
+    expect(isImapAccount("Work", multiEnv)).toBe(true);
+    expect(isImapAccount("nobody@x.com", multiEnv)).toBe(false);
+  });
+
+  it("resolveImapConfig selects by account and defaults to the first", () => {
+    expect(resolveImapConfig(multiEnv).accountLabel).toBe("Personal");
+    const work = resolveImapConfig(multiEnv, "Work");
+    expect(work.host).toBe("imap.work.com");
+    expect(work.user).toBe("me@work.com");
+    expect(work.pass).toBe("pw2");
+  });
+
+  it("throws for an unknown account and lists the configured ones", () => {
+    expect(() => resolveImapConfig(multiEnv, "Ghost")).toThrow(/Personal, Work/);
+  });
+
+  it("ignores malformed ACCOUNTS json and keeps the legacy account", () => {
+    const env: NodeJS.ProcessEnv = {
+      [IMAP_ENV.user]: "a@b.com",
+      [IMAP_ENV.password]: "p",
+      [IMAP_ENV.accounts]: "{not json",
+    };
+    expect(listImapAccountLabels(env)).toEqual(["a@b.com"]);
   });
 });
 
@@ -368,5 +415,93 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/Not an IMAP message id/);
+  });
+});
+
+describe("connection pooling (#50 / A3)", () => {
+  afterEach(async () => {
+    await __resetPool();
+    __setPoolConnect(null);
+  });
+
+  it("reuses one kept-alive connection across calls (NOOP liveness, no per-call logout)", async () => {
+    let connects = 0;
+    let noops = 0;
+    let logouts = 0;
+    __setPoolConnect(async () => {
+      connects++;
+      const c = makeClient([1, 2], {});
+      return {
+        ...c,
+        noop: async () => {
+          noops++;
+        },
+        logout: async () => {
+          logouts++;
+        },
+      };
+    });
+    // No injected connect → uses the pool.
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    expect(connects).toBe(1); // one connection, reused
+    expect(noops).toBe(1); // liveness checked before the 2nd reuse
+    expect(logouts).toBe(0); // kept alive, not logged out per call
+  });
+
+  it("reconnects when the pooled connection fails its liveness check", async () => {
+    let connects = 0;
+    __setPoolConnect(async () => {
+      connects++;
+      const c = makeClient([1], {});
+      // First connection reports dead on the next NOOP → forces a reconnect.
+      return connects === 1
+        ? {
+            ...c,
+            noop: async () => {
+              throw new Error("connection dropped");
+            },
+          }
+        : c;
+    });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    expect(connects).toBe(2);
+  });
+
+  it("keeps a separate pooled connection per account", async () => {
+    let connects = 0;
+    __setPoolConnect(async () => {
+      connects++;
+      return makeClient([1], {});
+    });
+    const cfgA: ImapConfig = { ...cfg, user: "a@x.com" };
+    const cfgB: ImapConfig = { ...cfg, user: "b@x.com" };
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgA });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgB });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgA }); // reuse A
+    expect(connects).toBe(2); // one connection per distinct account; A reused
+  });
+
+  it("does not pool when a connect is injected (per-call logout)", async () => {
+    let logouts = 0;
+    const make = () => {
+      const c = makeClient([1], {});
+      return {
+        ...c,
+        logout: async () => {
+          logouts++;
+        },
+      };
+    };
+    await imapListMessages(
+      { mailbox: "INBOX", limit: 5 },
+      { config: cfg, connect: async () => make() }
+    );
+    await imapListMessages(
+      { mailbox: "INBOX", limit: 5 },
+      { config: cfg, connect: async () => make() }
+    );
+    expect(logouts).toBe(2); // injected path logs out each call (no pooling)
   });
 });

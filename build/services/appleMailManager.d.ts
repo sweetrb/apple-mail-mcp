@@ -12,7 +12,7 @@
  *
  * @module services/appleMailManager
  */
-import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheckResult, MailStats, BatchOperationResult, SyncStatus, RecentlyReceivedStats, MailRule, Contact, EmailTemplate, SerialEmailRecipient, SerialEmailResult, SearchDiagnostics, SearchResult } from "../types.js";
+import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheckResult, MailStats, BatchOperationResult, SyncStatus, RecentlyReceivedStats, MailRule, RuleSpec, AttachmentInput, Contact, EmailTemplate, SerialEmailRecipient, SerialEmailResult, SearchDiagnostics, SearchResult } from "../types.js";
 /**
  * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
  *
@@ -287,7 +287,8 @@ export declare class AppleMailManager {
      * @param account - Account to send from
      * @returns true if sent successfully
      */
-    sendEmail(to: string[], subject: string, body: string, cc?: string[], bcc?: string[], account?: string, attachments?: string[]): boolean;
+    sendEmail(to: string[], subject: string, body: string, cc?: string[], bcc?: string[], account?: string, attachments?: AttachmentInput[]): boolean;
+    private sendEmailWithPaths;
     /**
      * Send individual personalized emails to a list of recipients (mail merge).
      *
@@ -313,7 +314,8 @@ export declare class AppleMailManager {
      * @param account - Account to create draft in
      * @returns true if draft created successfully
      */
-    createDraft(to: string[], subject: string, body: string, cc?: string[], bcc?: string[], account?: string, attachments?: string[]): boolean;
+    createDraft(to: string[], subject: string, body: string, cc?: string[], bcc?: string[], account?: string, attachments?: AttachmentInput[]): boolean;
+    private createDraftWithCommands;
     /**
      * Reply to a message.
      *
@@ -456,6 +458,17 @@ export declare class AppleMailManager {
      */
     saveAttachment(id: string, attachmentName: string, savePath: string): boolean;
     /**
+     * Fetch an attachment's bytes as base64 (B4) — the read counterpart to
+     * sending inline base64 content. Reuses saveAttachment via a throwaway temp
+     * dir (under an allowed root), then reads and encodes the file.
+     */
+    getAttachmentBase64(id: string, attachmentName: string): {
+        success: boolean;
+        base64?: string;
+        bytes?: number;
+        error?: string;
+    };
+    /**
      * List all mailboxes for an account.
      */
     listMailboxes(account?: string): Mailbox[];
@@ -504,11 +517,23 @@ export declare class AppleMailManager {
      */
     setRuleEnabled(ruleName: string, enabled: boolean): boolean;
     /**
+     * Create a mail rule (B2). Builds conditions (from/to/cc/subject/content with
+     * a match operator) and actions (mark read/flagged, delete, move to a
+     * mailbox) on a real Mail.app rule. Returns an error string on failure.
+     */
+    createRule(opts: RuleSpec): {
+        success: boolean;
+        error?: string;
+    };
+    /**
+     * Delete a mail rule by name (B2). Returns false if no such rule exists.
+     */
+    deleteRule(ruleName: string): boolean;
+    /**
      * Search contacts by name or email.
      */
     searchContacts(query: string): Contact[];
-    private templates;
-    private nextTemplateId;
+    private templateStore;
     /**
      * List all stored templates.
      */
@@ -518,11 +543,11 @@ export declare class AppleMailManager {
      */
     getTemplate(id: string): EmailTemplate | null;
     /**
-     * Create or update a template.
+     * Create or update a template (persisted).
      */
     saveTemplate(name: string, subject: string, body: string, to?: string[], cc?: string[], id?: string): EmailTemplate;
     /**
-     * Delete a template.
+     * Delete a template (persisted).
      */
     deleteTemplate(id: string): boolean;
     /**

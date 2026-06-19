@@ -33,6 +33,9 @@ export const IMAP_ENV = {
     password: "APPLE_MAIL_MCP_IMAP_PASSWORD",
     keychainService: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE",
     keychainAccount: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT",
+    // C2 multi-account: JSON array of additional accounts, e.g.
+    // [{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]
+    accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS",
 };
 // ---------------------------------------------------------------------------
 // Composite IMAP message id (Phase 3): a self-describing token the IMAP read
@@ -58,42 +61,129 @@ export function decodeImapId(id) {
         return null;
     }
 }
-/** True only when IMAP is configured AND the explicit `account` matches it. */
-export function isImapAccount(account, env = process.env) {
-    const user = env[IMAP_ENV.user]?.trim();
-    if (!user || !account)
-        return false;
-    const label = env[IMAP_ENV.account]?.trim() || user;
-    return account === label || account === user;
+function str(v) {
+    return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
-export function resolveImapConfig(env = process.env) {
+/**
+ * Enumerate all configured IMAP accounts (C2): the legacy single-account env
+ * vars plus any in the `APPLE_MAIL_MCP_IMAP_ACCOUNTS` JSON array. Does not
+ * resolve passwords. The legacy account takes precedence on label collisions.
+ */
+function listImapAccountSpecs(env = process.env) {
+    const specs = [];
     const user = env[IMAP_ENV.user]?.trim();
-    if (!user) {
-        throw new Error(`IMAP not configured. Set ${IMAP_ENV.user} (login address) to enable it.`);
+    if (user) {
+        specs.push({
+            accountLabel: env[IMAP_ENV.account]?.trim() || user,
+            user,
+            host: env[IMAP_ENV.host]?.trim() || "imap.gmail.com",
+            port: env[IMAP_ENV.port] ? Number.parseInt(env[IMAP_ENV.port], 10) : 993,
+            password: env[IMAP_ENV.password],
+            keychainService: env[IMAP_ENV.keychainService]?.trim(),
+            keychainAccount: env[IMAP_ENV.keychainAccount]?.trim(),
+        });
     }
-    const host = env[IMAP_ENV.host]?.trim() || "imap.gmail.com";
-    const port = env[IMAP_ENV.port] ? Number.parseInt(env[IMAP_ENV.port], 10) : 993;
-    if (!Number.isInteger(port) || port <= 0) {
-        throw new Error(`Invalid ${IMAP_ENV.port}: "${env[IMAP_ENV.port]}".`);
+    const json = env[IMAP_ENV.accounts]?.trim();
+    if (json) {
+        try {
+            const arr = JSON.parse(json);
+            if (Array.isArray(arr)) {
+                for (const raw of arr) {
+                    const a = raw;
+                    const u = str(a.user);
+                    if (!u)
+                        continue;
+                    const label = str(a.account) || str(a.accountLabel) || u;
+                    if (specs.some((s) => s.accountLabel === label))
+                        continue; // legacy wins
+                    const port = a.port ? Number(a.port) : 993;
+                    specs.push({
+                        accountLabel: label,
+                        user: u,
+                        host: str(a.host) || "imap.gmail.com",
+                        port,
+                        password: str(a.password),
+                        keychainService: str(a.keychainService),
+                        keychainAccount: str(a.keychainAccount),
+                    });
+                }
+            }
+        }
+        catch (e) {
+            console.error(`Invalid ${IMAP_ENV.accounts} JSON, ignoring: ${String(e)}`);
+        }
     }
-    let pass = env[IMAP_ENV.password];
+    return specs;
+}
+function specToConfig(spec) {
+    if (!Number.isInteger(spec.port) || spec.port <= 0) {
+        throw new Error(`Invalid IMAP port for account "${spec.accountLabel}": "${spec.port}".`);
+    }
+    let pass = spec.password;
+    if (!pass && spec.keychainService) {
+        pass =
+            readKeychainPassword(spec.keychainService, spec.keychainAccount || spec.user) ?? undefined;
+    }
     if (!pass) {
-        const svc = env[IMAP_ENV.keychainService]?.trim();
-        const acct = env[IMAP_ENV.keychainAccount]?.trim() || user;
-        if (svc)
-            pass = readKeychainPassword(svc, acct) ?? undefined;
-    }
-    if (!pass) {
-        throw new Error(`No IMAP password. Set ${IMAP_ENV.password}, or ${IMAP_ENV.keychainService}/${IMAP_ENV.keychainAccount} for the Keychain.`);
+        throw new Error(`No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account.`);
     }
     return {
-        host,
-        port,
-        secure: port === 993,
-        user,
+        host: spec.host,
+        port: spec.port,
+        secure: spec.port === 993,
+        user: spec.user,
         pass,
-        accountLabel: env[IMAP_ENV.account]?.trim() || user,
+        accountLabel: spec.accountLabel,
     };
+}
+/** True when `account` matches any configured IMAP account (label or user). */
+export function isImapAccount(account, env = process.env) {
+    if (!account)
+        return false;
+    return listImapAccountSpecs(env).some((s) => s.accountLabel === account || s.user === account);
+}
+/** Account labels of every configured IMAP account (C2), for diagnostics. */
+export function listImapAccountLabels(env = process.env) {
+    return listImapAccountSpecs(env).map((s) => s.accountLabel);
+}
+/**
+ * Resolve full configs (passwords included) for every configured IMAP account
+ * (C2/B5). Accounts whose password can't be resolved are skipped (logged), so a
+ * single misconfigured account doesn't take down the rest (e.g. IDLE watchers).
+ */
+export function resolveImapConfigs(env = process.env) {
+    const out = [];
+    for (const spec of listImapAccountSpecs(env)) {
+        try {
+            out.push(specToConfig(spec));
+        }
+        catch (e) {
+            console.error(`Skipping IMAP account "${spec.accountLabel}": ${String(e)}`);
+        }
+    }
+    return out;
+}
+/**
+ * Resolve the full IMAP config (password included) for `account`. With no
+ * `account`, returns the default/first configured account. Throws if IMAP is
+ * unconfigured or no account matches.
+ */
+export function resolveImapConfig(env = process.env, account) {
+    const specs = listImapAccountSpecs(env);
+    if (specs.length === 0) {
+        throw new Error(`IMAP not configured. Set ${IMAP_ENV.user} (login address) to enable it.`);
+    }
+    let spec;
+    if (account) {
+        spec = specs.find((s) => s.accountLabel === account || s.user === account);
+        if (!spec) {
+            throw new Error(`No IMAP account matching "${account}". Configured: ${specs.map((s) => s.accountLabel).join(", ")}.`);
+        }
+    }
+    else {
+        spec = specs[0];
+    }
+    return specToConfig(spec);
 }
 const defaultConnect = async (cfg) => {
     const client = new ImapFlow({
@@ -165,9 +255,9 @@ function formatRow(m, account, path) {
     return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]`;
 }
 async function run(args, listMode, deps) {
-    const cfg = deps.config ?? resolveImapConfig();
-    const client = await (deps.connect ?? defaultConnect)(cfg);
-    try {
+    // Reads are idempotent → safe to retry once if a pooled connection is dead.
+    // Route to the account named in the search args (C2 multi-account).
+    return useClient({ ...deps, account: deps.account ?? args.account }, async (client, cfg) => {
         const path = resolveMailboxPath(args.mailbox, listMode ? "list" : "search");
         const lock = await client.getMailboxLock(path);
         try {
@@ -196,10 +286,7 @@ async function run(args, listMode, deps) {
         finally {
             lock.release();
         }
-    }
-    finally {
-        await client.logout().catch(() => undefined);
-    }
+    }, true);
 }
 export function imapSearchMessages(args, deps = {}) {
     return run(args, false, deps);
@@ -210,16 +297,157 @@ export function imapListMessages(args, deps = {}) {
 function errText(e) {
     return e instanceof Error ? e.message : String(e);
 }
-/** Connect, run `fn`, always log out. */
-async function withClient(deps, fn) {
-    const cfg = deps.config ?? resolveImapConfig();
-    const client = await (deps.connect ?? defaultConnect)(cfg);
+// ---------------------------------------------------------------------------
+// Connection pool (issue #50 / A3)
+//
+// The MCP server is long-lived and every tool call is serialized through the
+// AppleScript gate, so instead of connecting + logging out (~seconds) on every
+// IMAP call, one connection is kept alive and reused. A NOOP verifies liveness
+// before reuse; an idle timer closes it after inactivity. An injected
+// `deps.connect` (tests) bypasses the pool and connects per call.
+// ---------------------------------------------------------------------------
+let poolConnect = defaultConnect;
+// One kept-alive connection per account (C2): keyed by host:port:user so each
+// configured IMAP account keeps its own pooled connection instead of thrashing
+// a single slot when calls alternate between accounts.
+const pools = new Map();
+function poolKey(cfg) {
+    return `${cfg.host}:${cfg.port}:${cfg.user}`;
+}
+function imapIdleMs() {
+    const raw = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
+    if (raw !== undefined) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 0)
+            return n;
+    }
+    return 60_000;
+}
+async function dropPool(key) {
+    const e = pools.get(key);
+    if (!e)
+        return;
+    if (e.idle)
+        clearTimeout(e.idle);
+    pools.delete(key);
+    await e.client.logout().catch(() => undefined);
+}
+async function dropAllPools() {
+    await Promise.all([...pools.keys()].map((k) => dropPool(k)));
+}
+function scheduleIdleClose(key) {
+    const e = pools.get(key);
+    if (!e)
+        return;
+    if (e.idle)
+        clearTimeout(e.idle);
+    const ms = imapIdleMs();
+    if (ms <= 0)
+        return;
+    e.idle = setTimeout(() => void dropPool(key), ms);
+    e.idle.unref?.();
+}
+async function acquirePooled(cfg) {
+    const key = poolKey(cfg);
+    const existing = pools.get(key);
+    if (existing) {
+        if (existing.idle)
+            clearTimeout(existing.idle);
+        try {
+            await existing.client.noop(); // verify the kept-alive connection is still usable
+            return existing.client;
+        }
+        catch {
+            await dropPool(key);
+        }
+    }
+    const client = await poolConnect(cfg);
+    pools.set(key, { client });
+    return client;
+}
+/**
+ * Health probe for the setup doctor (C3): reports whether IMAP is configured and,
+ * if so, whether a connection + NOOP succeeds (auth/network/Keychain all good).
+ */
+export async function imapHealthCheck(deps = {}) {
+    if (!deps.config && !process.env[IMAP_ENV.user]?.trim()) {
+        return { configured: false, ok: false };
+    }
+    let cfg;
     try {
-        return await fn(client, cfg);
+        cfg = deps.config ?? resolveImapConfig(process.env, deps.account);
     }
-    finally {
-        await client.logout().catch(() => undefined);
+    catch (e) {
+        return { configured: true, ok: false, error: errText(e) };
     }
+    try {
+        await useClient(deps, async (client) => {
+            await client.noop();
+        });
+        return { configured: true, ok: true, account: cfg.accountLabel, host: cfg.host };
+    }
+    catch (e) {
+        return {
+            configured: true,
+            ok: false,
+            account: cfg.accountLabel,
+            host: cfg.host,
+            error: errText(e),
+        };
+    }
+}
+/** Test seam: override the pool's connect factory; pass null to restore. */
+export function __setPoolConnect(fn) {
+    poolConnect = fn ?? defaultConnect;
+}
+/** Test seam: close and clear all pooled connections. */
+export async function __resetPool() {
+    await dropAllPools();
+}
+/**
+ * Run `fn` with an IMAP client. Default (production) path reuses the pooled,
+ * kept-alive connection; an injected `deps.connect` connects fresh and logs out
+ * per call. `retryOnDrop` reconnects once if a pooled connection dies mid-op —
+ * only safe for idempotent reads, so mutations leave it false.
+ */
+async function useClient(deps, fn, retryOnDrop = false) {
+    const cfg = deps.config ?? resolveImapConfig(process.env, deps.account);
+    if (deps.connect) {
+        const client = await deps.connect(cfg);
+        try {
+            return await fn(client, cfg);
+        }
+        finally {
+            await client.logout().catch(() => undefined);
+        }
+    }
+    const key = poolKey(cfg);
+    try {
+        const client = await acquirePooled(cfg);
+        const r = await fn(client, cfg);
+        scheduleIdleClose(key);
+        return r;
+    }
+    catch (e) {
+        await dropPool(key);
+        if (retryOnDrop) {
+            const client = await acquirePooled(cfg);
+            try {
+                const r = await fn(client, cfg);
+                scheduleIdleClose(key);
+                return r;
+            }
+            catch (e2) {
+                await dropPool(key);
+                throw e2;
+            }
+        }
+        throw e;
+    }
+}
+/** Connect, run `fn`, manage the connection (pooled in production). */
+function withClient(deps, fn) {
+    return useClient(deps, fn);
 }
 /**
  * Resolve a user-supplied mailbox name to an actual server path by listing the
@@ -314,7 +542,7 @@ export async function imapGetMessage(id, preferHtml, deps = {}) {
     const ref = decodeImapId(id);
     if (!ref)
         return { success: false, error: `Not an IMAP message id: "${id}".` };
-    return withMailbox(ref.path, deps, async (client) => {
+    return withMailbox(ref.path, { ...deps, account: deps.account ?? ref.account }, async (client) => {
         const msg = await client.fetchOne(String(ref.uid), { envelope: true, source: true }, { uid: true });
         if (!msg)
             return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
@@ -331,7 +559,7 @@ function flagOp(id, flag, add, deps) {
     const ref = decodeImapId(id);
     if (!ref)
         return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
-    return withMailbox(ref.path, deps, async (client) => {
+    return withMailbox(ref.path, { ...deps, account: deps.account ?? ref.account }, async (client) => {
         try {
             const ok = add
                 ? await client.messageFlagsAdd([ref.uid], [flag], { uid: true })
@@ -341,7 +569,10 @@ function flagOp(id, flag, add, deps) {
             return { success: true };
         }
         catch (e) {
-            return { success: false, error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}` };
+            return {
+                success: false,
+                error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}`,
+            };
         }
     });
 }
@@ -353,7 +584,7 @@ export async function imapMoveMessageById(id, destMailbox, deps = {}) {
     const ref = decodeImapId(id);
     if (!ref)
         return { success: false, error: `Not an IMAP message id: "${id}".` };
-    return withClient(deps, async (client) => {
+    return withClient({ ...deps, account: deps.account ?? ref.account }, async (client) => {
         const destPath = (await findMailboxPath(client, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
         const lock = await client.getMailboxLock(ref.path);
         try {
@@ -375,7 +606,7 @@ export async function imapDeleteMessageById(id, deps = {}) {
     const ref = decodeImapId(id);
     if (!ref)
         return { success: false, error: `Not an IMAP message id: "${id}".` };
-    return withMailbox(ref.path, deps, async (client) => {
+    return withMailbox(ref.path, { ...deps, account: deps.account ?? ref.account }, async (client) => {
         try {
             const ok = await client.messageDelete([ref.uid], { uid: true });
             if (!ok)
