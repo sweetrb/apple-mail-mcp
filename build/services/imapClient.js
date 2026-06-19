@@ -165,9 +165,8 @@ function formatRow(m, account, path) {
     return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]`;
 }
 async function run(args, listMode, deps) {
-    const cfg = deps.config ?? resolveImapConfig();
-    const client = await (deps.connect ?? defaultConnect)(cfg);
-    try {
+    // Reads are idempotent → safe to retry once if a pooled connection is dead.
+    return useClient(deps, async (client, cfg) => {
         const path = resolveMailboxPath(args.mailbox, listMode ? "list" : "search");
         const lock = await client.getMailboxLock(path);
         try {
@@ -196,10 +195,7 @@ async function run(args, listMode, deps) {
         finally {
             lock.release();
         }
-    }
-    finally {
-        await client.logout().catch(() => undefined);
-    }
+    }, true);
 }
 export function imapSearchMessages(args, deps = {}) {
     return run(args, false, deps);
@@ -210,16 +206,117 @@ export function imapListMessages(args, deps = {}) {
 function errText(e) {
     return e instanceof Error ? e.message : String(e);
 }
-/** Connect, run `fn`, always log out. */
-async function withClient(deps, fn) {
+// ---------------------------------------------------------------------------
+// Connection pool (issue #50 / A3)
+//
+// The MCP server is long-lived and every tool call is serialized through the
+// AppleScript gate, so instead of connecting + logging out (~seconds) on every
+// IMAP call, one connection is kept alive and reused. A NOOP verifies liveness
+// before reuse; an idle timer closes it after inactivity. An injected
+// `deps.connect` (tests) bypasses the pool and connects per call.
+// ---------------------------------------------------------------------------
+let poolConnect = defaultConnect;
+let pool = null;
+function imapIdleMs() {
+    const raw = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
+    if (raw !== undefined) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 0)
+            return n;
+    }
+    return 60_000;
+}
+async function dropPool() {
+    if (!pool)
+        return;
+    if (pool.idle)
+        clearTimeout(pool.idle);
+    const c = pool.client;
+    pool = null;
+    await c.logout().catch(() => undefined);
+}
+function scheduleIdleClose() {
+    if (!pool)
+        return;
+    if (pool.idle)
+        clearTimeout(pool.idle);
+    const ms = imapIdleMs();
+    if (ms <= 0)
+        return;
+    pool.idle = setTimeout(() => void dropPool(), ms);
+    pool.idle.unref?.();
+}
+async function acquirePooled(cfg) {
+    const key = `${cfg.host}:${cfg.port}:${cfg.user}`;
+    if (pool && pool.key === key) {
+        if (pool.idle)
+            clearTimeout(pool.idle);
+        try {
+            await pool.client.noop(); // verify the kept-alive connection is still usable
+            return pool.client;
+        }
+        catch {
+            await dropPool();
+        }
+    }
+    else if (pool) {
+        await dropPool(); // config changed — replace the pooled connection
+    }
+    const client = await poolConnect(cfg);
+    pool = { client, key };
+    return client;
+}
+/** Test seam: override the pool's connect factory; pass null to restore. */
+export function __setPoolConnect(fn) {
+    poolConnect = fn ?? defaultConnect;
+}
+/** Test seam: close and clear the pooled connection. */
+export async function __resetPool() {
+    await dropPool();
+}
+/**
+ * Run `fn` with an IMAP client. Default (production) path reuses the pooled,
+ * kept-alive connection; an injected `deps.connect` connects fresh and logs out
+ * per call. `retryOnDrop` reconnects once if a pooled connection dies mid-op —
+ * only safe for idempotent reads, so mutations leave it false.
+ */
+async function useClient(deps, fn, retryOnDrop = false) {
     const cfg = deps.config ?? resolveImapConfig();
-    const client = await (deps.connect ?? defaultConnect)(cfg);
+    if (deps.connect) {
+        const client = await deps.connect(cfg);
+        try {
+            return await fn(client, cfg);
+        }
+        finally {
+            await client.logout().catch(() => undefined);
+        }
+    }
     try {
-        return await fn(client, cfg);
+        const client = await acquirePooled(cfg);
+        const r = await fn(client, cfg);
+        scheduleIdleClose();
+        return r;
     }
-    finally {
-        await client.logout().catch(() => undefined);
+    catch (e) {
+        await dropPool();
+        if (retryOnDrop) {
+            const client = await acquirePooled(cfg);
+            try {
+                const r = await fn(client, cfg);
+                scheduleIdleClose();
+                return r;
+            }
+            catch (e2) {
+                await dropPool();
+                throw e2;
+            }
+        }
+        throw e;
     }
+}
+/** Connect, run `fn`, manage the connection (pooled in production). */
+function withClient(deps, fn) {
+    return useClient(deps, fn);
 }
 /**
  * Resolve a user-supplied mailbox name to an actual server path by listing the

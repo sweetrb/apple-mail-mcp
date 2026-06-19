@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   IMAP_ENV,
   isImapAccount,
@@ -18,6 +18,8 @@ import {
   imapUnflagMessage,
   imapMoveMessageById,
   imapDeleteMessageById,
+  __setPoolConnect,
+  __resetPool,
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
@@ -71,6 +73,7 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
     messageFlagsRemove: async () => true,
     messageMove: async () => ({}),
     messageDelete: async () => true,
+    noop: async () => undefined,
     logout: async () => undefined,
   };
 }
@@ -368,5 +371,79 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/Not an IMAP message id/);
+  });
+});
+
+describe("connection pooling (#50 / A3)", () => {
+  afterEach(async () => {
+    await __resetPool();
+    __setPoolConnect(null);
+  });
+
+  it("reuses one kept-alive connection across calls (NOOP liveness, no per-call logout)", async () => {
+    let connects = 0;
+    let noops = 0;
+    let logouts = 0;
+    __setPoolConnect(async () => {
+      connects++;
+      const c = makeClient([1, 2], {});
+      return {
+        ...c,
+        noop: async () => {
+          noops++;
+        },
+        logout: async () => {
+          logouts++;
+        },
+      };
+    });
+    // No injected connect → uses the pool.
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    expect(connects).toBe(1); // one connection, reused
+    expect(noops).toBe(1); // liveness checked before the 2nd reuse
+    expect(logouts).toBe(0); // kept alive, not logged out per call
+  });
+
+  it("reconnects when the pooled connection fails its liveness check", async () => {
+    let connects = 0;
+    __setPoolConnect(async () => {
+      connects++;
+      const c = makeClient([1], {});
+      // First connection reports dead on the next NOOP → forces a reconnect.
+      return connects === 1
+        ? {
+            ...c,
+            noop: async () => {
+              throw new Error("connection dropped");
+            },
+          }
+        : c;
+    });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    expect(connects).toBe(2);
+  });
+
+  it("does not pool when a connect is injected (per-call logout)", async () => {
+    let logouts = 0;
+    const make = () => {
+      const c = makeClient([1], {});
+      return {
+        ...c,
+        logout: async () => {
+          logouts++;
+        },
+      };
+    };
+    await imapListMessages(
+      { mailbox: "INBOX", limit: 5 },
+      { config: cfg, connect: async () => make() }
+    );
+    await imapListMessages(
+      { mailbox: "INBOX", limit: 5 },
+      { config: cfg, connect: async () => make() }
+    );
+    expect(logouts).toBe(2); // injected path logs out each call (no pooling)
   });
 });

@@ -105,6 +105,7 @@ export interface ImapClientLike {
   messageFlagsRemove(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
   messageMove(range: number[], destination: string, opts: FlagOpts): Promise<unknown>;
   messageDelete(range: number[], opts: FlagOpts): Promise<boolean>;
+  noop(): Promise<void>;
   logout(): Promise<void>;
 }
 
@@ -243,45 +244,46 @@ async function run(
   listMode: boolean,
   deps: { connect?: ImapConnect; config?: ImapConfig }
 ): Promise<string> {
-  const cfg = deps.config ?? resolveImapConfig();
-  const client = await (deps.connect ?? defaultConnect)(cfg);
-  try {
-    const path = resolveMailboxPath(args.mailbox, listMode ? "list" : "search");
-    const lock = await client.getMailboxLock(path);
-    try {
-      const found = await client.search(buildCriteria(args, listMode), { uid: true });
-      const uids = Array.isArray(found) ? found : [];
-      if (uids.length === 0) {
-        return `No messages found via IMAP in "${path}" (account ${cfg.accountLabel}).`;
+  // Reads are idempotent → safe to retry once if a pooled connection is dead.
+  return useClient(
+    deps,
+    async (client, cfg) => {
+      const path = resolveMailboxPath(args.mailbox, listMode ? "list" : "search");
+      const lock = await client.getMailboxLock(path);
+      try {
+        const found = await client.search(buildCriteria(args, listMode), { uid: true });
+        const uids = Array.isArray(found) ? found : [];
+        if (uids.length === 0) {
+          return `No messages found via IMAP in "${path}" (account ${cfg.accountLabel}).`;
+        }
+        const limit = args.limit ?? 50;
+        const offset = args.offset ?? 0;
+        // UIDs are ascending → newest are the highest. Apply offset+limit from the newest end.
+        const newest = uids
+          .slice()
+          .reverse()
+          .slice(offset, offset + limit);
+        const byUid = new Map<number, string>();
+        for await (const msg of client.fetch(
+          newest.join(","),
+          { envelope: true, flags: true },
+          { uid: true }
+        )) {
+          byUid.set(msg.uid, formatRow(msg, cfg.accountLabel, path));
+        }
+        const rows = newest.map((u) => byUid.get(u)).filter((r): r is string => Boolean(r));
+        const verb = listMode ? "listed" : "matched";
+        return (
+          `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, mailbox "${path}"; ${uids.length} total ${verb}):\n` +
+          rows.join("\n") +
+          `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`
+        );
+      } finally {
+        lock.release();
       }
-      const limit = args.limit ?? 50;
-      const offset = args.offset ?? 0;
-      // UIDs are ascending → newest are the highest. Apply offset+limit from the newest end.
-      const newest = uids
-        .slice()
-        .reverse()
-        .slice(offset, offset + limit);
-      const byUid = new Map<number, string>();
-      for await (const msg of client.fetch(
-        newest.join(","),
-        { envelope: true, flags: true },
-        { uid: true }
-      )) {
-        byUid.set(msg.uid, formatRow(msg, cfg.accountLabel, path));
-      }
-      const rows = newest.map((u) => byUid.get(u)).filter((r): r is string => Boolean(r));
-      const verb = listMode ? "listed" : "matched";
-      return (
-        `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, mailbox "${path}"; ${uids.length} total ${verb}):\n` +
-        rows.join("\n") +
-        `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`
-      );
-    } finally {
-      lock.release();
-    }
-  } finally {
-    await client.logout().catch(() => undefined);
-  }
+    },
+    true
+  );
 }
 
 export function imapSearchMessages(
@@ -318,18 +320,119 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Connect, run `fn`, always log out. */
-async function withClient<T>(
+// ---------------------------------------------------------------------------
+// Connection pool (issue #50 / A3)
+//
+// The MCP server is long-lived and every tool call is serialized through the
+// AppleScript gate, so instead of connecting + logging out (~seconds) on every
+// IMAP call, one connection is kept alive and reused. A NOOP verifies liveness
+// before reuse; an idle timer closes it after inactivity. An injected
+// `deps.connect` (tests) bypasses the pool and connects per call.
+// ---------------------------------------------------------------------------
+let poolConnect: ImapConnect = defaultConnect;
+let pool: { client: ImapClientLike; key: string; idle?: NodeJS.Timeout } | null = null;
+
+function imapIdleMs(): number {
+  const raw = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
+  if (raw !== undefined) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 60_000;
+}
+
+async function dropPool(): Promise<void> {
+  if (!pool) return;
+  if (pool.idle) clearTimeout(pool.idle);
+  const c = pool.client;
+  pool = null;
+  await c.logout().catch(() => undefined);
+}
+
+function scheduleIdleClose(): void {
+  if (!pool) return;
+  if (pool.idle) clearTimeout(pool.idle);
+  const ms = imapIdleMs();
+  if (ms <= 0) return;
+  pool.idle = setTimeout(() => void dropPool(), ms);
+  pool.idle.unref?.();
+}
+
+async function acquirePooled(cfg: ImapConfig): Promise<ImapClientLike> {
+  const key = `${cfg.host}:${cfg.port}:${cfg.user}`;
+  if (pool && pool.key === key) {
+    if (pool.idle) clearTimeout(pool.idle);
+    try {
+      await pool.client.noop(); // verify the kept-alive connection is still usable
+      return pool.client;
+    } catch {
+      await dropPool();
+    }
+  } else if (pool) {
+    await dropPool(); // config changed — replace the pooled connection
+  }
+  const client = await poolConnect(cfg);
+  pool = { client, key };
+  return client;
+}
+
+/** Test seam: override the pool's connect factory; pass null to restore. */
+export function __setPoolConnect(fn: ImapConnect | null): void {
+  poolConnect = fn ?? defaultConnect;
+}
+/** Test seam: close and clear the pooled connection. */
+export async function __resetPool(): Promise<void> {
+  await dropPool();
+}
+
+/**
+ * Run `fn` with an IMAP client. Default (production) path reuses the pooled,
+ * kept-alive connection; an injected `deps.connect` connects fresh and logs out
+ * per call. `retryOnDrop` reconnects once if a pooled connection dies mid-op —
+ * only safe for idempotent reads, so mutations leave it false.
+ */
+async function useClient<T>(
+  deps: { connect?: ImapConnect; config?: ImapConfig },
+  fn: (client: ImapClientLike, cfg: ImapConfig) => Promise<T>,
+  retryOnDrop = false
+): Promise<T> {
+  const cfg = deps.config ?? resolveImapConfig();
+  if (deps.connect) {
+    const client = await deps.connect(cfg);
+    try {
+      return await fn(client, cfg);
+    } finally {
+      await client.logout().catch(() => undefined);
+    }
+  }
+  try {
+    const client = await acquirePooled(cfg);
+    const r = await fn(client, cfg);
+    scheduleIdleClose();
+    return r;
+  } catch (e) {
+    await dropPool();
+    if (retryOnDrop) {
+      const client = await acquirePooled(cfg);
+      try {
+        const r = await fn(client, cfg);
+        scheduleIdleClose();
+        return r;
+      } catch (e2) {
+        await dropPool();
+        throw e2;
+      }
+    }
+    throw e;
+  }
+}
+
+/** Connect, run `fn`, manage the connection (pooled in production). */
+function withClient<T>(
   deps: { connect?: ImapConnect; config?: ImapConfig },
   fn: (client: ImapClientLike, cfg: ImapConfig) => Promise<T>
 ): Promise<T> {
-  const cfg = deps.config ?? resolveImapConfig();
-  const client = await (deps.connect ?? defaultConnect)(cfg);
-  try {
-    return await fn(client, cfg);
-  } finally {
-    await client.logout().catch(() => undefined);
-  }
+  return useClient(deps, fn);
 }
 
 /**

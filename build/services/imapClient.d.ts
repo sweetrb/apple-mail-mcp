@@ -82,6 +82,7 @@ export interface ImapClientLike {
     messageFlagsRemove(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
     messageMove(range: number[], destination: string, opts: FlagOpts): Promise<unknown>;
     messageDelete(range: number[], opts: FlagOpts): Promise<boolean>;
+    noop(): Promise<void>;
     logout(): Promise<void>;
 }
 export declare function encodeImapId(account: string, path: string, uid: number): string;
@@ -109,6 +110,10 @@ export interface ImapOpResult {
     error?: string;
     info?: string;
 }
+/** Test seam: override the pool's connect factory; pass null to restore. */
+export declare function __setPoolConnect(fn: ImapConnect | null): void;
+/** Test seam: close and clear the pooled connection. */
+export declare function __resetPool(): Promise<void>;
 export declare function imapCreateMailbox(name: string, deps?: {
     connect?: ImapConnect;
     config?: ImapConfig;
