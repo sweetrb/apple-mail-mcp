@@ -50,6 +50,7 @@ import {
 } from "@/tools/respond.js";
 import { routeMessage } from "@/services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "@/tools/doctor.js";
+import { registerResourcesAndPrompts } from "@/tools/resourcesAndPrompts.js";
 
 // =============================================================================
 // Shared Validation Schemas
@@ -109,6 +110,10 @@ const server = new McpServer({
  * Handles all AppleScript execution and mail operations.
  */
 const mailManager = new AppleMailManager();
+
+// MCP resources (accounts/templates/mailboxes) and prompts (triage/reply/
+// summary) — additive context + workflows alongside the tools (D2).
+registerResourcesAndPrompts(server, mailManager);
 
 // Response helpers, the AppleScript serial gate, withErrorHandling, and the
 // message backend router now live in @/tools/respond and @/services/messageRouter.
