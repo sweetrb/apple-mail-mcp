@@ -231,7 +231,7 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 2. list-templates → see saved templates
 3. use-template id="tmpl_1" → create draft from template
 4. use-template id="tmpl_1" to=["other@..."] → override recipients
-   Note: templates are stored in memory and reset when the server restarts
+   Note: templates persist to disk (APPLE_MAIL_MCP_TEMPLATES_FILE) and survive restarts
 ```
 
 ### Send email with attachments

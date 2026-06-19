@@ -341,9 +341,9 @@ an app-specific password for Gmail/Workspace/iCloud), so no secret goes in
 config. Gmail label semantics: common names (`All Mail`, `Sent`, `Trash`,
 `Spam`, `Important`, …) map to their `[Gmail]/…` IMAP paths automatically.
 
-> Note: each call currently opens its own IMAP connection (no pooling yet), so
-> expect a few seconds of connection overhead per call — the one remaining
-> follow-up on [#43](https://github.com/sweetrb/apple-mail-mcp/issues/43).
+> Note: IMAP connections are pooled — one kept-alive connection per account is
+> reused across calls (verified with a NOOP, closed after `APPLE_MAIL_MCP_IMAP_IDLE_MS`
+> of inactivity), so there's no per-call connection overhead ([#50](https://github.com/sweetrb/apple-mail-mcp/issues/50)).
 >
 > **iCloud:** set `APPLE_MAIL_MCP_IMAP_HOST=imap.mail.me.com`, `APPLE_MAIL_MCP_IMAP_USER`
 > to your iCloud address, `APPLE_MAIL_MCP_IMAP_ACCOUNT` to the Mail account name
@@ -426,16 +426,6 @@ Return an attachment's bytes as base64 (the read counterpart to inline-base64 se
 | `attachmentName` | string | Yes | Attachment filename (from `list-attachments`) |
 
 **Returns:** The attachment bytes, base64-encoded (also in `structuredContent.contentBase64`).
-
-#### `create-rule` / `delete-rule`
-
-Create a Mail rule with conditions and actions, or delete a rule by name.
-
-`create-rule` parameters: `name` (string), `conditions` (array of `{field: from|to|cc|subject|content, operator: contains|notContains|equals|beginsWith|endsWith, value}`), `actions` (`{markRead?, markFlagged?, delete?, moveTo?, moveToAccount?}`), `matchAll` (default true), `enabled` (default true). `delete-rule` parameters: `name`.
-
-#### `doctor`
-
-Run a full setup diagnostic: Mail.app automation permission, account state (flags disabled accounts), and each configured IMAP/SMTP backend, each reported as ok / warn / fail with an actionable message. No parameters.
 
 ---
 
@@ -674,6 +664,41 @@ Enable or disable a mail rule.
 
 ---
 
+#### `create-rule`
+
+Create a Mail rule with one or more conditions and actions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Rule name (must be unique) |
+| `conditions` | object[] | Yes | One or more `{field, operator, value}` (see below) |
+| `actions` | object | Yes | At least one of `markRead`, `markFlagged`, `delete`, `moveTo` |
+| `matchAll` | boolean | No | `true` (default) = all conditions must match; `false` = any |
+| `enabled` | boolean | No | Whether the rule is enabled on creation (default `true`) |
+
+Each condition is `{ field, operator, value }` where `field` is one of `from`, `to`, `cc`, `subject`, `content` and `operator` is one of `contains`, `notContains`, `equals`, `beginsWith`, `endsWith`. Actions: `markRead` / `markFlagged` / `delete` (booleans), `moveTo` (mailbox name) with optional `moveToAccount`.
+
+**Example:**
+```json
+{
+  "name": "Newsletters",
+  "conditions": [{ "field": "from", "operator": "contains", "value": "newsletter" }],
+  "actions": { "markRead": true, "moveTo": "Reading" }
+}
+```
+
+---
+
+#### `delete-rule`
+
+Delete a mail rule by name.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Rule name |
+
+---
+
 ### Contacts
 
 #### `search-contacts`
@@ -691,7 +716,7 @@ Search contacts in Contacts.app.
 
 ### Templates
 
-Email templates are stored in memory for the duration of the server session.
+Email templates are **persisted to disk** so they survive server restarts, stored as JSON at `APPLE_MAIL_MCP_TEMPLATES_FILE` (default `~/Library/Application Support/apple-mail-mcp/templates.json`).
 
 #### `save-template`
 
@@ -759,6 +784,16 @@ Verify Mail.app connectivity and permissions.
 **Parameters:** None
 
 **Returns:** Status of all health checks (app running, permissions, account access).
+
+---
+
+#### `doctor`
+
+Run a full setup diagnostic: Mail.app automation permission, account state (flagging disabled accounts), and each configured IMAP/SMTP backend — each reported as ok / warn / fail with an actionable message.
+
+**Parameters:** None
+
+**Returns:** A per-check report (`structuredContent` carries the raw `{healthy, checks[]}`).
 
 ---
 
