@@ -33,7 +33,6 @@ import {
   imapCreateMailbox,
   imapDeleteMailbox,
   imapRenameMailbox,
-  decodeImapId,
   imapGetMessage,
   imapMarkRead,
   imapMarkUnread,
@@ -42,8 +41,13 @@ import {
   imapMoveMessageById,
   imapDeleteMessageById,
 } from "@/services/imapClient.js";
-import { createSerialGate } from "@/utils/serialize.js";
-import type { SearchDiagnostics } from "@/types.js";
+import {
+  successResponse,
+  errorResponse,
+  partialCoverageBlock,
+  withErrorHandling,
+} from "@/tools/respond.js";
+import { routeMessage } from "@/services/messageRouter.js";
 
 // =============================================================================
 // Shared Validation Schemas
@@ -104,89 +108,8 @@ const server = new McpServer({
  */
 const mailManager = new AppleMailManager();
 
-// =============================================================================
-// Response Helpers
-// =============================================================================
-
-/**
- * Creates a successful MCP tool response.
- */
-function successResponse(message: string) {
-  return {
-    content: [{ type: "text" as const, text: message }],
-  };
-}
-
-/**
- * Creates an error MCP tool response.
- */
-function errorResponse(message: string) {
-  return {
-    content: [{ type: "text" as const, text: message }],
-    isError: true,
-  };
-}
-
-type ToolResponse = ReturnType<typeof successResponse> | ReturnType<typeof errorResponse>;
-
-/**
- * Render a partial-coverage warning from search/list diagnostics, so a caller
- * never mistakes an incomplete scan for a confirmed "no matches" (#24/#29).
- * Returns "" when coverage was complete.
- */
-function partialCoverageBlock(diagnostics: SearchDiagnostics): string {
-  const notes: string[] = [];
-  if (diagnostics.timedOutAccounts.length > 0) {
-    notes.push(`timed out (no results) for account(s): ${diagnostics.timedOutAccounts.join(", ")}`);
-  }
-  if (diagnostics.skippedLargeMailboxes.length > 0) {
-    notes.push(
-      `skipped mailbox(es) too large to scan via AppleScript: ${diagnostics.skippedLargeMailboxes.join(", ")} — scope with \`mailbox\` (+ a \`dateFrom\`/\`dateTo\` window for search) to reach them`
-    );
-  }
-  if (diagnostics.notSearchedMailboxes.length > 0) {
-    notes.push(
-      `could not finish scanning mailbox(es): ${diagnostics.notSearchedMailboxes.join(", ")}`
-    );
-  }
-  if (notes.length === 0) return "";
-  return `\n\n⚠️  Partial results — this is NOT a confirmed "no such mail":\n${notes
-    .map((n) => `  - ${n}`)
-    .join("\n")}`;
-}
-
-/**
- * Serial execution gate for AppleScript-backed tool calls (issue #11).
- *
- * Concurrent MCP tool calls are funneled through this single gate so only one
- * osascript invocation hits Mail.app's single-threaded AppleScript dispatch at
- * a time, with a short settle delay between calls so the dispatch queue drains.
- * Without it, a concurrent batch races into Mail.app, the later calls blow past
- * their timeouts, and Mail.app is left half-recovered for the next batch.
- */
-const serializeAppleScript = createSerialGate();
-
-/**
- * Wraps a tool handler with consistent error handling, serialized through the
- * AppleScript gate so concurrent MCP tool calls don't race into Mail.app (#11).
- * Handlers may be synchronous or async (the SMTP send path in send-email is
- * async), so the handler result is awaited inside the gate.
- */
-function withErrorHandling<T extends Record<string, unknown>>(
-  handler: (params: T) => ToolResponse | Promise<ToolResponse>,
-  errorPrefix: string
-) {
-  return async (params: T) => {
-    return serializeAppleScript(async () => {
-      try {
-        return await handler(params);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        return errorResponse(`${errorPrefix}: ${message}`);
-      }
-    });
-  };
-}
+// Response helpers, the AppleScript serial gate, withErrorHandling, and the
+// message backend router now live in @/tools/respond and @/services/messageRouter.
 
 // =============================================================================
 // Message Tools
@@ -296,28 +219,23 @@ server.tool(
       .optional()
       .describe("Return the HTML body (extracted from the message source) instead of plain text"),
   },
-  withErrorHandling(async ({ id, preferHtml }) => {
-    // IMAP id (imap:…) → fetch via IMAP (#43 Phase 3); else AppleScript.
-    if (decodeImapId(id)) {
-      const r = await imapGetMessage(id, preferHtml === true);
-      return r.success
-        ? successResponse(r.info ?? "")
-        : errorResponse(r.error ?? `Message with ID "${id}" not found`);
-    }
-
-    // Only fetch/parse the raw source when HTML is actually requested (#32).
-    const content = mailManager.getMessageContent(id, preferHtml === true);
-
-    if (!content) {
-      return errorResponse(`Message with ID "${id}" not found`);
-    }
-
-    if (preferHtml && content.htmlContent) {
-      return successResponse(`Subject: ${content.subject}\n\n${content.htmlContent}`);
-    }
-
-    return successResponse(`Subject: ${content.subject}\n\n${content.plainText}`);
-  }, "Error retrieving message")
+  withErrorHandling(
+    ({ id, preferHtml }) =>
+      routeMessage(id, {
+        // IMAP id (imap:…) → fetch via IMAP (#43 Phase 3); else AppleScript.
+        imap: () => imapGetMessage(id, preferHtml === true),
+        apple: () => {
+          // Only fetch/parse the raw source when HTML is actually requested (#32).
+          const content = mailManager.getMessageContent(id, preferHtml === true);
+          if (!content) return errorResponse(`Message with ID "${id}" not found`);
+          const body = preferHtml && content.htmlContent ? content.htmlContent : content.plainText;
+          return successResponse(`Subject: ${content.subject}\n\n${body}`);
+        },
+        ok: "",
+        fail: `Message with ID "${id}" not found`,
+      }),
+    "Error retrieving message"
+  )
 );
 
 // --- list-messages ---
@@ -552,21 +470,19 @@ server.tool(
   {
     id: MESSAGE_ID_SCHEMA,
   },
-  withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-      const r = await imapMarkRead(id);
-      return r.success
-        ? successResponse("Message marked as read")
-        : errorResponse(r.error ?? `Failed to mark message "${id}" as read`);
-    }
-    const success = mailManager.markAsRead(id);
-
-    if (!success) {
-      return errorResponse(`Failed to mark message "${id}" as read`);
-    }
-
-    return successResponse("Message marked as read");
-  }, "Error marking message as read")
+  withErrorHandling(
+    ({ id }) =>
+      routeMessage(id, {
+        imap: () => imapMarkRead(id),
+        apple: () =>
+          mailManager.markAsRead(id)
+            ? successResponse("Message marked as read")
+            : errorResponse(`Failed to mark message "${id}" as read`),
+        ok: "Message marked as read",
+        fail: `Failed to mark message "${id}" as read`,
+      }),
+    "Error marking message as read"
+  )
 );
 
 // --- mark-as-unread ---
@@ -576,21 +492,19 @@ server.tool(
   {
     id: MESSAGE_ID_SCHEMA,
   },
-  withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-      const r = await imapMarkUnread(id);
-      return r.success
-        ? successResponse("Message marked as unread")
-        : errorResponse(r.error ?? `Failed to mark message "${id}" as unread`);
-    }
-    const success = mailManager.markAsUnread(id);
-
-    if (!success) {
-      return errorResponse(`Failed to mark message "${id}" as unread`);
-    }
-
-    return successResponse("Message marked as unread");
-  }, "Error marking message as unread")
+  withErrorHandling(
+    ({ id }) =>
+      routeMessage(id, {
+        imap: () => imapMarkUnread(id),
+        apple: () =>
+          mailManager.markAsUnread(id)
+            ? successResponse("Message marked as unread")
+            : errorResponse(`Failed to mark message "${id}" as unread`),
+        ok: "Message marked as unread",
+        fail: `Failed to mark message "${id}" as unread`,
+      }),
+    "Error marking message as unread"
+  )
 );
 
 // --- flag-message ---
@@ -600,21 +514,19 @@ server.tool(
   {
     id: MESSAGE_ID_SCHEMA,
   },
-  withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-      const r = await imapFlagMessage(id);
-      return r.success
-        ? successResponse("Message flagged")
-        : errorResponse(r.error ?? `Failed to flag message "${id}"`);
-    }
-    const success = mailManager.flagMessage(id);
-
-    if (!success) {
-      return errorResponse(`Failed to flag message "${id}"`);
-    }
-
-    return successResponse("Message flagged");
-  }, "Error flagging message")
+  withErrorHandling(
+    ({ id }) =>
+      routeMessage(id, {
+        imap: () => imapFlagMessage(id),
+        apple: () =>
+          mailManager.flagMessage(id)
+            ? successResponse("Message flagged")
+            : errorResponse(`Failed to flag message "${id}"`),
+        ok: "Message flagged",
+        fail: `Failed to flag message "${id}"`,
+      }),
+    "Error flagging message"
+  )
 );
 
 // --- unflag-message ---
@@ -624,21 +536,19 @@ server.tool(
   {
     id: MESSAGE_ID_SCHEMA,
   },
-  withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-      const r = await imapUnflagMessage(id);
-      return r.success
-        ? successResponse("Message unflagged")
-        : errorResponse(r.error ?? `Failed to unflag message "${id}"`);
-    }
-    const success = mailManager.unflagMessage(id);
-
-    if (!success) {
-      return errorResponse(`Failed to unflag message "${id}"`);
-    }
-
-    return successResponse("Message unflagged");
-  }, "Error unflagging message")
+  withErrorHandling(
+    ({ id }) =>
+      routeMessage(id, {
+        imap: () => imapUnflagMessage(id),
+        apple: () =>
+          mailManager.unflagMessage(id)
+            ? successResponse("Message unflagged")
+            : errorResponse(`Failed to unflag message "${id}"`),
+        ok: "Message unflagged",
+        fail: `Failed to unflag message "${id}"`,
+      }),
+    "Error unflagging message"
+  )
 );
 
 // --- delete-message ---
@@ -648,21 +558,21 @@ server.tool(
   {
     id: MESSAGE_ID_SCHEMA,
   },
-  withErrorHandling(async ({ id }) => {
-    if (decodeImapId(id)) {
-      const r = await imapDeleteMessageById(id);
-      return r.success
-        ? successResponse("Message deleted")
-        : errorResponse(r.error ?? `Failed to delete message "${id}"`);
-    }
-    const { success, error } = mailManager.deleteMessage(id);
-
-    if (!success) {
-      return errorResponse(error || `Failed to delete message "${id}"`);
-    }
-
-    return successResponse("Message deleted");
-  }, "Error deleting message")
+  withErrorHandling(
+    ({ id }) =>
+      routeMessage(id, {
+        imap: () => imapDeleteMessageById(id),
+        apple: () => {
+          const { success, error } = mailManager.deleteMessage(id);
+          return success
+            ? successResponse("Message deleted")
+            : errorResponse(error || `Failed to delete message "${id}"`);
+        },
+        ok: "Message deleted",
+        fail: `Failed to delete message "${id}"`,
+      }),
+    "Error deleting message"
+  )
 );
 
 // --- move-message ---
@@ -674,21 +584,21 @@ server.tool(
     mailbox: z.string().min(1, "Destination mailbox is required"),
     account: z.string().optional().describe("Account containing the destination mailbox"),
   },
-  withErrorHandling(async ({ id, mailbox, account }) => {
-    if (decodeImapId(id)) {
-      const r = await imapMoveMessageById(id, mailbox);
-      return r.success
-        ? successResponse(`Message moved to "${mailbox}"`)
-        : errorResponse(r.error ?? `Failed to move message to "${mailbox}"`);
-    }
-    const { success, error } = mailManager.moveMessage(id, mailbox, account);
-
-    if (!success) {
-      return errorResponse(error || `Failed to move message to "${mailbox}"`);
-    }
-
-    return successResponse(`Message moved to "${mailbox}"`);
-  }, "Error moving message")
+  withErrorHandling(
+    ({ id, mailbox, account }) =>
+      routeMessage(id, {
+        imap: () => imapMoveMessageById(id, mailbox),
+        apple: () => {
+          const { success, error } = mailManager.moveMessage(id, mailbox, account);
+          return success
+            ? successResponse(`Message moved to "${mailbox}"`)
+            : errorResponse(error || `Failed to move message to "${mailbox}"`);
+        },
+        ok: `Message moved to "${mailbox}"`,
+        fail: `Failed to move message to "${mailbox}"`,
+      }),
+    "Error moving message"
+  )
 );
 
 // --- batch-delete-messages ---
