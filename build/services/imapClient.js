@@ -709,3 +709,76 @@ export async function imapDeleteMessageById(id, deps = {}) {
         }
     });
 }
+/** Walk a BODYSTRUCTURE tree collecting attachment parts (disposition or filename). */
+function collectAttachments(node, out = []) {
+    if (!node)
+        return out;
+    const filename = node.dispositionParameters?.filename || node.parameters?.name;
+    const disposition = node.disposition?.toLowerCase();
+    const isAttachment = !!node.part && (disposition === "attachment" || (!!filename && disposition !== "inline"));
+    if (isAttachment) {
+        out.push({
+            part: node.part,
+            filename: filename || `part-${node.part}`,
+            mimeType: node.type || "application/octet-stream",
+            size: node.size ?? 0,
+        });
+    }
+    for (const child of node.childNodes ?? [])
+        collectAttachments(child, out);
+    return out;
+}
+async function streamToBuffer(content) {
+    const chunks = [];
+    for await (const chunk of content)
+        chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+}
+/** List a message's attachments via IMAP BODYSTRUCTURE (no full download). */
+export async function imapListAttachments(id, deps = {}) {
+    const ref = decodeImapId(id);
+    if (!ref)
+        return { success: false, error: `Not an IMAP message id: "${id}".` };
+    return withMailbox(ref.path, { ...deps, account: deps.account ?? ref.account }, async (client) => {
+        const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+        if (!msg || !msg.bodyStructure) {
+            return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+        }
+        const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
+            id: `${id}#${a.part}`,
+            name: a.filename,
+            mimeType: a.mimeType,
+            size: a.size,
+        }));
+        return { success: true, attachments };
+    });
+}
+/** Fetch one attachment's bytes (base64) via IMAP, matched by filename. */
+export async function imapFetchAttachment(id, attachmentName, deps = {}) {
+    const ref = decodeImapId(id);
+    if (!ref)
+        return { success: false, error: `Not an IMAP message id: "${id}".` };
+    return withMailbox(ref.path, { ...deps, account: deps.account ?? ref.account }, async (client) => {
+        const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+        if (!msg || !msg.bodyStructure) {
+            return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+        }
+        const atts = collectAttachments(msg.bodyStructure);
+        const match = atts.find((a) => a.filename === attachmentName);
+        if (!match) {
+            const names = atts.map((a) => a.filename).join(", ") || "none";
+            return {
+                success: false,
+                error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`,
+            };
+        }
+        const dl = await client.download(String(ref.uid), match.part, { uid: true });
+        const buf = await streamToBuffer(dl.content);
+        return {
+            success: true,
+            base64: buf.toString("base64"),
+            bytes: buf.length,
+            mimeType: match.mimeType,
+        };
+    });
+}

@@ -39,11 +39,29 @@ interface ImapEnvelope {
     date?: Date | string;
     from?: ImapAddress[];
 }
+export interface ImapBodyStructure {
+    part?: string;
+    type?: string;
+    disposition?: string;
+    dispositionParameters?: Record<string, string>;
+    parameters?: Record<string, string>;
+    size?: number;
+    encoding?: string;
+    childNodes?: ImapBodyStructure[];
+}
 interface ImapMessage {
     uid: number;
     envelope?: ImapEnvelope;
     flags?: Set<string>;
     source?: Buffer | string;
+    bodyStructure?: ImapBodyStructure;
+}
+interface ImapDownload {
+    meta?: {
+        filename?: string;
+        contentType?: string;
+    };
+    content: AsyncIterable<Uint8Array>;
 }
 interface MailboxLock {
     release: () => void;
@@ -78,6 +96,9 @@ export interface ImapClientLike {
         unseen?: number;
         recent?: number;
     }>;
+    download(range: string, part: string, opts: {
+        uid: true;
+    }): Promise<ImapDownload>;
     mailboxCreate(path: string): Promise<{
         path: string;
         created: boolean;
@@ -190,5 +211,25 @@ export declare const imapFlagMessage: (id: string, deps?: {}) => Promise<ImapOpR
 export declare const imapUnflagMessage: (id: string, deps?: {}) => Promise<ImapOpResult>;
 export declare function imapMoveMessageById(id: string, destMailbox: string, deps?: ImapDeps): Promise<ImapOpResult>;
 export declare function imapDeleteMessageById(id: string, deps?: ImapDeps): Promise<ImapOpResult>;
+export interface ImapAttachmentInfo {
+    id: string;
+    name: string;
+    mimeType: string;
+    size: number;
+}
+/** List a message's attachments via IMAP BODYSTRUCTURE (no full download). */
+export declare function imapListAttachments(id: string, deps?: ImapDeps): Promise<{
+    success: boolean;
+    attachments?: ImapAttachmentInfo[];
+    error?: string;
+}>;
+/** Fetch one attachment's bytes (base64) via IMAP, matched by filename. */
+export declare function imapFetchAttachment(id: string, attachmentName: string, deps?: ImapDeps): Promise<{
+    success: boolean;
+    base64?: string;
+    bytes?: number;
+    mimeType?: string;
+    error?: string;
+}>;
 export {};
 //# sourceMappingURL=imapClient.d.ts.map

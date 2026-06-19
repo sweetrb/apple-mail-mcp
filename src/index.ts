@@ -24,7 +24,9 @@ import { createRequire } from "module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { AppleMailManager } from "@/services/appleMailManager.js";
+import { AppleMailManager, isPathWithinAllowedRoots } from "@/services/appleMailManager.js";
+import { writeFileSync } from "fs";
+import { resolve as resolvePath, join as joinPath } from "path";
 import { sendViaSmtp } from "@/services/smtpMailer.js";
 import {
   isImapAccount,
@@ -34,6 +36,8 @@ import {
   imapUnreadCount,
   imapListMailboxes,
   imapMailStats,
+  imapListAttachments,
+  imapFetchAttachment,
   imapCreateMailbox,
   imapDeleteMailbox,
   imapRenameMailbox,
@@ -866,8 +870,16 @@ server.tool(
   {
     id: MESSAGE_ID_SCHEMA,
   },
-  withErrorHandling(({ id }) => {
-    const attachments = mailManager.listAttachments(id);
+  withErrorHandling(async ({ id }) => {
+    // IMAP (I1): BODYSTRUCTURE enumerates parts (incl. MIME attachments
+    // AppleScript can't see) without downloading the message.
+    const attachments = id.startsWith("imap:")
+      ? await (async () => {
+          const r = await imapListAttachments(id);
+          if (!r.success) throw new Error(r.error || "Failed to list attachments via IMAP");
+          return r.attachments ?? [];
+        })()
+      : mailManager.listAttachments(id);
     const structured = { attachments, count: attachments.length };
 
     if (attachments.length === 0) {
@@ -897,7 +909,26 @@ server.tool(
     attachmentName: z.string().min(1, "Attachment name is required"),
     savePath: z.string().min(1, "Save directory path is required"),
   },
-  withErrorHandling(({ id, attachmentName, savePath }) => {
+  withErrorHandling(async ({ id, attachmentName, savePath }) => {
+    // IMAP (I1): fetch the part's bytes via IMAP, then write into savePath (a
+    // directory) as savePath/attachmentName — mirroring the AppleScript path,
+    // with the same name + allowed-roots validation.
+    if (id.startsWith("imap:")) {
+      if (/[/\\\0]/.test(attachmentName) || attachmentName.includes("..")) {
+        return errorResponse(`Invalid attachment name: "${attachmentName}"`);
+      }
+      const resolvedDir = resolvePath(savePath);
+      if (!isPathWithinAllowedRoots(resolvedDir)) {
+        return errorResponse(`Save path "${savePath}" is outside allowed directories`);
+      }
+      const r = await imapFetchAttachment(id, attachmentName);
+      if (!r.success || !r.base64) {
+        return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
+      }
+      writeFileSync(joinPath(resolvedDir, attachmentName), Buffer.from(r.base64, "base64"));
+      return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`);
+    }
+
     const success = mailManager.saveAttachment(id, attachmentName, savePath);
 
     if (!success) {
@@ -913,13 +944,23 @@ server.tool(
 server.tool(
   "fetch-attachment",
   {
-    id: NUMERIC_MESSAGE_ID_SCHEMA,
+    id: MESSAGE_ID_SCHEMA,
     attachmentName: z.string().min(1, "Attachment name is required"),
   },
-  withErrorHandling(({ id, attachmentName }) => {
+  withErrorHandling(async ({ id, attachmentName }) => {
     // Returns the attachment bytes as base64 (B4) — the read counterpart to
-    // sending inline base64 content, for clients that want the bytes directly
-    // rather than writing to disk via save-attachment.
+    // sending inline base64 content. IMAP (I1) fetches the part directly; numeric
+    // ids fall back to the AppleScript/MIME path.
+    if (id.startsWith("imap:")) {
+      const r = await imapFetchAttachment(id, attachmentName);
+      if (!r.success || !r.base64) {
+        return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
+      }
+      return successResponse(
+        `Fetched "${attachmentName}" (${r.bytes} bytes, base64-encoded below).\n\n${r.base64}`,
+        { attachmentName, bytes: r.bytes, mimeType: r.mimeType, contentBase64: r.base64 }
+      );
+    }
     const r = mailManager.getAttachmentBase64(id, attachmentName);
     if (!r.success) {
       return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);

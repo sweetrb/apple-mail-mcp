@@ -21,6 +21,8 @@ import {
   imapUnreadCount,
   imapListMailboxes,
   imapMailStats,
+  imapListAttachments,
+  imapFetchAttachment,
   listImapAccountLabels,
   __setPoolConnect,
   __resetPool,
@@ -71,6 +73,12 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
     fetchOne: async () => false,
     list: async () => [],
     status: async (path: string) => ({ path, messages: 0, unseen: 0, recent: 0 }),
+    download: async () => ({
+      meta: { filename: "file.bin" },
+      content: (async function* () {
+        yield Buffer.from("attachment-bytes");
+      })(),
+    }),
     mailboxCreate: async (path: string) => ({ path, created: true }),
     mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),
     mailboxDelete: async (path: string) => ({ path }),
@@ -419,6 +427,68 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/Not an IMAP message id/);
+  });
+});
+
+describe("attachments via BODYSTRUCTURE (I1)", () => {
+  const MID = encodeImapId("acct", "INBOX", 9);
+  function attClient(): ImapClientLike {
+    return {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 9,
+        bodyStructure: {
+          type: "multipart/mixed",
+          childNodes: [
+            { part: "1", type: "text/plain", size: 100 }, // body, not an attachment
+            {
+              part: "2",
+              type: "application/pdf",
+              disposition: "attachment",
+              dispositionParameters: { filename: "report.pdf" },
+              size: 2048,
+            },
+            { part: "3", type: "image/png", parameters: { name: "logo.png" }, size: 512 },
+          ],
+        },
+      }),
+      download: async (_range: string, part: string) => ({
+        meta: {},
+        content: (async function* () {
+          yield Buffer.from(`bytes-of-${part}`);
+        })(),
+      }),
+    };
+  }
+
+  it("lists only attachment parts from BODYSTRUCTURE", async () => {
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => attClient() });
+    expect(r.success).toBe(true);
+    expect(r.attachments?.map((a) => a.name)).toEqual(["report.pdf", "logo.png"]);
+    expect(r.attachments?.[0]).toMatchObject({ mimeType: "application/pdf", size: 2048 });
+  });
+
+  it("fetches an attachment's bytes by filename", async () => {
+    const r = await imapFetchAttachment(MID, "report.pdf", {
+      config: cfg,
+      connect: async () => attClient(),
+    });
+    expect(r.success).toBe(true);
+    expect(Buffer.from(r.base64 as string, "base64").toString()).toBe("bytes-of-2");
+    expect(r.mimeType).toBe("application/pdf");
+  });
+
+  it("errors clearly when the attachment name isn't found", async () => {
+    const r = await imapFetchAttachment(MID, "missing.txt", {
+      config: cfg,
+      connect: async () => attClient(),
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/not found/i);
+  });
+
+  it("rejects a non-IMAP id", async () => {
+    expect((await imapListAttachments("12345")).success).toBe(false);
   });
 });
 

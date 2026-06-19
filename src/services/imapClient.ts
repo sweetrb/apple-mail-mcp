@@ -72,11 +72,26 @@ interface ImapEnvelope {
   date?: Date | string;
   from?: ImapAddress[];
 }
+export interface ImapBodyStructure {
+  part?: string; // IMAP section id, e.g. "2" or "1.2"
+  type?: string; // MIME type, e.g. "image/png" or "multipart/mixed"
+  disposition?: string; // "attachment" | "inline"
+  dispositionParameters?: Record<string, string>;
+  parameters?: Record<string, string>;
+  size?: number;
+  encoding?: string;
+  childNodes?: ImapBodyStructure[];
+}
 interface ImapMessage {
   uid: number;
   envelope?: ImapEnvelope;
   flags?: Set<string>;
   source?: Buffer | string;
+  bodyStructure?: ImapBodyStructure;
+}
+interface ImapDownload {
+  meta?: { filename?: string; contentType?: string };
+  content: AsyncIterable<Uint8Array>;
 }
 interface MailboxLock {
   release: () => void;
@@ -105,6 +120,7 @@ export interface ImapClientLike {
     path: string,
     query: { messages?: boolean; unseen?: boolean; recent?: boolean }
   ): Promise<{ path: string; messages?: number; unseen?: number; recent?: number }>;
+  download(range: string, part: string, opts: { uid: true }): Promise<ImapDownload>;
   mailboxCreate(path: string): Promise<{ path: string; created: boolean }>;
   mailboxRename(path: string, newPath: string): Promise<{ path: string; newPath: string }>;
   mailboxDelete(path: string): Promise<{ path: string }>;
@@ -918,6 +934,123 @@ export async function imapDeleteMessageById(
       } catch (e) {
         return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
       }
+    }
+  );
+}
+
+// ===========================================================================
+// Attachments via BODYSTRUCTURE (2.1 optimization I1)
+//
+// AppleScript's `mail attachments` can't see MIME-embedded attachments, forcing
+// a full raw-source scan. IMAP BODYSTRUCTURE enumerates parts without
+// downloading the message, and FETCH BODY[part] pulls a single part — faster
+// and it sees the attachments AppleScript misses. Routed for `imap:` ids.
+// ===========================================================================
+
+interface AttachmentPart {
+  part: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
+export interface ImapAttachmentInfo {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+/** Walk a BODYSTRUCTURE tree collecting attachment parts (disposition or filename). */
+function collectAttachments(node: ImapBodyStructure, out: AttachmentPart[] = []): AttachmentPart[] {
+  if (!node) return out;
+  const filename = node.dispositionParameters?.filename || node.parameters?.name;
+  const disposition = node.disposition?.toLowerCase();
+  const isAttachment =
+    !!node.part && (disposition === "attachment" || (!!filename && disposition !== "inline"));
+  if (isAttachment) {
+    out.push({
+      part: node.part as string,
+      filename: filename || `part-${node.part}`,
+      mimeType: node.type || "application/octet-stream",
+      size: node.size ?? 0,
+    });
+  }
+  for (const child of node.childNodes ?? []) collectAttachments(child, out);
+  return out;
+}
+
+async function streamToBuffer(content: AsyncIterable<Uint8Array>): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of content) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+/** List a message's attachments via IMAP BODYSTRUCTURE (no full download). */
+export async function imapListAttachments(
+  id: string,
+  deps: ImapDeps = {}
+): Promise<{ success: boolean; attachments?: ImapAttachmentInfo[]; error?: string }> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(
+    ref.path,
+    { ...deps, account: deps.account ?? ref.account },
+    async (client) => {
+      const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+      if (!msg || !msg.bodyStructure) {
+        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+      }
+      const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
+        id: `${id}#${a.part}`,
+        name: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+      }));
+      return { success: true, attachments };
+    }
+  );
+}
+
+/** Fetch one attachment's bytes (base64) via IMAP, matched by filename. */
+export async function imapFetchAttachment(
+  id: string,
+  attachmentName: string,
+  deps: ImapDeps = {}
+): Promise<{
+  success: boolean;
+  base64?: string;
+  bytes?: number;
+  mimeType?: string;
+  error?: string;
+}> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(
+    ref.path,
+    { ...deps, account: deps.account ?? ref.account },
+    async (client) => {
+      const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+      if (!msg || !msg.bodyStructure) {
+        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+      }
+      const atts = collectAttachments(msg.bodyStructure);
+      const match = atts.find((a) => a.filename === attachmentName);
+      if (!match) {
+        const names = atts.map((a) => a.filename).join(", ") || "none";
+        return {
+          success: false,
+          error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`,
+        };
+      }
+      const dl = await client.download(String(ref.uid), match.part, { uid: true });
+      const buf = await streamToBuffer(dl.content);
+      return {
+        success: true,
+        base64: buf.toString("base64"),
+        bytes: buf.length,
+        mimeType: match.mimeType,
+      };
     }
   );
 }
