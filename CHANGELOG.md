@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-06-19
+
+IMAP acceleration release. Six more tools now use IMAP when the account is
+IMAP-configured and fall back to AppleScript otherwise — faster and more reliable
+on large mailboxes, with no behavior change for non-IMAP accounts.
+
+### Changed
+
+- **Attachments via IMAP `BODYSTRUCTURE` (I1)** — `list-attachments`, `save-attachment`, and `fetch-attachment` route to IMAP for `imap:` ids: parts are enumerated from `BODYSTRUCTURE` (without downloading the message) and a single part is pulled with `FETCH BODY[part]`. This also surfaces **MIME-embedded attachments that AppleScript's `mail attachments` can't see** (previously only found via a slow full-source scan). `fetch-attachment` now accepts `imap:` ids.
+- **Batch ops via IMAP `UID STORE`/`UID MOVE` (I2)** — `batch-mark-as-read`/`unread`, `batch-flag`/`unflag`-messages, `batch-move-messages`, and `batch-delete-messages` accept `imap:` ids, group them by mailbox, and apply the whole UID set in one command instead of per-message. Numeric ids still run via AppleScript; mixed batches are split and merged.
+- **`get-mail-stats` via IMAP `STATUS` + `SEARCH` (I3)** — a new optional `account` argument; when it names an IMAP account, totals come from `STATUS` and recent activity from `SEARCH SINCE` (authoritative and fast on huge mailboxes).
+- **`get-unread-count` via IMAP `STATUS (UNSEEN)` (I4)** — authoritative server count for IMAP accounts; no more enumerating messages.
+- **`get-thread` true threading via References/Message-ID (I5)** — for an `imap:` seed, the conversation is assembled from RFC 5322 `References`/`In-Reply-To` via IMAP `HEADER SEARCH` (more accurate than subject grouping); falls back to subject grouping when the server lacks `HEADER` search or nothing References-linked is found.
+- **`list-mailboxes` via IMAP `LIST` + `STATUS` (I6)** — the true server folder hierarchy with per-mailbox counts for IMAP accounts.
+
+### Added
+
+- `status()` and `download()` on the IMAP client; 4 new GreenMail integration cases covering the IMAP counts, attachments, batch, and threading paths. (45 tools unchanged; +18 unit tests, 225 total.)
+
 ## [2.0.0] - 2026-06-19
 
 Major feature release. Thirteen enhancements landed on a single `v2` branch, each
