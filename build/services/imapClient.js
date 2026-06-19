@@ -782,3 +782,61 @@ export async function imapFetchAttachment(id, attachmentName, deps = {}) {
         };
     });
 }
+async function imapBatch(ids, deps, op) {
+    const groups = new Map();
+    const errors = [];
+    let failed = 0;
+    for (const id of ids) {
+        const ref = decodeImapId(id);
+        if (!ref) {
+            failed++;
+            errors.push(`Not an IMAP id: "${id}"`);
+            continue;
+        }
+        const key = `${ref.account} ${ref.path}`;
+        const g = groups.get(key) ?? { account: ref.account, path: ref.path, uids: [] };
+        g.uids.push(ref.uid);
+        groups.set(key, g);
+    }
+    let success = 0;
+    for (const g of groups.values()) {
+        try {
+            await useClient({ ...deps, account: deps.account ?? g.account }, async (client) => {
+                const lock = await client.getMailboxLock(g.path);
+                try {
+                    await op(client, g.uids, g.path);
+                }
+                finally {
+                    lock.release();
+                }
+            });
+            success += g.uids.length;
+        }
+        catch (e) {
+            failed += g.uids.length;
+            errors.push(`${g.path}: ${errText(e)}`);
+        }
+    }
+    return { success, failed, errors };
+}
+export const imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+});
+export const imapBatchMarkUnread = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+});
+export const imapBatchFlag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+});
+export const imapBatchUnflag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsRemove(uids, ["\\Flagged"], { uid: true });
+});
+export const imapBatchDelete = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+    await c.messageDelete(uids, { uid: true });
+});
+export function imapBatchMove(ids, destMailbox, deps = {}) {
+    return imapBatch(ids, deps, async (c, uids) => {
+        const dest = (await findMailboxPath(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
+        await c.messageMove(uids, dest, { uid: true });
+    });
+}

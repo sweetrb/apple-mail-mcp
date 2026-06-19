@@ -231,5 +231,16 @@ export declare function imapFetchAttachment(id: string, attachmentName: string, 
     mimeType?: string;
     error?: string;
 }>;
+export interface ImapBatchResult {
+    success: number;
+    failed: number;
+    errors: string[];
+}
+export declare const imapBatchMarkRead: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare const imapBatchMarkUnread: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare const imapBatchFlag: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare const imapBatchUnflag: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare const imapBatchDelete: (ids: string[], deps?: ImapDeps) => Promise<ImapBatchResult>;
+export declare function imapBatchMove(ids: string[], destMailbox: string, deps?: ImapDeps): Promise<ImapBatchResult>;
 export {};
 //# sourceMappingURL=imapClient.d.ts.map

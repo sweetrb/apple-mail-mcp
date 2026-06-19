@@ -1054,3 +1054,88 @@ export async function imapFetchAttachment(
     }
   );
 }
+
+// ===========================================================================
+// Batch message operations via UID STORE / MOVE (2.1 optimization I2)
+//
+// AppleScript applies batch mark/flag/move/delete one message at a time. For
+// imap: ids we group by mailbox and apply the whole UID set in a single IMAP
+// command — dramatically fewer round-trips on large batches.
+// ===========================================================================
+
+export interface ImapBatchResult {
+  success: number;
+  failed: number;
+  errors: string[];
+}
+
+async function imapBatch(
+  ids: string[],
+  deps: ImapDeps,
+  op: (client: ImapClientLike, uids: number[], path: string) => Promise<void>
+): Promise<ImapBatchResult> {
+  const groups = new Map<string, { account: string; path: string; uids: number[] }>();
+  const errors: string[] = [];
+  let failed = 0;
+  for (const id of ids) {
+    const ref = decodeImapId(id);
+    if (!ref) {
+      failed++;
+      errors.push(`Not an IMAP id: "${id}"`);
+      continue;
+    }
+    const key = `${ref.account} ${ref.path}`;
+    const g = groups.get(key) ?? { account: ref.account, path: ref.path, uids: [] };
+    g.uids.push(ref.uid);
+    groups.set(key, g);
+  }
+  let success = 0;
+  for (const g of groups.values()) {
+    try {
+      await useClient({ ...deps, account: deps.account ?? g.account }, async (client) => {
+        const lock = await client.getMailboxLock(g.path);
+        try {
+          await op(client, g.uids, g.path);
+        } finally {
+          lock.release();
+        }
+      });
+      success += g.uids.length;
+    } catch (e) {
+      failed += g.uids.length;
+      errors.push(`${g.path}: ${errText(e)}`);
+    }
+  }
+  return { success, failed, errors };
+}
+
+export const imapBatchMarkRead = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+  });
+export const imapBatchMarkUnread = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+  });
+export const imapBatchFlag = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+  });
+export const imapBatchUnflag = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageFlagsRemove(uids, ["\\Flagged"], { uid: true });
+  });
+export const imapBatchDelete = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+  imapBatch(ids, deps, async (c, uids) => {
+    await c.messageDelete(uids, { uid: true });
+  });
+export function imapBatchMove(
+  ids: string[],
+  destMailbox: string,
+  deps: ImapDeps = {}
+): Promise<ImapBatchResult> {
+  return imapBatch(ids, deps, async (c, uids) => {
+    const dest = (await findMailboxPath(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
+    await c.messageMove(uids, dest, { uid: true });
+  });
+}

@@ -23,6 +23,8 @@ import {
   imapMailStats,
   imapListAttachments,
   imapFetchAttachment,
+  imapBatchMarkRead,
+  imapBatchMove,
   listImapAccountLabels,
   __setPoolConnect,
   __resetPool,
@@ -427,6 +429,65 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/Not an IMAP message id/);
+  });
+});
+
+describe("batch ops via UID STORE/MOVE (I2)", () => {
+  it("groups ids by mailbox and applies flags as one UID set per mailbox", async () => {
+    const calls: { path: string; uids: number[]; flags: string[] }[] = [];
+    let opens = 0;
+    let lastPath = "";
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      getMailboxLock: async (path: string) => {
+        opens++;
+        lastPath = path;
+        return { release: () => undefined };
+      },
+      messageFlagsAdd: async (uids: number[], flags: string[]) => {
+        calls.push({ path: lastPath, uids, flags });
+        return true;
+      },
+    };
+    const ids = [
+      encodeImapId("acct", "INBOX", 1),
+      encodeImapId("acct", "INBOX", 2),
+      encodeImapId("acct", "Archive", 9),
+    ];
+    const r = await imapBatchMarkRead(ids, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(3);
+    expect(r.failed).toBe(0);
+    expect(opens).toBe(2); // one lock per distinct mailbox
+    expect(calls).toEqual([
+      { path: "INBOX", uids: [1, 2], flags: ["\\Seen"] },
+      { path: "Archive", uids: [9], flags: ["\\Seen"] },
+    ]);
+  });
+
+  it("counts non-IMAP ids as failures", async () => {
+    const r = await imapBatchMarkRead(["12345"], {
+      config: cfg,
+      connect: async () => makeClient([], {}),
+    });
+    expect(r.success).toBe(0);
+    expect(r.failed).toBe(1);
+    expect(r.errors[0]).toMatch(/Not an IMAP id/);
+  });
+
+  it("moves a UID set to a resolved destination mailbox", async () => {
+    let moved: { uids: number[]; dest: string } | null = null;
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+      messageMove: async (uids: number[], dest: string) => {
+        moved = { uids, dest };
+        return {};
+      },
+    };
+    const ids = [encodeImapId("acct", "INBOX", 5), encodeImapId("acct", "INBOX", 6)];
+    const r = await imapBatchMove(ids, "Archive", { config: cfg, connect: async () => client });
+    expect(r.success).toBe(2);
+    expect(moved).toEqual({ uids: [5, 6], dest: "Archive" });
   });
 });
 
