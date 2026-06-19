@@ -331,11 +331,6 @@ Each entry accepts `account`, `user`, `host`, `port`, `password`, `keychainServi
 `keychainAccount`. Calls route to the account matching their `account` argument (or the
 decoded `imap:` id), and each account keeps its own pooled connection.
 
-**Push notifications (B5):** with `APPLE_MAIL_MCP_IMAP_IDLE=1`, the server watches each
-account's INBOX and emits an MCP logging message + `notifications/resources/updated` for
-`mail://mailboxes/{account}` when new mail arrives (real-time IDLE where the server
-supports it, polling fallback otherwise).
-
 As with SMTP, the password is read from the macOS **Keychain** by default (use
 an app-specific password for Gmail/Workspace/iCloud), so no secret goes in
 config. Gmail label semantics: common names (`All Mail`, `Sent`, `Trash`,
@@ -349,6 +344,48 @@ config. Gmail label semantics: common names (`All Mail`, `Sent`, `Trash`,
 > to your iCloud address, `APPLE_MAIL_MCP_IMAP_ACCOUNT` to the Mail account name
 > (e.g. `iCloud`), and use an **app-specific password** (from appleid.apple.com)
 > stored in the Keychain.
+
+##### Push notifications (IMAP IDLE) — opt-in
+
+When `APPLE_MAIL_MCP_IMAP_IDLE=1`, the server opens a dedicated, long-lived
+connection to **each configured IMAP account** and watches its INBOX for new
+mail. On arrival it pushes two MCP notifications to the client (no polling by the
+client required):
+
+1. **`notifications/message`** (logging) — a human-readable line, e.g.
+   `New mail in "Work": 2 new message(s) (INBOX now 1843).`
+2. **`notifications/resources/updated`** — for the affected account's resource
+   `mail://mailboxes/{account}`, so a client subscribed to that resource knows to
+   re-read it.
+
+This requires an IMAP account to be configured (single-account env or
+`APPLE_MAIL_MCP_IMAP_ACCOUNTS`); accounts that only use AppleScript aren't
+watched. Detection is **real-time** via the IMAP IDLE `EXISTS` event where the
+server pushes it, with an automatic **polling fallback** for servers that don't.
+Dropped connections reconnect with backoff, and the watchers shut down cleanly on
+`SIGINT`/`SIGTERM`.
+
+Enable it in your MCP client config alongside the IMAP settings:
+
+```jsonc
+{
+  "mcpServers": {
+    "apple-mail": {
+      "command": "node",
+      "args": ["/path/to/apple-mail-mcp/build/index.js"],
+      "env": {
+        "APPLE_MAIL_MCP_IMAP_USER": "you@gmail.com",
+        "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE": "imap.gmail.com",
+        "APPLE_MAIL_MCP_IMAP_IDLE": "1"
+      }
+    }
+  }
+}
+```
+
+> Note: this is most useful with clients that surface MCP logging messages or
+> subscribe to resource-update notifications. Clients that ignore notifications
+> are unaffected — the feature is opt-in and adds no behavior unless enabled.
 
 ---
 
