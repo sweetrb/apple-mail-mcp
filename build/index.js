@@ -25,12 +25,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "./services/appleMailManager.js";
 import { sendViaSmtp } from "./services/smtpMailer.js";
-import { isImapAccount, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
+import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
 import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
 import { routeMessage } from "./services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
 import { registerResourcesAndPrompts } from "./tools/resourcesAndPrompts.js";
 import { normalizeSubject, subjectFromGetMessage } from "./tools/thread.js";
+import { ImapIdleWatcher } from "./services/imapIdle.js";
 // =============================================================================
 // Shared Validation Schemas
 // =============================================================================
@@ -85,7 +86,9 @@ const server = new McpServer({
     name: "apple-mail",
     version,
     description: "MCP server for managing Apple Mail - read, search, send, and organize emails",
-});
+}, 
+// logging capability lets the IMAP IDLE watcher push new-mail notifications (B5).
+{ capabilities: { logging: {} } });
 /**
  * Singleton instance of the Apple Mail manager.
  * Handles all AppleScript execution and mail operations.
@@ -936,3 +939,40 @@ server.tool("get-sync-status", {}, withErrorHandling(() => {
  */
 const transport = new StdioServerTransport();
 await server.connect(transport);
+// IMAP IDLE push notifications (B5) — opt-in. When enabled, watch every
+// configured IMAP account's INBOX and notify the client on new mail via a
+// logging message + a resource-updated signal for the account's mailbox.
+let idleWatcher;
+if (/^(1|true|yes|on)$/i.test(process.env.APPLE_MAIL_MCP_IMAP_IDLE?.trim() ?? "")) {
+    try {
+        const configs = resolveImapConfigs();
+        if (configs.length > 0) {
+            idleWatcher = new ImapIdleWatcher({
+                configs,
+                onNewMail: (e) => {
+                    const newCount = e.count - e.prevCount;
+                    void server.server
+                        .sendLoggingMessage({
+                        level: "info",
+                        logger: "apple-mail-mcp",
+                        data: `New mail in "${e.account}": ${newCount} new message(s) (INBOX now ${e.count}).`,
+                    })
+                        .catch(() => undefined);
+                    void server.server
+                        .sendResourceUpdated({ uri: `mail://mailboxes/${encodeURIComponent(e.account)}` })
+                        .catch(() => undefined);
+                },
+            });
+            await idleWatcher.start();
+        }
+    }
+    catch (e) {
+        console.error(`IMAP IDLE watcher failed to start: ${String(e)}`);
+    }
+}
+// Clean up the long-lived IDLE connections on shutdown.
+for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => {
+        void idleWatcher?.stop().finally(() => process.exit(0));
+    });
+}

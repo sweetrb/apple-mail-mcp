@@ -108,6 +108,12 @@ export declare function isImapAccount(account: string | undefined, env?: NodeJS.
 /** Account labels of every configured IMAP account (C2), for diagnostics. */
 export declare function listImapAccountLabels(env?: NodeJS.ProcessEnv): string[];
 /**
+ * Resolve full configs (passwords included) for every configured IMAP account
+ * (C2/B5). Accounts whose password can't be resolved are skipped (logged), so a
+ * single misconfigured account doesn't take down the rest (e.g. IDLE watchers).
+ */
+export declare function resolveImapConfigs(env?: NodeJS.ProcessEnv): ImapConfig[];
+/**
  * Resolve the full IMAP config (password included) for `account`. With no
  * `account`, returns the default/first configured account. Throws if IMAP is
  * unconfigured or no account matches.

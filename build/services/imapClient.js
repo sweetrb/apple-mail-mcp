@@ -147,6 +147,23 @@ export function listImapAccountLabels(env = process.env) {
     return listImapAccountSpecs(env).map((s) => s.accountLabel);
 }
 /**
+ * Resolve full configs (passwords included) for every configured IMAP account
+ * (C2/B5). Accounts whose password can't be resolved are skipped (logged), so a
+ * single misconfigured account doesn't take down the rest (e.g. IDLE watchers).
+ */
+export function resolveImapConfigs(env = process.env) {
+    const out = [];
+    for (const spec of listImapAccountSpecs(env)) {
+        try {
+            out.push(specToConfig(spec));
+        }
+        catch (e) {
+            console.error(`Skipping IMAP account "${spec.accountLabel}": ${String(e)}`);
+        }
+    }
+    return out;
+}
+/**
  * Resolve the full IMAP config (password included) for `account`. With no
  * `account`, returns the default/first configured account. Throws if IMAP is
  * unconfigured or no account matches.
