@@ -13,12 +13,13 @@
  * @module services/appleMailManager
  */
 import { spawnSync } from "child_process";
-import { existsSync, writeFileSync } from "fs";
-import { isAbsolute, resolve, sep } from "path";
+import { existsSync, writeFileSync, readFileSync, mkdtempSync, rmSync } from "fs";
+import { isAbsolute, resolve, sep, join } from "path";
 import { homedir } from "os";
 import { executeAppleScript } from "../utils/applescript.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "../utils/mimeParse.js";
 import { TemplateStore } from "../services/templateStore.js";
+import { materializeAttachments } from "../utils/attachmentMaterialize.js";
 // =============================================================================
 // Search Tuning (issue #24)
 // =============================================================================
@@ -1184,7 +1185,17 @@ export class AppleMailManager {
                 recipientCommands += `make new bcc recipient at end of bcc recipients with properties {address:"${escapeForAppleScript(addr)}"}\n`;
             }
         }
-        const attachmentCommands = buildAttachmentCommands(attachments);
+        // Inline (base64) attachments are written to temp files first (B4), then
+        // cleaned up after the send. Plain paths pass through unchanged.
+        const mat = materializeAttachments(attachments);
+        try {
+            return this.sendEmailWithPaths(recipientCommands, safeSubject, safeBody, account, buildAttachmentCommands(mat.paths));
+        }
+        finally {
+            mat.cleanup();
+        }
+    }
+    sendEmailWithPaths(recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
         let sendCommand;
         if (account) {
             const safeAccount = escapeForAppleScript(account);
@@ -1296,7 +1307,17 @@ export class AppleMailManager {
                 recipientCommands += `make new bcc recipient at end of bcc recipients with properties {address:"${escapeForAppleScript(addr)}"}\n`;
             }
         }
-        const attachmentCommands = buildAttachmentCommands(attachments);
+        // Inline (base64) attachments → temp files (B4); cleaned up after.
+        const mat = materializeAttachments(attachments);
+        const attachmentCommands = buildAttachmentCommands(mat.paths);
+        try {
+            return this.createDraftWithCommands(recipientCommands, safeSubject, safeBody, account, attachmentCommands);
+        }
+        finally {
+            mat.cleanup();
+        }
+    }
+    createDraftWithCommands(recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
         let draftCommand;
         if (account) {
             const safeAccount = escapeForAppleScript(account);
@@ -1918,6 +1939,34 @@ export class AppleMailManager {
         catch (err) {
             console.error(`Failed to write attachment to disk: ${err}`);
             return false;
+        }
+    }
+    /**
+     * Fetch an attachment's bytes as base64 (B4) — the read counterpart to
+     * sending inline base64 content. Reuses saveAttachment via a throwaway temp
+     * dir (under an allowed root), then reads and encodes the file.
+     */
+    getAttachmentBase64(id, attachmentName) {
+        let dir = null;
+        try {
+            dir = mkdtempSync("/private/tmp/amcp-fetch-");
+            const dest = join(dir, attachmentName.replace(/[/\\]/g, "_"));
+            const ok = this.saveAttachment(id, attachmentName, dest);
+            if (!ok) {
+                return {
+                    success: false,
+                    error: `Attachment "${attachmentName}" not found on message ${id}`,
+                };
+            }
+            const buf = readFileSync(dest);
+            return { success: true, base64: buf.toString("base64"), bytes: buf.length };
+        }
+        catch (e) {
+            return { success: false, error: e instanceof Error ? e.message : String(e) };
+        }
+        finally {
+            if (dir)
+                rmSync(dir, { recursive: true, force: true });
         }
     }
     // ===========================================================================

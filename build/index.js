@@ -59,6 +59,19 @@ const DATE_FILTER_SCHEMA = z
     message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')",
 })
     .optional();
+// Attachments: absolute file paths and/or inline base64 content (B4).
+const ATTACHMENTS_SCHEMA = z
+    .array(z.union([
+    z.string().describe("Absolute path to an existing file"),
+    z.object({
+        filename: z.string().min(1).describe("Filename to give the attachment"),
+        contentBase64: z.string().min(1).describe("Base64-encoded file content"),
+    }),
+]))
+    .max(20, "Cannot attach more than 20 files")
+    .optional()
+    .describe("Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or " +
+    "inline {filename, contentBase64} objects for content not on disk.");
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -265,11 +278,7 @@ server.tool("send-email", {
     cc: z.array(z.string()).optional().describe("CC recipients"),
     bcc: z.array(z.string()).optional().describe("BCC recipients"),
     account: z.string().optional().describe("Account to send from"),
-    attachments: z
-        .array(z.string())
-        .max(20, "Cannot attach more than 20 files")
-        .optional()
-        .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
+    attachments: ATTACHMENTS_SCHEMA,
     transport: z
         .enum(["applescript", "smtp"])
         .optional()
@@ -343,11 +352,7 @@ server.tool("create-draft", {
     cc: z.array(z.string()).optional().describe("CC recipients"),
     bcc: z.array(z.string()).optional().describe("BCC recipients"),
     account: z.string().optional().describe("Account to create draft in"),
-    attachments: z
-        .array(z.string())
-        .max(20, "Cannot attach more than 20 files")
-        .optional()
-        .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
+    attachments: ATTACHMENTS_SCHEMA,
 }, withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
     const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
     if (!success) {
@@ -589,6 +594,20 @@ server.tool("save-attachment", {
     }
     return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`);
 }, "Error saving attachment"));
+// --- fetch-attachment ---
+server.tool("fetch-attachment", {
+    id: NUMERIC_MESSAGE_ID_SCHEMA,
+    attachmentName: z.string().min(1, "Attachment name is required"),
+}, withErrorHandling(({ id, attachmentName }) => {
+    // Returns the attachment bytes as base64 (B4) — the read counterpart to
+    // sending inline base64 content, for clients that want the bytes directly
+    // rather than writing to disk via save-attachment.
+    const r = mailManager.getAttachmentBase64(id, attachmentName);
+    if (!r.success) {
+        return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
+    }
+    return successResponse(`Fetched "${attachmentName}" (${r.bytes} bytes, base64-encoded below).\n\n${r.base64}`, { attachmentName, bytes: r.bytes, contentBase64: r.base64 });
+}, "Error fetching attachment"));
 // =============================================================================
 // Mailbox Tools
 // =============================================================================

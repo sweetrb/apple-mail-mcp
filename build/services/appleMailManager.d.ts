@@ -12,7 +12,7 @@
  *
  * @module services/appleMailManager
  */
-import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheckResult, MailStats, BatchOperationResult, SyncStatus, RecentlyReceivedStats, MailRule, RuleSpec, Contact, EmailTemplate, SerialEmailRecipient, SerialEmailResult, SearchDiagnostics, SearchResult } from "../types.js";
+import type { Message, MessageContent, Mailbox, Account, Attachment, HealthCheckResult, MailStats, BatchOperationResult, SyncStatus, RecentlyReceivedStats, MailRule, RuleSpec, AttachmentInput, Contact, EmailTemplate, SerialEmailRecipient, SerialEmailResult, SearchDiagnostics, SearchResult } from "../types.js";
 /**
  * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
  *
@@ -287,7 +287,8 @@ export declare class AppleMailManager {
      * @param account - Account to send from
      * @returns true if sent successfully
      */
-    sendEmail(to: string[], subject: string, body: string, cc?: string[], bcc?: string[], account?: string, attachments?: string[]): boolean;
+    sendEmail(to: string[], subject: string, body: string, cc?: string[], bcc?: string[], account?: string, attachments?: AttachmentInput[]): boolean;
+    private sendEmailWithPaths;
     /**
      * Send individual personalized emails to a list of recipients (mail merge).
      *
@@ -313,7 +314,8 @@ export declare class AppleMailManager {
      * @param account - Account to create draft in
      * @returns true if draft created successfully
      */
-    createDraft(to: string[], subject: string, body: string, cc?: string[], bcc?: string[], account?: string, attachments?: string[]): boolean;
+    createDraft(to: string[], subject: string, body: string, cc?: string[], bcc?: string[], account?: string, attachments?: AttachmentInput[]): boolean;
+    private createDraftWithCommands;
     /**
      * Reply to a message.
      *
@@ -455,6 +457,17 @@ export declare class AppleMailManager {
      * when AppleScript can't find the attachment.
      */
     saveAttachment(id: string, attachmentName: string, savePath: string): boolean;
+    /**
+     * Fetch an attachment's bytes as base64 (B4) — the read counterpart to
+     * sending inline base64 content. Reuses saveAttachment via a throwaway temp
+     * dir (under an allowed root), then reads and encodes the file.
+     */
+    getAttachmentBase64(id: string, attachmentName: string): {
+        success: boolean;
+        base64?: string;
+        bytes?: number;
+        error?: string;
+    };
     /**
      * List all mailboxes for an account.
      */

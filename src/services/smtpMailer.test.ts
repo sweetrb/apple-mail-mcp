@@ -106,6 +106,41 @@ describe("sendViaSmtp", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("attaches inline base64 content as a Buffer and validates file paths (B4)", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
+
+    await sendViaSmtp(
+      {
+        to: ["bob@example.com"],
+        subject: "s",
+        body: "b",
+        attachments: [
+          { filename: "hello.txt", contentBase64: Buffer.from("hi there").toString("base64") },
+        ],
+      },
+      testConfig,
+      createTransport as never
+    );
+
+    const atts = sendMail.mock.calls[0][0].attachments;
+    expect(atts).toHaveLength(1);
+    expect(atts[0].filename).toBe("hello.txt");
+    expect(Buffer.isBuffer(atts[0].content)).toBe(true);
+    expect(atts[0].content.toString()).toBe("hi there");
+  });
+
+  it("rejects a non-absolute attachment path", async () => {
+    const createTransport = vi.fn().mockReturnValue({ sendMail: vi.fn(), close: vi.fn() });
+    const r = await sendViaSmtp(
+      { to: ["b@example.com"], subject: "s", body: "b", attachments: ["relative/path.pdf"] },
+      testConfig,
+      createTransport as never
+    );
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/must be absolute/);
+  });
+
   it("uses the per-call from override when provided", async () => {
     const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
     const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });

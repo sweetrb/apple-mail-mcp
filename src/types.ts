@@ -481,6 +481,13 @@ export interface MailRule {
   enabled: boolean;
 }
 
+/**
+ * An attachment to send (B4): either an absolute path to an existing file, or
+ * raw bytes provided inline as base64 with a filename — so a client can attach
+ * content it generated without first writing it to disk.
+ */
+export type AttachmentInput = string | { filename: string; contentBase64: string };
+
 /** Header/field a rule condition tests (B2). */
 export type RuleConditionField = "from" | "to" | "cc" | "subject" | "content";
 
