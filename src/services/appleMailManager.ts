@@ -315,6 +315,109 @@ function buildAttachmentCommands(attachments?: string[]): string {
 const AS_DATE_TO_STRING = `((year of d) as string) & "-" & ((month of d as integer) as string) & "-" & ((day of d) as string) & "-" & ((hours of d) as string) & "-" & ((minutes of d) as string) & "-" & ((seconds of d) as string)`;
 
 /**
+ * Build the AppleScript loop that turns a message collection into delimited
+ * rows (C1, audit #11). It first tries a *bulk* read — one Apple Event per
+ * property for the whole collection (`subject of msgs`, `sender of msgs`, …),
+ * ~6 events total instead of ~6 per message — and only on error falls back to
+ * the original per-message reads. The per-iteration `try` preserves the
+ * malformed-message isolation (#13): one bad message can't abort the batch,
+ * and if a bulk read throws (the audit's regression worry) we degrade to the
+ * safe per-message path automatically.
+ *
+ * Expects `outputText`, `msgCount` (and, when `dedup`, `seenIds`) already in
+ * scope at the call site; appends rows and advances `msgCount` up to `limit`.
+ */
+function buildMessageRowLoop(opts: {
+  collection: string;
+  limit: number;
+  dedup?: boolean;
+  dateFilter?: string;
+  trailing?: string;
+  /** Honor an `offset` by skipping the first N matched (uses a `skipped` var). */
+  offset?: number;
+  /** Append a hasAttachments field (bulk-reads `mail attachments`). */
+  withAttachments?: boolean;
+}): string {
+  const { collection, limit, dedup, dateFilter, trailing = "", offset, withAttachments } = opts;
+  const dedupOpen = dedup
+    ? `if seenIds does not contain msgId then\n            set end of seenIds to msgId`
+    : "";
+  const dedupClose = dedup ? `end if` : "";
+  const offsetOpen =
+    offset !== undefined
+      ? `if skipped < ${offset} then\n            set skipped to skipped + 1\n          else`
+      : "";
+  const offsetClose = offset !== undefined ? `end if` : "";
+  const dateOpen = dateFilter
+    ? `set msgDate to d\n            if not (${dateFilter}) then\n              -- outside date range; skip\n            else`
+    : "";
+  const dateClose = dateFilter ? `end if` : "";
+  const attBulk = withAttachments ? `\n        set _atts to mail attachments of _msgs` : "";
+  const attRow = withAttachments
+    ? `
+          set msgHasAtt to "false"
+          try
+            if _bulkOK then
+              if (count of (item _i of _atts)) > 0 then set msgHasAtt to "true"
+            else
+              if (count of mail attachments of (item _i of _msgs)) > 0 then set msgHasAtt to "true"
+            end if
+          end try`
+    : "";
+  const attField = withAttachments ? ` & "${FIELD_SEP}" & msgHasAtt` : "";
+  return `
+      set _msgs to ${collection}
+      set _bulkOK to true
+      try
+        set _ids to id of _msgs
+        set _subjs to subject of _msgs
+        set _sndrs to sender of _msgs
+        set _dates to date received of _msgs
+        set _reads to read status of _msgs
+        set _flags to flagged status of _msgs${attBulk}
+      on error
+        set _bulkOK to false
+      end try
+      repeat with _i from 1 to (count of _msgs)
+        if msgCount >= ${limit} then exit repeat
+        try
+          if _bulkOK then
+            set msgId to (item _i of _ids) as string
+          else
+            set msgId to id of (item _i of _msgs) as string
+          end if
+          ${dedupOpen}
+          ${offsetOpen}
+          if _bulkOK then
+            set d to item _i of _dates
+          else
+            set d to date received of (item _i of _msgs)
+          end if
+          ${dateOpen}
+          if _bulkOK then
+            set msgSubject to item _i of _subjs
+            set msgSender to item _i of _sndrs
+            set msgRead to (item _i of _reads) as string
+            set msgFlagged to (item _i of _flags) as string
+          else
+            set _m to item _i of _msgs
+            set msgSubject to subject of _m
+            set msgSender to sender of _m
+            set msgRead to read status of _m as string
+            set msgFlagged to flagged status of _m as string
+          end if${attRow}
+          set msgDateStr to ${AS_DATE_TO_STRING}
+          if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
+          set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged${trailing}${attField}
+          set msgCount to msgCount + 1
+          ${dateClose}
+          ${offsetClose}
+          ${dedupClose}
+        end try
+      end repeat`;
+}
+
+/**
  * Parses a locale-independent date string "YYYY-M-D-H-m-s"
  * produced by the AppleScript snippet above.
  *
@@ -776,24 +879,7 @@ export class AppleMailManager {
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
       set msgCount to 0
       try
-        set allMessages to messages of theMailbox ${searchCondition}
-        repeat with msg in allMessages
-          if msgCount >= ${limit} then exit repeat
-          try
-            ${dateFilter ? `set msgDate to date received of msg\n            if not (${dateFilter}) then\n              -- skip message outside date range\n            else` : ""}
-            set msgId to id of msg as string
-            set msgSubject to subject of msg
-            set msgSender to sender of msg
-            set d to date received of msg
-            set msgDateStr to ${AS_DATE_TO_STRING}
-            set msgRead to read status of msg as string
-            set msgFlagged to flagged status of msg as string
-            if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-            set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged
-            set msgCount to msgCount + 1
-            ${dateFilter ? "end if" : ""}
-          end try
-        end repeat
+        ${buildMessageRowLoop({ collection: `messages of theMailbox ${searchCondition}`, limit, dateFilter })}
       on error _errMsg number _errNum
         set _timedOut to true
         set _notSearched to "${escapeForAppleScript(targetMailbox)}${DIAG_ITEM_SEP}"
@@ -833,27 +919,7 @@ export class AppleMailManager {
             set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")${DIAG_ITEM_SEP}"
           else
             try
-              set allMessages to messages of mb ${searchCondition}
-              repeat with msg in allMessages
-                if msgCount >= ${limit} then exit repeat
-                try
-                  set msgId to id of msg as string
-                  if seenIds does not contain msgId then
-                    set end of seenIds to msgId
-                    ${dateFilter ? `set msgDate to date received of msg\n                    if not (${dateFilter}) then\n                      -- skip message outside date range\n                    else` : ""}
-                    set msgSubject to subject of msg
-                    set msgSender to sender of msg
-                    set d to date received of msg
-                    set msgDateStr to ${AS_DATE_TO_STRING}
-                    set msgRead to read status of msg as string
-                    set msgFlagged to flagged status of msg as string
-                    if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-                    set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & mbName
-                    set msgCount to msgCount + 1
-                    ${dateFilter ? "end if" : ""}
-                  end if
-                end try
-              end repeat
+              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, trailing: ` & "${FIELD_SEP}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
@@ -1162,29 +1228,7 @@ export class AppleMailManager {
       set msgCount to 0
       set skipped to 0
       try
-        repeat with msg in messages of theMailbox ${fromFilter}
-          if msgCount >= ${limit} then exit repeat
-          try
-            if skipped < ${offset} then
-              set skipped to skipped + 1
-            else
-              set msgId to id of msg as string
-              set msgSubject to subject of msg
-              set msgSender to sender of msg
-              set d to date received of msg
-              set msgDate to ${AS_DATE_TO_STRING}
-              set msgRead to read status of msg as string
-              set msgFlagged to flagged status of msg as string
-              set msgHasAtt to "false"
-              try
-                if (count of mail attachments of msg) > 0 then set msgHasAtt to "true"
-              end try
-              if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-              set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgHasAtt
-              set msgCount to msgCount + 1
-            end if
-          end try
-        end repeat
+        ${buildMessageRowLoop({ collection: `messages of theMailbox ${fromFilter}`, limit, offset, withAttachments: true })}
       on error _errMsg number _errNum
         set _timedOut to true
         set _notSearched to "${escapeForAppleScript(targetMailbox)}${DIAG_ITEM_SEP}"
@@ -1223,32 +1267,7 @@ export class AppleMailManager {
             set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")${DIAG_ITEM_SEP}"
           else
             try
-              repeat with msg in messages of mb ${fromFilter}
-                if msgCount >= ${limit} then exit repeat
-                try
-                  set msgId to id of msg as string
-                  if seenIds does not contain msgId then
-                    set end of seenIds to msgId
-                    if skipped < ${offset} then
-                      set skipped to skipped + 1
-                    else
-                      set msgSubject to subject of msg
-                      set msgSender to sender of msg
-                      set d to date received of msg
-                      set msgDate to ${AS_DATE_TO_STRING}
-                      set msgRead to read status of msg as string
-                      set msgFlagged to flagged status of msg as string
-                      set msgHasAtt to "false"
-                      try
-                        if (count of mail attachments of msg) > 0 then set msgHasAtt to "true"
-                      end try
-                      if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-                      set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & mbName & "${FIELD_SEP}" & msgHasAtt
-                      set msgCount to msgCount + 1
-                    end if
-                  end if
-                end try
-              end repeat
+              ${buildMessageRowLoop({ collection: `messages of mb ${fromFilter}`, limit, dedup: true, offset, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
