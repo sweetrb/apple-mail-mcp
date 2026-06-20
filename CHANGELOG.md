@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2026-06-20
+
+### Fixed
+
+- **`prepare` now builds the server on install.** The `prepare` script was `husky` only, so a fresh `git`/clone or Claude Code marketplace install ran the git hooks but never compiled `build/` — leaving the server unbuilt. It is now `husky; npm run build` (the `;` ensures the build runs even if husky can't initialize, e.g. in a non-git context), matching the other Apple MCP servers. Registry installs were unaffected (the published tarball already ships `build/`).
+
 ## [2.1.1] - 2026-06-19
 
 ### Added
