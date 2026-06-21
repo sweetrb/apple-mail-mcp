@@ -218,6 +218,8 @@ List messages in a mailbox.
 
 Send a new email immediately.
 
+**⚠️ Safety:** Sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `to` | string[] | Yes | Recipient addresses |
@@ -450,6 +452,8 @@ Each recipient object:
 
 **Returns:** Per-recipient success/failure results with a summary count.
 
+**⚠️ Safety:** Sends real mail immediately to every recipient and cannot be unsent. Confirm the recipient list, subject, and body with the user before calling.
+
 ---
 
 #### `create-draft`
@@ -523,6 +527,8 @@ Reply to an existing message.
 }
 ```
 
+**⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
+
 ---
 
 #### `forward-message`
@@ -535,6 +541,8 @@ Forward a message to new recipients.
 | `to` | string[] | Yes | Recipients to forward to |
 | `body` | string | No | Message to prepend |
 | `send` | boolean | No | Send immediately (default: true, false = save as draft) |
+
+**⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
 
 ---
 
@@ -565,6 +573,8 @@ Delete a message (move to trash).
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Message ID |
+
+**⚠️ Safety:** Destructive. Requires explicit user confirmation; search/list first to confirm the message id.
 
 ---
 
@@ -613,6 +623,8 @@ All batch operations accept an array of message IDs (max 100 per batch) and retu
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs to delete (max 100) |
+
+**⚠️ Safety:** Destructive. Requires explicit user confirmation; search/list first to confirm the message ids.
 
 #### `batch-move-messages`
 
@@ -680,6 +692,8 @@ Delete a mailbox.
 |-----------|------|----------|-------------|
 | `name` | string | Yes | Mailbox name |
 | `account` | string | No | Account containing mailbox |
+
+**⚠️ Safety:** Destructive — deletes the mailbox and its contents. Requires explicit user confirmation; list mailboxes first to confirm the name.
 
 ---
 
@@ -762,6 +776,8 @@ Delete a mail rule by name.
 |-----------|------|----------|-------------|
 | `name` | string | Yes | Rule name |
 
+**⚠️ Safety:** Destructive. Requires explicit user confirmation; list rules first to confirm the name.
+
 ---
 
 ### Contacts
@@ -823,6 +839,8 @@ Delete a template.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Template ID |
+
+**⚠️ Safety:** Destructive — removes the template from the on-disk store. Requires explicit user confirmation; list templates first to confirm the id.
 
 ---
 

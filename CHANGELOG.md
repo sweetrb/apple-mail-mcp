@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **MCP-visible tool descriptions on all 45 tools** ([#51](https://github.com/sweetrb/apple-mail-mcp/pull/51)). Every tool now registers a structured description exposed via `tools/list`, in a consistent **Use when: / Returns: / Do not use when:** shape (single↔batch and read↔send variants cross-reference each other, and read/list tools are named as the way to obtain message ids). Write/destructive/external-effect tools additionally carry an explicit **Safety:** line requiring user confirmation: `send-email`, `send-serial-email`, `reply-to-message`, `forward-message` (send real mail immediately, cannot be unsent — confirm recipients/subject/body); `delete-message`, `batch-delete-messages` (confirm and list/search first); `move-message`, `batch-move-messages` (confirm destination and ids); `create-mailbox`, `rename-mailbox`, `delete-mailbox`, `create-rule`, `delete-rule` (external effect on the account); `save-attachment` (writes a file to disk); `save-template`, `delete-template` (mutate the on-disk template store). Metadata only — no handler logic, schemas, or behavior changed.
+
 ### Documentation
 - Added `docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md`: why macOS re-prompts for Full Disk Access / Automation when the server runs under an ad-hoc-signed (e.g. Homebrew) Node, and the fix — run it under the official Developer-ID-signed Node so the grant survives Node updates. README and CLAUDE.md now point at it.
 
