@@ -28,7 +28,7 @@
     "format": "prettier --write src",
     "format:check": "prettier --check src",
     "typecheck": "tsc --noEmit",
-    "version": "node scripts/sync-plugin-version.mjs && git add .claude-plugin/plugin.json .claude-plugin/marketplace.json .agents/plugins/marketplace.json codex/.codex-plugin/plugin.json",
+    "version": "node scripts/sync-plugin-version.mjs && git add .claude-plugin .agents/plugins codex .hermes-plugin .antigravity-plugin",
     "prepublishOnly": "npm run lint && npm run test && npm run build",
     "prepare": "husky; npm run build"
   },
