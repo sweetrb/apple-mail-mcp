@@ -1,7 +1,7 @@
 {
   "name": "apple-mail-mcp",
   "version": "2.1.2",
-  "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude and other AI assistants",
+  "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude, Codex, and other AI assistants",
   "type": "module",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -28,7 +28,7 @@
     "format": "prettier --write src",
     "format:check": "prettier --check src",
     "typecheck": "tsc --noEmit",
-    "version": "node -e \"const p=require('./package.json'); const f='.claude-plugin/plugin.json'; const c=JSON.parse(require('fs').readFileSync(f,'utf8')); c.version=p.version; require('fs').writeFileSync(f,JSON.stringify(c,null,2)+'\\n')\" && git add .claude-plugin/plugin.json",
+    "version": "node scripts/sync-plugin-version.mjs && git add .claude-plugin/plugin.json .claude-plugin/marketplace.json .agents/plugins/marketplace.json codex/.codex-plugin/plugin.json",
     "prepublishOnly": "npm run lint && npm run test && npm run build",
     "prepare": "husky; npm run build"
   },
@@ -36,6 +36,7 @@
     "mcp",
     "apple-mail",
     "claude",
+    "codex",
     "ai",
     "applescript",
     "macos",
