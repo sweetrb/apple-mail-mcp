@@ -6,6 +6,10 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that e
 [![CI](https://github.com/sweetrb/apple-mail-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/sweetrb/apple-mail-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+<p align="center">
+  <img src="codex/assets/screenshot.svg" alt="Apple Mail MCP — read, search, send, and organize Apple Mail from Codex, Claude, and other AI assistants" width="680">
+</p>
+
 > **Note:** This is the **npm/Node.js** package — install with `npx` or `npm`. There is an unrelated Python project of the same name on PyPI ([`imdinu/apple-mail-mcp`](https://github.com/imdinu/apple-mail-mcp)) installed via `pipx`/`uvx`. If you're using `uvx` and seeing a `cyclopts` dependency error, you're looking for that project, not this one.
 
 ## What is This?
