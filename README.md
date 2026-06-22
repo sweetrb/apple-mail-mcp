@@ -56,6 +56,10 @@ codex plugin add apple-mail@apple-mail-mcp
 
 The Codex package registers the same `apple-mail` MCP server through `npx -y github:sweetrb/apple-mail-mcp` and includes the Apple Mail skill guidance.
 
+### Other Hosts (Hermes, Antigravity)
+
+Plugin packaging for the Hermes and Antigravity hosts is also included (`.hermes-plugin/` and `.antigravity-plugin/`). Each registers the same `apple-mail` MCP server (launched via `npx -y github:sweetrb/apple-mail-mcp`) and bundles the Apple Mail skill, so behavior matches the Claude Code and Codex plugins. Install them through each host's plugin/marketplace mechanism pointed at this repository.
+
 ### Manual Installation
 
 **1. Install the server:**

@@ -1,0 +1,41 @@
+{
+  "name": "apple-mail-mcp",
+  "interface": {
+    "displayName": "Apple Mail MCP"
+  },
+  "metadata": {
+    "description": "Apple Mail integration marketplace for Claude Code, Codex, Hermes, and Antigravity.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "apple-mail",
+      "version": "2.1.2",
+      "description": "Manage Apple Mail through natural language - read, search, send, reply, forward, and organize emails and mailboxes, with diagnostics, attachments, templates, and mail-merge support (macOS only).",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "category": "productivity",
+      "displayName": "Apple Mail",
+      "author": {
+        "name": "Rob Sweet",
+        "email": "rob@superiortech.io"
+      },
+      "homepage": "https://github.com/sweetrb/apple-mail-mcp#readme",
+      "repository": "https://github.com/sweetrb/apple-mail-mcp",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "apple-mail",
+        "claude",
+        "codex",
+        "hermes",
+        "macos",
+        "mail",
+        "email"
+      ],
+      "mcpServers": "./.hermes-plugin/mcp.json"
+    }
+  ]
+}

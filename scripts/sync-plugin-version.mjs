@@ -30,6 +30,30 @@ updateJson(".agents/plugins/marketplace.json", (data) => {
   }
 });
 
+updateJson(".hermes-plugin/plugin.json", (data) => {
+  data.version = version;
+});
+
+updateJson(".antigravity-plugin/plugin.json", (data) => {
+  data.version = version;
+});
+
+updateJson(".hermes-plugin/marketplace.json", (data) => {
+  for (const plugin of data.plugins ?? []) {
+    if (plugin.name === "apple-mail") {
+      plugin.version = version;
+    }
+  }
+});
+
+updateJson(".antigravity-plugin/marketplace.json", (data) => {
+  for (const plugin of data.plugins ?? []) {
+    if (plugin.name === "apple-mail") {
+      plugin.version = version;
+    }
+  }
+});
+
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(root, relativePath), "utf8"));
 }

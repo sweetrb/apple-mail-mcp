@@ -1,0 +1,24 @@
+{
+  "name": "apple-mail",
+  "version": "2.1.2",
+  "description": "Manage Apple Mail through natural language - read, search, send, reply, forward, and organize emails and mailboxes, with diagnostics, attachments, templates, and mail-merge support (macOS only).",
+  "author": {
+    "name": "Rob Sweet",
+    "email": "rob@superiortech.io"
+  },
+  "license": "MIT",
+  "category": "productivity",
+  "displayName": "Apple Mail",
+  "homepage": "https://github.com/sweetrb/apple-mail-mcp#readme",
+  "repository": "https://github.com/sweetrb/apple-mail-mcp",
+  "keywords": [
+    "mcp",
+    "apple-mail",
+    "antigravity",
+    "claude",
+    "codex",
+    "macos",
+    "mail",
+    "email"
+  ]
+}
