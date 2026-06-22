@@ -35,7 +35,7 @@
   <g filter="url(#shadow)">
     <rect x="708" y="152" width="386" height="252" rx="24" fill="#ffffff" fill-opacity="0.18" stroke="#ffffff" stroke-opacity="0.28"/>
     <text x="744" y="210" class="small">Suggested prompt</text>
-    <text x="744" y="266" class="prompt"><tspan x="744" dy="0">Find my unread emails from Sarah and</tspan><tspan x="744" dy="28">summarize them.</tspan></text>
+    <text x="744" y="266" class="prompt"><tspan x="744" dy="0">Find my unread emails from</tspan><tspan x="744" dy="28">Sarah and summarize them.</tspan></text>
     <rect x="744" y="334" width="184" height="44" rx="22" fill="#ffffff" fill-opacity="0.18"/>
     <text x="836" y="363" text-anchor="middle" class="chip">Codex ready</text>
   </g>
