@@ -3,7 +3,7 @@
     "command": "npx",
     "args": [
       "-y",
-      "github:sweetrb/apple-mail-mcp"
+      "apple-mail-mcp"
     ]
   }
 }
