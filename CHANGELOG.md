@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-06-22
 ### Added
 - **Hermes and Antigravity plugin packaging.** Adds `.hermes-plugin/` and `.antigravity-plugin/` marketplace and plugin manifests plus the Apple Mail skill, so the server installs as a plugin on the Hermes and Antigravity hosts alongside the existing Claude Code and Codex packaging; each registers the same `apple-mail` MCP server (launched via `npx -y github:sweetrb/apple-mail-mcp`). Wired into `scripts/sync-plugin-version.mjs` so their versions track `package.json`, and documented in the README. Brings multi-host packaging parity with the other Apple MCP servers.
 - **Codex plugin marketplace packaging** ([#54](https://github.com/sweetrb/apple-mail-mcp/pull/54)). Adds a `codex/` plugin package and `.agents/plugins/marketplace.json` so the server installs from Codex's marketplace alongside the Claude Code plugin (launched via `npx -y github:sweetrb/apple-mail-mcp`), plus the Apple Mail skill. Introduces `scripts/sync-plugin-version.mjs` to keep every plugin/marketplace manifest version in lockstep with `package.json`, and normalizes the Claude marketplace manifest to the current version. Thanks @oliverames.

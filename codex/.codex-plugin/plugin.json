@@ -1,6 +1,6 @@
 {
   "name": "apple-mail",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Manage Apple Mail through natural language - read, search, send, reply, forward, and organize emails and mailboxes, with diagnostics, attachments, templates, and mail-merge support (macOS only).",
   "author": {
     "name": "Rob Sweet",
@@ -9,7 +9,15 @@
   "homepage": "https://github.com/sweetrb/apple-mail-mcp#readme",
   "repository": "https://github.com/sweetrb/apple-mail-mcp",
   "license": "MIT",
-  "keywords": ["mcp", "apple-mail", "mail", "email", "claude", "codex", "macos"],
+  "keywords": [
+    "mcp",
+    "apple-mail",
+    "mail",
+    "email",
+    "claude",
+    "codex",
+    "macos"
+  ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
@@ -18,7 +26,11 @@
     "longDescription": "A macOS-only Apple Mail connector for Codex that uses the apple-mail-mcp server to read, search, send, reply to, forward, and organize emails and mailboxes across Apple Mail accounts, with diagnostics, attachment, template, contact lookup, and mail-merge support.",
     "developerName": "Rob Sweet",
     "category": "Productivity",
-    "capabilities": ["MCP Servers", "Read", "Write"],
+    "capabilities": [
+      "MCP Servers",
+      "Read",
+      "Write"
+    ],
     "websiteURL": "https://github.com/sweetrb/apple-mail-mcp#readme",
     "defaultPrompt": [
       "Check my inbox and summarize any unread emails.",
@@ -28,6 +40,8 @@
     "brandColor": "#4f98da",
     "composerIcon": "./assets/icon.png",
     "logo": "./assets/icon.png",
-    "screenshots": ["./assets/screenshot.png"]
+    "screenshots": [
+      "./assets/screenshot.png"
+    ]
   }
 }
