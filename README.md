@@ -45,6 +45,17 @@ Install as a Claude Code plugin for automatic configuration and enhanced AI beha
 
 This method also installs a **skill** that teaches Claude when and how to use Apple Mail effectively.
 
+### Using the Codex Marketplace
+
+Install the same public marketplace in Codex:
+
+```bash
+codex plugin marketplace add sweetrb/apple-mail-mcp
+codex plugin add apple-mail@apple-mail-mcp
+```
+
+The Codex package registers the same `apple-mail` MCP server through `npx -y github:sweetrb/apple-mail-mcp` and includes the Apple Mail skill guidance.
+
 ### Manual Installation
 
 **1. Install the server:**

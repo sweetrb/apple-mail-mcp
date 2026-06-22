@@ -1,8 +1,8 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "apple-mail-mcp",
-  "version": "1.0.0",
-  "description": "Apple Mail integration for Claude Code via MCP",
+  "version": "2.1.2",
+  "description": "Apple Mail integration for Claude Code and Codex via MCP",
   "owner": {
     "name": "Rob Sweet",
     "email": "rob@superiortech.io"
@@ -10,12 +10,25 @@
   "plugins": [
     {
       "name": "apple-mail",
-      "description": "Manage Apple Mail through natural language - read, search, send, and organize emails",
-      "version": "1.0.0",
+      "displayName": "Apple Mail",
+      "description": "Manage Apple Mail through natural language - read, search, send, and organize emails (macOS only)",
+      "version": "2.1.2",
       "author": {
         "name": "Rob Sweet",
         "email": "rob@superiortech.io"
       },
+      "homepage": "https://github.com/sweetrb/apple-mail-mcp#readme",
+      "repository": "https://github.com/sweetrb/apple-mail-mcp",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "apple-mail",
+        "mail",
+        "email",
+        "claude",
+        "codex",
+        "macos"
+      ],
       "source": "./",
       "category": "productivity"
     }

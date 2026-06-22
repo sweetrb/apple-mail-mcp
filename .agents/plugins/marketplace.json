@@ -1,0 +1,21 @@
+{
+  "name": "apple-mail-mcp",
+  "interface": {
+    "displayName": "Apple Mail MCP"
+  },
+  "plugins": [
+    {
+      "name": "apple-mail",
+      "version": "2.1.2",
+      "source": {
+        "source": "local",
+        "path": "./codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
