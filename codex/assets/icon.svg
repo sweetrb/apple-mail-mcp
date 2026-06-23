@@ -1,0 +1,20 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#74b0e6"/>
+      <stop offset="1" stop-color="#4f98da"/>
+    </linearGradient>
+    <filter id="sh" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#3a4a5a" flood-opacity="0.22"/>
+    </filter>
+    <clipPath id="card"><rect x="86" y="76" width="340" height="360" rx="72"/></clipPath>
+  </defs>
+  <rect x="86" y="76" width="340" height="360" rx="72" fill="#ffffff" filter="url(#sh)"/>
+  <g clip-path="url(#card)">
+    <rect x="86" y="76" width="340" height="116" fill="url(#band)"/>
+  </g>
+  <g fill="none" stroke="#4f98da" stroke-width="22" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="150" y="250" width="212" height="138" rx="24"/>
+    <path d="M156 266 L256 338 L356 266"/>
+  </g>
+</svg>

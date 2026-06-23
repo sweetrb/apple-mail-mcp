@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.4] - 2026-06-23
+### Fixed
+- **Codex marketplace shipped the Apple Notes icon for Apple Mail (#56).** Replaced `codex/assets/icon.png` (and added an `icon.svg` source) with a Mail-specific icon — a blue card with an envelope glyph, part of a consistent Apple MCP icon family. Thanks @oliverames for the hash-level diagnosis.
+
+### Documentation
+- README: added npm-downloads, supported-Node, platform-macOS, and MCP badges next to the existing version/CI/License badges.
+
 ## [2.1.3] - 2026-06-22
 ### Added
 - **Hermes and Antigravity plugin packaging.** Adds `.hermes-plugin/` and `.antigravity-plugin/` marketplace and plugin manifests plus the Apple Mail skill, so the server installs as a plugin on the Hermes and Antigravity hosts alongside the existing Claude Code and Codex packaging; each registers the same `apple-mail` MCP server (launched via `npx -y github:sweetrb/apple-mail-mcp`). Wired into `scripts/sync-plugin-version.mjs` so their versions track `package.json`, and documented in the README. Brings multi-host packaging parity with the other Apple MCP servers.
