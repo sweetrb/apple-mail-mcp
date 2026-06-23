@@ -1,9 +1,0 @@
-{
-  "apple-mail": {
-    "command": "npx",
-    "args": [
-      "-y",
-      "apple-mail-mcp"
-    ]
-  }
-}

@@ -1,0 +1,20 @@
+# Apple Mail MCP server — configuration for NousResearch's Hermes Agent.
+# Docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp/
+#
+# Hermes has no third-party plugin/marketplace drop-in. Register the server
+# one of two ways:
+#
+#   1. CLI (recommended):
+#        hermes mcp add apple-mail --command npx --args -y apple-mail-mcp
+#
+#   2. Manual: merge the mcp_servers block below into ~/.hermes/config.yaml,
+#      then restart your Hermes session.
+#
+# Requires macOS (drives Apple Mail via AppleScript) and Node.js 18+ (npx
+# fetches the published apple-mail-mcp package).
+mcp_servers:
+  apple-mail:
+    command: npx
+    args:
+      - "-y"
+      - "apple-mail-mcp"

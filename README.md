@@ -62,11 +62,14 @@ codex plugin marketplace add sweetrb/apple-mail-mcp
 codex plugin add apple-mail@apple-mail-mcp
 ```
 
-The Codex package registers the same `apple-mail` MCP server through `npx -y github:sweetrb/apple-mail-mcp` and includes the Apple Mail skill guidance.
+The Codex package registers the same `apple-mail` MCP server through `npx -y apple-mail-mcp` and includes the Apple Mail skill guidance.
 
 ### Other Hosts (Hermes, Antigravity)
 
-Plugin packaging for the Hermes and Antigravity hosts is also included (`.hermes-plugin/` and `.antigravity-plugin/`). Each registers the same `apple-mail` MCP server (launched via `npx -y github:sweetrb/apple-mail-mcp`) and bundles the Apple Mail skill, so behavior matches the Claude Code and Codex plugins. Install them through each host's plugin/marketplace mechanism pointed at this repository.
+Configuration for two more hosts is included — each registers the same `apple-mail` MCP server (`npx -y apple-mail-mcp`):
+
+- **[Hermes Agent](https://hermes-agent.nousresearch.com/)** (NousResearch) — Hermes has no plugin/marketplace drop-in. Add the server with `hermes mcp add apple-mail --command npx --args -y apple-mail-mcp`, or merge [`.hermes-plugin/config.yaml`](.hermes-plugin/config.yaml) into `~/.hermes/config.yaml`. Details: [`.hermes-plugin/README.md`](.hermes-plugin/README.md).
+- **[Antigravity](https://antigravity.google/)** (Google) — add the server entry from [`.antigravity-plugin/mcp_config.json`](.antigravity-plugin/mcp_config.json) to `~/.gemini/config/mcp_config.json` (or via Antigravity's MCP settings).
 
 ### Manual Installation
 
