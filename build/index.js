@@ -77,6 +77,41 @@ const ATTACHMENTS_SCHEMA = z
     .optional()
     .describe("Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or " +
     "inline {filename, contentBase64} objects for content not on disk.");
+// =============================================================================
+// Shared Output Schemas (MCP outputSchema)
+//
+// Every tool below declares an MCP `outputSchema` so clients can know and
+// validate the output shape. The SDK requires `structuredContent` on every
+// success result once an outputSchema is present and validates it against the
+// schema, so these schemas are intentionally PERMISSIVE — fields are optional
+// unless they are provably always present on every success path, no `.strict()`
+// is used (extra keys pass), and rows that vary across the AppleScript and IMAP
+// backends use loose element types. Error responses are exempt from validation.
+// =============================================================================
+/** A message row in a list/search result. Loose: the AppleScript path emits a
+ *  messageSummary while the IMAP path emits its own record, so allow any keys. */
+const MESSAGE_ROW_SCHEMA = z.object({}).passthrough();
+/** Shape returned by list/search style tools (messages + count + optional
+ *  partial-coverage diagnostics). Diagnostics only appear on the AppleScript
+ *  path, so they are optional. */
+const LIST_OUTPUT_SCHEMA = {
+    messages: z.array(MESSAGE_ROW_SCHEMA).optional(),
+    count: z.number().optional(),
+    partial: z.boolean().optional(),
+    skippedLargeMailboxes: z.array(z.string()).optional(),
+    notSearchedMailboxes: z.array(z.string()).optional(),
+    timedOutAccounts: z.array(z.string()).optional(),
+};
+/** Shape returned by the batch count tools. */
+const BATCH_COUNT_OUTPUT_SCHEMA = {
+    ok: z.boolean().optional(),
+    success: z.number().optional(),
+    failed: z.number().optional(),
+    mailbox: z.string().optional(),
+};
+/** A health/doctor check item — loose to accept both health-check
+ *  ({name, passed, message}) and doctor ({name, status, detail}) items. */
+const CHECK_ITEM_SCHEMA = z.object({}).passthrough();
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -132,23 +167,27 @@ async function hybridBatchCounts(ids, appleFn, imapFn) {
 // Message Tools
 // =============================================================================
 // --- search-messages ---
-server.tool("search-messages", "Use when: finding messages by query/sender/subject/date/read/flag filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, and read state (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.", {
-    query: z.string().optional().describe("Text to search for in subject, sender, or content"),
-    from: z
-        .string()
-        .optional()
-        .describe("Filter by sender (substring match against the full sender string, i.e. display name + address — not an exact address match)"),
-    subject: z.string().optional().describe("Filter by subject line (substring match)"),
-    mailbox: z
-        .string()
-        .optional()
-        .describe("Mailbox to search in (e.g., 'INBOX'). Omit to search all mailboxes."),
-    account: z.string().optional().describe("Account to search in (omit to search all accounts)"),
-    isRead: z.boolean().optional().describe("Filter by read status"),
-    isFlagged: z.boolean().optional().describe("Filter by flagged status"),
-    dateFrom: DATE_FILTER_SCHEMA.describe("Start date filter (e.g., 'January 1, 2026')"),
-    dateTo: DATE_FILTER_SCHEMA.describe("End date filter (e.g., 'March 1, 2026')"),
-    limit: z.number().optional().describe("Maximum number of results (default: 50)"),
+server.registerTool("search-messages", {
+    description: "Use when: finding messages by query/sender/subject/date/read/flag filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, and read state (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.",
+    inputSchema: {
+        query: z.string().optional().describe("Text to search for in subject, sender, or content"),
+        from: z
+            .string()
+            .optional()
+            .describe("Filter by sender (substring match against the full sender string, i.e. display name + address — not an exact address match)"),
+        subject: z.string().optional().describe("Filter by subject line (substring match)"),
+        mailbox: z
+            .string()
+            .optional()
+            .describe("Mailbox to search in (e.g., 'INBOX'). Omit to search all mailboxes."),
+        account: z.string().optional().describe("Account to search in (omit to search all accounts)"),
+        isRead: z.boolean().optional().describe("Filter by read status"),
+        isFlagged: z.boolean().optional().describe("Filter by flagged status"),
+        dateFrom: DATE_FILTER_SCHEMA.describe("Start date filter (e.g., 'January 1, 2026')"),
+        dateTo: DATE_FILTER_SCHEMA.describe("End date filter (e.g., 'March 1, 2026')"),
+        limit: z.number().optional().describe("Maximum number of results (default: 50)"),
+    },
+    outputSchema: LIST_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ query, mailbox, account, limit = 50, dateFrom, dateTo, from, subject, isRead, isFlagged, }) => {
     // IMAP backend (issue #43): server-side search when this account is
     // explicitly configured for IMAP; otherwise fall through to AppleScript.
@@ -193,12 +232,21 @@ server.tool("search-messages", "Use when: finding messages by query/sender/subje
     return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`, structured);
 }, "Error searching messages"));
 // --- get-message ---
-server.tool("get-message", "Use when: reading the full body of one message whose id you already have (numeric or imap:…); set preferHtml to get the HTML body instead of plain text.\nReturns: the message subject and body (plain text by default, HTML when preferHtml is true).\nDo not use when: you don't yet have an id (use search-messages or list-messages first), or you want the whole conversation (use get-thread).", {
-    id: MESSAGE_ID_SCHEMA,
-    preferHtml: z
-        .boolean()
-        .optional()
-        .describe("Return the HTML body (extracted from the message source) instead of plain text"),
+server.registerTool("get-message", {
+    description: "Use when: reading the full body of one message whose id you already have (numeric or imap:…); set preferHtml to get the HTML body instead of plain text.\nReturns: the message subject and body (plain text by default, HTML when preferHtml is true).\nDo not use when: you don't yet have an id (use search-messages or list-messages first), or you want the whole conversation (use get-thread).",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+        preferHtml: z
+            .boolean()
+            .optional()
+            .describe("Return the HTML body (extracted from the message source) instead of plain text"),
+    },
+    outputSchema: {
+        id: z.string().optional(),
+        subject: z.string().optional(),
+        body: z.string().optional(),
+        isHtml: z.boolean().optional(),
+    },
 }, withErrorHandling(({ id, preferHtml }) => routeMessage(id, {
     // IMAP id (imap:…) → fetch via IMAP (#43 Phase 3); else AppleScript.
     imap: () => imapGetMessage(id, preferHtml === true),
@@ -233,11 +281,20 @@ server.tool("get-message", "Use when: reading the full body of one message whose
     fail: `Message with ID "${id}" not found`,
 }), "Error retrieving message"));
 // --- get-thread ---
-server.tool("get-thread", "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject.\nReturns: the thread's normalized subject and its messages (id, date, subject, sender, read state).\nDo not use when: you only need the single message (use get-message) or are searching by arbitrary criteria (use search-messages).", {
-    id: MESSAGE_ID_SCHEMA.describe("A message ID in the conversation (numeric or imap:…)"),
-    account: z.string().optional().describe("Account to search (omit to search all)"),
-    mailbox: z.string().optional().describe("Mailbox to search (omit to search all)"),
-    limit: z.number().optional().describe("Max messages in the thread (default 50)"),
+server.registerTool("get-thread", {
+    description: "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject.\nReturns: the thread's normalized subject and its messages (id, date, subject, sender, read state).\nDo not use when: you only need the single message (use get-message) or are searching by arbitrary criteria (use search-messages).",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA.describe("A message ID in the conversation (numeric or imap:…)"),
+        account: z.string().optional().describe("Account to search (omit to search all)"),
+        mailbox: z.string().optional().describe("Mailbox to search (omit to search all)"),
+        limit: z.number().optional().describe("Max messages in the thread (default 50)"),
+    },
+    outputSchema: {
+        subject: z.string().optional(),
+        messages: z.array(MESSAGE_ROW_SCHEMA).optional(),
+        count: z.number().optional(),
+        partial: z.boolean().optional(),
+    },
 }, withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
     // True threading via References/Message-ID when we have an imap: id (I5);
     // falls through to subject grouping if the server lacks HEADER search or
@@ -296,16 +353,20 @@ server.tool("get-thread", "Use when: you have one message id and want the whole 
     return successResponse(`Thread "${base}" — ${ordered.length} message(s), oldest first:\n${list}${coverageBlock}`, structured);
 }, "Error retrieving thread"));
 // --- list-messages ---
-server.tool("list-messages", "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, and sender (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags (use search-messages) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.", {
-    mailbox: z
-        .string()
-        .optional()
-        .describe("Mailbox to list messages from. Omit to list from all mailboxes."),
-    account: z.string().optional().describe("Account to list messages from"),
-    limit: z.number().optional().describe("Maximum number of messages (default: 50)"),
-    offset: z.number().optional().describe("Number of messages to skip (for pagination)"),
-    from: z.string().optional().describe("Filter by sender email address or name"),
-    unreadOnly: z.boolean().optional().describe("Only show unread messages"),
+server.registerTool("list-messages", {
+    description: "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, and sender (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags (use search-messages) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.",
+    inputSchema: {
+        mailbox: z
+            .string()
+            .optional()
+            .describe("Mailbox to list messages from. Omit to list from all mailboxes."),
+        account: z.string().optional().describe("Account to list messages from"),
+        limit: z.number().optional().describe("Maximum number of messages (default: 50)"),
+        offset: z.number().optional().describe("Number of messages to skip (for pagination)"),
+        from: z.string().optional().describe("Filter by sender email address or name"),
+        unreadOnly: z.boolean().optional().describe("Only show unread messages"),
+    },
+    outputSchema: LIST_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ mailbox, account, limit = 50, offset = 0, from, unreadOnly }) => {
     // IMAP backend (issue #43): server-side listing when this account is
     // explicitly configured for IMAP; otherwise fall through to AppleScript.
@@ -339,20 +400,29 @@ server.tool("list-messages", "Use when: browsing a mailbox's recent messages (op
     return successResponse(`Found ${messages.length} message(s):\n${messageList}${coverageBlock}`, structured);
 }, "Error listing messages"));
 // --- send-email ---
-server.tool("send-email", "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count.\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent — require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.", {
-    to: z.array(z.string()).min(1, "At least one recipient is required"),
-    subject: z.string().min(1, "Subject is required"),
-    body: z.string().min(1, "Body is required"),
-    cc: z.array(z.string()).optional().describe("CC recipients"),
-    bcc: z.array(z.string()).optional().describe("BCC recipients"),
-    account: z.string().optional().describe("Account to send from"),
-    attachments: ATTACHMENTS_SCHEMA,
-    transport: z
-        .enum(["applescript", "smtp"])
-        .optional()
-        .describe("Send transport. 'applescript' (default) sends through Mail.app. " +
-        "'smtp' submits clean MIME directly via SMTP, avoiding the macOS 15+ " +
-        "Mail.app <blockquote> wrapping (issue #12); requires APPLE_MAIL_MCP_SMTP_* env config."),
+server.registerTool("send-email", {
+    description: "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count.\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent — require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
+    inputSchema: {
+        to: z.array(z.string()).min(1, "At least one recipient is required"),
+        subject: z.string().min(1, "Subject is required"),
+        body: z.string().min(1, "Body is required"),
+        cc: z.array(z.string()).optional().describe("CC recipients"),
+        bcc: z.array(z.string()).optional().describe("BCC recipients"),
+        account: z.string().optional().describe("Account to send from"),
+        attachments: ATTACHMENTS_SCHEMA,
+        transport: z
+            .enum(["applescript", "smtp"])
+            .optional()
+            .describe("Send transport. 'applescript' (default) sends through Mail.app. " +
+            "'smtp' submits clean MIME directly via SMTP, avoiding the macOS 15+ " +
+            "Mail.app <blockquote> wrapping (issue #12); requires APPLE_MAIL_MCP_SMTP_* env config."),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        recipients: z.array(z.string()).optional(),
+        attachmentCount: z.number().optional(),
+        transport: z.string().optional(),
+    },
 }, withErrorHandling(async ({ to, subject, body, cc, bcc, account, attachments, transport }) => {
     const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
     const attachmentCount = attachments?.length ?? 0;
@@ -380,32 +450,49 @@ server.tool("send-email", "Use when: the user has explicitly confirmed they want
     });
 }, "Error sending email"));
 // --- send-serial-email ---
-server.tool("send-serial-email", "Use when: the user has confirmed a mail-merge — sending individually personalized copies to many recipients (max 100), with {{Key}} placeholders in subject/body replaced per-recipient from each recipient's variables. Recipients do not see each other.\nReturns: a per-recipient sent/failed report with counts.\nDo not use when: sending one message to a shared recipient list (use send-email) or saving for review (use create-draft).\nSafety: this SENDS many real emails immediately and they cannot be unsent — require explicit user confirmation of the recipient list, the subject/body template, and the placeholder substitutions before calling.", {
-    recipients: z
-        .array(z.object({
-        email: z.string().min(1, "Recipient email is required"),
-        variables: z
-            .record(z.string())
-            .describe("Placeholder values, e.g. { Name: 'Alice', Company: 'Acme' }"),
-    }))
-        .min(1, "At least one recipient is required")
-        .max(100, "Cannot send to more than 100 recipients in a single batch")
-        .describe("List of recipients with personalization variables (max 100)"),
-    subject: z
-        .string()
-        .min(1, "Subject is required")
-        .describe("Subject line — use {{Key}} for placeholders"),
-    body: z
-        .string()
-        .min(1, "Body is required")
-        .describe("Email body — use {{Key}} for placeholders"),
-    account: z.string().optional().describe("Account to send from"),
-    delayMs: z
-        .number()
-        .min(0)
-        .max(10000)
-        .optional()
-        .describe("Delay between sends in ms (default: 500, max: 10000)"),
+server.registerTool("send-serial-email", {
+    description: "Use when: the user has confirmed a mail-merge — sending individually personalized copies to many recipients (max 100), with {{Key}} placeholders in subject/body replaced per-recipient from each recipient's variables. Recipients do not see each other.\nReturns: a per-recipient sent/failed report with counts.\nDo not use when: sending one message to a shared recipient list (use send-email) or saving for review (use create-draft).\nSafety: this SENDS many real emails immediately and they cannot be unsent — require explicit user confirmation of the recipient list, the subject/body template, and the placeholder substitutions before calling.",
+    inputSchema: {
+        recipients: z
+            .array(z.object({
+            email: z.string().min(1, "Recipient email is required"),
+            variables: z
+                .record(z.string())
+                .describe("Placeholder values, e.g. { Name: 'Alice', Company: 'Acme' }"),
+        }))
+            .min(1, "At least one recipient is required")
+            .max(100, "Cannot send to more than 100 recipients in a single batch")
+            .describe("List of recipients with personalization variables (max 100)"),
+        subject: z
+            .string()
+            .min(1, "Subject is required")
+            .describe("Subject line — use {{Key}} for placeholders"),
+        body: z
+            .string()
+            .min(1, "Body is required")
+            .describe("Email body — use {{Key}} for placeholders"),
+        account: z.string().optional().describe("Account to send from"),
+        delayMs: z
+            .number()
+            .min(0)
+            .max(10000)
+            .optional()
+            .describe("Delay between sends in ms (default: 500, max: 10000)"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        sent: z.number().optional(),
+        failed: z.number().optional(),
+        results: z
+            .array(z
+            .object({
+            email: z.string().optional(),
+            success: z.boolean().optional(),
+            error: z.string().optional(),
+        })
+            .passthrough())
+            .optional(),
+    },
 }, withErrorHandling(({ recipients, subject, body, account, delayMs }) => {
     const results = mailManager.sendSerialEmail(recipients, subject, body, account, delayMs);
     const successCount = results.filter((r) => r.success).length;
@@ -430,14 +517,22 @@ server.tool("send-serial-email", "Use when: the user has confirmed a mail-merge 
     }
 }, "Error sending serial emails"));
 // --- create-draft ---
-server.tool("create-draft", "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message (to/cc/bcc are arrays, optional attachments).\nReturns: a confirmation that the draft was created, with recipients and attachment count.\nDo not use when: the user has already confirmed they want it sent now (use send-email).\nSafety: low risk — creates a draft only and sends nothing; the user must open Mail.app and send it themselves.", {
-    to: z.array(z.string()).min(1, "At least one recipient is required"),
-    subject: z.string().min(1, "Subject is required"),
-    body: z.string().min(1, "Body is required"),
-    cc: z.array(z.string()).optional().describe("CC recipients"),
-    bcc: z.array(z.string()).optional().describe("BCC recipients"),
-    account: z.string().optional().describe("Account to create draft in"),
-    attachments: ATTACHMENTS_SCHEMA,
+server.registerTool("create-draft", {
+    description: "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message (to/cc/bcc are arrays, optional attachments).\nReturns: a confirmation that the draft was created, with recipients and attachment count.\nDo not use when: the user has already confirmed they want it sent now (use send-email).\nSafety: low risk — creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
+    inputSchema: {
+        to: z.array(z.string()).min(1, "At least one recipient is required"),
+        subject: z.string().min(1, "Subject is required"),
+        body: z.string().min(1, "Body is required"),
+        cc: z.array(z.string()).optional().describe("CC recipients"),
+        bcc: z.array(z.string()).optional().describe("BCC recipients"),
+        account: z.string().optional().describe("Account to create draft in"),
+        attachments: ATTACHMENTS_SCHEMA,
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        recipients: z.array(z.string()).optional(),
+        attachmentCount: z.number().optional(),
+    },
 }, withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
     const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
     if (!success) {
@@ -452,11 +547,23 @@ server.tool("create-draft", "Use when: composing an email the user should review
     });
 }, "Error creating draft"));
 // --- reply-to-message ---
-server.tool("reply-to-message", "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.", {
-    id: MESSAGE_ID_SCHEMA,
-    body: z.string().min(1, "Reply body is required"),
-    replyAll: z.boolean().optional().default(false).describe("Reply to all recipients"),
-    send: z.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
+server.registerTool("reply-to-message", {
+    description: "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+        body: z.string().min(1, "Reply body is required"),
+        replyAll: z.boolean().optional().default(false).describe("Reply to all recipients"),
+        send: z
+            .boolean()
+            .optional()
+            .default(true)
+            .describe("Send immediately (false = save as draft)"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        sent: z.boolean().optional(),
+        id: z.string().optional(),
+    },
 }, withErrorHandling(({ id, body, replyAll, send }) => {
     const success = mailManager.replyToMessage(id, body, replyAll, send);
     if (!success) {
@@ -469,11 +576,24 @@ server.tool("reply-to-message", "Use when: replying to an existing message by id
     });
 }, "Error replying to message"));
 // --- forward-message ---
-server.tool("forward-message", "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.", {
-    id: MESSAGE_ID_SCHEMA,
-    to: z.array(z.string()).min(1, "At least one recipient is required"),
-    body: z.string().optional().describe("Optional message to prepend"),
-    send: z.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
+server.registerTool("forward-message", {
+    description: "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+        to: z.array(z.string()).min(1, "At least one recipient is required"),
+        body: z.string().optional().describe("Optional message to prepend"),
+        send: z
+            .boolean()
+            .optional()
+            .default(true)
+            .describe("Send immediately (false = save as draft)"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        sent: z.boolean().optional(),
+        recipients: z.array(z.string()).optional(),
+        id: z.string().optional(),
+    },
 }, withErrorHandling(({ id, to, body, send }) => {
     const success = mailManager.forwardMessage(id, to, body, send);
     if (!success) {
@@ -482,8 +602,12 @@ server.tool("forward-message", "Use when: forwarding an existing message (by id)
     return successResponse(send ? `Message forwarded to ${to.join(", ")}` : "Forward saved as draft", { ok: true, sent: send, recipients: to, id });
 }, "Error forwarding message"));
 // --- mark-as-read ---
-server.tool("mark-as-read", "Use when: marking a single message (by id) as read.\nReturns: a confirmation that the message was marked read.\nDo not use when: marking several at once (use batch-mark-as-read) or marking unread (use mark-as-unread). Get the id from search-messages or list-messages first.", {
-    id: MESSAGE_ID_SCHEMA,
+server.registerTool("mark-as-read", {
+    description: "Use when: marking a single message (by id) as read.\nReturns: a confirmation that the message was marked read.\nDo not use when: marking several at once (use batch-mark-as-read) or marking unread (use mark-as-unread). Get the id from search-messages or list-messages first.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+    },
+    outputSchema: { ok: z.boolean().optional(), id: z.string().optional() },
 }, withErrorHandling(({ id }) => routeMessage(id, {
     imap: () => imapMarkRead(id),
     apple: () => mailManager.markAsRead(id)
@@ -494,8 +618,12 @@ server.tool("mark-as-read", "Use when: marking a single message (by id) as read.
     structured: { ok: true, id },
 }), "Error marking message as read"));
 // --- mark-as-unread ---
-server.tool("mark-as-unread", "Use when: marking a single message (by id) as unread.\nReturns: a confirmation that the message was marked unread.\nDo not use when: marking several at once (use batch-mark-as-unread) or marking read (use mark-as-read). Get the id from search-messages or list-messages first.", {
-    id: MESSAGE_ID_SCHEMA,
+server.registerTool("mark-as-unread", {
+    description: "Use when: marking a single message (by id) as unread.\nReturns: a confirmation that the message was marked unread.\nDo not use when: marking several at once (use batch-mark-as-unread) or marking read (use mark-as-read). Get the id from search-messages or list-messages first.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+    },
+    outputSchema: { ok: z.boolean().optional(), id: z.string().optional() },
 }, withErrorHandling(({ id }) => routeMessage(id, {
     imap: () => imapMarkUnread(id),
     apple: () => mailManager.markAsUnread(id)
@@ -506,8 +634,12 @@ server.tool("mark-as-unread", "Use when: marking a single message (by id) as unr
     structured: { ok: true, id },
 }), "Error marking message as unread"));
 // --- flag-message ---
-server.tool("flag-message", "Use when: flagging a single message (by id).\nReturns: a confirmation that the message was flagged.\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.", {
-    id: MESSAGE_ID_SCHEMA,
+server.registerTool("flag-message", {
+    description: "Use when: flagging a single message (by id).\nReturns: a confirmation that the message was flagged.\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+    },
+    outputSchema: { ok: z.boolean().optional(), id: z.string().optional() },
 }, withErrorHandling(({ id }) => routeMessage(id, {
     imap: () => imapFlagMessage(id),
     apple: () => mailManager.flagMessage(id)
@@ -518,8 +650,12 @@ server.tool("flag-message", "Use when: flagging a single message (by id).\nRetur
     structured: { ok: true, id },
 }), "Error flagging message"));
 // --- unflag-message ---
-server.tool("unflag-message", "Use when: removing the flag from a single message (by id).\nReturns: a confirmation that the message was unflagged.\nDo not use when: unflagging several at once (use batch-unflag-messages) or adding a flag (use flag-message). Get the id from search-messages or list-messages first.", {
-    id: MESSAGE_ID_SCHEMA,
+server.registerTool("unflag-message", {
+    description: "Use when: removing the flag from a single message (by id).\nReturns: a confirmation that the message was unflagged.\nDo not use when: unflagging several at once (use batch-unflag-messages) or adding a flag (use flag-message). Get the id from search-messages or list-messages first.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+    },
+    outputSchema: { ok: z.boolean().optional(), id: z.string().optional() },
 }, withErrorHandling(({ id }) => routeMessage(id, {
     imap: () => imapUnflagMessage(id),
     apple: () => mailManager.unflagMessage(id)
@@ -530,8 +666,12 @@ server.tool("unflag-message", "Use when: removing the flag from a single message
     structured: { ok: true, id },
 }), "Error unflagging message"));
 // --- delete-message ---
-server.tool("delete-message", "Use when: deleting a single message by id (moves it to Trash).\nReturns: a confirmation that the message was deleted.\nDo not use when: deleting several at once (use batch-delete-messages) or just filing it away (use move-message).\nSafety: destructive — require explicit user confirmation, and search-messages/list-messages first to confirm you have the right id before deleting.", {
-    id: MESSAGE_ID_SCHEMA,
+server.registerTool("delete-message", {
+    description: "Use when: deleting a single message by id (moves it to Trash).\nReturns: a confirmation that the message was deleted.\nDo not use when: deleting several at once (use batch-delete-messages) or just filing it away (use move-message).\nSafety: destructive — require explicit user confirmation, and search-messages/list-messages first to confirm you have the right id before deleting.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+    },
+    outputSchema: { ok: z.boolean().optional(), id: z.string().optional() },
 }, withErrorHandling(({ id }) => routeMessage(id, {
     imap: () => imapDeleteMessageById(id),
     apple: () => {
@@ -545,10 +685,18 @@ server.tool("delete-message", "Use when: deleting a single message by id (moves 
     structured: { ok: true, id },
 }), "Error deleting message"));
 // --- move-message ---
-server.tool("move-message", "Use when: moving a single message (by id) into another mailbox/folder, e.g. archiving or filing.\nReturns: a confirmation naming the destination mailbox.\nDo not use when: moving several at once (use batch-move-messages) or deleting (use delete-message). Use list-mailboxes to confirm the destination name exists.\nSafety: moves a real message between folders — confirm the destination mailbox, and search-messages/list-messages first to confirm the id.", {
-    id: MESSAGE_ID_SCHEMA,
-    mailbox: z.string().min(1, "Destination mailbox is required"),
-    account: z.string().optional().describe("Account containing the destination mailbox"),
+server.registerTool("move-message", {
+    description: "Use when: moving a single message (by id) into another mailbox/folder, e.g. archiving or filing.\nReturns: a confirmation naming the destination mailbox.\nDo not use when: moving several at once (use batch-move-messages) or deleting (use delete-message). Use list-mailboxes to confirm the destination name exists.\nSafety: moves a real message between folders — confirm the destination mailbox, and search-messages/list-messages first to confirm the id.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+        mailbox: z.string().min(1, "Destination mailbox is required"),
+        account: z.string().optional().describe("Account containing the destination mailbox"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        id: z.string().optional(),
+        mailbox: z.string().optional(),
+    },
 }, withErrorHandling(({ id, mailbox, account }) => routeMessage(id, {
     imap: () => imapMoveMessageById(id, mailbox),
     apple: () => {
@@ -562,8 +710,12 @@ server.tool("move-message", "Use when: moving a single message (by id) into anot
     structured: { ok: true, id, mailbox },
 }), "Error moving message"));
 // --- batch-delete-messages ---
-server.tool("batch-delete-messages", "Use when: deleting multiple messages in one call (1–100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once — require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting.", {
-    ids: BATCH_IDS_SCHEMA,
+server.registerTool("batch-delete-messages", {
+    description: "Use when: deleting multiple messages in one call (1–100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once — require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting.",
+    inputSchema: {
+        ids: BATCH_IDS_SCHEMA,
+    },
+    outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ ids }) => {
     const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchDeleteMessages(n), (im) => imapBatchDelete(im));
     const structured = { ok: failCount === 0, success: successCount, failed: failCount };
@@ -578,10 +730,14 @@ server.tool("batch-delete-messages", "Use when: deleting multiple messages in on
     }
 }, "Error batch deleting messages"));
 // --- batch-move-messages ---
-server.tool("batch-move-messages", "Use when: moving multiple messages (1–100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once — confirm the destination mailbox, and search-messages/list-messages first to confirm the ids.", {
-    ids: BATCH_IDS_SCHEMA,
-    mailbox: z.string().min(1, "Destination mailbox is required"),
-    account: z.string().optional().describe("Account containing the destination mailbox"),
+server.registerTool("batch-move-messages", {
+    description: "Use when: moving multiple messages (1–100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once — confirm the destination mailbox, and search-messages/list-messages first to confirm the ids.",
+    inputSchema: {
+        ids: BATCH_IDS_SCHEMA,
+        mailbox: z.string().min(1, "Destination mailbox is required"),
+        account: z.string().optional().describe("Account containing the destination mailbox"),
+    },
+    outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ ids, mailbox, account }) => {
     const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchMoveMessages(n, mailbox, account), (im) => imapBatchMove(im, mailbox, { account }));
     const structured = { ok: failCount === 0, success: successCount, failed: failCount, mailbox };
@@ -596,8 +752,12 @@ server.tool("batch-move-messages", "Use when: moving multiple messages (1–100 
     }
 }, "Error batch moving messages"));
 // --- batch-mark-as-read ---
-server.tool("batch-mark-as-read", "Use when: marking multiple messages (1–100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first.", {
-    ids: BATCH_IDS_SCHEMA,
+server.registerTool("batch-mark-as-read", {
+    description: "Use when: marking multiple messages (1–100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first.",
+    inputSchema: {
+        ids: BATCH_IDS_SCHEMA,
+    },
+    outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ ids }) => {
     const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchMarkAsRead(n), (im) => imapBatchMarkRead(im));
     const structured = { ok: failCount === 0, success: successCount, failed: failCount };
@@ -612,8 +772,12 @@ server.tool("batch-mark-as-read", "Use when: marking multiple messages (1–100 
     }
 }, "Error batch marking messages as read"));
 // --- batch-mark-as-unread ---
-server.tool("batch-mark-as-unread", "Use when: marking multiple messages (1–100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first.", {
-    ids: BATCH_IDS_SCHEMA,
+server.registerTool("batch-mark-as-unread", {
+    description: "Use when: marking multiple messages (1–100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first.",
+    inputSchema: {
+        ids: BATCH_IDS_SCHEMA,
+    },
+    outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ ids }) => {
     const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchMarkAsUnread(n), (im) => imapBatchMarkUnread(im));
     const structured = { ok: failCount === 0, success: successCount, failed: failCount };
@@ -628,8 +792,12 @@ server.tool("batch-mark-as-unread", "Use when: marking multiple messages (1–10
     }
 }, "Error batch marking messages as unread"));
 // --- batch-flag-messages ---
-server.tool("batch-flag-messages", "Use when: flagging multiple messages (1–100 ids) in one call.\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.", {
-    ids: BATCH_IDS_SCHEMA,
+server.registerTool("batch-flag-messages", {
+    description: "Use when: flagging multiple messages (1–100 ids) in one call.\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.",
+    inputSchema: {
+        ids: BATCH_IDS_SCHEMA,
+    },
+    outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ ids }) => {
     const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchFlagMessages(n), (im) => imapBatchFlag(im));
     const structured = { ok: failCount === 0, success: successCount, failed: failCount };
@@ -644,8 +812,12 @@ server.tool("batch-flag-messages", "Use when: flagging multiple messages (1–10
     }
 }, "Error batch flagging messages"));
 // --- batch-unflag-messages ---
-server.tool("batch-unflag-messages", "Use when: removing flags from multiple messages (1–100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first.", {
-    ids: BATCH_IDS_SCHEMA,
+server.registerTool("batch-unflag-messages", {
+    description: "Use when: removing flags from multiple messages (1–100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first.",
+    inputSchema: {
+        ids: BATCH_IDS_SCHEMA,
+    },
+    outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ ids }) => {
     const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchUnflagMessages(n), (im) => imapBatchUnflag(im));
     const structured = { ok: failCount === 0, success: successCount, failed: failCount };
@@ -660,8 +832,15 @@ server.tool("batch-unflag-messages", "Use when: removing flags from multiple mes
     }
 }, "Error batch unflagging messages"));
 // --- list-attachments ---
-server.tool("list-attachments", "Use when: enumerating a message's attachments (by id) to discover their names, MIME types, and sizes — typically before saving or fetching one.\nReturns: each attachment's name, MIME type, and size, plus a count.\nDo not use when: you want the bytes (use fetch-attachment for inline base64, or save-attachment to write to disk). Get the message id from search-messages or list-messages first.", {
-    id: MESSAGE_ID_SCHEMA,
+server.registerTool("list-attachments", {
+    description: "Use when: enumerating a message's attachments (by id) to discover their names, MIME types, and sizes — typically before saving or fetching one.\nReturns: each attachment's name, MIME type, and size, plus a count.\nDo not use when: you want the bytes (use fetch-attachment for inline base64, or save-attachment to write to disk). Get the message id from search-messages or list-messages first.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+    },
+    outputSchema: {
+        attachments: z.array(z.object({}).passthrough()).optional(),
+        count: z.number().optional(),
+    },
 }, withErrorHandling(async ({ id }) => {
     // IMAP (I1): BODYSTRUCTURE enumerates parts (incl. MIME attachments
     // AppleScript can't see) without downloading the message.
@@ -686,10 +865,18 @@ server.tool("list-attachments", "Use when: enumerating a message's attachments (
     return successResponse(`Found ${attachments.length} attachment(s):\n${attachmentList}`, structured);
 }, "Error listing attachments"));
 // --- save-attachment ---
-server.tool("save-attachment", "Use when: writing one of a message's attachments to disk, by message id and attachmentName, into the savePath directory (saved as savePath/attachmentName).\nReturns: a confirmation of the saved file path.\nDo not use when: you don't know the attachment name (use list-attachments first) or want the bytes inline rather than on disk (use fetch-attachment).\nSafety: writes a file to disk — savePath must be a directory inside the configured allowed roots, and attachmentName may not contain path separators or '..'; calls outside those constraints are rejected.", {
-    id: MESSAGE_ID_SCHEMA,
-    attachmentName: z.string().min(1, "Attachment name is required"),
-    savePath: z.string().min(1, "Save directory path is required"),
+server.registerTool("save-attachment", {
+    description: "Use when: writing one of a message's attachments to disk, by message id and attachmentName, into the savePath directory (saved as savePath/attachmentName).\nReturns: a confirmation of the saved file path.\nDo not use when: you don't know the attachment name (use list-attachments first) or want the bytes inline rather than on disk (use fetch-attachment).\nSafety: writes a file to disk — savePath must be a directory inside the configured allowed roots, and attachmentName may not contain path separators or '..'; calls outside those constraints are rejected.",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+        attachmentName: z.string().min(1, "Attachment name is required"),
+        savePath: z.string().min(1, "Save directory path is required"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        attachmentName: z.string().optional(),
+        savedPath: z.string().optional(),
+    },
 }, withErrorHandling(async ({ id, attachmentName, savePath }) => {
     // IMAP (I1): fetch the part's bytes via IMAP, then write into savePath (a
     // directory) as savePath/attachmentName — mirroring the AppleScript path,
@@ -725,9 +912,18 @@ server.tool("save-attachment", "Use when: writing one of a message's attachments
     });
 }, "Error saving attachment"));
 // --- fetch-attachment ---
-server.tool("fetch-attachment", "Use when: retrieving an attachment's raw bytes inline as base64 (by message id and attachmentName), e.g. to process its contents without touching disk.\nReturns: the attachment's bytes base64-encoded, with its size and (for IMAP) MIME type.\nDo not use when: you don't know the attachment name (use list-attachments first) or you just want it saved to disk (use save-attachment).", {
-    id: MESSAGE_ID_SCHEMA,
-    attachmentName: z.string().min(1, "Attachment name is required"),
+server.registerTool("fetch-attachment", {
+    description: "Use when: retrieving an attachment's raw bytes inline as base64 (by message id and attachmentName), e.g. to process its contents without touching disk.\nReturns: the attachment's bytes base64-encoded, with its size and (for IMAP) MIME type.\nDo not use when: you don't know the attachment name (use list-attachments first) or you just want it saved to disk (use save-attachment).",
+    inputSchema: {
+        id: MESSAGE_ID_SCHEMA,
+        attachmentName: z.string().min(1, "Attachment name is required"),
+    },
+    outputSchema: {
+        attachmentName: z.string().optional(),
+        bytes: z.number().optional(),
+        mimeType: z.string().optional(),
+        contentBase64: z.string().optional(),
+    },
 }, withErrorHandling(async ({ id, attachmentName }) => {
     // Returns the attachment bytes as base64 (B4) — the read counterpart to
     // sending inline base64 content. IMAP (I1) fetches the part directly; numeric
@@ -749,8 +945,15 @@ server.tool("fetch-attachment", "Use when: retrieving an attachment's raw bytes 
 // Mailbox Tools
 // =============================================================================
 // --- list-mailboxes ---
-server.tool("list-mailboxes", "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).", {
-    account: z.string().optional().describe("Account to list mailboxes from"),
+server.registerTool("list-mailboxes", {
+    description: "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).",
+    inputSchema: {
+        account: z.string().optional().describe("Account to list mailboxes from"),
+    },
+    outputSchema: {
+        mailboxes: z.array(z.object({}).passthrough()).optional(),
+        count: z.number().optional(),
+    },
 }, withErrorHandling(async ({ account }) => {
     // IMAP (I6): LIST + per-mailbox STATUS — sees the true server hierarchy and
     // authoritative counts; falls back to AppleScript for non-IMAP accounts.
@@ -778,9 +981,17 @@ server.tool("list-mailboxes", "Use when: discovering the mailbox/folder names (a
     return successResponse(`Found ${mailboxes.length} mailbox(es):\n${mailboxList}`, structured);
 }, "Error listing mailboxes"));
 // --- get-unread-count ---
-server.tool("get-unread-count", "Use when: you only need the number of unread messages (optionally scoped to one mailbox and/or account), without listing the messages themselves.\nReturns: the unread count for the requested scope.\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals (use get-mail-stats).", {
-    mailbox: z.string().optional().describe("Mailbox to check (default: all)"),
-    account: z.string().optional().describe("Account to check"),
+server.registerTool("get-unread-count", {
+    description: "Use when: you only need the number of unread messages (optionally scoped to one mailbox and/or account), without listing the messages themselves.\nReturns: the unread count for the requested scope.\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals (use get-mail-stats).",
+    inputSchema: {
+        mailbox: z.string().optional().describe("Mailbox to check (default: all)"),
+        account: z.string().optional().describe("Account to check"),
+    },
+    outputSchema: {
+        unread: z.number().optional(),
+        mailbox: z.string().optional(),
+        account: z.string().optional(),
+    },
 }, withErrorHandling(async ({ mailbox, account }) => {
     // IMAP (I4): STATUS (UNSEEN) is authoritative and fast even on huge
     // mailboxes; falls back to AppleScript for non-IMAP accounts.
@@ -795,9 +1006,16 @@ server.tool("get-unread-count", "Use when: you only need the number of unread me
     });
 }, "Error getting unread count"));
 // --- create-mailbox ---
-server.tool("create-mailbox", "Use when: creating a new mailbox/folder in an account.\nReturns: a confirmation that the mailbox was created.\nDo not use when: renaming an existing one (use rename-mailbox) or deleting one (use delete-mailbox). Use list-mailboxes to see what already exists.\nSafety: creates a real folder in the mail account — confirm the name and target account first.", {
-    name: z.string().min(1, "Mailbox name is required"),
-    account: z.string().optional().describe("Account to create the mailbox in"),
+server.registerTool("create-mailbox", {
+    description: "Use when: creating a new mailbox/folder in an account.\nReturns: a confirmation that the mailbox was created.\nDo not use when: renaming an existing one (use rename-mailbox) or deleting one (use delete-mailbox). Use list-mailboxes to see what already exists.\nSafety: creates a real folder in the mail account — confirm the name and target account first.",
+    inputSchema: {
+        name: z.string().min(1, "Mailbox name is required"),
+        account: z.string().optional().describe("Account to create the mailbox in"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        name: z.string().optional(),
+    },
 }, withErrorHandling(async ({ name, account }) => {
     // IMAP backend (issue #43, Phase 2): server-side folder op when this account
     // is IMAP-configured; otherwise AppleScript.
@@ -814,9 +1032,16 @@ server.tool("create-mailbox", "Use when: creating a new mailbox/folder in an acc
     return successResponse(`Mailbox "${name}" created`, { ok: true, name });
 }, "Error creating mailbox"));
 // --- delete-mailbox ---
-server.tool("delete-mailbox", "Use when: deleting a mailbox/folder from an account.\nReturns: a confirmation that the mailbox was deleted.\nDo not use when: renaming it (use rename-mailbox) or deleting messages within it (use delete-message / batch-delete-messages).\nSafety: destructive — deleting a mailbox removes the folder and any messages it contains. Require explicit user confirmation and use list-mailboxes first to confirm the exact name.", {
-    name: z.string().min(1, "Mailbox name is required"),
-    account: z.string().optional().describe("Account containing the mailbox"),
+server.registerTool("delete-mailbox", {
+    description: "Use when: deleting a mailbox/folder from an account.\nReturns: a confirmation that the mailbox was deleted.\nDo not use when: renaming it (use rename-mailbox) or deleting messages within it (use delete-message / batch-delete-messages).\nSafety: destructive — deleting a mailbox removes the folder and any messages it contains. Require explicit user confirmation and use list-mailboxes first to confirm the exact name.",
+    inputSchema: {
+        name: z.string().min(1, "Mailbox name is required"),
+        account: z.string().optional().describe("Account containing the mailbox"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        name: z.string().optional(),
+    },
 }, withErrorHandling(async ({ name, account }) => {
     if (isImapAccount(account)) {
         const r = await imapDeleteMailbox(name, { account });
@@ -831,10 +1056,18 @@ server.tool("delete-mailbox", "Use when: deleting a mailbox/folder from an accou
     return successResponse(`Mailbox "${name}" deleted`, { ok: true, name });
 }, "Error deleting mailbox"));
 // --- rename-mailbox ---
-server.tool("rename-mailbox", "Use when: renaming an existing mailbox/folder from oldName to newName within an account.\nReturns: a confirmation naming the old and new mailbox names.\nDo not use when: creating a new folder (use create-mailbox) or deleting one (use delete-mailbox). Use list-mailboxes to confirm the current name.\nSafety: renames a real folder in the mail account — confirm oldName matches exactly (case-sensitive) before calling.", {
-    oldName: z.string().min(1, "Current mailbox name is required"),
-    newName: z.string().min(1, "New mailbox name is required"),
-    account: z.string().optional().describe("Account containing the mailbox"),
+server.registerTool("rename-mailbox", {
+    description: "Use when: renaming an existing mailbox/folder from oldName to newName within an account.\nReturns: a confirmation naming the old and new mailbox names.\nDo not use when: creating a new folder (use create-mailbox) or deleting one (use delete-mailbox). Use list-mailboxes to confirm the current name.\nSafety: renames a real folder in the mail account — confirm oldName matches exactly (case-sensitive) before calling.",
+    inputSchema: {
+        oldName: z.string().min(1, "Current mailbox name is required"),
+        newName: z.string().min(1, "New mailbox name is required"),
+        account: z.string().optional().describe("Account containing the mailbox"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        oldName: z.string().optional(),
+        newName: z.string().optional(),
+    },
 }, withErrorHandling(async ({ oldName, newName, account }) => {
     if (isImapAccount(account)) {
         const r = await imapRenameMailbox(oldName, newName, { account });
@@ -861,7 +1094,14 @@ server.tool("rename-mailbox", "Use when: renaming an existing mailbox/folder fro
 // Account Tools
 // =============================================================================
 // --- list-accounts ---
-server.tool("list-accounts", "Use when: discovering the configured Mail accounts (e.g. iCloud, Gmail) so you can pass an exact account name to other tools.\nReturns: the account names and a count.\nDo not use when: you want the folders within an account (use list-mailboxes) or messages (use list-messages / search-messages).", {}, withErrorHandling(() => {
+server.registerTool("list-accounts", {
+    description: "Use when: discovering the configured Mail accounts (e.g. iCloud, Gmail) so you can pass an exact account name to other tools.\nReturns: the account names and a count.\nDo not use when: you want the folders within an account (use list-mailboxes) or messages (use list-messages / search-messages).",
+    inputSchema: {},
+    outputSchema: {
+        accounts: z.array(z.object({}).passthrough()).optional(),
+        count: z.number().optional(),
+    },
+}, withErrorHandling(() => {
     const accounts = mailManager.listAccounts();
     const structured = { accounts, count: accounts.length };
     if (accounts.length === 0) {
@@ -874,7 +1114,14 @@ server.tool("list-accounts", "Use when: discovering the configured Mail accounts
 // Mail Rules Tools
 // =============================================================================
 // --- list-rules ---
-server.tool("list-rules", "Use when: discovering the Mail rules that exist and whether each is enabled or disabled, e.g. before enabling/disabling/deleting one.\nReturns: each rule's name and enabled/disabled state.\nDo not use when: you want to change a rule (use enable-rule / disable-rule / create-rule / delete-rule).", {}, withErrorHandling(() => {
+server.registerTool("list-rules", {
+    description: "Use when: discovering the Mail rules that exist and whether each is enabled or disabled, e.g. before enabling/disabling/deleting one.\nReturns: each rule's name and enabled/disabled state.\nDo not use when: you want to change a rule (use enable-rule / disable-rule / create-rule / delete-rule).",
+    inputSchema: {},
+    outputSchema: {
+        rules: z.array(z.object({}).passthrough()).optional(),
+        count: z.number().optional(),
+    },
+}, withErrorHandling(() => {
     const rules = mailManager.listRules();
     const structured = {
         rules: rules.map((r) => ({ name: r.name, enabled: r.enabled })),
@@ -889,8 +1136,16 @@ server.tool("list-rules", "Use when: discovering the Mail rules that exist and w
     return successResponse(`Found ${rules.length} rule(s):\n${ruleList}`, structured);
 }, "Error listing rules"));
 // --- enable-rule ---
-server.tool("enable-rule", "Use when: turning on an existing Mail rule by name.\nReturns: a confirmation that the rule was enabled.\nDo not use when: turning a rule off (use disable-rule), creating one (use create-rule), or deleting one (use delete-rule). Use list-rules to confirm the exact rule name.", {
-    name: z.string().min(1, "Rule name is required"),
+server.registerTool("enable-rule", {
+    description: "Use when: turning on an existing Mail rule by name.\nReturns: a confirmation that the rule was enabled.\nDo not use when: turning a rule off (use disable-rule), creating one (use create-rule), or deleting one (use delete-rule). Use list-rules to confirm the exact rule name.",
+    inputSchema: {
+        name: z.string().min(1, "Rule name is required"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        name: z.string().optional(),
+        enabled: z.boolean().optional(),
+    },
 }, withErrorHandling(({ name }) => {
     const success = mailManager.setRuleEnabled(name, true);
     if (!success) {
@@ -899,8 +1154,16 @@ server.tool("enable-rule", "Use when: turning on an existing Mail rule by name.\
     return successResponse(`Rule "${name}" enabled`, { ok: true, name, enabled: true });
 }, "Error enabling rule"));
 // --- disable-rule ---
-server.tool("disable-rule", "Use when: turning off an existing Mail rule by name (without deleting it).\nReturns: a confirmation that the rule was disabled.\nDo not use when: turning a rule on (use enable-rule), creating one (use create-rule), or removing it permanently (use delete-rule). Use list-rules to confirm the exact rule name.", {
-    name: z.string().min(1, "Rule name is required"),
+server.registerTool("disable-rule", {
+    description: "Use when: turning off an existing Mail rule by name (without deleting it).\nReturns: a confirmation that the rule was disabled.\nDo not use when: turning a rule on (use enable-rule), creating one (use create-rule), or removing it permanently (use delete-rule). Use list-rules to confirm the exact rule name.",
+    inputSchema: {
+        name: z.string().min(1, "Rule name is required"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        name: z.string().optional(),
+        enabled: z.boolean().optional(),
+    },
 }, withErrorHandling(({ name }) => {
     const success = mailManager.setRuleEnabled(name, false);
     if (!success) {
@@ -909,28 +1172,35 @@ server.tool("disable-rule", "Use when: turning off an existing Mail rule by name
     return successResponse(`Rule "${name}" disabled`, { ok: true, name, enabled: false });
 }, "Error disabling rule"));
 // --- create-rule ---
-server.tool("create-rule", "Use when: creating a new Mail rule with one or more conditions (field/operator/value) and at least one action (markRead, markFlagged, delete, or moveTo). Set matchAll to require all conditions vs. any.\nReturns: a confirmation naming the rule and its condition count.\nDo not use when: toggling an existing rule (use enable-rule / disable-rule) or removing one (use delete-rule). Use list-rules to avoid duplicating an existing rule.\nSafety: creates a rule that automatically acts on real mail (including delete/move actions) on an ongoing basis — confirm the conditions and actions with the user before calling.", {
-    name: z.string().min(1, "Rule name is required"),
-    conditions: z
-        .array(z.object({
-        field: z.enum(["from", "to", "cc", "subject", "content"]),
-        operator: z
-            .enum(["contains", "notContains", "equals", "beginsWith", "endsWith"])
-            .default("contains"),
-        value: z.string().min(1, "Condition value is required"),
-    }))
-        .min(1, "At least one condition is required"),
-    actions: z
-        .object({
-        markRead: z.boolean().optional(),
-        markFlagged: z.boolean().optional(),
-        delete: z.boolean().optional(),
-        moveTo: z.string().optional(),
-        moveToAccount: z.string().optional(),
-    })
-        .refine((a) => a.markRead || a.markFlagged || a.delete || a.moveTo, "At least one action is required (markRead, markFlagged, delete, or moveTo)"),
-    matchAll: z.boolean().default(true),
-    enabled: z.boolean().default(true),
+server.registerTool("create-rule", {
+    description: "Use when: creating a new Mail rule with one or more conditions (field/operator/value) and at least one action (markRead, markFlagged, delete, or moveTo). Set matchAll to require all conditions vs. any.\nReturns: a confirmation naming the rule and its condition count.\nDo not use when: toggling an existing rule (use enable-rule / disable-rule) or removing one (use delete-rule). Use list-rules to avoid duplicating an existing rule.\nSafety: creates a rule that automatically acts on real mail (including delete/move actions) on an ongoing basis — confirm the conditions and actions with the user before calling.",
+    inputSchema: {
+        name: z.string().min(1, "Rule name is required"),
+        conditions: z
+            .array(z.object({
+            field: z.enum(["from", "to", "cc", "subject", "content"]),
+            operator: z
+                .enum(["contains", "notContains", "equals", "beginsWith", "endsWith"])
+                .default("contains"),
+            value: z.string().min(1, "Condition value is required"),
+        }))
+            .min(1, "At least one condition is required"),
+        actions: z
+            .object({
+            markRead: z.boolean().optional(),
+            markFlagged: z.boolean().optional(),
+            delete: z.boolean().optional(),
+            moveTo: z.string().optional(),
+            moveToAccount: z.string().optional(),
+        })
+            .refine((a) => a.markRead || a.markFlagged || a.delete || a.moveTo, "At least one action is required (markRead, markFlagged, delete, or moveTo)"),
+        matchAll: z.boolean().default(true),
+        enabled: z.boolean().default(true),
+    },
+    outputSchema: {
+        name: z.string().optional(),
+        created: z.boolean().optional(),
+    },
 }, withErrorHandling((args) => {
     const result = mailManager.createRule(args);
     if (!result.success) {
@@ -939,8 +1209,15 @@ server.tool("create-rule", "Use when: creating a new Mail rule with one or more 
     return successResponse(`Rule "${args.name}" created with ${args.conditions.length} condition(s).`, { name: args.name, created: true });
 }, "Error creating rule"));
 // --- delete-rule ---
-server.tool("delete-rule", "Use when: permanently removing a Mail rule by name.\nReturns: a confirmation that the rule was deleted.\nDo not use when: you only want to pause it (use disable-rule) or create one (use create-rule).\nSafety: destructive — the rule is removed permanently. Require explicit user confirmation and use list-rules first to confirm the exact name.", {
-    name: z.string().min(1, "Rule name is required"),
+server.registerTool("delete-rule", {
+    description: "Use when: permanently removing a Mail rule by name.\nReturns: a confirmation that the rule was deleted.\nDo not use when: you only want to pause it (use disable-rule) or create one (use create-rule).\nSafety: destructive — the rule is removed permanently. Require explicit user confirmation and use list-rules first to confirm the exact name.",
+    inputSchema: {
+        name: z.string().min(1, "Rule name is required"),
+    },
+    outputSchema: {
+        name: z.string().optional(),
+        deleted: z.boolean().optional(),
+    },
 }, withErrorHandling(({ name }) => {
     const success = mailManager.deleteRule(name);
     if (!success) {
@@ -952,8 +1229,15 @@ server.tool("delete-rule", "Use when: permanently removing a Mail rule by name.\
 // Contacts Tools
 // =============================================================================
 // --- search-contacts ---
-server.tool("search-contacts", "Use when: looking up a person in Contacts.app by name to find their email address(es) before composing or sending mail.\nReturns: matching contacts with their names and email addresses.\nDo not use when: searching email messages (use search-messages) — this queries Contacts, not the mailbox.", {
-    query: z.string().min(1, "Search query is required"),
+server.registerTool("search-contacts", {
+    description: "Use when: looking up a person in Contacts.app by name to find their email address(es) before composing or sending mail.\nReturns: matching contacts with their names and email addresses.\nDo not use when: searching email messages (use search-messages) — this queries Contacts, not the mailbox.",
+    inputSchema: {
+        query: z.string().min(1, "Search query is required"),
+    },
+    outputSchema: {
+        contacts: z.array(z.object({}).passthrough()).optional(),
+        count: z.number().optional(),
+    },
 }, withErrorHandling(({ query }) => {
     const contacts = mailManager.searchContacts(query);
     const structured = {
@@ -975,13 +1259,21 @@ server.tool("search-contacts", "Use when: looking up a person in Contacts.app by
 // Email Template Tools
 // =============================================================================
 // --- save-template ---
-server.tool("save-template", "Use when: creating a reusable email template (name, subject, body, optional default to/cc), or updating one by passing its existing id. Subject/body may contain placeholders for later use.\nReturns: the saved template's name and id (reuse the id with use-template / get-template / delete-template).\nDo not use when: composing a one-off message (use create-draft / send-email) or filling in a template to send (use use-template).\nSafety: writes the template to the on-disk templates store (APPLE_MAIL_MCP_TEMPLATES_FILE) and persists across restarts; passing an existing id overwrites that template.", {
-    name: z.string().min(1, "Template name is required"),
-    subject: z.string().min(1, "Subject is required"),
-    body: z.string().min(1, "Body is required"),
-    to: z.array(z.string()).optional().describe("Default recipients"),
-    cc: z.array(z.string()).optional().describe("Default CC recipients"),
-    id: z.string().optional().describe("Template ID (for updating existing template)"),
+server.registerTool("save-template", {
+    description: "Use when: creating a reusable email template (name, subject, body, optional default to/cc), or updating one by passing its existing id. Subject/body may contain placeholders for later use.\nReturns: the saved template's name and id (reuse the id with use-template / get-template / delete-template).\nDo not use when: composing a one-off message (use create-draft / send-email) or filling in a template to send (use use-template).\nSafety: writes the template to the on-disk templates store (APPLE_MAIL_MCP_TEMPLATES_FILE) and persists across restarts; passing an existing id overwrites that template.",
+    inputSchema: {
+        name: z.string().min(1, "Template name is required"),
+        subject: z.string().min(1, "Subject is required"),
+        body: z.string().min(1, "Body is required"),
+        to: z.array(z.string()).optional().describe("Default recipients"),
+        cc: z.array(z.string()).optional().describe("Default CC recipients"),
+        id: z.string().optional().describe("Template ID (for updating existing template)"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        id: z.string().optional(),
+        name: z.string().optional(),
+    },
 }, withErrorHandling(({ name, subject, body, to, cc, id }) => {
     const template = mailManager.saveTemplate(name, subject, body, to, cc, id);
     return successResponse(`Template "${template.name}" saved with ID: ${template.id}`, {
@@ -991,7 +1283,14 @@ server.tool("save-template", "Use when: creating a reusable email template (name
     });
 }, "Error saving template"));
 // --- list-templates ---
-server.tool("list-templates", "Use when: discovering the saved email templates and their ids, e.g. before using or editing one.\nReturns: each template's id, name, and subject.\nDo not use when: you want a single template's full body (use get-template) or want to apply one (use use-template).", {}, withErrorHandling(() => {
+server.registerTool("list-templates", {
+    description: "Use when: discovering the saved email templates and their ids, e.g. before using or editing one.\nReturns: each template's id, name, and subject.\nDo not use when: you want a single template's full body (use get-template) or want to apply one (use use-template).",
+    inputSchema: {},
+    outputSchema: {
+        templates: z.array(z.object({}).passthrough()).optional(),
+        count: z.number().optional(),
+    },
+}, withErrorHandling(() => {
     const templates = mailManager.listTemplates();
     const structured = {
         templates: templates.map((t) => ({ id: t.id, name: t.name, subject: t.subject })),
@@ -1006,8 +1305,19 @@ server.tool("list-templates", "Use when: discovering the saved email templates a
     return successResponse(`Found ${templates.length} template(s):\n${templateList}`, structured);
 }, "Error listing templates"));
 // --- get-template ---
-server.tool("get-template", "Use when: reading the full contents of one saved template by id — its name, subject, default to/cc, and body.\nReturns: the template's name, subject, default recipients, and body text.\nDo not use when: you don't have the id (use list-templates first) or want to apply the template into a draft (use use-template).", {
-    id: z.string().min(1, "Template ID is required"),
+server.registerTool("get-template", {
+    description: "Use when: reading the full contents of one saved template by id — its name, subject, default to/cc, and body.\nReturns: the template's name, subject, default recipients, and body text.\nDo not use when: you don't have the id (use list-templates first) or want to apply the template into a draft (use use-template).",
+    inputSchema: {
+        id: z.string().min(1, "Template ID is required"),
+    },
+    outputSchema: {
+        id: z.string().optional(),
+        name: z.string().optional(),
+        subject: z.string().optional(),
+        to: z.array(z.string()).optional(),
+        cc: z.array(z.string()).optional(),
+        body: z.string().optional(),
+    },
 }, withErrorHandling(({ id }) => {
     const template = mailManager.getTemplate(id);
     if (!template) {
@@ -1032,8 +1342,15 @@ server.tool("get-template", "Use when: reading the full contents of one saved te
     });
 }, "Error getting template"));
 // --- delete-template ---
-server.tool("delete-template", "Use when: permanently removing a saved email template by id.\nReturns: a confirmation that the template was deleted.\nDo not use when: you only want to view it (use get-template) or update it (use save-template with the existing id).\nSafety: destructive — removes the template from the on-disk store permanently. Require explicit user confirmation and use list-templates first to confirm the id.", {
-    id: z.string().min(1, "Template ID is required"),
+server.registerTool("delete-template", {
+    description: "Use when: permanently removing a saved email template by id.\nReturns: a confirmation that the template was deleted.\nDo not use when: you only want to view it (use get-template) or update it (use save-template with the existing id).\nSafety: destructive — removes the template from the on-disk store permanently. Require explicit user confirmation and use list-templates first to confirm the id.",
+    inputSchema: {
+        id: z.string().min(1, "Template ID is required"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        id: z.string().optional(),
+    },
 }, withErrorHandling(({ id }) => {
     const success = mailManager.deleteTemplate(id);
     if (!success) {
@@ -1042,12 +1359,19 @@ server.tool("delete-template", "Use when: permanently removing a saved email tem
     return successResponse(`Template "${id}" deleted`, { ok: true, id });
 }, "Error deleting template"));
 // --- use-template ---
-server.tool("use-template", "Use when: composing a new draft from a saved template (by id), optionally overriding the recipients, subject, or body. Creates a draft in Mail.app for the user to review and send.\nReturns: a confirmation that a draft was created from the template.\nDo not use when: you want to inspect the template without composing (use get-template) or send immediately without a draft (use send-email).", {
-    id: z.string().min(1, "Template ID is required"),
-    to: z.array(z.string()).optional().describe("Override recipients"),
-    cc: z.array(z.string()).optional().describe("Override CC recipients"),
-    subject: z.string().optional().describe("Override subject"),
-    body: z.string().optional().describe("Override body"),
+server.registerTool("use-template", {
+    description: "Use when: composing a new draft from a saved template (by id), optionally overriding the recipients, subject, or body. Creates a draft in Mail.app for the user to review and send.\nReturns: a confirmation that a draft was created from the template.\nDo not use when: you want to inspect the template without composing (use get-template) or send immediately without a draft (use send-email).",
+    inputSchema: {
+        id: z.string().min(1, "Template ID is required"),
+        to: z.array(z.string()).optional().describe("Override recipients"),
+        cc: z.array(z.string()).optional().describe("Override CC recipients"),
+        subject: z.string().optional().describe("Override subject"),
+        body: z.string().optional().describe("Override body"),
+    },
+    outputSchema: {
+        ok: z.boolean().optional(),
+        id: z.string().optional(),
+    },
 }, withErrorHandling(({ id, to, cc, subject, body }) => {
     const success = mailManager.useTemplate(id, { to, cc, subject, body });
     if (!success) {
@@ -1059,7 +1383,14 @@ server.tool("use-template", "Use when: composing a new draft from a saved templa
 // Diagnostics Tools
 // =============================================================================
 // --- health-check ---
-server.tool("health-check", "Use when: doing a quick check that Mail.app is reachable and the server's basic checks pass.\nReturns: an overall healthy/unhealthy status with a pass/fail line per check.\nDo not use when: you need detailed permission/account/IMAP/SMTP diagnostics with remediation steps (use doctor).", {}, withErrorHandling(() => {
+server.registerTool("health-check", {
+    description: "Use when: doing a quick check that Mail.app is reachable and the server's basic checks pass.\nReturns: an overall healthy/unhealthy status with a pass/fail line per check.\nDo not use when: you need detailed permission/account/IMAP/SMTP diagnostics with remediation steps (use doctor).",
+    inputSchema: {},
+    outputSchema: {
+        healthy: z.boolean().optional(),
+        checks: z.array(CHECK_ITEM_SCHEMA).optional(),
+    },
+}, withErrorHandling(() => {
     const result = mailManager.healthCheck();
     const statusIcon = result.healthy ? "✓" : "✗";
     const statusText = result.healthy ? "All checks passed" : "Issues detected";
@@ -1072,18 +1403,36 @@ server.tool("health-check", "Use when: doing a quick check that Mail.app is reac
     return successResponse(`${statusIcon} ${statusText}\n\n${checkLines}`, { ...result });
 }, "Error running health check"));
 // --- doctor ---
-server.tool("doctor", "Use when: troubleshooting setup problems — diagnoses Mail.app automation permissions, account state, and the IMAP/SMTP backends with actionable remediation messages.\nReturns: a detailed diagnostic report (formatted text plus structured checks).\nDo not use when: you just want a quick up/down status (use health-check) or message counts (use get-mail-stats).", {}, withErrorHandling(async () => {
+server.registerTool("doctor", {
+    description: "Use when: troubleshooting setup problems — diagnoses Mail.app automation permissions, account state, and the IMAP/SMTP backends with actionable remediation messages.\nReturns: a detailed diagnostic report (formatted text plus structured checks).\nDo not use when: you just want a quick up/down status (use health-check) or message counts (use get-mail-stats).",
+    inputSchema: {},
+    outputSchema: {
+        healthy: z.boolean().optional(),
+        checks: z.array(CHECK_ITEM_SCHEMA).optional(),
+    },
+}, withErrorHandling(async () => {
     // Diagnoses Mail.app permission, account state, and the IMAP/SMTP backends
     // with actionable messages (C3). structuredContent carries the raw checks.
     const report = await runDoctor(mailManager);
     return successResponse(formatDoctorReport(report), { ...report });
 }, "Error running doctor"));
 // --- get-mail-stats ---
-server.tool("get-mail-stats", "Use when: you want aggregate mailbox statistics — total and unread message counts, recently-received counts (last 24h/7d/30d), and (for the all-accounts path) a per-account breakdown.\nReturns: totals, unread counts, recent-activity counts, and per-account figures.\nDo not use when: you only need a single unread number (use get-unread-count) or want to list the messages themselves (use list-messages / search-messages).", {
-    account: z
-        .string()
-        .optional()
-        .describe("Limit to one account; uses fast IMAP STATUS if that account is IMAP-configured"),
+server.registerTool("get-mail-stats", {
+    description: "Use when: you want aggregate mailbox statistics — total and unread message counts, recently-received counts (last 24h/7d/30d), and (for the all-accounts path) a per-account breakdown.\nReturns: totals, unread counts, recent-activity counts, and per-account figures.\nDo not use when: you only need a single unread number (use get-unread-count) or want to list the messages themselves (use list-messages / search-messages).",
+    inputSchema: {
+        account: z
+            .string()
+            .optional()
+            .describe("Limit to one account; uses fast IMAP STATUS if that account is IMAP-configured"),
+    },
+    outputSchema: {
+        account: z.string().optional(),
+        totalMessages: z.number().optional(),
+        totalUnread: z.number().optional(),
+        accounts: z.array(z.object({}).passthrough()).optional(),
+        recentlyReceived: z.object({}).passthrough().optional(),
+        recent: z.object({}).passthrough().optional(),
+    },
 }, withErrorHandling(async ({ account }) => {
     // IMAP (I3): for a named IMAP account, STATUS gives authoritative counts and
     // SEARCH SINCE gives recent activity — fast even on huge mailboxes.
@@ -1125,7 +1474,17 @@ server.tool("get-mail-stats", "Use when: you want aggregate mailbox statistics �
     return successResponse(lines.join("\n"), { ...stats });
 }, "Error getting mail statistics"));
 // --- get-sync-status ---
-server.tool("get-sync-status", "Use when: checking whether Mail.app is running and actively syncing, e.g. to explain why new mail hasn't appeared yet.\nReturns: whether Mail.app is running and whether sync activity was detected.\nDo not use when: you need message counts (use get-mail-stats) or a full setup diagnosis (use doctor).", {}, withErrorHandling(() => {
+server.registerTool("get-sync-status", {
+    description: "Use when: checking whether Mail.app is running and actively syncing, e.g. to explain why new mail hasn't appeared yet.\nReturns: whether Mail.app is running and whether sync activity was detected.\nDo not use when: you need message counts (use get-mail-stats) or a full setup diagnosis (use doctor).",
+    inputSchema: {},
+    outputSchema: {
+        syncDetected: z.boolean().optional(),
+        pendingUpload: z.number().optional(),
+        recentActivity: z.boolean().optional(),
+        secondsSinceLastChange: z.number().optional(),
+        error: z.string().optional(),
+    },
+}, withErrorHandling(() => {
     const status = mailManager.getSyncStatus();
     const lines = [];
     lines.push(`🔄 Mail Sync Status`);
