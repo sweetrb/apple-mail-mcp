@@ -383,7 +383,44 @@ function formatRow(m: ImapMessage, account: string, path: string): string {
   return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]`;
 }
 
-async function run(args: ImapSearchArgs, listMode: boolean, deps: ImapDeps): Promise<string> {
+/**
+ * JSON-friendly summary of an IMAP message for `structuredContent`, mirroring the
+ * AppleScript path's `messageSummary` shape so the search/list/thread tools emit
+ * the same structured payload regardless of backend (A1).
+ */
+function structuredRow(m: ImapMessage, account: string, path: string): Record<string, unknown> {
+  const env = m.envelope ?? {};
+  return {
+    id: encodeImapId(account, path, m.uid),
+    subject: env.subject || "(no subject)",
+    sender: senderName(env.from),
+    dateReceived: env.date ? new Date(env.date).toISOString() : "",
+    isRead: m.flags?.has("\\Seen") ?? false,
+    isFlagged: m.flags?.has("\\Flagged") ?? false,
+    mailbox: path,
+    account,
+    hasAttachments: false,
+  };
+}
+
+/**
+ * Result of an IMAP search/list: the human text identical to before, plus the
+ * structured payload (messages + count) so callers can pass it straight to
+ * `successResponse(text, structured)` and emit `structuredContent` on the IMAP
+ * path the same way the AppleScript path does.
+ */
+export interface ImapListResult {
+  text: string;
+  messages: Record<string, unknown>[];
+  count: number;
+  partial: boolean;
+}
+
+async function run(
+  args: ImapSearchArgs,
+  listMode: boolean,
+  deps: ImapDeps
+): Promise<ImapListResult> {
   // Reads are idempotent → safe to retry once if a pooled connection is dead.
   // Route to the account named in the search args (C2 multi-account).
   return useClient(
@@ -395,7 +432,12 @@ async function run(args: ImapSearchArgs, listMode: boolean, deps: ImapDeps): Pro
         const found = await client.search(buildCriteria(args, listMode), { uid: true });
         const uids = Array.isArray(found) ? found : [];
         if (uids.length === 0) {
-          return `No messages found via IMAP in "${path}" (account ${cfg.accountLabel}).`;
+          return {
+            text: `No messages found via IMAP in "${path}" (account ${cfg.accountLabel}).`,
+            messages: [],
+            count: 0,
+            partial: false,
+          };
         }
         const limit = args.limit ?? 50;
         const offset = args.offset ?? 0;
@@ -404,21 +446,25 @@ async function run(args: ImapSearchArgs, listMode: boolean, deps: ImapDeps): Pro
           .slice()
           .reverse()
           .slice(offset, offset + limit);
-        const byUid = new Map<number, string>();
+        const byUid = new Map<number, ImapMessage>();
         for await (const msg of client.fetch(
           newest.join(","),
           { envelope: true, flags: true },
           { uid: true }
         )) {
-          byUid.set(msg.uid, formatRow(msg, cfg.accountLabel, path));
+          byUid.set(msg.uid, msg);
         }
-        const rows = newest.map((u) => byUid.get(u)).filter((r): r is string => Boolean(r));
+        const ordered = newest
+          .map((u) => byUid.get(u))
+          .filter((m): m is ImapMessage => m !== undefined);
+        const rows = ordered.map((m) => formatRow(m, cfg.accountLabel, path));
+        const messages = ordered.map((m) => structuredRow(m, cfg.accountLabel, path));
         const verb = listMode ? "listed" : "matched";
-        return (
+        const text =
           `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, mailbox "${path}"; ${uids.length} total ${verb}):\n` +
           rows.join("\n") +
-          `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`
-        );
+          `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`;
+        return { text, messages, count: messages.length, partial: false };
       } finally {
         lock.release();
       }
@@ -427,11 +473,17 @@ async function run(args: ImapSearchArgs, listMode: boolean, deps: ImapDeps): Pro
   );
 }
 
-export function imapSearchMessages(args: ImapSearchArgs, deps: ImapDeps = {}): Promise<string> {
+export function imapSearchMessages(
+  args: ImapSearchArgs,
+  deps: ImapDeps = {}
+): Promise<ImapListResult> {
   return run(args, false, deps);
 }
 
-export function imapListMessages(args: ImapSearchArgs, deps: ImapDeps = {}): Promise<string> {
+export function imapListMessages(
+  args: ImapSearchArgs,
+  deps: ImapDeps = {}
+): Promise<ImapListResult> {
   return run(args, true, deps);
 }
 

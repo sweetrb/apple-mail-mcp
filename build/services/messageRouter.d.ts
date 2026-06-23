@@ -12,5 +12,13 @@ export declare function routeMessage(id: string, opts: {
     apple: () => ToolResponse | Promise<ToolResponse>;
     ok: string;
     fail: string;
+    /** Optional ack payload attached as `structuredContent` on the IMAP success
+     *  path, so a caller can verify the mutation programmatically regardless of
+     *  backend (A1). The AppleScript path supplies its own via `apple`. */
+    structured?: Record<string, unknown>;
+    /** Derive `structuredContent` from the IMAP result on success (e.g. parse
+     *  subject/body from `info`). Takes precedence over `structured`; return
+     *  undefined to attach none. */
+    structuredFromResult?: (r: ImapOpResult) => Record<string, unknown> | undefined;
 }): Promise<ToolResponse>;
 //# sourceMappingURL=messageRouter.d.ts.map

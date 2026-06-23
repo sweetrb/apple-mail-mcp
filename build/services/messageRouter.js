@@ -23,7 +23,9 @@ export function isImapId(id) {
 export async function routeMessage(id, opts) {
     if (decodeImapId(id)) {
         const r = await opts.imap();
-        return r.success ? successResponse(r.info ?? opts.ok) : errorResponse(r.error ?? opts.fail);
+        return r.success
+            ? successResponse(r.info ?? opts.ok, opts.structuredFromResult ? opts.structuredFromResult(r) : opts.structured)
+            : errorResponse(r.error ?? opts.fail);
     }
     return opts.apple();
 }

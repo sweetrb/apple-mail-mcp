@@ -79,20 +79,22 @@ run("IMAP backend (GreenMail) integration", () => {
   });
 
   it("lists INBOX messages with composite imap: ids", async () => {
-    const out = await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps);
+    const out = (await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps)).text;
     expect(out).toMatch(/via IMAP/);
     const id = firstImapId(out);
     expect(decodeImapId(id)?.path).toBe("INBOX");
   });
 
   it("server-side search finds a message by subject", async () => {
-    const out = await imapSearchMessages({ mailbox: "INBOX", subject: "Hello One", limit: 5 }, deps);
+    const out = (
+      await imapSearchMessages({ mailbox: "INBOX", subject: "Hello One", limit: 5 }, deps)
+    ).text;
     expect(out).toMatch(/1 total matched|message\(s\) via IMAP/);
     expect(decodeImapId(firstImapId(out))).not.toBeNull();
   });
 
   it("get-message returns subject + body", async () => {
-    const list = await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps);
+    const list = (await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps)).text;
     const id = firstImapId(list);
     const r = await imapGetMessage(id, false, deps);
     expect(r.success).toBe(true);
@@ -101,7 +103,7 @@ run("IMAP backend (GreenMail) integration", () => {
   });
 
   it("mark-read and flag succeed", async () => {
-    const list = await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps);
+    const list = (await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps)).text;
     const id = firstImapId(list);
     expect((await imapMarkRead(id, deps)).success).toBe(true);
     expect((await imapFlagMessage(id, deps)).success).toBe(true);
@@ -120,12 +122,15 @@ run("IMAP backend (GreenMail) integration", () => {
   it("move then delete a message across mailboxes", async () => {
     expect((await imapCreateMailbox("Dest", deps)).success).toBe(true);
     await appendMessage("Movable", "move me");
-    const list = await imapListMessages({ mailbox: "INBOX", subject: undefined, limit: 50 }, deps);
+    const list = (await imapListMessages({ mailbox: "INBOX", subject: undefined, limit: 50 }, deps))
+      .text;
     // find the "Movable" row's id by re-searching
-    const search = await imapSearchMessages({ mailbox: "INBOX", subject: "Movable", limit: 1 }, deps);
+    const search = (
+      await imapSearchMessages({ mailbox: "INBOX", subject: "Movable", limit: 1 }, deps)
+    ).text;
     const id = firstImapId(search);
     expect((await imapMoveMessageById(id, "Dest", deps)).success).toBe(true);
-    const inDest = await imapListMessages({ mailbox: "Dest", limit: 10 }, deps);
+    const inDest = (await imapListMessages({ mailbox: "Dest", limit: 10 }, deps)).text;
     const destId = firstImapId(inDest);
     expect((await imapDeleteMessageById(destId, deps)).success).toBe(true);
     await imapDeleteMailbox("Dest", deps);
@@ -192,10 +197,7 @@ run("IMAP 2.1 optimizations (GreenMail) integration", () => {
     await imapCreateMailbox("BatchDest", deps);
     const u1 = await appendRaw("From: a@x.com\nSubject: batch-1\n\nb");
     const u2 = await appendRaw("From: a@x.com\nSubject: batch-2\n\nb");
-    const ids = [
-      encodeImapId("greenmail", "INBOX", u1),
-      encodeImapId("greenmail", "INBOX", u2),
-    ];
+    const ids = [encodeImapId("greenmail", "INBOX", u1), encodeImapId("greenmail", "INBOX", u2)];
     const mr = await imapBatchMarkRead(ids, deps);
     expect(mr.success).toBe(2);
     const mv = await imapBatchMove(ids, "BatchDest", deps);

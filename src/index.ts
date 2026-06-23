@@ -235,20 +235,23 @@ server.tool(
       // IMAP backend (issue #43): server-side search when this account is
       // explicitly configured for IMAP; otherwise fall through to AppleScript.
       if (isImapAccount(account)) {
-        return successResponse(
-          await imapSearchMessages({
-            query,
-            mailbox,
-            account,
-            limit,
-            dateFrom,
-            dateTo,
-            from,
-            subject,
-            isRead,
-            isFlagged,
-          })
-        );
+        const r = await imapSearchMessages({
+          query,
+          mailbox,
+          account,
+          limit,
+          dateFrom,
+          dateTo,
+          from,
+          subject,
+          isRead,
+          isFlagged,
+        });
+        return successResponse(r.text, {
+          messages: r.messages,
+          count: r.count,
+          partial: r.partial,
+        });
       }
 
       const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
@@ -314,6 +317,18 @@ server.tool(
       routeMessage(id, {
         // IMAP id (imap:…) → fetch via IMAP (#43 Phase 3); else AppleScript.
         imap: () => imapGetMessage(id, preferHtml === true),
+        // IMAP path: parse subject/body out of the returned source so the
+        // structuredContent matches the AppleScript branch's shape.
+        structuredFromResult: (r) => {
+          if (!r.info) return undefined;
+          const sep = r.info.indexOf("\n\n");
+          return {
+            id,
+            subject: subjectFromGetMessage(r.info),
+            body: sep >= 0 ? r.info.slice(sep + 2) : r.info,
+            isHtml: preferHtml === true,
+          };
+        },
         apple: () => {
           // Only fetch/parse the raw source when HTML is actually requested (#32).
           const content = mailManager.getMessageContent(id, preferHtml === true);
@@ -371,8 +386,13 @@ server.tool(
 
     // IMAP backend: server-side subject search.
     if (isImapAccount(account)) {
-      const text = await imapSearchMessages({ subject: base, mailbox, account, limit });
-      return successResponse(`Thread "${base}":\n${text}`, { subject: base });
+      const r = await imapSearchMessages({ subject: base, mailbox, account, limit });
+      return successResponse(`Thread "${base}":\n${r.text}`, {
+        subject: base,
+        messages: r.messages,
+        count: r.count,
+        partial: r.partial,
+      });
     }
 
     const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
@@ -432,9 +452,12 @@ server.tool(
     // IMAP backend (issue #43): server-side listing when this account is
     // explicitly configured for IMAP; otherwise fall through to AppleScript.
     if (isImapAccount(account)) {
-      return successResponse(
-        await imapListMessages({ mailbox, account, limit, offset, from, unreadOnly })
-      );
+      const r = await imapListMessages({ mailbox, account, limit, offset, from, unreadOnly });
+      return successResponse(r.text, {
+        messages: r.messages,
+        count: r.count,
+        partial: r.partial,
+      });
     }
 
     const { messages, diagnostics } = mailManager.listMessagesWithDiagnostics(
@@ -501,12 +524,19 @@ server.tool(
   withErrorHandling(async ({ to, subject, body, cc, bcc, account, attachments, transport }) => {
     const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
 
+    const attachmentCount = attachments?.length ?? 0;
+
     if (transport === "smtp") {
       const result = await sendViaSmtp({ to, subject, body, cc, bcc, from: account, attachments });
       if (!result.success) {
         return errorResponse(result.error ?? "Failed to send email via SMTP.");
       }
-      return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}`);
+      return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}`, {
+        ok: true,
+        recipients: to,
+        attachmentCount,
+        transport: "smtp",
+      });
     }
 
     const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
@@ -515,7 +545,12 @@ server.tool(
       return errorResponse("Failed to send email. Check Mail.app configuration.");
     }
 
-    return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`);
+    return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
+      ok: true,
+      recipients: to,
+      attachmentCount,
+      transport: "applescript",
+    });
   }, "Error sending email")
 );
 
@@ -562,13 +597,21 @@ server.tool(
       .map((r) => `  - ${r.email}: ${r.success ? "sent" : `FAILED (${r.error})`}`)
       .join("\n");
 
+    const structured = {
+      ok: failCount === 0,
+      sent: successCount,
+      failed: failCount,
+      results: results.map((r) => ({ email: r.email, success: r.success, error: r.error })),
+    };
+
     if (failCount === 0) {
-      return successResponse(`Successfully sent ${successCount} email(s):\n${details}`);
+      return successResponse(`Successfully sent ${successCount} email(s):\n${details}`, structured);
     } else if (successCount === 0) {
       return errorResponse(`Failed to send all ${failCount} email(s):\n${details}`);
     } else {
       return successResponse(
-        `Sent ${successCount} of ${results.length} email(s), ${failCount} failed:\n${details}`
+        `Sent ${successCount} of ${results.length} email(s), ${failCount} failed:\n${details}`,
+        structured
       );
     }
   }, "Error sending serial emails")
@@ -595,8 +638,13 @@ server.tool(
       return errorResponse("Failed to create draft. Check Mail.app configuration.");
     }
 
-    const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
-    return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`);
+    const attachmentCount = attachments?.length ?? 0;
+    const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
+    return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
+      ok: true,
+      recipients: to,
+      attachmentCount,
+    });
   }, "Error creating draft")
 );
 
@@ -618,7 +666,11 @@ server.tool(
       return errorResponse(`Failed to reply to message "${id}"`);
     }
 
-    return successResponse(send ? "Reply sent" : "Reply saved as draft");
+    return successResponse(send ? "Reply sent" : "Reply saved as draft", {
+      ok: true,
+      sent: send,
+      id,
+    });
   }, "Error replying to message")
 );
 
@@ -641,7 +693,8 @@ server.tool(
     }
 
     return successResponse(
-      send ? `Message forwarded to ${to.join(", ")}` : "Forward saved as draft"
+      send ? `Message forwarded to ${to.join(", ")}` : "Forward saved as draft",
+      { ok: true, sent: send, recipients: to, id }
     );
   }, "Error forwarding message")
 );
@@ -660,10 +713,11 @@ server.tool(
         imap: () => imapMarkRead(id),
         apple: () =>
           mailManager.markAsRead(id)
-            ? successResponse("Message marked as read")
+            ? successResponse("Message marked as read", { ok: true, id })
             : errorResponse(`Failed to mark message "${id}" as read`),
         ok: "Message marked as read",
         fail: `Failed to mark message "${id}" as read`,
+        structured: { ok: true, id },
       }),
     "Error marking message as read"
   )
@@ -683,10 +737,11 @@ server.tool(
         imap: () => imapMarkUnread(id),
         apple: () =>
           mailManager.markAsUnread(id)
-            ? successResponse("Message marked as unread")
+            ? successResponse("Message marked as unread", { ok: true, id })
             : errorResponse(`Failed to mark message "${id}" as unread`),
         ok: "Message marked as unread",
         fail: `Failed to mark message "${id}" as unread`,
+        structured: { ok: true, id },
       }),
     "Error marking message as unread"
   )
@@ -706,10 +761,11 @@ server.tool(
         imap: () => imapFlagMessage(id),
         apple: () =>
           mailManager.flagMessage(id)
-            ? successResponse("Message flagged")
+            ? successResponse("Message flagged", { ok: true, id })
             : errorResponse(`Failed to flag message "${id}"`),
         ok: "Message flagged",
         fail: `Failed to flag message "${id}"`,
+        structured: { ok: true, id },
       }),
     "Error flagging message"
   )
@@ -729,10 +785,11 @@ server.tool(
         imap: () => imapUnflagMessage(id),
         apple: () =>
           mailManager.unflagMessage(id)
-            ? successResponse("Message unflagged")
+            ? successResponse("Message unflagged", { ok: true, id })
             : errorResponse(`Failed to unflag message "${id}"`),
         ok: "Message unflagged",
         fail: `Failed to unflag message "${id}"`,
+        structured: { ok: true, id },
       }),
     "Error unflagging message"
   )
@@ -753,11 +810,12 @@ server.tool(
         apple: () => {
           const { success, error } = mailManager.deleteMessage(id);
           return success
-            ? successResponse("Message deleted")
+            ? successResponse("Message deleted", { ok: true, id })
             : errorResponse(error || `Failed to delete message "${id}"`);
         },
         ok: "Message deleted",
         fail: `Failed to delete message "${id}"`,
+        structured: { ok: true, id },
       }),
     "Error deleting message"
   )
@@ -780,11 +838,12 @@ server.tool(
         apple: () => {
           const { success, error } = mailManager.moveMessage(id, mailbox, account);
           return success
-            ? successResponse(`Message moved to "${mailbox}"`)
+            ? successResponse(`Message moved to "${mailbox}"`, { ok: true, id, mailbox })
             : errorResponse(error || `Failed to move message to "${mailbox}"`);
         },
         ok: `Message moved to "${mailbox}"`,
         fail: `Failed to move message to "${mailbox}"`,
+        structured: { ok: true, id, mailbox },
       }),
     "Error moving message"
   )
@@ -804,13 +863,14 @@ server.tool(
       (n) => mailManager.batchDeleteMessages(n),
       (im) => imapBatchDelete(im)
     );
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
 
     if (failCount === 0) {
-      return successResponse(`Successfully deleted ${successCount} message(s)`);
+      return successResponse(`Successfully deleted ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
       return errorResponse(`Failed to delete all ${failCount} message(s)`);
     } else {
-      return successResponse(`Deleted ${successCount} message(s), ${failCount} failed`);
+      return successResponse(`Deleted ${successCount} message(s), ${failCount} failed`, structured);
     }
   }, "Error batch deleting messages")
 );
@@ -831,14 +891,19 @@ server.tool(
       (n) => mailManager.batchMoveMessages(n, mailbox, account),
       (im) => imapBatchMove(im, mailbox, { account })
     );
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount, mailbox };
 
     if (failCount === 0) {
-      return successResponse(`Successfully moved ${successCount} message(s) to "${mailbox}"`);
+      return successResponse(
+        `Successfully moved ${successCount} message(s) to "${mailbox}"`,
+        structured
+      );
     } else if (successCount === 0) {
       return errorResponse(`Failed to move all ${failCount} message(s)`);
     } else {
       return successResponse(
-        `Moved ${successCount} message(s) to "${mailbox}", ${failCount} failed`
+        `Moved ${successCount} message(s) to "${mailbox}", ${failCount} failed`,
+        structured
       );
     }
   }, "Error batch moving messages")
@@ -858,13 +923,17 @@ server.tool(
       (n) => mailManager.batchMarkAsRead(n),
       (im) => imapBatchMarkRead(im)
     );
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
 
     if (failCount === 0) {
-      return successResponse(`Successfully marked ${successCount} message(s) as read`);
+      return successResponse(`Successfully marked ${successCount} message(s) as read`, structured);
     } else if (successCount === 0) {
       return errorResponse(`Failed to mark all ${failCount} message(s) as read`);
     } else {
-      return successResponse(`Marked ${successCount} message(s) as read, ${failCount} failed`);
+      return successResponse(
+        `Marked ${successCount} message(s) as read, ${failCount} failed`,
+        structured
+      );
     }
   }, "Error batch marking messages as read")
 );
@@ -883,13 +952,20 @@ server.tool(
       (n) => mailManager.batchMarkAsUnread(n),
       (im) => imapBatchMarkUnread(im)
     );
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
 
     if (failCount === 0) {
-      return successResponse(`Successfully marked ${successCount} message(s) as unread`);
+      return successResponse(
+        `Successfully marked ${successCount} message(s) as unread`,
+        structured
+      );
     } else if (successCount === 0) {
       return errorResponse(`Failed to mark all ${failCount} message(s) as unread`);
     } else {
-      return successResponse(`Marked ${successCount} message(s) as unread, ${failCount} failed`);
+      return successResponse(
+        `Marked ${successCount} message(s) as unread, ${failCount} failed`,
+        structured
+      );
     }
   }, "Error batch marking messages as unread")
 );
@@ -908,13 +984,14 @@ server.tool(
       (n) => mailManager.batchFlagMessages(n),
       (im) => imapBatchFlag(im)
     );
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
 
     if (failCount === 0) {
-      return successResponse(`Successfully flagged ${successCount} message(s)`);
+      return successResponse(`Successfully flagged ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
       return errorResponse(`Failed to flag all ${failCount} message(s)`);
     } else {
-      return successResponse(`Flagged ${successCount} message(s), ${failCount} failed`);
+      return successResponse(`Flagged ${successCount} message(s), ${failCount} failed`, structured);
     }
   }, "Error batch flagging messages")
 );
@@ -933,13 +1010,17 @@ server.tool(
       (n) => mailManager.batchUnflagMessages(n),
       (im) => imapBatchUnflag(im)
     );
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
 
     if (failCount === 0) {
-      return successResponse(`Successfully unflagged ${successCount} message(s)`);
+      return successResponse(`Successfully unflagged ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
       return errorResponse(`Failed to unflag all ${failCount} message(s)`);
     } else {
-      return successResponse(`Unflagged ${successCount} message(s), ${failCount} failed`);
+      return successResponse(
+        `Unflagged ${successCount} message(s), ${failCount} failed`,
+        structured
+      );
     }
   }, "Error batch unflagging messages")
 );
@@ -1008,8 +1089,13 @@ server.tool(
       if (!r.success || !r.base64) {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
-      writeFileSync(joinPath(resolvedDir, attachmentName), Buffer.from(r.base64, "base64"));
-      return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`);
+      const savedPath = joinPath(resolvedDir, attachmentName);
+      writeFileSync(savedPath, Buffer.from(r.base64, "base64"));
+      return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`, {
+        ok: true,
+        attachmentName,
+        savedPath,
+      });
     }
 
     const success = mailManager.saveAttachment(id, attachmentName, savePath);
@@ -1018,7 +1104,11 @@ server.tool(
       return errorResponse(`Failed to save attachment "${attachmentName}"`);
     }
 
-    return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`);
+    return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`, {
+      ok: true,
+      attachmentName,
+      savedPath: joinPath(savePath, attachmentName),
+    });
   }, "Error saving attachment")
 );
 
@@ -1139,7 +1229,7 @@ server.tool(
     if (isImapAccount(account)) {
       const r = await imapCreateMailbox(name, { account });
       if (!r.success) return errorResponse(r.error || `Failed to create mailbox "${name}"`);
-      return successResponse(r.info || `Mailbox "${name}" created`);
+      return successResponse(r.info || `Mailbox "${name}" created`, { ok: true, name });
     }
 
     const success = mailManager.createMailbox(name, account);
@@ -1148,7 +1238,7 @@ server.tool(
       return errorResponse(`Failed to create mailbox "${name}"`);
     }
 
-    return successResponse(`Mailbox "${name}" created`);
+    return successResponse(`Mailbox "${name}" created`, { ok: true, name });
   }, "Error creating mailbox")
 );
 
@@ -1165,7 +1255,7 @@ server.tool(
     if (isImapAccount(account)) {
       const r = await imapDeleteMailbox(name, { account });
       if (!r.success) return errorResponse(r.error || `Failed to delete mailbox "${name}"`);
-      return successResponse(r.info || `Mailbox "${name}" deleted`);
+      return successResponse(r.info || `Mailbox "${name}" deleted`, { ok: true, name });
     }
 
     const { success, error } = mailManager.deleteMailbox(name, account);
@@ -1174,7 +1264,7 @@ server.tool(
       return errorResponse(error || `Failed to delete mailbox "${name}"`);
     }
 
-    return successResponse(`Mailbox "${name}" deleted`);
+    return successResponse(`Mailbox "${name}" deleted`, { ok: true, name });
   }, "Error deleting mailbox")
 );
 
@@ -1194,7 +1284,11 @@ server.tool(
       if (!r.success) {
         return errorResponse(r.error || `Failed to rename mailbox "${oldName}" to "${newName}"`);
       }
-      return successResponse(r.info || `Mailbox renamed from "${oldName}" to "${newName}"`);
+      return successResponse(r.info || `Mailbox renamed from "${oldName}" to "${newName}"`, {
+        ok: true,
+        oldName,
+        newName,
+      });
     }
 
     const { success, error } = mailManager.renameMailbox(oldName, newName, account);
@@ -1203,7 +1297,11 @@ server.tool(
       return errorResponse(error || `Failed to rename mailbox "${oldName}" to "${newName}"`);
     }
 
-    return successResponse(`Mailbox renamed from "${oldName}" to "${newName}"`);
+    return successResponse(`Mailbox renamed from "${oldName}" to "${newName}"`, {
+      ok: true,
+      oldName,
+      newName,
+    });
   }, "Error renaming mailbox")
 );
 
@@ -1242,16 +1340,20 @@ server.tool(
   {},
   withErrorHandling(() => {
     const rules = mailManager.listRules();
+    const structured = {
+      rules: rules.map((r) => ({ name: r.name, enabled: r.enabled })),
+      count: rules.length,
+    };
 
     if (rules.length === 0) {
-      return successResponse("No mail rules found");
+      return successResponse("No mail rules found", structured);
     }
 
     const ruleList = rules
       .map((r) => `  - ${r.name} [${r.enabled ? "enabled" : "disabled"}]`)
       .join("\n");
 
-    return successResponse(`Found ${rules.length} rule(s):\n${ruleList}`);
+    return successResponse(`Found ${rules.length} rule(s):\n${ruleList}`, structured);
   }, "Error listing rules")
 );
 
@@ -1270,7 +1372,7 @@ server.tool(
       return errorResponse(`Failed to enable rule "${name}"`);
     }
 
-    return successResponse(`Rule "${name}" enabled`);
+    return successResponse(`Rule "${name}" enabled`, { ok: true, name, enabled: true });
   }, "Error enabling rule")
 );
 
@@ -1289,7 +1391,7 @@ server.tool(
       return errorResponse(`Failed to disable rule "${name}"`);
     }
 
-    return successResponse(`Rule "${name}" disabled`);
+    return successResponse(`Rule "${name}" disabled`, { ok: true, name, enabled: false });
   }, "Error disabling rule")
 );
 
@@ -1369,9 +1471,13 @@ server.tool(
   },
   withErrorHandling(({ query }) => {
     const contacts = mailManager.searchContacts(query);
+    const structured = {
+      contacts: contacts.map((c) => ({ name: c.name, emails: c.emails })),
+      count: contacts.length,
+    };
 
     if (contacts.length === 0) {
-      return successResponse("No contacts found");
+      return successResponse("No contacts found", structured);
     }
 
     const contactList = contacts
@@ -1381,7 +1487,7 @@ server.tool(
       })
       .join("\n");
 
-    return successResponse(`Found ${contacts.length} contact(s):\n${contactList}`);
+    return successResponse(`Found ${contacts.length} contact(s):\n${contactList}`, structured);
   }, "Error searching contacts")
 );
 
@@ -1405,7 +1511,11 @@ server.tool(
   withErrorHandling(({ name, subject, body, to, cc, id }) => {
     const template = mailManager.saveTemplate(name, subject, body, to, cc, id);
 
-    return successResponse(`Template "${template.name}" saved with ID: ${template.id}`);
+    return successResponse(`Template "${template.name}" saved with ID: ${template.id}`, {
+      ok: true,
+      id: template.id,
+      name: template.name,
+    });
   }, "Error saving template")
 );
 
@@ -1417,16 +1527,20 @@ server.tool(
   {},
   withErrorHandling(() => {
     const templates = mailManager.listTemplates();
+    const structured = {
+      templates: templates.map((t) => ({ id: t.id, name: t.name, subject: t.subject })),
+      count: templates.length,
+    };
 
     if (templates.length === 0) {
-      return successResponse("No templates saved");
+      return successResponse("No templates saved", structured);
     }
 
     const templateList = templates
       .map((t) => `  - [${t.id}] ${t.name} — "${t.subject}"`)
       .join("\n");
 
-    return successResponse(`Found ${templates.length} template(s):\n${templateList}`);
+    return successResponse(`Found ${templates.length} template(s):\n${templateList}`, structured);
   }, "Error listing templates")
 );
 
@@ -1455,7 +1569,14 @@ server.tool(
       .filter(Boolean)
       .join("\n");
 
-    return successResponse(lines);
+    return successResponse(lines, {
+      id: template.id,
+      name: template.name,
+      subject: template.subject,
+      to: template.to ?? [],
+      cc: template.cc ?? [],
+      body: template.body,
+    });
   }, "Error getting template")
 );
 
@@ -1474,7 +1595,7 @@ server.tool(
       return errorResponse(`Template "${id}" not found`);
     }
 
-    return successResponse(`Template "${id}" deleted`);
+    return successResponse(`Template "${id}" deleted`, { ok: true, id });
   }, "Error deleting template")
 );
 
@@ -1497,7 +1618,7 @@ server.tool(
       return errorResponse(`Failed to use template "${id}". Template not found or no recipients.`);
     }
 
-    return successResponse(`Draft created from template "${id}"`);
+    return successResponse(`Draft created from template "${id}"`, { ok: true, id });
   }, "Error using template")
 );
 
@@ -1524,7 +1645,7 @@ server.tool(
       })
       .join("\n");
 
-    return successResponse(`${statusIcon} ${statusText}\n\n${checkLines}`);
+    return successResponse(`${statusIcon} ${statusText}\n\n${checkLines}`, { ...result });
   }, "Error running health check")
 );
 

@@ -189,10 +189,11 @@ describe("resolveMailboxPath", () => {
 describe("imapSearchMessages", () => {
   it("server-side searches, formats UID rows, newest-first, with limit", async () => {
     const rec: Rec = {};
-    const out = await imapSearchMessages(
+    const res = await imapSearchMessages(
       { query: "the", limit: 2 },
       { config: cfg, connect: async () => makeClient([1, 2, 3, 4, 5], rec) }
     );
+    const out = res.text;
     expect(rec.path).toBe("[Gmail]/All Mail");
     expect(rec.criteria).toEqual({ or: [{ subject: "the" }, { from: "the" }] });
     expect(rec.range).toBe("5,4"); // newest two, newest first
@@ -206,29 +207,42 @@ describe("imapSearchMessages", () => {
     expect(first?.path).toBe("[Gmail]/All Mail");
     expect(out).toContain("5 total matched");
     expect(out).toMatch(/work with get-message/);
+    // structuredContent now mirrors the AppleScript path's shape (messages + count).
+    expect(res.count).toBe(2);
+    expect(res.messages.map((m) => decodeImapId(m.id as string)?.uid)).toEqual([5, 4]);
+    expect(res.messages[0]).toMatchObject({
+      subject: "Subject 5",
+      mailbox: "[Gmail]/All Mail",
+      isRead: false,
+    });
   });
 
   it("returns a clear empty message when nothing matches", async () => {
-    const out = await imapSearchMessages(
+    const res = await imapSearchMessages(
       { query: "zzz" },
       { config: cfg, connect: async () => makeClient([], {}) }
     );
-    expect(out).toMatch(/No messages found via IMAP/);
+    expect(res.text).toMatch(/No messages found via IMAP/);
+    expect(res.count).toBe(0);
+    expect(res.messages).toEqual([]);
   });
 });
 
 describe("imapListMessages", () => {
   it("defaults to INBOX and maps unreadOnly to an unseen search", async () => {
     const rec: Rec = {};
-    const out = await imapListMessages(
+    const res = await imapListMessages(
       { unreadOnly: true, limit: 10 },
       { config: cfg, connect: async () => makeClient([7, 8], rec) }
     );
+    const out = res.text;
     expect(rec.path).toBe("INBOX");
     expect(rec.criteria).toEqual({ unseen: true });
     const uids = [...out.matchAll(/imap:[A-Za-z0-9_-]+/g)].map((m) => decodeImapId(m[0])?.uid);
     expect(uids).toEqual([8, 7]); // newest-first
     expect(out).toContain("2 total listed");
+    expect(res.count).toBe(2);
+    expect(res.messages.map((m) => decodeImapId(m.id as string)?.uid)).toEqual([8, 7]);
   });
 });
 

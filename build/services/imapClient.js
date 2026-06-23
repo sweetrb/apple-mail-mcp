@@ -254,6 +254,25 @@ function formatRow(m, account, path) {
     // can route this row back to IMAP (Phase 3).
     return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]`;
 }
+/**
+ * JSON-friendly summary of an IMAP message for `structuredContent`, mirroring the
+ * AppleScript path's `messageSummary` shape so the search/list/thread tools emit
+ * the same structured payload regardless of backend (A1).
+ */
+function structuredRow(m, account, path) {
+    const env = m.envelope ?? {};
+    return {
+        id: encodeImapId(account, path, m.uid),
+        subject: env.subject || "(no subject)",
+        sender: senderName(env.from),
+        dateReceived: env.date ? new Date(env.date).toISOString() : "",
+        isRead: m.flags?.has("\\Seen") ?? false,
+        isFlagged: m.flags?.has("\\Flagged") ?? false,
+        mailbox: path,
+        account,
+        hasAttachments: false,
+    };
+}
 async function run(args, listMode, deps) {
     // Reads are idempotent → safe to retry once if a pooled connection is dead.
     // Route to the account named in the search args (C2 multi-account).
@@ -264,7 +283,12 @@ async function run(args, listMode, deps) {
             const found = await client.search(buildCriteria(args, listMode), { uid: true });
             const uids = Array.isArray(found) ? found : [];
             if (uids.length === 0) {
-                return `No messages found via IMAP in "${path}" (account ${cfg.accountLabel}).`;
+                return {
+                    text: `No messages found via IMAP in "${path}" (account ${cfg.accountLabel}).`,
+                    messages: [],
+                    count: 0,
+                    partial: false,
+                };
             }
             const limit = args.limit ?? 50;
             const offset = args.offset ?? 0;
@@ -275,13 +299,18 @@ async function run(args, listMode, deps) {
                 .slice(offset, offset + limit);
             const byUid = new Map();
             for await (const msg of client.fetch(newest.join(","), { envelope: true, flags: true }, { uid: true })) {
-                byUid.set(msg.uid, formatRow(msg, cfg.accountLabel, path));
+                byUid.set(msg.uid, msg);
             }
-            const rows = newest.map((u) => byUid.get(u)).filter((r) => Boolean(r));
+            const ordered = newest
+                .map((u) => byUid.get(u))
+                .filter((m) => m !== undefined);
+            const rows = ordered.map((m) => formatRow(m, cfg.accountLabel, path));
+            const messages = ordered.map((m) => structuredRow(m, cfg.accountLabel, path));
             const verb = listMode ? "listed" : "matched";
-            return (`Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, mailbox "${path}"; ${uids.length} total ${verb}):\n` +
+            const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, mailbox "${path}"; ${uids.length} total ${verb}):\n` +
                 rows.join("\n") +
-                `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`);
+                `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`;
+            return { text, messages, count: messages.length, partial: false };
         }
         finally {
             lock.release();

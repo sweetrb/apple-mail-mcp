@@ -30,11 +30,24 @@ export async function routeMessage(
     apple: () => ToolResponse | Promise<ToolResponse>;
     ok: string;
     fail: string;
+    /** Optional ack payload attached as `structuredContent` on the IMAP success
+     *  path, so a caller can verify the mutation programmatically regardless of
+     *  backend (A1). The AppleScript path supplies its own via `apple`. */
+    structured?: Record<string, unknown>;
+    /** Derive `structuredContent` from the IMAP result on success (e.g. parse
+     *  subject/body from `info`). Takes precedence over `structured`; return
+     *  undefined to attach none. */
+    structuredFromResult?: (r: ImapOpResult) => Record<string, unknown> | undefined;
   }
 ): Promise<ToolResponse> {
   if (decodeImapId(id)) {
     const r = await opts.imap();
-    return r.success ? successResponse(r.info ?? opts.ok) : errorResponse(r.error ?? opts.fail);
+    return r.success
+      ? successResponse(
+          r.info ?? opts.ok,
+          opts.structuredFromResult ? opts.structuredFromResult(r) : opts.structured
+        )
+      : errorResponse(r.error ?? opts.fail);
   }
   return opts.apple();
 }

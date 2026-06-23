@@ -155,8 +155,20 @@ export declare function resolveImapConfigs(env?: NodeJS.ProcessEnv): ImapConfig[
 export declare function resolveImapConfig(env?: NodeJS.ProcessEnv, account?: string): ImapConfig;
 /** Map common (Gmail) mailbox names to their IMAP paths. */
 export declare function resolveMailboxPath(mailbox: string | undefined, mode: "search" | "list"): string;
-export declare function imapSearchMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<string>;
-export declare function imapListMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<string>;
+/**
+ * Result of an IMAP search/list: the human text identical to before, plus the
+ * structured payload (messages + count) so callers can pass it straight to
+ * `successResponse(text, structured)` and emit `structuredContent` on the IMAP
+ * path the same way the AppleScript path does.
+ */
+export interface ImapListResult {
+    text: string;
+    messages: Record<string, unknown>[];
+    count: number;
+    partial: boolean;
+}
+export declare function imapSearchMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<ImapListResult>;
+export declare function imapListMessages(args: ImapSearchArgs, deps?: ImapDeps): Promise<ImapListResult>;
 /** Unread count via IMAP STATUS (UNSEEN). No mailbox → sum across all mailboxes. */
 export declare function imapUnreadCount(mailbox: string | undefined, deps?: ImapDeps): Promise<number>;
 export interface ImapMailboxInfo {

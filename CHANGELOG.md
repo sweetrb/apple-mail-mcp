@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.2.0] - 2026-06-23
+### Added
+- **Full `structuredContent` coverage across all tools.** Every tool now returns a machine-readable `structuredContent` payload alongside the unchanged human text. Data tools emit their data — `list-rules` (`{ rules:[{name,enabled}], count }`), `search-contacts` (`{ contacts:[{name,emails}], count }`), `list-templates` (`{ templates:[{id,name,subject}], count }`), and `get-template` (`{ id,name,subject,to,cc,body }`). Mutations return a small ack — single-message ops (`mark-as-read`/`mark-as-unread`/`flag-message`/`unflag-message`/`delete-message`/`move-message`) return `{ ok, id, … }`; the six batch ops return `{ ok, success, failed, … }`; `send-email`/`send-serial-email`/`create-draft`/`reply-to-message`/`forward-message`, the mailbox ops (`create`/`delete`/`rename`), the rule toggles (`enable`/`disable`), and the template ops (`save`/`delete`/`use`) each return their relevant `{ ok, … }` fields. `health-check` now returns `{ healthy, checks[] }`. The IMAP backend was made consistent with the AppleScript path: `imapSearchMessages`/`imapListMessages` now return the same structured shape (`{ messages[], count, partial }`) instead of text-only, so `search-messages`, `list-messages`, `get-thread`, and `get-message` populate `structuredContent` regardless of backend. No tool names, input schemas, or human-readable text changed.
+
 ### Changed
 - **Rewrote the Hermes Agent packaging to match NousResearch's real spec.** `.hermes-plugin/` previously shipped Claude-format JSON (`plugin.json` / `marketplace.json` / `mcp.json`) that Hermes never reads; it now provides a `config.yaml` (a `~/.hermes/config.yaml` `mcp_servers:` snippet) plus a README with the `hermes mcp add` command. The README "Other Hosts" section is corrected to match (Hermes has no plugin/marketplace drop-in; Antigravity uses its native `mcp_config.json`). Claude Code, Codex, and Antigravity packaging are unchanged.
 
