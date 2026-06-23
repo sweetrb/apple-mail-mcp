@@ -41,7 +41,16 @@ jobs:
           cache: "npm"
 
       - name: Upgrade npm (OIDC trusted publishing needs npm >= 11.5.1)
-        run: npm install -g npm@latest
+        # Retry: the global install hits the live registry and has flaked on
+        # transient ECONNRESET, aborting releases. Try up to 3 times.
+        run: |
+          for i in 1 2 3; do
+            npm install -g npm@latest && exit 0
+            echo "npm upgrade attempt $i failed; retrying in 5s…" >&2
+            sleep 5
+          done
+          echo "::error::npm upgrade failed after 3 attempts" >&2
+          exit 1
 
       - name: Check if version is already published
         id: check
