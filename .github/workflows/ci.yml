@@ -55,6 +55,10 @@ jobs:
             exit 1
           fi
 
+      - name: outputSchema contract (boots the built server over stdio)
+        if: matrix.node-version == 22
+        run: npx vitest run --config vitest.integration.config.ts test/output-schema.test.ts
+
   # IMAP backend integration tests run against a real IMAP server (GreenMail).
   # Unlike the Mail.app integration suite, the IMAP code path needs no macOS, so
   # this runs on Linux with GreenMail as a service container. (#43 / A2)
