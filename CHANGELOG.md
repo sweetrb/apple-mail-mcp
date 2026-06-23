@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.1.5] - 2026-06-23
+### Fixed
+- **Codex packaging: launch the published npm package, not a `github:` ref.** `codex/.mcp.json` now runs `npx -y apple-mail-mcp` (was `npx -y github:sweetrb/apple-mail-mcp`), matching the other Apple MCP servers — Codex installs the prebuilt published package instead of cloning + building the repo on every launch.
+- **Codex skill is now discoverable.** Added the required YAML frontmatter (`name` / `description`) to `skills/apple-mail/SKILL.md` (and the Codex copy), which was missing it — Codex can now register the bundled skill's name and description.
+
 ### Changed
 - `npm audit fix` cleared the remaining transitive advisories — `npm audit --omit=dev` is now clean.
 - `publish.yml`'s `npm install -g npm@latest` step now retries, so a transient registry `ECONNRESET` no longer aborts a release.

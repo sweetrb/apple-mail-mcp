@@ -1,3 +1,8 @@
+---
+name: apple-mail
+description: Use this skill when the user wants to manage Apple Mail on macOS - reading, searching, sending, replying to, forwarding, and organizing emails and mailboxes. This skill provides access to Apple Mail through MCP tools.
+---
+
 # Apple Mail Skill
 
 This skill enables you to manage Apple Mail on macOS through natural language. Use it whenever the user mentions email, wants to send messages, or needs to read, search, or organize their inbox.
