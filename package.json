@@ -63,7 +63,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "imapflow": "^1.4.1",
     "nodemailer": "^9.0.0",
-    "zod": "^3.22.4"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
