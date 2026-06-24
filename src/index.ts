@@ -27,7 +27,7 @@ import { z } from "zod";
 import { AppleMailManager, isPathWithinAllowedRoots } from "@/services/appleMailManager.js";
 import { writeFileSync } from "fs";
 import { resolve as resolvePath, join as joinPath } from "path";
-import { sendViaSmtp } from "@/services/smtpMailer.js";
+import { sendViaSmtp, shouldUseSmtp } from "@/services/smtpMailer.js";
 import {
   isImapAccount,
   resolveImapConfigs,
@@ -584,9 +584,11 @@ server.registerTool(
         .enum(["applescript", "smtp"])
         .optional()
         .describe(
-          "Send transport. 'applescript' (default) sends through Mail.app. " +
-            "'smtp' submits clean MIME directly via SMTP, avoiding the macOS 15+ " +
-            "Mail.app <blockquote> wrapping (issue #12); requires APPLE_MAIL_MCP_SMTP_* env config."
+          "Send transport. 'smtp' submits clean MIME directly via SMTP, avoiding " +
+            "the macOS 15+ Mail.app <blockquote> wrapping (issue #12); requires " +
+            "APPLE_MAIL_MCP_SMTP_* env config. 'applescript' sends through Mail.app. " +
+            "If omitted, SMTP is used automatically when APPLE_MAIL_MCP_SMTP_* is " +
+            "configured, otherwise AppleScript."
         ),
     },
     outputSchema: {
@@ -601,8 +603,17 @@ server.registerTool(
 
     const attachmentCount = attachments?.length ?? 0;
 
-    if (transport === "smtp") {
-      const result = await sendViaSmtp({ to, subject, body, cc, bcc, from: account, attachments });
+    // Prefer SMTP when explicitly requested, or automatically when it is
+    // configured and no transport was specified — except when a non-email
+    // `account` label requests Mail.app account selection (see shouldUseSmtp).
+    // Explicit transport:"applescript" always forces the Mail.app path.
+    if (shouldUseSmtp(transport, account)) {
+      // `account` is a Mail.app account label for the AppleScript path; for SMTP
+      // it only makes sense as a From override when it is an actual address.
+      // A bare label (only possible here via explicit transport:"smtp") must not
+      // corrupt the From — fall back to the configured SMTP From in that case.
+      const smtpFrom = account?.includes("@") ? account : undefined;
+      const result = await sendViaSmtp({ to, subject, body, cc, bcc, from: smtpFrom, attachments });
       if (!result.success) {
         return errorResponse(result.error ?? "Failed to send email via SMTP.");
       }

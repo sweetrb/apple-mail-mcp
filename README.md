@@ -256,7 +256,7 @@ Send a new email immediately.
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Send from specific account (with `transport: "smtp"`, overrides the From address) |
 | `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths (e.g., `"/Users/me/report.pdf"`) and/or inline `{filename, contentBase64}` objects for content not on disk |
-| `transport` | `"applescript"` \| `"smtp"` | No | Send transport (default `"applescript"`). Use `"smtp"` to send clean MIME directly, avoiding the macOS 15+ Mail.app `<blockquote>` wrapping — see [SMTP transport](#smtp-transport) |
+| `transport` | `"applescript"` \| `"smtp"` | No | Send transport. If omitted, **SMTP is used automatically when configured** (otherwise AppleScript). Pass `"smtp"` to require clean MIME, or `"applescript"` to force the Mail.app path — see [SMTP transport](#smtp-transport) |
 
 **Example:**
 ```json
@@ -275,8 +275,25 @@ On macOS 15+ (Sequoia/Tahoe), Mail.app wraps any AppleScript-injected body in
 `<blockquote type="cite">` under the `Apple-Mail-URLShareWrapperClass` template,
 so emails sent through the default `applescript` transport render to recipients
 as if they were quoted/forwarded (Apple radar **FB11734014**, open since
-Ventura). Passing `transport: "smtp"` bypasses Mail.app entirely and submits
-clean MIME via SMTP.
+Ventura). The SMTP transport bypasses Mail.app entirely and submits clean MIME
+directly. **Once SMTP is configured, `send-email` uses it automatically** (no
+need to pass `transport` per call); pass `transport: "applescript"` to force the
+Mail.app path.
+
+Two differences to know when SMTP is auto-preferred:
+
+- **No Sent-folder copy.** SMTP submission does not file the message in Mail.app's
+  Sent mailbox (the server's own "save to Sent" may, depending on provider). Use
+  `transport: "applescript"` if you need the local Sent copy.
+- **`account` is a From override, not account selection.** Over SMTP, `account`
+  is used as the From address only when it is an email address; a Mail.app
+  account *label* (e.g. `"Work"`) can't select an account over SMTP, so a call
+  that passes one is left on the AppleScript path automatically. To force
+  account selection, pass `transport: "applescript"` explicitly.
+
+Both plain-text and HTML bodies are supported — over SMTP an HTML body (CLI
+`--html-body-file`) is sent as `multipart/alternative` with the plain-text
+fallback.
 
 Configure SMTP via environment variables on the MCP server. The password is
 read from the macOS **Keychain** by default, so no secret goes in config:
@@ -293,23 +310,48 @@ read from the macOS **Keychain** by default, so no secret goes in config:
 | `APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT` | No | = user | Keychain item account |
 
 Store the password in the Keychain once (an app-specific password for Gmail/
-iCloud), e.g.:
+iCloud). A generic-password item with an explicit service name keeps it from
+colliding with the system mail account password, and matches
+`APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE`:
 
 ```bash
+# Fastmail (Keychain service defaults to the host)
 security add-internet-password -s smtp.fastmail.com -a you@example.com -w
+
+# Gmail / Google Workspace, using a dedicated Keychain service name:
+#   APPLE_MAIL_MCP_SMTP_HOST=smtp.gmail.com
+#   APPLE_MAIL_MCP_SMTP_USER=you@gmail.com
+#   APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE=apple-mail-mcp-smtp
+security add-generic-password -s apple-mail-mcp-smtp -a you@gmail.com -w
 ```
 
-Then send:
+Once the env vars are set, a plain `send-email` (no `transport`) already goes
+out clean:
 ```json
 {
   "to": ["colleague@company.com"],
   "subject": "Standings",
-  "body": "Plain body — no blockquote wrapping.",
-  "transport": "smtp"
+  "body": "Plain body — no blockquote wrapping."
 }
 ```
 
-The default `applescript` transport is unchanged; SMTP is opt-in per call.
+###### `apple-mail-send` CLI (no MCP server required)
+
+The package also installs an `apple-mail-send` binary — a standalone CLI over the
+same SMTP path, for cron jobs, scheduled tasks, and scripts that can't run an MCP
+session. It reads the identical `APPLE_MAIL_MCP_SMTP_*` env + Keychain config:
+
+```bash
+apple-mail-send \
+  --from you@example.com --to colleague@company.com \
+  --subject "Standings" --body-file /tmp/body.txt \
+  [--html-body-file /tmp/body.html] [--attach /tmp/report.pdf]
+```
+
+Repeatable `--to`/`--cc`/`--bcc`/`--attach`; an `--html-body-file` is sent as a
+`multipart/alternative` alongside the plain `--body-file`. Exit codes follow
+`sysexits.h`: `0` success, `64` usage error, `66` unreadable body file, `78`
+SMTP not configured.
 
 ##### IMAP backend — opt-in
 

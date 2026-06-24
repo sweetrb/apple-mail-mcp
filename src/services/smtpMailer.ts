@@ -9,8 +9,9 @@
  *
  * Connection settings come from environment variables; the password is read
  * from the macOS Keychain via the `security` CLI by default so no secret is
- * ever placed in config. AppleScript remains the default transport — SMTP is
- * opt-in per call (`transport: "smtp"`).
+ * ever placed in config. When SMTP is configured, `send-email` auto-prefers it
+ * over AppleScript (opt out per call with `transport: "applescript"`); see
+ * {@link shouldUseSmtp}.
  *
  * @module services/smtpMailer
  */
@@ -25,6 +26,7 @@ import type { AttachmentInput } from "@/types.js";
 export interface SmtpSendOptions {
   to: string[];
   subject: string;
+  /** Plain-text body. Always sent as the text/plain part. */
   body: string;
   cc?: string[];
   bcc?: string[];
@@ -32,6 +34,13 @@ export interface SmtpSendOptions {
   from?: string;
   /** Files to attach: absolute paths and/or inline base64 content (B4). */
   attachments?: AttachmentInput[];
+  /**
+   * Optional HTML body. When provided, the message is sent as
+   * multipart/alternative ({@link SmtpSendOptions.body} as the text/plain part,
+   * this as the text/html part) so clients pick the richer rendering while
+   * plain-text clients still get a clean fallback.
+   */
+  htmlBody?: string;
 }
 
 /** Resolved SMTP connection configuration. */
@@ -65,6 +74,42 @@ export const SMTP_ENV = {
   keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
   keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT",
 } as const;
+
+/**
+ * Cheap check for whether the SMTP transport is configured at all, i.e. the two
+ * required settings ({@link SMTP_ENV.host} and {@link SMTP_ENV.user}) are
+ * present. Used to auto-prefer SMTP over AppleScript when no transport is
+ * explicitly requested, and by `doctor`. Does NOT touch the Keychain or verify
+ * the password — a misconfigured password still surfaces a clear error at send
+ * time via {@link resolveSmtpConfig}.
+ */
+export function isSmtpConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim());
+}
+
+/**
+ * Decides whether `send-email` should use the SMTP transport for this call.
+ *
+ * - explicit `"smtp"` → always SMTP (config errors surface, no fallback);
+ * - explicit `"applescript"` → always the Mail.app path;
+ * - omitted → SMTP when configured, **except** when a non-email `account` label
+ *   (a Mail.app account name such as `"Work"`) is supplied. That requests
+ *   account-based sending, which only the AppleScript path can do, so we honor
+ *   the caller's intent instead of silently switching their account. An
+ *   `account` that is an email address is treated as a From override and does
+ *   not block SMTP.
+ */
+export function shouldUseSmtp(
+  transport: "applescript" | "smtp" | undefined,
+  account: string | undefined,
+  configured: boolean = isSmtpConfigured()
+): boolean {
+  if (transport === "smtp") return true;
+  if (transport === "applescript") return false;
+  if (!configured) return false;
+  const isAccountLabel = Boolean(account && !account.includes("@"));
+  return !isAccountLabel;
+}
 
 /**
  * Reads a password from the macOS login Keychain via the `security` CLI.
@@ -198,6 +243,8 @@ export async function sendViaSmtp(
     auth: { user: cfg.user, pass: cfg.pass },
   });
 
+  const html = opts.htmlBody?.trim() ? opts.htmlBody : undefined;
+
   try {
     const info = await transporter.sendMail({
       from: opts.from?.trim() || cfg.from,
@@ -206,6 +253,8 @@ export async function sendViaSmtp(
       bcc: opts.bcc,
       subject: opts.subject,
       text: opts.body,
+      // When present, nodemailer emits multipart/alternative (text + html).
+      html,
       attachments,
     });
     return { success: true, messageId: info.messageId };

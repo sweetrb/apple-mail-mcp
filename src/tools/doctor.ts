@@ -8,7 +8,7 @@
  */
 import type { AppleMailManager } from "@/services/appleMailManager.js";
 import { imapHealthCheck, IMAP_ENV, listImapAccountLabels } from "@/services/imapClient.js";
-import { SMTP_ENV } from "@/services/smtpMailer.js";
+import { SMTP_ENV, isSmtpConfigured } from "@/services/smtpMailer.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
 export interface DoctorCheck {
@@ -80,10 +80,10 @@ export async function runDoctor(mailManager: AppleMailManager): Promise<DoctorRe
   const smtpHost = process.env[SMTP_ENV.host]?.trim();
   checks.push({
     name: "SMTP transport",
-    status: smtpHost ? "ok" : "warn",
-    detail: smtpHost
-      ? `configured (${smtpHost}); send-email transport:"smtp" is available`
-      : `not configured — send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} to enable.`,
+    status: isSmtpConfigured() ? "ok" : "warn",
+    detail: isSmtpConfigured()
+      ? `configured (${smtpHost}); send-email auto-prefers clean SMTP (no Mail.app Sent-folder copy; a non-email "account" label still routes to AppleScript). Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.`
+      : `not configured — send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} and ${SMTP_ENV.user} (+ password via Keychain) to enable.`,
   });
 
   const healthy = !checks.some((c) => c.status === "fail");
