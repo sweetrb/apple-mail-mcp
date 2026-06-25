@@ -1,12 +1,13 @@
 {
   "name": "apple-mail-mcp",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude and other AI assistants",
   "type": "module",
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "bin": {
-    "apple-mail-mcp": "build/index.js"
+    "apple-mail-mcp": "build/index.js",
+    "apple-mail-send": "build/cli.js"
   },
   "files": [
     "build",

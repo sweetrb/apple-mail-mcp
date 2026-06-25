@@ -7,7 +7,14 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { resolveSmtpConfig, sendViaSmtp, SMTP_ENV, type SmtpConfig } from "./smtpMailer.js";
+import {
+  resolveSmtpConfig,
+  sendViaSmtp,
+  isSmtpConfigured,
+  shouldUseSmtp,
+  SMTP_ENV,
+  type SmtpConfig,
+} from "./smtpMailer.js";
 
 const baseEnv = {
   [SMTP_ENV.host]: "smtp.example.com",
@@ -74,6 +81,55 @@ describe("resolveSmtpConfig", () => {
   });
 });
 
+describe("isSmtpConfigured", () => {
+  it("is true when both host and user are set", () => {
+    expect(isSmtpConfigured(baseEnv)).toBe(true);
+  });
+
+  it("is false when host is missing", () => {
+    expect(isSmtpConfigured({ [SMTP_ENV.user]: "alice@example.com" })).toBe(false);
+  });
+
+  it("is false when user is missing", () => {
+    expect(isSmtpConfigured({ [SMTP_ENV.host]: "smtp.example.com" })).toBe(false);
+  });
+
+  it("is false for empty/whitespace values", () => {
+    expect(isSmtpConfigured({ [SMTP_ENV.host]: "  ", [SMTP_ENV.user]: "  " })).toBe(false);
+    expect(isSmtpConfigured({})).toBe(false);
+  });
+});
+
+describe("shouldUseSmtp (send-email transport decision)", () => {
+  it("always uses SMTP when explicitly requested, even if unconfigured", () => {
+    expect(shouldUseSmtp("smtp", undefined, false)).toBe(true);
+    expect(shouldUseSmtp("smtp", "Work", true)).toBe(true);
+  });
+
+  it("never uses SMTP when applescript is explicitly requested", () => {
+    expect(shouldUseSmtp("applescript", undefined, true)).toBe(false);
+    expect(shouldUseSmtp("applescript", "me@example.com", true)).toBe(false);
+  });
+
+  it("auto-prefers SMTP when configured and no transport/account is given", () => {
+    expect(shouldUseSmtp(undefined, undefined, true)).toBe(true);
+  });
+
+  it("stays on AppleScript when SMTP is not configured", () => {
+    expect(shouldUseSmtp(undefined, undefined, false)).toBe(false);
+    expect(shouldUseSmtp(undefined, "me@example.com", false)).toBe(false);
+  });
+
+  it("does NOT hijack a non-email account label (Mail.app account selection)", () => {
+    // Regression guard: account="Work" + configured SMTP must still use AppleScript.
+    expect(shouldUseSmtp(undefined, "Work", true)).toBe(false);
+  });
+
+  it("auto-prefers SMTP when the account is an email address (From override)", () => {
+    expect(shouldUseSmtp(undefined, "me@example.com", true)).toBe(true);
+  });
+});
+
 describe("sendViaSmtp", () => {
   it("sends clean MIME via the injected transporter and reports success", async () => {
     const sendMail = vi.fn().mockResolvedValue({ messageId: "<abc@example.com>" });
@@ -104,6 +160,39 @@ describe("sendViaSmtp", () => {
     expect(payload.from).toBe("alice@example.com");
     expect(payload.to).toEqual(["bob@example.com"]);
     expect(close).toHaveBeenCalled();
+  });
+
+  it("sends multipart/alternative when an htmlBody is provided", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<h>" });
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
+
+    await sendViaSmtp(
+      {
+        to: ["bob@example.com"],
+        subject: "s",
+        body: "plain fallback",
+        htmlBody: "<p>rich</p>",
+      },
+      testConfig,
+      createTransport as never
+    );
+
+    const payload = sendMail.mock.calls[0][0];
+    expect(payload.text).toBe("plain fallback"); // text/plain part preserved
+    expect(payload.html).toBe("<p>rich</p>"); // text/html alternative added
+  });
+
+  it("omits the html part when htmlBody is empty/whitespace", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<h>" });
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
+
+    await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b", htmlBody: "   " },
+      testConfig,
+      createTransport as never
+    );
+
+    expect(sendMail.mock.calls[0][0].html).toBeUndefined();
   });
 
   it("attaches inline base64 content as a Buffer and validates file paths (B4)", async () => {

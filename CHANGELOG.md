@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-06-24
+### Added
+- **`apple-mail-send` CLI — clean SMTP sending without a running MCP server.** A new `bin` (`src/cli.ts` → `build/cli.js`) wraps the existing `sendViaSmtp()` so cron jobs, scheduled tasks, and scripts can send clean MIME from the command line. Flags mirror a standard mail sender (`--from`, repeatable `--to`/`--cc`/`--bcc`, `--subject`, `--body-file`, `--html-body-file`, repeatable `--attach`) and it reuses the same `APPLE_MAIL_MCP_SMTP_*` env + Keychain config as the MCP `send-email` tool. Exit codes follow `sysexits.h` (`0`/`64`/`66`/`78`).
+- **HTML-alternative bodies over SMTP.** `sendViaSmtp()` now accepts an optional `htmlBody`; when present the message is sent as `multipart/alternative` (the plain-text `body` as the fallback part). The MIME-cleanliness harness asserts the HTML part is free of the AppleScript blockquote artifacts too.
+### Changed
+- **`send-email` auto-prefers SMTP when configured.** With no explicit `transport`, the tool now uses the clean SMTP path automatically whenever `APPLE_MAIL_MCP_SMTP_HOST` + `APPLE_MAIL_MCP_SMTP_USER` are set, instead of always defaulting to AppleScript. Pass `transport: "applescript"` to force the Mail.app path, or `transport: "smtp"` to require SMTP (a configuration error is surfaced rather than silently falling back). The `doctor` SMTP check reflects the new behavior. Resolves the long-standing footgun where clean sending required remembering the per-call flag.
+  - **Migration notes:** (1) SMTP submission does not write to Mail.app's Sent mailbox — pass `transport: "applescript"` if you rely on the local Sent copy. (2) A call that passes a non-email `account` *label* (a Mail.app account name, e.g. `"Work"`) is left on the AppleScript path automatically, so existing account-selection calls keep working unchanged; an `account` that is an email address is treated as the SMTP From override.
+
 ## [2.3.0] - 2026-06-23
 ### Added
 - **All tools now declare an MCP `outputSchema`.** Every tool migrated from `server.tool(...)` to `server.registerTool(...)` so its structured-output shape is advertised in the tool metadata and validated by the SDK. Schemas are intentionally permissive (all fields optional, no `.strict()`, loose element types for arrays) so they describe the output contract without ever rejecting a valid result. No tool names, inputs, descriptions, or handler behavior changed.
