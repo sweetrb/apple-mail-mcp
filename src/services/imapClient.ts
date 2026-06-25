@@ -670,7 +670,13 @@ async function dropPool(key: string): Promise<void> {
   await e.client.logout().catch(() => undefined);
 }
 
-async function dropAllPools(): Promise<void> {
+/**
+ * Close and log out every pooled IMAP connection. Exported so the server can
+ * call it on shutdown (SIGINT/SIGTERM/stdin-EOF) — otherwise a killed or
+ * orphaned instance leaves its pooled sockets occupying slots against the
+ * server's per-account connection limit until they're reaped by a TCP timeout.
+ */
+export async function dropAllPools(): Promise<void> {
   await Promise.all([...pools.keys()].map((k) => dropPool(k)));
 }
 
@@ -684,6 +690,11 @@ function scheduleIdleClose(key: string): void {
   e.idle.unref?.();
 }
 
+// Single-flight connect guard: concurrent acquisitions of the same account
+// await ONE in-flight connect instead of each opening (and orphaning) its own
+// socket — the race that can leak connections past the per-account limit.
+const connecting = new Map<string, Promise<ImapClientLike>>();
+
 async function acquirePooled(cfg: ImapConfig): Promise<ImapClientLike> {
   const key = poolKey(cfg);
   const existing = pools.get(key);
@@ -696,9 +707,19 @@ async function acquirePooled(cfg: ImapConfig): Promise<ImapClientLike> {
       await dropPool(key);
     }
   }
-  const client = await poolConnect(cfg);
-  pools.set(key, { client });
-  return client;
+  const inFlight = connecting.get(key);
+  if (inFlight) return inFlight;
+  const p = (async () => {
+    const client = await poolConnect(cfg);
+    pools.set(key, { client });
+    return client;
+  })();
+  connecting.set(key, p);
+  try {
+    return await p;
+  } finally {
+    connecting.delete(key);
+  }
 }
 
 /**

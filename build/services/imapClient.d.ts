@@ -201,6 +201,13 @@ export interface ImapOpResult {
     info?: string;
 }
 /**
+ * Close and log out every pooled IMAP connection. Exported so the server can
+ * call it on shutdown (SIGINT/SIGTERM/stdin-EOF) — otherwise a killed or
+ * orphaned instance leaves its pooled sockets occupying slots against the
+ * server's per-account connection limit until they're reaped by a TCP timeout.
+ */
+export declare function dropAllPools(): Promise<void>;
+/**
  * Health probe for the setup doctor (C3): reports whether IMAP is configured and,
  * if so, whether a connection + NOOP succeeds (auth/network/Keychain all good).
  */

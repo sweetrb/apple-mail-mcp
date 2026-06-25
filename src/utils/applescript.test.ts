@@ -315,6 +315,39 @@ describe("executeAppleScript", () => {
 
       expect(result.error).toContain("timed out after 60 seconds");
     });
+
+    it("classifies a SIGKILL-killed osascript as a timeout", () => {
+      const err = new Error("Command failed: osascript ...") as Error & {
+        killed?: boolean;
+        signal?: string;
+      };
+      err.signal = "SIGKILL"; // externally/OOM-killed osascript
+      mockExecSync.mockImplementation(() => {
+        throw err;
+      });
+
+      const result = executeAppleScript("test");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("timed out");
+    });
+
+    it("never leaks the raw osascript command/script on an abnormal failure", () => {
+      // osascript exits non-zero with no parseable AppleScript error and no
+      // timeout signal — must NOT dump the full "Command failed: osascript -e '<script>'".
+      const err = new Error(
+        "Command failed: osascript -e 'tell application \"Mail\" to get every mailbox'"
+      );
+      mockExecSync.mockImplementation(() => {
+        throw err;
+      });
+
+      const result = executeAppleScript("test");
+
+      expect(result.success).toBe(false);
+      expect(result.error).not.toContain("osascript -e"); // no script dump
+      expect(result.error).toContain("osascript exited abnormally");
+    });
   });
 
   describe("retry logic", () => {

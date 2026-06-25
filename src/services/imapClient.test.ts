@@ -29,6 +29,7 @@ import {
   listImapAccountLabels,
   __setPoolConnect,
   __resetPool,
+  dropAllPools,
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
@@ -747,6 +748,45 @@ describe("connection pooling (#50 / A3)", () => {
     await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgB });
     await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgA }); // reuse A
     expect(connects).toBe(2); // one connection per distinct account; A reused
+  });
+
+  it("dropAllPools logs out and clears every pooled connection (shutdown cleanup)", async () => {
+    let connects = 0;
+    let logouts = 0;
+    __setPoolConnect(async () => {
+      connects++;
+      const c = makeClient([1], {});
+      return {
+        ...c,
+        logout: async () => {
+          logouts++;
+        },
+      };
+    });
+    const cfgA: ImapConfig = { ...cfg, user: "a@x.com" };
+    const cfgB: ImapConfig = { ...cfg, user: "b@x.com" };
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgA });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgB });
+    expect(logouts).toBe(0); // both pooled, kept alive
+    await dropAllPools(); // exactly what the server's shutdown handler now calls
+    expect(logouts).toBe(2); // both pooled connections logged out on shutdown
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgA });
+    expect(connects).toBe(3); // pool was cleared → next call reconnects
+  });
+
+  it("single-flights concurrent connects for one account (no orphaned sockets)", async () => {
+    let connects = 0;
+    __setPoolConnect(async () => {
+      connects++;
+      await new Promise((r) => setTimeout(r, 20)); // make the two acquisitions overlap
+      return makeClient([1], {});
+    });
+    // Two reads for the SAME account fired before either has connected.
+    await Promise.all([
+      imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg }),
+      imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg }),
+    ]);
+    expect(connects).toBe(1); // one shared connection, not two orphaned sockets
   });
 
   it("does not pool when a connect is injected (per-call logout)", async () => {

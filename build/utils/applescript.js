@@ -129,8 +129,11 @@ function wrapWithTimeout(script, processTimeoutMs) {
 function isTimeoutError(error) {
     if (error instanceof Error) {
         const execError = error;
-        // execSync kills the process with SIGTERM on timeout
-        return execError.killed === true || execError.signal === "SIGTERM";
+        // executeAppleScript kills a timed-out osascript with SIGKILL; execSync also
+        // sets killed=true on its own timeout. Treat any killed osascript
+        // (SIGTERM/SIGKILL) as a timeout/abnormal exit rather than leaking the raw
+        // "Command failed" string downstream.
+        return (execError.killed === true || execError.signal === "SIGTERM" || execError.signal === "SIGKILL");
     }
     return false;
 }
@@ -269,6 +272,14 @@ function parseErrorMessage(errorOutput) {
     const notFoundError = coreError.match(/Can't get (.+?)\./);
     if (notFoundError) {
         return `Not found: ${notFoundError[1]}`;
+    }
+    // Never leak Node's raw `Command failed: osascript -e '<entire script>'` to the
+    // user — it means osascript exited abnormally with no parseable AppleScript
+    // error (killed under load, Mail.app relaunching, or Automation denied).
+    if (/^Command failed:\s*osascript/.test(coreError.trim())) {
+        return ("Mail.app scripting failed (osascript exited abnormally). Mail may be " +
+            "unresponsive or relaunching, or Automation permission was denied — check " +
+            "System Settings > Privacy & Security > Automation, and try again.");
     }
     // Return cleaned version of original error
     return coreError.trim() || "Unknown AppleScript error";

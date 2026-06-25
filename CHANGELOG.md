@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-06-25
+### Fixed
+- IMAP connections no longer leak past the per-account limit. The request-pool connections are torn down on EVERY exit path — SIGINT/SIGTERM and stdin-EOF (when the MCP client/parent goes away) — so a killed, restarted, or orphaned instance never leaves IMAP sockets occupying slots against Gmail's ~15-per-account cap. Added a single-flight connect guard so concurrent reads for one account share one connection instead of orphaning duplicate sockets.
+- list-mailboxes (and any AppleScript op) no longer leaks the raw "Command failed: osascript -e <script>" when osascript exits abnormally (killed under load, Mail.app relaunching, or Automation denied) — returns a clean, actionable message instead; a SIGKILL-killed osascript is now classified as a timeout.
+
+
 ## [2.4.1] - 2026-06-25
 ### Fixed
 - IMAP idle watcher and connection pool now attach an error listener before connecting, so an unhandled ImapFlow socket error/timeout (idle Gmail/iCloud drop, server BYE, network blip) can no longer crash the server. Added a process-level uncaughtException/unhandledRejection safety net (clean exit on stdout EPIPE).

@@ -27,7 +27,7 @@ import { AppleMailManager, isPathWithinAllowedRoots } from "./services/appleMail
 import { writeFileSync } from "fs";
 import { resolve as resolvePath, join as joinPath } from "path";
 import { sendViaSmtp, shouldUseSmtp } from "./services/smtpMailer.js";
-import { isImapAccount, resolveImapConfigs, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapListAttachments, imapFetchAttachment, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete, imapBatchMove, imapThread, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
+import { isImapAccount, resolveImapConfigs, dropAllPools, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapListAttachments, imapFetchAttachment, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete, imapBatchMove, imapThread, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
 import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
 import { routeMessage } from "./services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
@@ -1559,9 +1559,24 @@ if (/^(1|true|yes|on)$/i.test(process.env.APPLE_MAIL_MCP_IMAP_IDLE?.trim() ?? ""
         console.error(`IMAP IDLE watcher failed to start: ${String(e)}`);
     }
 }
-// Clean up the long-lived IDLE connections on shutdown.
+// Clean shutdown: close BOTH the IDLE watcher's connections AND the request
+// pool's pooled sockets, so we never leave IMAP connections occupying slots
+// against the server's per-account limit. Triggered on SIGINT/SIGTERM (parent
+// kills us) AND on stdin EOF (the MCP client/parent went away) — the latter
+// prevents this process lingering as an orphan that keeps holding IMAP
+// connections after its Claude session is gone, which is how connections piled
+// up past Gmail's per-account limit.
+let _shuttingDown = false;
+const shutdown = () => {
+    if (_shuttingDown)
+        return;
+    _shuttingDown = true;
+    const force = setTimeout(() => process.exit(0), 2000);
+    force.unref?.();
+    void Promise.allSettled([idleWatcher?.stop() ?? Promise.resolve(), dropAllPools()]).finally(() => process.exit(0));
+};
 for (const sig of ["SIGINT", "SIGTERM"]) {
-    process.on(sig, () => {
-        void idleWatcher?.stop().finally(() => process.exit(0));
-    });
+    process.on(sig, shutdown);
 }
+process.stdin.on("end", shutdown);
+process.stdin.on("close", shutdown);
