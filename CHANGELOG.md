@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-06-25
+### Fixed
+- IMAP idle watcher and connection pool now attach an error listener before connecting, so an unhandled ImapFlow socket error/timeout (idle Gmail/iCloud drop, server BYE, network blip) can no longer crash the server. Added a process-level uncaughtException/unhandledRejection safety net (clean exit on stdout EPIPE).
+
+
 ## [2.4.0] - 2026-06-24
 ### Added
 - **`apple-mail-send` CLI — clean SMTP sending without a running MCP server.** A new `bin` (`src/cli.ts` → `build/cli.js`) wraps the existing `sendViaSmtp()` so cron jobs, scheduled tasks, and scripts can send clean MIME from the command line. Flags mirror a standard mail sender (`--from`, repeatable `--to`/`--cc`/`--bcc`, `--subject`, `--body-file`, `--html-body-file`, repeatable `--attach`) and it reuses the same `APPLE_MAIL_MCP_SMTP_*` env + Keychain config as the MCP `send-email` tool. Exit codes follow `sysexits.h` (`0`/`64`/`66`/`78`).

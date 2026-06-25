@@ -2131,6 +2131,17 @@ server.registerTool(
 /**
  * Initialize and start the MCP server.
  */
+// Defense-in-depth: a stray EventEmitter "error" (e.g. an idle IMAP/SMTP socket
+// drop) or an unhandled rejection must never take down this long-lived MCP
+// server. EPIPE on stdout means the MCP client went away — exit cleanly.
+process.on("uncaughtException", (err) => {
+  if ((err as NodeJS.ErrnoException)?.code === "EPIPE") process.exit(0);
+  console.error("[uncaughtException]", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 

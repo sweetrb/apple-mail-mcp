@@ -330,6 +330,13 @@ const defaultConnect: ImapConnect = async (cfg) => {
     auth: { user: cfg.user, pass: cfg.pass },
     logger: false,
   });
+  // ImapFlow is an EventEmitter: once connect() resolves, a later socket error
+  // on this pooled, long-lived client (idle Gmail/iCloud timeout, server BYE,
+  // network drop) emits 'error'. With no listener that is an *uncaught*
+  // exception that crashes the whole MCP server. Attach one before connect so
+  // the error is swallowed; the pool's liveness probe reconnects on next use.
+  // Same defect class as defaultIdleConnect in imapIdle.ts.
+  client.on("error", () => {});
   await client.connect();
   return client as unknown as ImapClientLike;
 };

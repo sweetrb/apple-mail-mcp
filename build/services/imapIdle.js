@@ -19,6 +19,12 @@ const defaultIdleConnect = async (cfg) => {
         auth: { user: cfg.user, pass: cfg.pass },
         logger: false,
     });
+    // ImapFlow is an EventEmitter: an 'error' with no listener (e.g. a socket
+    // ETIMEOUT during connect, before watch() attaches its handler) is an
+    // *uncaught* exception that crashes the whole MCP server. Attach a listener
+    // before connect() so a connection error rejects the promise instead — the
+    // caller (watch) catches that and schedules a reconnect.
+    client.on("error", () => { });
     await client.connect();
     return client;
 };
