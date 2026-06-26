@@ -273,6 +273,28 @@ export function isImapAccount(
   return listImapAccountSpecs(env).some((s) => s.accountLabel === account || s.user === account);
 }
 
+/**
+ * Read-side routing gate (v2.6.0 — prefer-IMAP reads). Returns true when a read
+ * tool should go to IMAP rather than AppleScript:
+ *   - IMAP is configured at all, AND
+ *   - either the caller named no account (→ merge across all accounts), or the
+ *     named account is itself a configured IMAP account.
+ * An explicitly-named NON-IMAP account returns false → AppleScript. When IMAP is
+ * not configured at all this is always false, so behavior is unchanged.
+ *
+ * NOTE: the 3 mailbox-WRITE ops (create/delete/rename-mailbox) deliberately keep
+ * using `isImapAccount` — they only route to IMAP for an explicitly-named IMAP
+ * account, never on an omitted account.
+ */
+export function shouldUseImap(
+  account: string | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return (
+    listImapAccountSpecs(env).length > 0 && (account === undefined || isImapAccount(account, env))
+  );
+}
+
 /** Account labels of every configured IMAP account (C2), for diagnostics. */
 export function listImapAccountLabels(env: NodeJS.ProcessEnv = process.env): string[] {
   return listImapAccountSpecs(env).map((s) => s.accountLabel);
@@ -407,6 +429,11 @@ function structuredRow(m: ImapMessage, account: string, path: string): Record<st
     mailbox: path,
     account,
     hasAttachments: false,
+    // Message-ID (when the envelope carries it) is the strongest cross-/intra-
+    // backend dedup key for the multi-account merge (imapMultiAccount.ts). The
+    // AppleScript path does not expose it, so cross-backend dedup falls back to
+    // the subject|sender|date composite key.
+    ...(env.messageId ? { messageId: env.messageId } : {}),
   };
 }
 

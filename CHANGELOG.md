@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-06-26
+### Changed
+- **Reads now PREFER direct IMAP whenever IMAP is configured** (previously IMAP was used only when a call passed an `account` exactly matching a configured IMAP account; an omitted account fell to AppleScript). This affects the six read tools — `search-messages`, `get-thread`, `list-messages`, `list-mailboxes`, `get-unread-count`, `get-mail-stats` — and is why this is a minor release. Three cases:
+  - **Explicit IMAP account** → single-account IMAP (fast server-side path, unchanged).
+  - **Explicit non-IMAP account** → AppleScript (unchanged).
+  - **No `account` given** → **merge across all accounts**: the query fans out over *every* configured IMAP account **and** the AppleScript all-accounts path covers non-IMAP accounts, then the results are merged. Message lists (`search-messages`/`get-thread`/`list-messages`) de-duplicate any message present in both backends — keyed by normalized `Message-ID` when available, else a `normalizedSubject|sender|dateReceivedEpoch` composite — preferring the IMAP copy (which carries the round-trippable `imap:` id) and sorting newest-first. Count tools (`get-unread-count`, `get-mail-stats`) partition the accounts so an IMAP-covered Mail account is counted via IMAP only and never double-counted; `list-mailboxes` concatenates each IMAP account's mailboxes (prefixed with the account label) plus the AppleScript mailboxes of any non-IMAP accounts.
+  - When IMAP is **not** configured at all, every read behaves exactly as before (pure AppleScript) — this change is inert without IMAP config.
+- The three mailbox-**write** ops (`create-mailbox`, `delete-mailbox`, `rename-mailbox`) are intentionally **unchanged**: they still route to IMAP only for an explicitly-named IMAP account, never on an omitted account.
+
+### Docs
+- README and CLAUDE.md now document the prefer-IMAP read behavior and the no-account multi-account merge, and clarify that `reply-to-message`/`forward-message` send via clean direct SMTP with RFC 5322 threading when SMTP is configured (AppleScript `without opening window` fallback otherwise) — mirroring the `send-email` prefer-direct model shipped in v2.5.0.
+
 ## [2.5.0] - 2026-06-26
 ### Added
 - **Reply and forward now send via direct SMTP with proper RFC 5322 threading** (`In-Reply-To` / `References`) whenever the SMTP transport is configured — a clean, correctly-threaded MIME message instead of driving Mail.app's `reply`/`forward` AppleScript (which threads, but wraps the injected body in a `blockquote` on macOS 15+). `reply-to-message` addresses the original sender (or `Reply-To`), adds the other recipients as `Cc` on `replyAll`, prefixes `Re:`, and quotes the original; `forward-message` builds a clean `Fwd:` with a forwarded-header block. The Mail.app path is used automatically as a fallback when SMTP is not configured, the original can't be fetched, or it has no `Message-ID` to thread on. Drafts (`send=false`) still go through Mail.app.

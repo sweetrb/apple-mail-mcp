@@ -373,7 +373,7 @@ What routes to IMAP when an account is IMAP-configured:
 - **Folder ops:** `create-mailbox`, `rename-mailbox`, `delete-mailbox` — IMAP's `CREATE`/`RENAME`/`DELETE` succeed on the iCloud/Gmail/Workspace/Exchange mailboxes Mail.app's AppleScript bridge can't touch (#42).
 - **Message mutations:** `mark-as-read`/`unread`, `flag-message`/`unflag-message`, `move-message`, `delete-message`.
 - **Batch mutations (2.1):** `batch-mark-as-read`/`unread`, `batch-flag`/`unflag-messages`, `batch-move-messages`, `batch-delete-messages` — `imap:` ids are grouped by mailbox and applied as a single `UID STORE`/`UID MOVE`; numeric ids in the same batch still use AppleScript.
-- **Counts & stats (2.1):** `get-unread-count` and `list-mailboxes` use `STATUS`; `get-mail-stats` (with an `account`) uses `STATUS` + `SEARCH SINCE` — authoritative and fast even on huge mailboxes.
+- **Counts & stats (2.1):** `get-unread-count` and `list-mailboxes` use `STATUS`; `get-mail-stats` uses `STATUS` + `SEARCH SINCE` — authoritative and fast even on huge mailboxes. As of v2.6.0 these prefer IMAP whenever it's configured (see *Read routing* below), merging across accounts when no `account` is given.
 - **Attachments (2.1):** `list-attachments`, `save-attachment`, `fetch-attachment` use `BODYSTRUCTURE` + `FETCH BODY[part]` for `imap:` ids — faster and able to see MIME-embedded attachments AppleScript misses.
 - **Threading (2.1):** `get-thread` links a conversation via `References`/`Message-ID` (`HEADER SEARCH`) for an `imap:` seed, falling back to subject grouping otherwise.
 
@@ -384,9 +384,27 @@ attachment/thread tools and it routes to IMAP automatically; bare numeric ids
 continue to use AppleScript. So an agent never has to know which backend a
 message came from — the id carries it.
 
-Routing is conservative: only a call whose explicit `account` matches the
-configured IMAP account goes to IMAP; everything else falls through to
-AppleScript.
+**Read routing (v2.6.0): reads PREFER direct IMAP whenever IMAP is configured.**
+The read tools — `search-messages`, `get-thread`, `list-messages`,
+`list-mailboxes`, `get-unread-count`, `get-mail-stats` — now go to IMAP whenever
+any `APPLE_MAIL_MCP_IMAP_*` account is configured, not just when an explicit
+matching `account` is passed. There are three cases:
+
+- **Explicit IMAP account** — single-account IMAP (fast server-side path).
+- **Explicit non-IMAP account** — AppleScript (that account isn't on IMAP).
+- **No `account` given** — **merge across all accounts**: the query fans out over
+  *every* configured IMAP account **and** the AppleScript all-accounts path runs
+  for any non-IMAP accounts; the results are merged so no account is dropped.
+  Message lists de-duplicate any message that appears in both backends (preferring
+  the IMAP copy, which carries the round-trippable `imap:` id) and sort
+  newest-first; count tools (`get-unread-count`, `get-mail-stats`) partition the
+  accounts so an IMAP-covered account is counted via IMAP only — never
+  double-counted.
+
+If IMAP is **not** configured at all, every read behaves exactly as before
+(pure AppleScript). The three mailbox-**write** ops (`create-mailbox`,
+`delete-mailbox`, `rename-mailbox`) remain conservative — they route to IMAP only
+for an explicitly-named IMAP account, never on an omitted account.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -596,6 +614,8 @@ Reply to an existing message.
 }
 ```
 
+> **Transport (v2.5.0):** when SMTP is configured, `reply-to-message` sends via **clean SMTP**, threading the reply with proper RFC 5322 `In-Reply-To`/`References` headers (built from the original message) so it lands in the same conversation. When SMTP is not configured (or the original lacks the headers needed to thread), it falls back to Mail.app's AppleScript `reply … without opening window` — same reliable-from-background-process path as before. See [SMTP transport](#smtp-transport).
+
 **⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
 
 ---
@@ -610,6 +630,8 @@ Forward a message to new recipients.
 | `to` | string[] | Yes | Recipients to forward to |
 | `body` | string | No | Message to prepend |
 | `send` | boolean | No | Send immediately (default: true, false = save as draft) |
+
+> **Transport (v2.5.0):** when SMTP is configured, `forward-message` sends via **clean SMTP** (a fresh message with the original quoted, no threading headers — a forward starts a new conversation). When SMTP is not configured it falls back to Mail.app's AppleScript `forward … without opening window`. See [SMTP transport](#smtp-transport).
 
 **⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
 
@@ -1127,6 +1149,8 @@ Prior to v1.4.0, `reply-to-message` and `forward-message` would send messages wi
 **Root cause:** The AppleScript `reply msg with opening window` command creates a GUI compose window asynchronously. When `set content` runs immediately after, the window may not be ready, and the content assignment is silently ignored. Delays (`delay 1`, `delay 2`) were unreliable — the compose window's readiness depends on system load, Mail.app state, and whether the process has GUI access.
 
 **Fix:** Replaced `with opening window` with `without opening window` for both `reply` and `forward` commands. With this approach, `set content` works immediately and reliably from background processes. `In-Reply-To` and `References` headers are still set correctly by Mail.app, and no GUI compose window is opened.
+
+**Update (v2.5.0):** when SMTP is configured, `reply-to-message` and `forward-message` now prefer **clean direct SMTP** instead of AppleScript — the same prefer-direct model as `send-email`. Replies are threaded with RFC 5322 `In-Reply-To`/`References` headers built from the original message; forwards start a new conversation. The AppleScript `without opening window` path above remains the fallback when SMTP is not configured (or, for replies, when the original message lacks the headers needed to thread).
 
 See [#7](https://github.com/sweetrb/apple-mail-mcp/issues/7) for full details and the list of approaches that were tested.
 
