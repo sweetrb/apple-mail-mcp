@@ -226,7 +226,10 @@ interface AppleScan {
  * AppleScript side — which, for an all-IMAP user, means ZERO AppleScript work and
  * therefore no reliance on the fragile composite dedup. `scan` runs one account.
  */
-function appleScanForAccounts(accounts: Account[], scan: (accountName: string) => SearchResult): AppleScan {
+function appleScanForAccounts(
+  accounts: Account[],
+  scan: (accountName: string) => SearchResult
+): AppleScan {
   const rows: MessageRow[] = [];
   let diagnostics = emptyDiagnostics();
   for (const acct of accounts) {
@@ -277,7 +280,8 @@ function mergedMessageResponse(
     return successResponse(`${base}${coverageBlock}`, structured);
   }
   const parts: string[] = [];
-  if (fan.accountsQueried.length > 0) parts.push(`IMAP account(s): ${fan.accountsQueried.join(", ")}`);
+  if (fan.accountsQueried.length > 0)
+    parts.push(`IMAP account(s): ${fan.accountsQueried.join(", ")}`);
   if (apple.rows.length > 0) parts.push("AppleScript");
   const accountsNote = parts.length > 0 ? ` (merged across ${parts.join(" + ")})` : "";
   return successResponse(
@@ -2530,7 +2534,8 @@ server.registerTool(
         ``,
         `📁 By Account:`,
         ...perAccount.map(
-          (a) => `  ${a.name}: ${a.totalMessages} messages (${a.unreadMessages} unread) [${a.backend}]`
+          (a) =>
+            `  ${a.name}: ${a.totalMessages} messages (${a.unreadMessages} unread) [${a.backend}]`
         ),
       ];
       return successResponse(lines.join("\n"), {
