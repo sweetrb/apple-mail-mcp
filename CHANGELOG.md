@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-06-26
+### Added
+- **Reply and forward now send via direct SMTP with proper RFC 5322 threading** (`In-Reply-To` / `References`) whenever the SMTP transport is configured — a clean, correctly-threaded MIME message instead of driving Mail.app's `reply`/`forward` AppleScript (which threads, but wraps the injected body in a `blockquote` on macOS 15+). `reply-to-message` addresses the original sender (or `Reply-To`), adds the other recipients as `Cc` on `replyAll`, prefixes `Re:`, and quotes the original; `forward-message` builds a clean `Fwd:` with a forwarded-header block. The Mail.app path is used automatically as a fallback when SMTP is not configured, the original can't be fetched, or it has no `Message-ID` to thread on. Drafts (`send=false`) still go through Mail.app.
+- `send-serial-email` (mail-merge) now sends via direct SMTP when configured — one individual, personalized message per recipient, with the same `{{Key}}` substitution and per-recipient delay as the AppleScript path. Mail.app fallback when SMTP is not configured.
+- **Disabled-account guard + rename rollback** for structural mailbox operations. Creating, deleting, or renaming a mailbox on an account that is *disabled* in Mail fails inside Mail with an opaque AppleEvent `-10000` and can leave a half-built (orphaned) destination mailbox behind. These ops now detect a disabled target account up front and refuse with an actionable message ("Enable the account … and retry"), and a failed `rename-mailbox` rolls back an *empty* orphaned destination so no ghost mailbox is left behind (mailboxes that actually received messages are never deleted). The account-state probe fails open — an inconclusive check never blocks an otherwise-valid operation.
+
+### Changed
+- `AppleMailManager.createMailbox` / `renameMailbox` now return `{ success, error }` (internal API) so the guard can surface a precise reason. The MCP tool responses are unchanged.
+
+### Fixed
+- Removed a stray NUL byte in `imapClient.ts` — an internal pool-group-key separator was a raw `\0` byte; it is now the `\0` string escape. No behavior change (the runtime key is identical), but the source is clean ASCII again so tooling (grep, etc.) no longer treats the file as binary.
+
 ## [2.4.2] - 2026-06-25
 ### Fixed
 - IMAP connections no longer leak past the per-account limit. The request-pool connections are torn down on EVERY exit path — SIGINT/SIGTERM and stdin-EOF (when the MCP client/parent goes away) — so a killed, restarted, or orphaned instance never leaves IMAP sockets occupying slots against Gmail's ~15-per-account cap. Added a single-flight connect guard so concurrent reads for one account share one connection instead of orphaning duplicate sockets.

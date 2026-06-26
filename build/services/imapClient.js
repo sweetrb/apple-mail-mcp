@@ -851,7 +851,7 @@ async function imapBatch(ids, deps, op) {
             errors.push(`Not an IMAP id: "${id}"`);
             continue;
         }
-        const key = `${ref.account} ${ref.path}`;
+        const key = `${ref.account}\0${ref.path}`;
         const g = groups.get(key) ?? { account: ref.account, path: ref.path, uids: [] };
         g.uids.push(ref.uid);
         groups.set(key, g);

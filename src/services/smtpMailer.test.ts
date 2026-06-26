@@ -10,10 +10,13 @@ import { describe, it, expect, vi } from "vitest";
 import {
   resolveSmtpConfig,
   sendViaSmtp,
+  sendSerialViaSmtp,
+  applyPlaceholders,
   isSmtpConfigured,
   shouldUseSmtp,
   SMTP_ENV,
   type SmtpConfig,
+  type SmtpSendOptions,
 } from "./smtpMailer.js";
 
 const baseEnv = {
@@ -282,5 +285,93 @@ describe("sendViaSmtp", () => {
     // In this environment env is unset for SMTP, so config resolution fails.
     expect(result.success).toBe(false);
     expect(result.error).toBeTruthy();
+  });
+});
+
+describe("sendViaSmtp threading headers (2.5.0)", () => {
+  it("passes inReplyTo and references through to nodemailer", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<new@host>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    const result = await sendViaSmtp(
+      {
+        to: ["a@b.com"],
+        subject: "Re: hi",
+        body: "hello",
+        inReplyTo: "<orig@host>",
+        references: ["<root@host>", "<orig@host>"],
+      },
+      testConfig,
+      createTransport
+    );
+    expect(result.success).toBe(true);
+    const arg = sendMail.mock.calls[0][0];
+    expect(arg.inReplyTo).toBe("<orig@host>");
+    expect(arg.references).toEqual(["<root@host>", "<orig@host>"]);
+  });
+
+  it("omits empty threading headers", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    await sendViaSmtp({ to: ["a@b.com"], subject: "hi", body: "x" }, testConfig, createTransport);
+    const arg = sendMail.mock.calls[0][0];
+    expect(arg.inReplyTo).toBeUndefined();
+    expect(arg.references).toBeUndefined();
+  });
+});
+
+describe("applyPlaceholders", () => {
+  it("replaces {{Key}} tokens, escapes regex-special keys, leaves unknowns intact", () => {
+    expect(applyPlaceholders("Hi {{Name}}", { Name: "Alice" })).toBe("Hi Alice");
+    expect(applyPlaceholders("{{a.b}}", { "a.b": "X" })).toBe("X");
+    expect(applyPlaceholders("{{Missing}}", { Other: "y" })).toBe("{{Missing}}");
+  });
+});
+
+describe("sendSerialViaSmtp", () => {
+  it("personalizes per recipient, reports each result, and a single failure never aborts", async () => {
+    const calls: SmtpSendOptions[] = [];
+    const send = vi.fn(async (opts: SmtpSendOptions) => {
+      calls.push(opts);
+      return opts.to[0] === "bob@x.com"
+        ? { success: false, error: "bounced" }
+        : { success: true, messageId: "<ok>" };
+    });
+    const sleep = vi.fn(async () => {});
+    const results = await sendSerialViaSmtp(
+      [
+        { email: "alice@x.com", variables: { Name: "Alice" } },
+        { email: "bob@x.com", variables: { Name: "Bob" } },
+      ],
+      "Hi {{Name}}",
+      "Dear {{Name}},",
+      testConfig,
+      { delayMs: 250, send: send as never, sleep }
+    );
+    expect(calls[0].subject).toBe("Hi Alice");
+    expect(calls[0].body).toBe("Dear Alice,");
+    expect(calls[0].to).toEqual(["alice@x.com"]);
+    expect(results).toEqual([
+      { email: "alice@x.com", success: true, error: undefined },
+      { email: "bob@x.com", success: false, error: "bounced" },
+    ]);
+    // one inter-send delay between two recipients, none trailing the last
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(250);
+  });
+
+  it("skips sleeping entirely when delayMs is 0", async () => {
+    const sleep = vi.fn(async () => {});
+    const send = vi.fn(async () => ({ success: true, messageId: "<ok>" }));
+    await sendSerialViaSmtp(
+      [
+        { email: "a@x.com", variables: {} },
+        { email: "b@x.com", variables: {} },
+      ],
+      "s",
+      "b",
+      testConfig,
+      { delayMs: 0, send: send as never, sleep }
+    );
+    expect(sleep).not.toHaveBeenCalled();
   });
 });

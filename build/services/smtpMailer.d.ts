@@ -36,6 +36,17 @@ export interface SmtpSendOptions {
      * plain-text clients still get a clean fallback.
      */
     htmlBody?: string;
+    /**
+     * RFC 5322 threading (2.5.0): the message this is replying to — emitted as the
+     * `In-Reply-To` header so SMTP replies/forwards thread correctly in Gmail and
+     * other clients. Pass the original message's `Message-ID`.
+     */
+    inReplyTo?: string;
+    /**
+     * RFC 5322 threading (2.5.0): the `References` chain — the original message's
+     * existing `References` plus its `Message-ID`. nodemailer accepts an array.
+     */
+    references?: string[];
 }
 /** Resolved SMTP connection configuration. */
 export interface SmtpConfig {
@@ -114,4 +125,36 @@ export declare function resolveSmtpConfig(env?: NodeJS.ProcessEnv): SmtpConfig;
  * a transporter factory only in tests.
  */
 export declare function sendViaSmtp(opts: SmtpSendOptions, config?: SmtpConfig, createTransport?: typeof nodemailer.createTransport): Promise<SmtpSendResult>;
+/** One recipient of a mail-merge batch (mirrors the AppleScript serial path). */
+export interface SerialSmtpRecipient {
+    email: string;
+    variables: Record<string, string>;
+}
+/** Per-recipient outcome of a serial SMTP send. */
+export interface SerialSmtpResult {
+    email: string;
+    success: boolean;
+    error?: string;
+}
+/**
+ * Replace every `{{Key}}` token in `template` with the matching value from
+ * `variables`. Keys are escaped so regex metacharacters in a key are literal.
+ * Mirrors the substitution in {@link AppleMailManager.sendSerialEmail} so the
+ * two transports personalize identically.
+ */
+export declare function applyPlaceholders(template: string, variables: Record<string, string>): string;
+/**
+ * Send a personalized mail-merge batch over SMTP — one individual message per
+ * recipient (recipients never see each other), with `{{Key}}` placeholders in
+ * the subject/body replaced per recipient. Returns a per-recipient result list;
+ * a single recipient's failure does not abort the batch.
+ *
+ * `opts.send` and `opts.sleep` are injectable for tests (no real SMTP / no real
+ * delay). The default `sleep` waits `delayMs` (clamped 0–10000) between sends.
+ */
+export declare function sendSerialViaSmtp(recipients: SerialSmtpRecipient[], subject: string, body: string, config: SmtpConfig, opts?: {
+    delayMs?: number;
+    send?: typeof sendViaSmtp;
+    sleep?: (ms: number) => Promise<void>;
+}): Promise<SerialSmtpResult[]>;
 //# sourceMappingURL=smtpMailer.d.ts.map

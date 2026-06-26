@@ -41,6 +41,17 @@ export interface SmtpSendOptions {
    * plain-text clients still get a clean fallback.
    */
   htmlBody?: string;
+  /**
+   * RFC 5322 threading (2.5.0): the message this is replying to — emitted as the
+   * `In-Reply-To` header so SMTP replies/forwards thread correctly in Gmail and
+   * other clients. Pass the original message's `Message-ID`.
+   */
+  inReplyTo?: string;
+  /**
+   * RFC 5322 threading (2.5.0): the `References` chain — the original message's
+   * existing `References` plus its `Message-ID`. nodemailer accepts an array.
+   */
+  references?: string[];
 }
 
 /** Resolved SMTP connection configuration. */
@@ -256,6 +267,9 @@ export async function sendViaSmtp(
       // When present, nodemailer emits multipart/alternative (text + html).
       html,
       attachments,
+      // RFC 5322 threading for SMTP replies/forwards (2.5.0).
+      inReplyTo: opts.inReplyTo?.trim() || undefined,
+      references: opts.references?.length ? opts.references : undefined,
     });
     return { success: true, messageId: info.messageId };
   } catch (error) {
@@ -266,4 +280,84 @@ export async function sendViaSmtp(
   } finally {
     transporter.close();
   }
+}
+
+/** One recipient of a mail-merge batch (mirrors the AppleScript serial path). */
+export interface SerialSmtpRecipient {
+  email: string;
+  variables: Record<string, string>;
+}
+
+/** Per-recipient outcome of a serial SMTP send. */
+export interface SerialSmtpResult {
+  email: string;
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Replace every `{{Key}}` token in `template` with the matching value from
+ * `variables`. Keys are escaped so regex metacharacters in a key are literal.
+ * Mirrors the substitution in {@link AppleMailManager.sendSerialEmail} so the
+ * two transports personalize identically.
+ */
+export function applyPlaceholders(template: string, variables: Record<string, string>): string {
+  let out = template;
+  for (const [key, value] of Object.entries(variables)) {
+    const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), value);
+  }
+  return out;
+}
+
+/**
+ * Send a personalized mail-merge batch over SMTP — one individual message per
+ * recipient (recipients never see each other), with `{{Key}}` placeholders in
+ * the subject/body replaced per recipient. Returns a per-recipient result list;
+ * a single recipient's failure does not abort the batch.
+ *
+ * `opts.send` and `opts.sleep` are injectable for tests (no real SMTP / no real
+ * delay). The default `sleep` waits `delayMs` (clamped 0–10000) between sends.
+ */
+export async function sendSerialViaSmtp(
+  recipients: SerialSmtpRecipient[],
+  subject: string,
+  body: string,
+  config: SmtpConfig,
+  opts: {
+    delayMs?: number;
+    send?: typeof sendViaSmtp;
+    sleep?: (ms: number) => Promise<void>;
+  } = {}
+): Promise<SerialSmtpResult[]> {
+  const send = opts.send ?? sendViaSmtp;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const delay = Math.min(Math.max(opts.delayMs ?? 500, 0), 10000);
+
+  const results: SerialSmtpResult[] = [];
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    try {
+      const res = await send(
+        {
+          to: [r.email],
+          subject: applyPlaceholders(subject, r.variables),
+          body: applyPlaceholders(body, r.variables),
+          from: config.from,
+        },
+        config
+      );
+      results.push({ email: r.email, success: res.success, error: res.error });
+    } catch (error) {
+      results.push({
+        email: r.email,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (delay > 0 && i < recipients.length - 1) {
+      await sleep(delay);
+    }
+  }
+  return results;
 }

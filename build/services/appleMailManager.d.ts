@@ -53,7 +53,7 @@ export declare function isPathWithinAllowedRoots(resolvedPath: string): boolean;
  *
  * Exported for unit testing.
  */
-export declare function describeMailboxOpError(op: "delete" | "rename", raw: string): string;
+export declare function describeMailboxOpError(op: "create" | "delete" | "rename", raw: string): string;
 /** Env var to pin the default account (matched by account name or email). */
 export declare const DEFAULT_ACCOUNT_ENV = "APPLE_MAIL_MCP_DEFAULT_ACCOUNT";
 /**
@@ -153,6 +153,38 @@ export declare class AppleMailManager {
      * mailbox structure (create/delete/rename mailbox).
      */
     private invalidateCache;
+    /**
+     * Reads the live `enabled` flag for an account directly from Mail (bypassing
+     * the 60 s account cache) so a guard reflects an account that was enabled or
+     * disabled out-of-band. Returns true/false when known, or null when the probe
+     * is inconclusive — account not found, or the probe itself failed. Callers
+     * treat null as "can't tell, don't block".
+     */
+    private isAccountEnabled;
+    /**
+     * Guard for AppleScript-backed structural operations (create / delete / rename
+     * mailbox). When the target account is disabled in Mail, Mail holds no live
+     * server session for it, so the operation fails inside Mail with an opaque
+     * AppleEvent -10000 — and a multi-step op like rename can leave half-built
+     * state behind (an orphaned destination mailbox). Detect the disabled account
+     * up front and refuse with an actionable message instead of attempting the
+     * doomed op.
+     *
+     * Returns an error string when the account is known-disabled, else null —
+     * including when the state can't be determined. We fail open: an inconclusive
+     * probe never blocks an otherwise-valid operation.
+     *
+     * Applies only to the AppleScript backend. Direct-IMAP accounts talk to the
+     * server independent of Mail's enabled toggle and are routed before reaching
+     * the manager.
+     */
+    private disabledAccountGuard;
+    /**
+     * Best-effort rollback for a failed rename: delete a just-created destination
+     * mailbox, but ONLY if it is empty, so any messages that did move are never
+     * destroyed. Returns true if the empty orphan was removed.
+     */
+    private deleteMailboxIfEmpty;
     /**
      * Resolves the account to use for an operation when the caller omits one.
      *
@@ -479,7 +511,10 @@ export declare class AppleMailManager {
     /**
      * Create a new mailbox.
      */
-    createMailbox(name: string, account?: string): boolean;
+    createMailbox(name: string, account?: string): {
+        success: boolean;
+        error?: string;
+    };
     /**
      * Delete a mailbox.
      */

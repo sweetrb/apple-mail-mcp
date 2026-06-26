@@ -27,7 +27,19 @@ import { z } from "zod";
 import { AppleMailManager, isPathWithinAllowedRoots } from "@/services/appleMailManager.js";
 import { writeFileSync } from "fs";
 import { resolve as resolvePath, join as joinPath } from "path";
-import { sendViaSmtp, shouldUseSmtp } from "@/services/smtpMailer.js";
+import {
+  sendViaSmtp,
+  sendSerialViaSmtp,
+  shouldUseSmtp,
+  isSmtpConfigured,
+  resolveSmtpConfig,
+  type SmtpConfig,
+} from "@/services/smtpMailer.js";
+import {
+  buildReplyOptions,
+  buildForwardOptions,
+  parseOriginalHeaders,
+} from "@/services/replyForward.js";
 import {
   isImapAccount,
   resolveImapConfigs,
@@ -694,8 +706,13 @@ server.registerTool(
         .optional(),
     },
   },
-  withErrorHandling(({ recipients, subject, body, account, delayMs }) => {
-    const results = mailManager.sendSerialEmail(recipients, subject, body, account, delayMs);
+  withErrorHandling(async ({ recipients, subject, body, account, delayMs }) => {
+    // 2.5.0: prefer direct SMTP for mail-merge when configured (and not targeting
+    // a bare Mail.app account label); Mail.app fallback when not configured.
+    const smtpCfg = shouldUseSmtp(undefined, account) ? resolveSmtpOrFallback() : null;
+    const results = smtpCfg
+      ? await sendSerialViaSmtp(recipients, subject, body, smtpCfg, { delayMs })
+      : mailManager.sendSerialEmail(recipients, subject, body, account, delayMs);
     const successCount = results.filter((r) => r.success).length;
     const failCount = results.length - successCount;
 
@@ -762,6 +779,89 @@ server.registerTool(
   }, "Error creating draft")
 );
 
+/**
+ * Outcome of a direct-SMTP reply/forward attempt (2.5.0 prefer-direct path).
+ * - `sent`: the SMTP transaction succeeded.
+ * - `fallback`: the direct path could not be used (SMTP not fully configured, the
+ *   original couldn't be fetched, or — for replies — it has no `Message-ID` to
+ *   thread on); the caller should use the Mail.app AppleScript path instead.
+ * - `error` (only with `fallback: false`): the SMTP transaction itself failed —
+ *   surface it rather than risk a double-send by also trying Mail.app.
+ */
+type DirectSendOutcome =
+  | { sent: true }
+  | { sent: false; fallback: true }
+  | { sent: false; fallback: false; error: string };
+
+/** Resolve SMTP config, falling back (host/user set but no password) to Mail.app. */
+function resolveSmtpOrFallback(): SmtpConfig | null {
+  try {
+    return resolveSmtpConfig();
+  } catch {
+    return null;
+  }
+}
+
+/** Reply to a message over direct SMTP with RFC 5322 threading headers. */
+async function sendReplyViaSmtp(
+  id: string,
+  body: string,
+  replyAll: boolean
+): Promise<DirectSendOutcome> {
+  const cfg = resolveSmtpOrFallback();
+  if (!cfg) return { sent: false, fallback: true };
+
+  const raw = mailManager.getRawSource(id);
+  if (!raw) return { sent: false, fallback: true };
+
+  const original = parseOriginalHeaders(raw);
+  // Without a Message-ID we can't thread; let Mail.app's reply handle it.
+  if (!original.messageId || original.from.length === 0) {
+    return { sent: false, fallback: true };
+  }
+
+  const content = mailManager.getMessageContent(id);
+  const opts = buildReplyOptions({
+    original,
+    originalPlainText: content?.plainText ?? "",
+    body,
+    replyAll,
+    self: [cfg.from, cfg.user],
+    from: cfg.from,
+  });
+
+  const result = await sendViaSmtp(opts, cfg);
+  if (result.success) return { sent: true };
+  return { sent: false, fallback: false, error: result.error ?? "unknown SMTP error" };
+}
+
+/** Forward a message over direct SMTP (clean MIME, new thread). */
+async function sendForwardViaSmtp(
+  id: string,
+  to: string[],
+  body: string | undefined
+): Promise<DirectSendOutcome> {
+  const cfg = resolveSmtpOrFallback();
+  if (!cfg) return { sent: false, fallback: true };
+
+  const raw = mailManager.getRawSource(id);
+  if (!raw) return { sent: false, fallback: true };
+
+  const original = parseOriginalHeaders(raw);
+  const content = mailManager.getMessageContent(id);
+  const opts = buildForwardOptions({
+    original,
+    originalPlainText: content?.plainText ?? "",
+    to,
+    body,
+    from: cfg.from,
+  });
+
+  const result = await sendViaSmtp(opts, cfg);
+  if (result.success) return { sent: true };
+  return { sent: false, fallback: false, error: result.error ?? "unknown SMTP error" };
+}
+
 // --- reply-to-message ---
 
 server.registerTool(
@@ -785,7 +885,20 @@ server.registerTool(
       id: z.string().optional(),
     },
   },
-  withErrorHandling(({ id, body, replyAll, send }) => {
+  withErrorHandling(async ({ id, body, replyAll, send }) => {
+    // 2.5.0: prefer direct SMTP (clean, correctly threaded MIME) when configured
+    // and actually sending. Drafts (send=false) and the not-configured /
+    // unthreadable cases fall through to the Mail.app AppleScript path.
+    if (send && isSmtpConfigured()) {
+      const outcome = await sendReplyViaSmtp(id, body, replyAll);
+      if (outcome.sent) {
+        return successResponse("Reply sent", { ok: true, sent: true, id });
+      }
+      if (!outcome.fallback) {
+        return errorResponse(`Failed to reply to message "${id}" via SMTP: ${outcome.error}`);
+      }
+    }
+
     const success = mailManager.replyToMessage(id, body, replyAll, send);
 
     if (!success) {
@@ -824,7 +937,23 @@ server.registerTool(
       id: z.string().optional(),
     },
   },
-  withErrorHandling(({ id, to, body, send }) => {
+  withErrorHandling(async ({ id, to, body, send }) => {
+    // 2.5.0: prefer direct SMTP (clean MIME) when configured and actually sending.
+    if (send && isSmtpConfigured()) {
+      const outcome = await sendForwardViaSmtp(id, to, body);
+      if (outcome.sent) {
+        return successResponse(`Message forwarded to ${to.join(", ")}`, {
+          ok: true,
+          sent: true,
+          recipients: to,
+          id,
+        });
+      }
+      if (!outcome.fallback) {
+        return errorResponse(`Failed to forward message "${id}" via SMTP: ${outcome.error}`);
+      }
+    }
+
     const success = mailManager.forwardMessage(id, to, body, send);
 
     if (!success) {
@@ -1469,10 +1598,10 @@ server.registerTool(
       return successResponse(r.info || `Mailbox "${name}" created`, { ok: true, name });
     }
 
-    const success = mailManager.createMailbox(name, account);
+    const { success, error } = mailManager.createMailbox(name, account);
 
     if (!success) {
-      return errorResponse(`Failed to create mailbox "${name}"`);
+      return errorResponse(error || `Failed to create mailbox "${name}"`);
     }
 
     return successResponse(`Mailbox "${name}" created`, { ok: true, name });
