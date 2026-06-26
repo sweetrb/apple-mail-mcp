@@ -1,12 +1,12 @@
 set -e
 
-npx lint-staged
+pnpm exec lint-staged
 
-# Marketplace path-source plugins are git-cloned without `npm install`, so the
+# Marketplace path-source plugins are git-cloned without `pnpm install`, so the
 # `build/` artifacts must be committed for the plugin to work after install.
 # Keep them fresh: if any staged file is under src/, rebuild and stage build/.
 if git diff --cached --name-only --diff-filter=ACMR | grep -q '^src/'; then
   echo "src/ changed — rebuilding build/ for plugin distribution"
-  npm run build --silent
+  pnpm run build --silent
   git add build
 fi
