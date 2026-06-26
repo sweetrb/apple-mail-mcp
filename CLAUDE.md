@@ -118,7 +118,7 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 - **Reads prefer direct IMAP when configured (v2.6.0).** When any `APPLE_MAIL_MCP_IMAP_*` account is configured, the read tools (`search-messages`, `get-thread`, `list-messages`, `list-mailboxes`, `get-unread-count`, `get-mail-stats`) go to IMAP instead of AppleScript:
   - explicit IMAP `account` → that account over IMAP (fast, server-side);
   - explicit non-IMAP `account` → AppleScript;
-  - **no `account` → merge across all accounts**: the query fans out over every configured IMAP account *and* AppleScript covers the non-IMAP accounts, merged. Message lists de-dup messages seen in both backends (preferring the IMAP copy and its `imap:` id) and sort newest-first; count tools partition accounts so an IMAP-covered account is never double-counted.
+  - **no `account` → merge across all accounts**: the query fans out over every configured IMAP account, and AppleScript runs **only for the accounts no IMAP config covers** (the account list is partitioned — IMAP-served accounts aren't re-scanned; if all accounts are IMAP, AppleScript is skipped entirely). Message lists de-dup messages seen in both backends (preferring the IMAP copy and its `imap:` id) and sort newest-first; count tools count each account via exactly one backend so a coverage mismatch can never double-count.
   - With IMAP unconfigured, reads behave exactly as before (pure AppleScript). The mailbox-write ops (`create`/`delete`/`rename-mailbox`) still route to IMAP only for an explicitly-named IMAP account.
 
 ## Error Handling

@@ -393,13 +393,15 @@ matching `account` is passed. There are three cases:
 - **Explicit IMAP account** — single-account IMAP (fast server-side path).
 - **Explicit non-IMAP account** — AppleScript (that account isn't on IMAP).
 - **No `account` given** — **merge across all accounts**: the query fans out over
-  *every* configured IMAP account **and** the AppleScript all-accounts path runs
-  for any non-IMAP accounts; the results are merged so no account is dropped.
-  Message lists de-duplicate any message that appears in both backends (preferring
-  the IMAP copy, which carries the round-trippable `imap:` id) and sort
-  newest-first; count tools (`get-unread-count`, `get-mail-stats`) partition the
-  accounts so an IMAP-covered account is counted via IMAP only — never
-  double-counted.
+  *every* configured IMAP account, **and** AppleScript runs **only for the
+  accounts no IMAP config covers** (the account list is partitioned — accounts
+  already served by IMAP are *not* re-scanned via AppleScript). If every Mail
+  account is IMAP-configured, AppleScript is skipped entirely. The results are
+  merged so no account is dropped. Message lists still de-duplicate as a safety
+  net (preferring the IMAP copy, which carries the round-trippable `imap:` id) and
+  sort newest-first; count tools (`get-unread-count`, `get-mail-stats`) count each
+  account via exactly one backend so a coverage mismatch can never double- (or
+  under-) count.
 
 If IMAP is **not** configured at all, every read behaves exactly as before
 (pure AppleScript). The three mailbox-**write** ops (`create-mailbox`,

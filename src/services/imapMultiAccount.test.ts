@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   dedupKey,
   mergeMessages,
+  configMatchesAccount,
   isAccountCoveredByImap,
   partitionAccountsForCounts,
+  planCountSources,
   fanOutImapMessages,
   formatMergedRows,
   type MessageRow,
@@ -189,10 +191,75 @@ describe("isAccountCoveredByImap / partitionAccountsForCounts (no double-count)"
     expect(appleScriptOnly.map((a) => a.name)).toEqual(["Exchange"]);
   });
 
+  it("ALL accounts IMAP-covered → appleScriptOnly is EMPTY (message lists run zero AppleScript)", () => {
+    // The maintainer's worst case: every Mail account is IMAP-configured. The
+    // message-list sites iterate appleScriptOnly to drive the AppleScript scan,
+    // so an empty partition here means ZERO AppleScript work and no reliance on
+    // the composite dedup.
+    const allImap: Account[] = [accounts[0], accounts[1]]; // Personal + Work, both covered
+    const { imapCovered, appleScriptOnly } = partitionAccountsForCounts(allImap, [cfgA, cfgB]);
+    expect(appleScriptOnly).toEqual([]);
+    expect(imapCovered).toHaveLength(2);
+  });
+
   it("when IMAP covers nothing, all accounts fall to AppleScript", () => {
     const { imapCovered, appleScriptOnly } = partitionAccountsForCounts(accounts, []);
     expect(imapCovered).toEqual([]);
     expect(appleScriptOnly).toHaveLength(3);
+  });
+
+  it("configMatchesAccount is the per-pair matcher (label/user vs name/email)", () => {
+    expect(configMatchesAccount(cfgA, accounts[0])).toBe(true); // Personal
+    expect(configMatchesAccount(cfgA, accounts[1])).toBe(false); // Work
+    expect(configMatchesAccount({ ...cfgA, accountLabel: "x" }, accounts[0])).toBe(true); // user==email
+  });
+});
+
+describe("planCountSources (each account counted exactly once)", () => {
+  const accounts: Account[] = [
+    { name: "Personal", email: "a@gmail.com", enabled: true },
+    { name: "Work", email: "b@work.com", enabled: true },
+    { name: "Exchange", email: "c@corp.com", enabled: true }, // not IMAP
+  ];
+
+  it("assigns each Mail account ONE source: its matching config, else AppleScript", () => {
+    const sources = planCountSources(accounts, [cfgA, cfgB]);
+    expect(sources).toHaveLength(3);
+    const byName = Object.fromEntries(sources.map((s) => [s.label, s.kind]));
+    expect(byName).toEqual({ Personal: "imap", Work: "imap", Exchange: "applescript" });
+  });
+
+  it("does NOT double-count when an IMAP-configured account is UNMATCHED by the heuristic", () => {
+    // cfg has a freeform label AND a user that matches NO Mail account email →
+    // the heuristic can't match it to "Personal". It must NOT also be summed for
+    // Personal via IMAP: Personal falls to AppleScript (ONE source), and the
+    // orphan config is counted once via IMAP. Total sources = 3 accounts + 1
+    // orphan config = 4, with Personal counted exactly once (AppleScript).
+    const orphan: ImapConfig = { ...cfgA, accountLabel: "freeform", user: "nomatch@x.com" };
+    const sources = planCountSources(accounts, [orphan]);
+    const personal = sources.filter((s) => s.label === "Personal");
+    expect(personal).toHaveLength(1);
+    expect(personal[0].kind).toBe("applescript"); // counted via AppleScript only, never doubled
+    // The orphan config is counted exactly once, via IMAP, under its own label.
+    const orphanSrc = sources.filter((s) => s.label === "freeform");
+    expect(orphanSrc).toHaveLength(1);
+    expect(orphanSrc[0].kind).toBe("imap");
+    expect(sources).toHaveLength(4);
+  });
+
+  it("a config consumed by one account is not reused by another (no inflation)", () => {
+    // Two Mail accounts could both fuzzy-match a single config by email; the
+    // config is consumed by the FIRST, so the second falls to AppleScript.
+    const dupA: Account = { name: "Acct1", email: "a@gmail.com", enabled: true };
+    const dupB: Account = { name: "Acct2", email: "a@gmail.com", enabled: true };
+    const sources = planCountSources([dupA, dupB], [cfgA]);
+    expect(sources.map((s) => s.kind)).toEqual(["imap", "applescript"]);
+  });
+
+  it("with no configs, every account is an AppleScript source", () => {
+    const sources = planCountSources(accounts, []);
+    expect(sources.every((s) => s.kind === "applescript")).toBe(true);
+    expect(sources).toHaveLength(3);
   });
 });
 

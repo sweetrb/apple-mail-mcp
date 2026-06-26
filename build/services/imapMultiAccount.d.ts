@@ -66,33 +66,52 @@ export declare function fanOutImapMessages(args: ImapSearchArgs, kind: "search" 
     accountsFailed: string[];
 }>;
 /**
- * Heuristic: is this Mail.app account covered by one of the IMAP configs?
- *
- * Matched case-insensitively against each IMAP config's `accountLabel` AND
- * `user`, compared to the Mail account's `name` AND `email`. The IMAP
- * `accountLabel` defaults to the login address (see listImapAccountSpecs), and
- * users typically set it to the Mail.app account NAME, so checking both the
- * label and the user against both the account name and email catches the common
- * configurations (label=accountName, label=email, or login=email).
- *
- * Uncertainty (note for live testing): if a user's IMAP `accountLabel` matches
- * NEITHER the Mail account name NOR its email (e.g. a freeform label), the
- * account won't be recognized as covered, and it would be counted by BOTH
- * backends. To stay safe we bias toward NOT double-counting: see
- * partitionAccountsForCounts, which treats an account as IMAP-covered (and thus
- * skipped on the AppleScript side) on any match. The trade-off is that an
- * unmatched-but-actually-IMAP account is counted once via AppleScript, which is
- * still correct (no double-count) — we just lose the IMAP speed for it.
+ * Per-pair matcher: does this IMAP config correspond to this Mail.app account?
+ * Compared case-insensitively, the config's `accountLabel` AND `user` against the
+ * Mail account's `name` AND `email`. An empty email can't match (avoids
+ * `"" === ""` false positives). This is the single source of truth for coverage;
+ * everything else delegates here.
  */
+export declare function configMatchesAccount(config: ImapConfig, account: Account): boolean;
+/** True when ANY config matches this Mail account (delegates to the per-pair matcher). */
 export declare function isAccountCoveredByImap(account: Account, configs: ImapConfig[]): boolean;
 /**
  * Split Mail.app accounts into those covered by IMAP (counted via IMAP) and the
- * rest (counted via AppleScript), so counts merge without double-counting.
+ * rest (counted via AppleScript), so reads/counts skip the AppleScript scan for
+ * IMAP-covered accounts.
  */
 export declare function partitionAccountsForCounts(accounts: Account[], configs: ImapConfig[]): {
     imapCovered: Account[];
     appleScriptOnly: Account[];
 };
+/**
+ * One unit to count for the count tools (get-unread-count / get-mail-stats),
+ * carrying exactly ONE source so every account is counted once and only once:
+ *   - `{ kind: "imap", config }`        — count this account via IMAP STATUS;
+ *   - `{ kind: "applescript", account }`— count this Mail account via AppleScript.
+ */
+export type CountSource = {
+    kind: "imap";
+    config: ImapConfig;
+    label: string;
+} | {
+    kind: "applescript";
+    account: Account;
+    label: string;
+};
+/**
+ * Plan the count sources so NO account is double-counted even when the coverage
+ * heuristic mis-matches (the failure mode the naive `Σimap(all configs) +
+ * Σapple(uncovered)` had: a config that fails to match its Mail account lands in
+ * BOTH sums).
+ *
+ * Account-centric: walk the Mail.app accounts; each is counted via its FIRST
+ * matching config (IMAP) or, if none matches, via AppleScript. Then any IMAP
+ * config that matched NO Mail account (configured-but-not-present-in-Mail.app) is
+ * added once as an IMAP source. A config is consumed by at most one Mail account,
+ * so two Mail accounts can't both claim the same config and inflate the total.
+ */
+export declare function planCountSources(accounts: Account[], configs: ImapConfig[]): CountSource[];
 /**
  * Render the structured message rows into the human text block the read tools
  * emit (`  - ID: … | date | subject (from: sender) [read|unread]`). Shared so the

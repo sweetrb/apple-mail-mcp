@@ -30,7 +30,7 @@ import { sendViaSmtp, sendSerialViaSmtp, shouldUseSmtp, isSmtpConfigured, resolv
 import { buildReplyOptions, buildForwardOptions, parseOriginalHeaders, } from "./services/replyForward.js";
 import { isImapAccount, shouldUseImap, resolveImapConfigs, dropAllPools, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapListAttachments, imapFetchAttachment, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete, imapBatchMove, imapThread, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
 import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
-import { fanOutImapMessages, mergeMessages, formatMergedRows, partitionAccountsForCounts, } from "./services/imapMultiAccount.js";
+import { fanOutImapMessages, mergeMessages, formatMergedRows, partitionAccountsForCounts, planCountSources, } from "./services/imapMultiAccount.js";
 import { routeMessage } from "./services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "./tools/doctor.js";
 import { registerResourcesAndPrompts } from "./tools/resourcesAndPrompts.js";
@@ -117,18 +117,53 @@ const CHECK_ITEM_SCHEMA = z.object({}).passthrough();
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
+/** An empty SearchDiagnostics (complete coverage). */
+function emptyDiagnostics() {
+    return {
+        partial: false,
+        timedOutAccounts: [],
+        skippedLargeMailboxes: [],
+        notSearchedMailboxes: [],
+    };
+}
+/** Merge two diagnostics objects (union the lists, OR the partial flag). */
+function mergeDiagnostics(a, b) {
+    return {
+        partial: a.partial || b.partial,
+        timedOutAccounts: [...a.timedOutAccounts, ...b.timedOutAccounts],
+        skippedLargeMailboxes: [...a.skippedLargeMailboxes, ...b.skippedLargeMailboxes],
+        notSearchedMailboxes: [...a.notSearchedMailboxes, ...b.notSearchedMailboxes],
+    };
+}
+/**
+ * Run a per-account AppleScript scan over ONLY the given accounts (the ones no
+ * IMAP config covers), concatenating their rows and merging diagnostics. The IMAP
+ * fan-out already covers the IMAP accounts, so this avoids scanning them on the
+ * AppleScript side — which, for an all-IMAP user, means ZERO AppleScript work and
+ * therefore no reliance on the fragile composite dedup. `scan` runs one account.
+ */
+function appleScanForAccounts(accounts, scan) {
+    const rows = [];
+    let diagnostics = emptyDiagnostics();
+    for (const acct of accounts) {
+        const res = scan(acct.name);
+        rows.push(...res.messages.map(messageSummary));
+        diagnostics = mergeDiagnostics(diagnostics, res.diagnostics);
+    }
+    return { rows, diagnostics };
+}
 /**
  * Build the success response for a no-account, prefer-IMAP MERGED message list
  * (search-messages / list-messages — v2.6.0). Concatenates the IMAP fan-out rows
- * with the AppleScript all-accounts rows, de-dups (IMAP copy wins), sorts
- * newest-first, applies `limit`, and preserves the AppleScript partial-coverage
- * diagnostics (plus any IMAP accounts that failed the fan-out).
+ * with the (already partitioned) AppleScript rows, de-dups (IMAP copy wins — a
+ * safety net for heuristic misses + IMAP-vs-IMAP dupes, no longer load-bearing
+ * for matched accounts), sorts newest-first, applies `limit`, and preserves the
+ * partial-coverage diagnostics (AppleScript scan + any failed IMAP fan-out).
  *
  * @param verb "matched" (search) or "listed" (list) — only affects empty-state text.
  */
 function mergedMessageResponse(fan, apple, limit, verb) {
-    const appleRows = apple.messages.map(messageSummary);
-    const merged = mergeMessages(fan.rows, appleRows, limit);
+    const merged = mergeMessages(fan.rows, apple.rows, limit);
     // Surface IMAP fan-out failures alongside the AppleScript diagnostics so a
     // partial merge is never mistaken for a confirmed "no such mail".
     const diagnostics = {
@@ -151,9 +186,12 @@ function mergedMessageResponse(fan, apple, limit, verb) {
             : "No messages found";
         return successResponse(`${base}${coverageBlock}`, structured);
     }
-    const accountsNote = fan.accountsQueried.length > 0
-        ? ` (merged across IMAP account(s): ${fan.accountsQueried.join(", ")} + AppleScript)`
-        : "";
+    const parts = [];
+    if (fan.accountsQueried.length > 0)
+        parts.push(`IMAP account(s): ${fan.accountsQueried.join(", ")}`);
+    if (apple.rows.length > 0)
+        parts.push("AppleScript");
+    const accountsNote = parts.length > 0 ? ` (merged across ${parts.join(" + ")})` : "";
     return successResponse(`Found ${merged.length} message(s)${accountsNote}:\n${formatMergedRows(merged)}${coverageBlock}`, structured);
 }
 // =============================================================================
@@ -232,9 +270,10 @@ server.registerTool("search-messages", {
 }, withErrorHandling(async ({ query, mailbox, account, limit = 50, dateFrom, dateTo, from, subject, isRead, isFlagged, }) => {
     // IMAP backend: prefer direct IMAP whenever IMAP is configured (v2.6.0).
     //   - explicit IMAP account → single-account IMAP (fast path);
-    //   - no account + IMAP configured → MERGE IMAP (all configured accounts)
-    //     with the AppleScript all-accounts scan, de-duped (covers IMAP + non-
-    //     IMAP accounts without dropping or double-counting any);
+    //   - no account + IMAP configured → MERGE: IMAP fans out over every
+    //     configured account; AppleScript scans ONLY the accounts no IMAP
+    //     config covers (partitioned — so an all-IMAP user runs ZERO
+    //     AppleScript and never relies on the composite dedup);
     //   - explicit non-IMAP account (or IMAP unconfigured) → AppleScript below.
     if (shouldUseImap(account)) {
         const imapArgs = {
@@ -256,10 +295,9 @@ server.registerTool("search-messages", {
                 partial: r.partial,
             });
         }
-        // No-account merge: IMAP fan-out over every configured account + the
-        // AppleScript all-accounts scan, merged + de-duped (IMAP copy wins).
         const fan = await fanOutImapMessages(imapArgs, "search");
-        const apple = mailManager.searchMessagesWithDiagnostics(query, mailbox, account, limit, dateFrom, dateTo, from, subject, isRead, isFlagged);
+        const { appleScriptOnly } = partitionAccountsForCounts(mailManager.listAccounts(), resolveImapConfigs());
+        const apple = appleScanForAccounts(appleScriptOnly, (acctName) => mailManager.searchMessagesWithDiagnostics(query, mailbox, acctName, limit, dateFrom, dateTo, from, subject, isRead, isFlagged));
         return mergedMessageResponse(fan, apple, limit, "matched");
     }
     const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(query, mailbox, account, limit, dateFrom, dateTo, from, subject, isRead, isFlagged);
@@ -376,8 +414,9 @@ server.registerTool("get-thread", {
     const base = normalizeSubject(seedSubject);
     // IMAP backend: server-side subject search (prefer-IMAP, v2.6.0).
     //   - explicit IMAP account → single-account IMAP subject search;
-    //   - no account + IMAP configured → MERGE the IMAP fan-out subject search
-    //     with the AppleScript subject search (de-duped), then re-order oldest-
+    //   - no account + IMAP configured → MERGE: IMAP fan-out subject search over
+    //     every configured account + AppleScript subject search over ONLY the
+    //     accounts no IMAP config covers (partitioned), then re-order oldest-
     //     first for natural thread reading.
     if (shouldUseImap(account)) {
         if (account !== undefined) {
@@ -390,9 +429,10 @@ server.registerTool("get-thread", {
             });
         }
         const fan = await fanOutImapMessages({ subject: base, mailbox, limit }, "search");
-        const apple = mailManager.searchMessagesWithDiagnostics(undefined, mailbox, account, limit, undefined, undefined, undefined, base);
+        const { appleScriptOnly } = partitionAccountsForCounts(mailManager.listAccounts(), resolveImapConfigs());
+        const apple = appleScanForAccounts(appleScriptOnly, (acctName) => mailManager.searchMessagesWithDiagnostics(undefined, mailbox, acctName, limit, undefined, undefined, undefined, base));
         // Merge + de-dup (IMAP wins), then sort OLDEST-first for thread order.
-        const mergedNewestFirst = mergeMessages(fan.rows, apple.messages.map(messageSummary), limit);
+        const mergedNewestFirst = mergeMessages(fan.rows, apple.rows, limit);
         const orderedRows = mergedNewestFirst
             .slice()
             .reverse() // mergeMessages returns newest-first; threads read oldest-first
@@ -453,11 +493,12 @@ server.registerTool("list-messages", {
 }, withErrorHandling(async ({ mailbox, account, limit = 50, offset = 0, from, unreadOnly }) => {
     // IMAP backend: prefer direct IMAP whenever IMAP is configured (v2.6.0).
     //   - explicit IMAP account → single-account IMAP listing (fast path);
-    //   - no account + IMAP configured → MERGE the IMAP fan-out with the
-    //     AppleScript all-accounts listing (de-duped). NOTE: pagination via
-    //     `offset` is applied PER-BACKEND before the merge, so deep offsets in a
-    //     merged multi-account list are approximate — recommend scoping with an
-    //     `account` for exact pagination.
+    //   - no account + IMAP configured → MERGE: IMAP fans out over every
+    //     configured account; AppleScript lists ONLY the accounts no IMAP config
+    //     covers (partitioned — all-IMAP user runs ZERO AppleScript). NOTE:
+    //     pagination via `offset` is applied PER-BACKEND before the merge, so
+    //     deep offsets in a merged multi-account list are approximate — recommend
+    //     scoping with an `account` for exact pagination.
     if (shouldUseImap(account)) {
         if (account !== undefined) {
             const r = await imapListMessages({ mailbox, account, limit, offset, from, unreadOnly });
@@ -468,7 +509,8 @@ server.registerTool("list-messages", {
             });
         }
         const fan = await fanOutImapMessages({ mailbox, limit, offset, from, unreadOnly }, "list");
-        const apple = mailManager.listMessagesWithDiagnostics(mailbox, account, limit, from, offset);
+        const { appleScriptOnly } = partitionAccountsForCounts(mailManager.listAccounts(), resolveImapConfigs());
+        const apple = appleScanForAccounts(appleScriptOnly, (acctName) => mailManager.listMessagesWithDiagnostics(mailbox, acctName, limit, from, offset));
         return mergedMessageResponse(fan, apple, limit, "listed");
     }
     const { messages, diagnostics } = mailManager.listMessagesWithDiagnostics(mailbox, account, limit, from, offset);
@@ -1232,11 +1274,12 @@ server.registerTool("get-unread-count", {
     },
 }, withErrorHandling(async ({ mailbox, account }) => {
     // IMAP (I4): STATUS (UNSEEN) is authoritative and fast even on huge
-    // mailboxes. Prefer-IMAP (v2.6.0), partitioned so no account is double-counted:
+    // mailboxes. Prefer-IMAP (v2.6.0). Counts are ACCOUNT-CENTRIC so each account
+    // is counted exactly once even if the coverage heuristic mis-matches:
     //   - explicit IMAP account → IMAP UNSEEN for that account;
-    //   - no account + IMAP configured → sum IMAP UNSEEN over every configured
-    //     account, PLUS AppleScript unread for each Mail account NOT covered by
-    //     IMAP (matched via the accountLabel/user heuristic);
+    //   - no account + IMAP configured → planCountSources assigns each account
+    //     ONE source (its matching IMAP config, else AppleScript) and counts any
+    //     config that matched no account once via IMAP — no double-counting;
     //   - explicit non-IMAP account (or IMAP unconfigured) → AppleScript.
     let count;
     if (shouldUseImap(account)) {
@@ -1244,20 +1287,20 @@ server.registerTool("get-unread-count", {
             count = await imapUnreadCount(mailbox, { account });
         }
         else {
-            const configs = resolveImapConfigs();
+            const sources = planCountSources(mailManager.listAccounts(), resolveImapConfigs());
             let total = 0;
-            for (const config of configs) {
-                try {
-                    total += await imapUnreadCount(mailbox, { config });
+            for (const src of sources) {
+                if (src.kind === "imap") {
+                    try {
+                        total += await imapUnreadCount(mailbox, { config: src.config });
+                    }
+                    catch (e) {
+                        console.error(`IMAP unread-count failed for "${src.label}": ${String(e)}`);
+                    }
                 }
-                catch (e) {
-                    console.error(`IMAP unread-count failed for "${config.accountLabel}": ${String(e)}`);
+                else {
+                    total += mailManager.getUnreadCount(mailbox, src.account.name);
                 }
-            }
-            // AppleScript unread for the accounts IMAP doesn't cover (no double-count).
-            const { appleScriptOnly } = partitionAccountsForCounts(mailManager.listAccounts(), configs);
-            for (const acct of appleScriptOnly) {
-                total += mailManager.getUnreadCount(mailbox, acct.name);
             }
             count = total;
         }
@@ -1724,53 +1767,54 @@ server.registerTool("get-mail-stats", {
         return successResponse(lines.join("\n"), { account, ...s });
     }
     if (account === undefined && shouldUseImap(account)) {
-        const configs = resolveImapConfigs();
         let totalMessages = 0;
         let totalUnread = 0;
         const recent = { last24h: 0, last7d: 0, last30d: 0 };
         const perAccount = [];
-        // IMAP STATUS per configured account.
-        for (const config of configs) {
-            try {
-                const s = await imapMailStats({ config });
-                totalMessages += s.totalMessages;
-                totalUnread += s.totalUnread;
-                recent.last24h += s.recent.last24h;
-                recent.last7d += s.recent.last7d;
-                recent.last30d += s.recent.last30d;
+        // ACCOUNT-CENTRIC: each account counted via exactly ONE source so a
+        // heuristic mis-match can't double-count. IMAP sources use STATUS; the
+        // AppleScript sources are built from listMailboxes (same source
+        // getMailStats uses) — never getMailStats(), which is all-accounts and
+        // would re-count the IMAP-covered ones. Recently-received from AppleScript
+        // is INBOX-wide (not per-account), so it's omitted for AppleScript sources;
+        // IMAP's per-account recent IS included.
+        const sources = planCountSources(mailManager.listAccounts(), resolveImapConfigs());
+        for (const src of sources) {
+            if (src.kind === "imap") {
+                try {
+                    const s = await imapMailStats({ config: src.config });
+                    totalMessages += s.totalMessages;
+                    totalUnread += s.totalUnread;
+                    recent.last24h += s.recent.last24h;
+                    recent.last7d += s.recent.last7d;
+                    recent.last30d += s.recent.last30d;
+                    perAccount.push({
+                        name: src.label,
+                        totalMessages: s.totalMessages,
+                        unreadMessages: s.totalUnread,
+                        backend: "imap",
+                    });
+                }
+                catch (e) {
+                    console.error(`IMAP mail-stats failed for "${src.label}": ${String(e)}`);
+                }
+            }
+            else {
+                let m = 0;
+                let u = 0;
+                for (const mb of mailManager.listMailboxes(src.account.name)) {
+                    m += mb.messageCount;
+                    u += mb.unreadCount;
+                }
+                totalMessages += m;
+                totalUnread += u;
                 perAccount.push({
-                    name: config.accountLabel,
-                    totalMessages: s.totalMessages,
-                    unreadMessages: s.totalUnread,
-                    backend: "imap",
+                    name: src.label,
+                    totalMessages: m,
+                    unreadMessages: u,
+                    backend: "applescript",
                 });
             }
-            catch (e) {
-                console.error(`IMAP mail-stats failed for "${config.accountLabel}": ${String(e)}`);
-            }
-        }
-        // AppleScript per-account stats for the accounts IMAP doesn't cover. We
-        // build them from listMailboxes (same source getMailStats uses) instead of
-        // calling getMailStats(), which is all-accounts and would re-count the
-        // IMAP-covered ones. Recently-received from AppleScript is INBOX-wide and
-        // not per-account, so it is omitted for these (IMAP's recent is included).
-        const { appleScriptOnly } = partitionAccountsForCounts(mailManager.listAccounts(), configs);
-        for (const acct of appleScriptOnly) {
-            const mailboxes = mailManager.listMailboxes(acct.name);
-            let m = 0;
-            let u = 0;
-            for (const mb of mailboxes) {
-                m += mb.messageCount;
-                u += mb.unreadCount;
-            }
-            totalMessages += m;
-            totalUnread += u;
-            perAccount.push({
-                name: acct.name,
-                totalMessages: m,
-                unreadMessages: u,
-                backend: "applescript",
-            });
         }
         const lines = [
             `📊 Mail Statistics (merged: IMAP + AppleScript)`,
