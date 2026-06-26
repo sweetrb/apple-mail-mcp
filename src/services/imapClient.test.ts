@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   IMAP_ENV,
   isImapAccount,
+  shouldUseImap,
   resolveImapConfig,
   resolveMailboxPath,
   imapSearchMessages,
@@ -107,6 +108,29 @@ describe("isImapAccount", () => {
     expect(isImapAccount("Work", env)).toBe(true);
     expect(isImapAccount("rob@example.com", env)).toBe(true);
     expect(isImapAccount("other@example.com", env)).toBe(false);
+  });
+});
+
+describe("shouldUseImap (v2.6.0 prefer-IMAP read gate)", () => {
+  const env = { [IMAP_ENV.user]: "rob@example.com", [IMAP_ENV.account]: "Work" };
+
+  it("is false when IMAP is not configured (behavior unchanged → AppleScript)", () => {
+    expect(shouldUseImap(undefined, {})).toBe(false);
+    expect(shouldUseImap("anything", {})).toBe(false);
+  });
+
+  it("is true with no account when IMAP IS configured (→ merge across accounts)", () => {
+    expect(shouldUseImap(undefined, env)).toBe(true);
+  });
+
+  it("is true for an explicitly-named configured IMAP account (label or user)", () => {
+    expect(shouldUseImap("Work", env)).toBe(true);
+    expect(shouldUseImap("rob@example.com", env)).toBe(true);
+  });
+
+  it("is FALSE for an explicitly-named NON-IMAP account (→ AppleScript)", () => {
+    expect(shouldUseImap("Exchange-Work", env)).toBe(false);
+    expect(shouldUseImap("someone@else.com", env)).toBe(false);
   });
 });
 

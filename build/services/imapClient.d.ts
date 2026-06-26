@@ -139,6 +139,20 @@ export interface ImapDeps {
 }
 /** True when `account` matches any configured IMAP account (label or user). */
 export declare function isImapAccount(account: string | undefined, env?: NodeJS.ProcessEnv): boolean;
+/**
+ * Read-side routing gate (v2.6.0 — prefer-IMAP reads). Returns true when a read
+ * tool should go to IMAP rather than AppleScript:
+ *   - IMAP is configured at all, AND
+ *   - either the caller named no account (→ merge across all accounts), or the
+ *     named account is itself a configured IMAP account.
+ * An explicitly-named NON-IMAP account returns false → AppleScript. When IMAP is
+ * not configured at all this is always false, so behavior is unchanged.
+ *
+ * NOTE: the 3 mailbox-WRITE ops (create/delete/rename-mailbox) deliberately keep
+ * using `isImapAccount` — they only route to IMAP for an explicitly-named IMAP
+ * account, never on an omitted account.
+ */
+export declare function shouldUseImap(account: string | undefined, env?: NodeJS.ProcessEnv): boolean;
 /** Account labels of every configured IMAP account (C2), for diagnostics. */
 export declare function listImapAccountLabels(env?: NodeJS.ProcessEnv): string[];
 /**

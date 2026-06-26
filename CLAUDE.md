@@ -100,14 +100,14 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 - Set `replyAll: true` to reply to all recipients
 - Set `send: false` to save as draft instead of sending immediately
 - Default behavior: reply to sender only, send immediately
-- Uses `without opening window` internally — no Mail.app compose window is opened, which ensures reliable body delivery from background processes (see [Known Issues](#known-issue-resolved-reply--forward-empty-body-from-background-processes) below)
+- **Transport (v2.5.0):** when SMTP is configured, sends via **clean direct SMTP**, threading the reply with proper RFC 5322 `In-Reply-To`/`References` headers (built from the original) so it stays in the same conversation. Falls back to Mail.app's AppleScript `reply … without opening window` when SMTP isn't configured (or the original lacks the headers needed to thread). The `without opening window` path opens no compose window, which ensures reliable body delivery from background processes (see [Known Issues](#known-issue-resolved-reply--forward-empty-body-from-background-processes) below)
 
 ### forward-message
 
 - Requires message `id` and `to` array
 - Optional `body` to prepend a message
 - Set `send: false` to save as draft
-- Uses `without opening window` internally — same background-process fix as reply-to-message
+- **Transport (v2.5.0):** when SMTP is configured, sends via **clean direct SMTP** (a forward starts a new conversation — no threading headers). Falls back to AppleScript `forward … without opening window` when SMTP isn't configured — same background-process fix as reply-to-message
 
 ### Multi-account
 
@@ -115,6 +115,11 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 - `search-messages` searches all accounts when no `account` is specified
 - Use `list-accounts` to see available accounts
 - Pass `account` parameter to target specific account
+- **Reads prefer direct IMAP when configured (v2.6.0).** When any `APPLE_MAIL_MCP_IMAP_*` account is configured, the read tools (`search-messages`, `get-thread`, `list-messages`, `list-mailboxes`, `get-unread-count`, `get-mail-stats`) go to IMAP instead of AppleScript:
+  - explicit IMAP `account` → that account over IMAP (fast, server-side);
+  - explicit non-IMAP `account` → AppleScript;
+  - **no `account` → merge across all accounts**: the query fans out over every configured IMAP account, and AppleScript runs **only for the accounts no IMAP config covers** (the account list is partitioned — IMAP-served accounts aren't re-scanned; if all accounts are IMAP, AppleScript is skipped entirely). Message lists de-dup messages seen in both backends (preferring the IMAP copy and its `imap:` id) and sort newest-first; count tools count each account via exactly one backend so a coverage mismatch can never double-count.
+  - With IMAP unconfigured, reads behave exactly as before (pure AppleScript). The mailbox-write ops (`create`/`delete`/`rename-mailbox`) still route to IMAP only for an explicitly-named IMAP account.
 
 ## Error Handling
 
