@@ -50,6 +50,8 @@ export declare function dedupKey(row: MessageRow): string;
  * sort newest-first by dateReceived, then apply `limit`.
  */
 export declare function mergeMessages(imapRows: MessageRow[], appleRows: MessageRow[], limit: number): MessageRow[];
+/** Gmail/Workspace IMAP host? Its `[Gmail]/All Mail` virtual mailbox is Gmail-only. */
+export declare function isGmailHost(host: string): boolean;
 /**
  * Fan an IMAP message query out over EVERY configured IMAP account and return
  * the concatenated structured rows (not yet merged with AppleScript, not yet

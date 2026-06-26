@@ -106,6 +106,10 @@ export function mergeMessages(imapRows, appleRows, limit) {
     merged.sort((a, b) => dateEpoch(b) - dateEpoch(a)); // newest first
     return limit >= 0 ? merged.slice(0, limit) : merged;
 }
+/** Gmail/Workspace IMAP host? Its `[Gmail]/All Mail` virtual mailbox is Gmail-only. */
+export function isGmailHost(host) {
+    return /(^|\.)gmail\.com$/i.test(host.trim());
+}
 /**
  * Fan an IMAP message query out over EVERY configured IMAP account and return
  * the concatenated structured rows (not yet merged with AppleScript, not yet
@@ -120,10 +124,16 @@ export async function fanOutImapMessages(args, kind, deps = {}, configs = resolv
     const rows = [];
     const accountsQueried = [];
     const accountsFailed = [];
-    // Over-fetch per account (limit applied AFTER the cross-account merge so the
-    // global newest-N is correct even when one account dominates).
-    const perAccountArgs = { ...args, account: undefined };
     for (const config of configs) {
+        // Default-mailbox resolution is PER-ACCOUNT: the single-account search default
+        // ("[Gmail]/All Mail") is Gmail-only, so fanning it out to a non-Gmail account
+        // (e.g. iCloud) makes that SELECT fail and the account silently drops from the
+        // merged results. When the caller pinned no mailbox, give Gmail hosts their
+        // All-Mail default (undefined → resolved downstream) and every other host a
+        // universal "INBOX". (limit is applied AFTER the cross-account merge so the
+        // global newest-N is correct even when one account dominates.)
+        const mailbox = args.mailbox ?? (isGmailHost(config.host) ? undefined : "INBOX");
+        const perAccountArgs = { ...args, account: undefined, mailbox };
         try {
             const res = kind === "search"
                 ? await imapSearchMessages(perAccountArgs, { ...deps, config })

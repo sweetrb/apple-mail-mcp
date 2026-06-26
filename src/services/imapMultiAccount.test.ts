@@ -7,6 +7,7 @@ import {
   partitionAccountsForCounts,
   planCountSources,
   fanOutImapMessages,
+  isGmailHost,
   formatMergedRows,
   type MessageRow,
 } from "@/services/imapMultiAccount.js";
@@ -80,7 +81,9 @@ function row(over: Partial<MessageRow> = {}): MessageRow {
 
 describe("dedupKey", () => {
   it("prefers a normalized Message-ID (case/brackets-insensitive)", () => {
-    expect(dedupKey(row({ messageId: "<ABC@host>" }))).toBe(dedupKey(row({ messageId: "abc@host" })));
+    expect(dedupKey(row({ messageId: "<ABC@host>" }))).toBe(
+      dedupKey(row({ messageId: "abc@host" }))
+    );
     expect(dedupKey(row({ messageId: "<ABC@host>" }))).toBe("mid:abc@host");
   });
 
@@ -162,6 +165,61 @@ describe("fanOutImapMessages", () => {
     expect(res.accountsQueried).toEqual(["Personal"]);
     expect(res.accountsFailed).toEqual(["Work"]);
     expect(res.rows).toHaveLength(1);
+  });
+
+  it("defaults the mailbox PER HOST when none is pinned (Gmail→All Mail, others→INBOX)", async () => {
+    // Regression guard: a no-mailbox search must NOT fan Gmail's "[Gmail]/All Mail"
+    // out to a non-Gmail account (e.g. iCloud), where that SELECT fails and the
+    // account silently drops from the merged results.
+    const selectedPath: Record<string, string> = {};
+    await fanOutImapMessages(
+      { query: "x", limit: 10 }, // no mailbox pinned
+      "search",
+      {
+        connect: async (cfg) => {
+          const client = makeClient([1]);
+          client.getMailboxLock = async (path: string) => {
+            selectedPath[cfg.accountLabel] = path;
+            return { release: () => undefined };
+          };
+          return client;
+        },
+      },
+      [cfgA, cfgB] // cfgA host=imap.gmail.com, cfgB host=imap.work.com
+    );
+    expect(selectedPath.Personal).toBe("[Gmail]/All Mail"); // Gmail host → All Mail
+    expect(selectedPath.Work).toBe("INBOX"); // non-Gmail host → universal INBOX
+  });
+
+  it("honors an explicitly pinned mailbox for every account (no per-host override)", async () => {
+    const selectedPath: Record<string, string> = {};
+    await fanOutImapMessages(
+      { query: "x", mailbox: "INBOX", limit: 10 },
+      "search",
+      {
+        connect: async (cfg) => {
+          const client = makeClient([1]);
+          client.getMailboxLock = async (path: string) => {
+            selectedPath[cfg.accountLabel] = path;
+            return { release: () => undefined };
+          };
+          return client;
+        },
+      },
+      [cfgA, cfgB]
+    );
+    expect(selectedPath.Personal).toBe("INBOX");
+    expect(selectedPath.Work).toBe("INBOX");
+  });
+});
+
+describe("isGmailHost", () => {
+  it("matches gmail.com and its subdomains (Workspace), not look-alikes", () => {
+    expect(isGmailHost("imap.gmail.com")).toBe(true);
+    expect(isGmailHost("gmail.com")).toBe(true);
+    expect(isGmailHost("imap.mail.me.com")).toBe(false); // iCloud
+    expect(isGmailHost("imap.work.com")).toBe(false);
+    expect(isGmailHost("notgmail.com.evil.com")).toBe(false);
   });
 });
 

@@ -402,6 +402,11 @@ matching `account` is passed. There are three cases:
   sort newest-first; count tools (`get-unread-count`, `get-mail-stats`) count each
   account via exactly one backend so a coverage mismatch can never double- (or
   under-) count.
+  - **Default mailbox is resolved per account.** When you don't pin a `mailbox`, a
+    fan-out search scopes each account to its own default — Gmail/Workspace to
+    `[Gmail]/All Mail`, every other IMAP host (iCloud, etc.) to `INBOX` (since
+    `[Gmail]/All Mail` is Gmail-only and selecting it elsewhere would silently drop
+    that account). Pin a `mailbox` to search a wider scope on non-Gmail accounts.
 
 If IMAP is **not** configured at all, every read behaves exactly as before
 (pure AppleScript). The three mailbox-**write** ops (`create-mailbox`,
