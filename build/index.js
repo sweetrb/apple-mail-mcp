@@ -1036,9 +1036,9 @@ server.registerTool("create-mailbox", {
             return errorResponse(r.error || `Failed to create mailbox "${name}"`);
         return successResponse(r.info || `Mailbox "${name}" created`, { ok: true, name });
     }
-    const success = mailManager.createMailbox(name, account);
+    const { success, error } = mailManager.createMailbox(name, account);
     if (!success) {
-        return errorResponse(`Failed to create mailbox "${name}"`);
+        return errorResponse(error || `Failed to create mailbox "${name}"`);
     }
     return successResponse(`Mailbox "${name}" created`, { ok: true, name });
 }, "Error creating mailbox"));

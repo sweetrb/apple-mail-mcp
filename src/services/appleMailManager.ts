@@ -222,10 +222,13 @@ const UNSUPPORTED_APPLESCRIPT_OP = /AppleEvent handler failed|-10000/i;
  *
  * Exported for unit testing.
  */
-export function describeMailboxOpError(op: "delete" | "rename", raw: string): string {
+export function describeMailboxOpError(
+  op: "create" | "delete" | "rename",
+  raw: string
+): string {
   const trimmed = (raw || "").trim();
   if (UNSUPPORTED_APPLESCRIPT_OP.test(trimmed)) {
-    const verb = op === "delete" ? "Delete" : "Rename";
+    const verb = op.charAt(0).toUpperCase() + op.slice(1);
     return `Mail.app cannot ${op} server-side (IMAP / Gmail / Workspace / iCloud / Exchange) mailboxes via AppleScript — only local "On My Mac" mailboxes support this. ${verb} it in Mail.app directly. (Mail.app error: ${trimmed})`;
   }
   return trimmed || `Failed to ${op} mailbox`;
@@ -631,6 +634,81 @@ export class AppleMailManager {
   private invalidateCache(): void {
     this.cache.accounts = null;
     this.cache.mailboxNames.clear();
+  }
+
+  /**
+   * Reads the live `enabled` flag for an account directly from Mail (bypassing
+   * the 60 s account cache) so a guard reflects an account that was enabled or
+   * disabled out-of-band. Returns true/false when known, or null when the probe
+   * is inconclusive — account not found, or the probe itself failed. Callers
+   * treat null as "can't tell, don't block".
+   */
+  private isAccountEnabled(account: string): boolean | null {
+    const safeAccount = escapeForAppleScript(account);
+    const result = executeAppleScript(
+      buildAppLevelScript(`
+        try
+          return (enabled of account "${safeAccount}") as text
+        on error
+          return "missing"
+        end try
+      `)
+    );
+    if (!result.success) return null;
+    const out = result.output.trim();
+    if (out === "true") return true;
+    if (out === "false") return false;
+    return null;
+  }
+
+  /**
+   * Guard for AppleScript-backed structural operations (create / delete / rename
+   * mailbox). When the target account is disabled in Mail, Mail holds no live
+   * server session for it, so the operation fails inside Mail with an opaque
+   * AppleEvent -10000 — and a multi-step op like rename can leave half-built
+   * state behind (an orphaned destination mailbox). Detect the disabled account
+   * up front and refuse with an actionable message instead of attempting the
+   * doomed op.
+   *
+   * Returns an error string when the account is known-disabled, else null —
+   * including when the state can't be determined. We fail open: an inconclusive
+   * probe never blocks an otherwise-valid operation.
+   *
+   * Applies only to the AppleScript backend. Direct-IMAP accounts talk to the
+   * server independent of Mail's enabled toggle and are routed before reaching
+   * the manager.
+   */
+  private disabledAccountGuard(account: string): string | null {
+    if (this.isAccountEnabled(account) === false) {
+      return `Account "${account}" is disabled in Mail, so Mail has no live connection to it — this operation would fail server-side (AppleEvent -10000) and could leave a mailbox half-changed. Enable the account (Mail ▸ Settings ▸ Accounts ▸ "Enable this account") and retry, or target an enabled account.`;
+    }
+    return null;
+  }
+
+  /**
+   * Best-effort rollback for a failed rename: delete a just-created destination
+   * mailbox, but ONLY if it is empty, so any messages that did move are never
+   * destroyed. Returns true if the empty orphan was removed.
+   */
+  private deleteMailboxIfEmpty(name: string, account: string): boolean {
+    const safeName = escapeForAppleScript(name);
+    const safeAccount = escapeForAppleScript(account);
+    const result = executeAppleScript(
+      buildAppLevelScript(`
+        try
+          set mb to mailbox "${safeName}" of account "${safeAccount}"
+          if (count of messages of mb) is 0 then
+            delete mb
+            return "deleted"
+          else
+            return "kept"
+          end if
+        on error errMsg
+          return "error:" & errMsg
+        end try
+      `)
+    );
+    return result.success && result.output.trim() === "deleted";
   }
 
   /**
@@ -2408,8 +2486,15 @@ export class AppleMailManager {
   /**
    * Create a new mailbox.
    */
-  createMailbox(name: string, account?: string): boolean {
+  createMailbox(name: string, account?: string): { success: boolean; error?: string } {
     const targetAccount = this.resolveAccount(account);
+
+    const disabled = this.disabledAccountGuard(targetAccount);
+    if (disabled) {
+      console.error(`Refusing to create mailbox: ${disabled}`);
+      return { success: false, error: disabled };
+    }
+
     const safeName = escapeForAppleScript(name);
     const safeAccount = escapeForAppleScript(targetAccount);
 
@@ -2425,12 +2510,16 @@ export class AppleMailManager {
     const result = executeAppleScript(script);
 
     if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to create mailbox: ${result.error || result.output}`);
-      return false;
+      const raw = result.success
+        ? result.output.replace(/^error:/, "")
+        : result.error || "Unknown error";
+      const error = describeMailboxOpError("create", raw);
+      console.error(`Failed to create mailbox: ${error}`);
+      return { success: false, error };
     }
 
     this.invalidateCache();
-    return true;
+    return { success: true };
   }
 
   /**
@@ -2438,6 +2527,13 @@ export class AppleMailManager {
    */
   deleteMailbox(name: string, account?: string): { success: boolean; error?: string } {
     const targetAccount = this.resolveAccount(account);
+
+    const disabled = this.disabledAccountGuard(targetAccount);
+    if (disabled) {
+      console.error(`Refusing to delete mailbox: ${disabled}`);
+      return { success: false, error: disabled };
+    }
+
     const targetMailbox = this.resolveMailbox(name, targetAccount);
     const safeName = escapeForAppleScript(targetMailbox);
     const safeAccount = escapeForAppleScript(targetAccount);
@@ -2476,11 +2572,16 @@ export class AppleMailManager {
   ): { success: boolean; error?: string } {
     const targetAccount = this.resolveAccount(account);
 
-    // Create the new mailbox
-    if (!this.createMailbox(newName, targetAccount)) {
+    // Create the new mailbox. createMailbox runs the disabled-account guard, so
+    // a disabled target is refused here before anything is built — no orphan can
+    // be created. Propagate its (more specific) error rather than a generic one.
+    const created = this.createMailbox(newName, targetAccount);
+    if (!created.success) {
       return {
         success: false,
-        error: `Could not create the destination mailbox "${newName}" needed for the rename.`,
+        error:
+          created.error ??
+          `Could not create the destination mailbox "${newName}" needed for the rename.`,
       };
     }
 
@@ -2534,9 +2635,16 @@ export class AppleMailManager {
       const raw = result.success
         ? result.output.replace(/^error:/, "")
         : result.error || "Unknown error";
-      // The empty destination mailbox we just created is now an orphan; the
-      // source is untouched (delete only runs after a verified-empty move).
-      const error = describeMailboxOpError("rename", raw);
+      // Roll back the destination we just created so a failed rename doesn't
+      // leave an orphan (as a partial-failure once did — the _amcp_rename_test_*
+      // ghosts). deleteMailboxIfEmpty only removes it when empty, so any
+      // messages that did move are never destroyed; the source is untouched
+      // (its delete only runs after a verified-empty move).
+      const rolledBack = this.deleteMailboxIfEmpty(resolvedNew, targetAccount);
+      let error = describeMailboxOpError("rename", raw);
+      error += rolledBack
+        ? ` The empty destination mailbox "${resolvedNew}" was rolled back, so no orphan was left.`
+        : ` The destination mailbox "${resolvedNew}" was created and could not be auto-removed; delete it manually if it is an empty leftover.`;
       console.error(`Failed to rename mailbox: ${error}`);
       this.invalidateCache();
       return { success: false, error };

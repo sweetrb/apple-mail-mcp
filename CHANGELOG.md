@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- **rename-mailbox no longer leaves an orphaned destination mailbox when the move fails.** Rename is emulated as create-new + move-all + delete-old; if the move step errored, the freshly-created (empty) destination was left behind as an orphan — the origin of the stray `_amcp_rename_test_*` mailboxes. The failure path now rolls back that destination, but **only when it is empty**, so a partial move (some messages already relocated) still keeps both mailboxes intact and never destroys mail.
+- **create / delete / rename-mailbox now refuse up front when the target account is disabled in Mail.** A disabled account has no live server session, so an AppleScript structural op fails inside Mail with an opaque `AppleEvent -10000` and — for rename — could leave a half-built mailbox behind. These ops now probe the account's live `enabled` state first and return a clear, actionable error ("Account … is disabled in Mail … Enable the account and retry") instead of attempting the doomed operation. The probe fails open: an indeterminate result never blocks an otherwise-valid op, and this applies only to the AppleScript backend (direct-IMAP accounts talk to the server independent of Mail's enabled toggle).
+
+### Changed
+- `AppleMailManager.createMailbox()` now returns `{ success, error }` (was `boolean`) so the disabled-account and other failure reasons surface through the `create-mailbox` tool instead of a generic message.
 
 ## [2.4.2] - 2026-06-25
 ### Fixed
