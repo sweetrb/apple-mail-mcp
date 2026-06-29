@@ -93,6 +93,7 @@ import { registerResourcesAndPrompts } from "@/tools/resourcesAndPrompts.js";
 import { normalizeSubject, subjectFromGetMessage } from "@/tools/thread.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
 import { loadFileConfig } from "@/services/fileConfig.js";
+import { isOrphaned } from "@/utils/orphan.js";
 
 // Load file-based config FIRST (2.1.1) — before anything reads APPLE_MAIL_MCP_*.
 // Lets users configure the server when the host app strips the MCP env block.
@@ -2673,8 +2674,14 @@ let _shuttingDown = false;
 const shutdown = (): void => {
   if (_shuttingDown) return;
   _shuttingDown = true;
+  // Stop the parent-death watchdog (defined just below) so it can't re-enter.
+  clearInterval(orphanWatchdog);
   const force = setTimeout(() => process.exit(0), 2000);
   force.unref?.();
+  // Closing the IDLE watcher logs out its dedicated per-account connections
+  // (one persistent socket per account when APPLE_MAIL_MCP_IMAP_IDLE=1) and
+  // dropAllPools() closes the request pool — together this releases EVERY IMAP
+  // socket this instance holds, which is the whole point of the orphan check.
   void Promise.allSettled([idleWatcher?.stop() ?? Promise.resolve(), dropAllPools()]).finally(() =>
     process.exit(0)
   );
@@ -2684,3 +2691,19 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 }
 process.stdin.on("end", shutdown);
 process.stdin.on("close", shutdown);
+
+// Parent-death watchdog (connection-footprint hardening, v2.6.1). The exit
+// paths above all rely on a signal or stdin-EOF, but a host (claude-code) that
+// is force-quit or crashes delivers neither — leaving this process orphaned and
+// still holding its IMAP sockets (the IDLE watcher's per-account connections
+// and/or pooled request connections) against Gmail's ~15-per-account cap, which
+// can starve Apple Mail of connection slots. On macOS an orphan is reparented to
+// launchd (ppid 1), so poll for that and self-shutdown. At normal startup ppid
+// is the real parent, so this never misfires; it's unref'd (never keeps the
+// event loop alive) and is cleared in shutdown(). `shutdown` only reads this
+// binding at runtime (long after it's initialized), so the forward reference is
+// safe.
+const orphanWatchdog: NodeJS.Timeout = setInterval(() => {
+  if (isOrphaned()) shutdown();
+}, 30_000);
+orphanWatchdog.unref?.();

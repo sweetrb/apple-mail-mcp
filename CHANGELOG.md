@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-06-29
+Connection-footprint hardening — keep this server's IMAP usage small so multiple coexisting instances (the Claude desktop app spawns a separate set of MCP servers per open conversation) are less likely to exhaust **Gmail's 15-simultaneous-IMAP-connections-per-account cap** and starve Apple Mail of slots.
+
+### Fixed
+- **Self-exit when orphaned.** A host (claude-code) that is force-quit or crashes delivers neither a signal nor stdin-EOF, so the server could linger as an orphan holding its pooled IMAP sockets against the per-account cap. The server now runs a lightweight watchdog: on macOS an orphan is reparented to launchd (`process.ppid === 1`), so it polls every 30s and, when detected, runs the same clean shutdown (drops all pooled IMAP connections, then exits). The watchdog is `unref`'d (never keeps the process alive on its own), can't misfire at startup (ppid is the real parent then), and is cleared when shutdown begins. Decision extracted into a pure, unit-tested helper `isOrphaned(ppid)`.
+
+### Changed
+- **Pooled IMAP connections now close after ~30s idle instead of ~60s** (`APPLE_MAIL_MCP_IMAP_IDLE_MS` default `60000` → `30000`; still overridable, `0` = never close), so an instance that isn't actively serving IMAP calls gives its connection slot back sooner.
+
+### Docs
+- README and CLAUDE.md gained a **"Connection footprint (playing nice with Gmail)"** note: one pooled connection per account closed after ~30s idle, IMAP IDLE opt-in adds one persistent connection per account, Gmail's 15-per-account cap, how many concurrent instances multiply the footprint, the shutdown + orphan self-exit behavior, and how to mitigate (close idle conversations, keep IDLE off, lower the idle timeout).
+
 ## [2.6.0] - 2026-06-26
 ### Changed
 - **Reads now PREFER direct IMAP whenever IMAP is configured** (previously IMAP was used only when a call passed an `account` exactly matching a configured IMAP account; an omitted account fell to AppleScript). This affects the six read tools — `search-messages`, `get-thread`, `list-messages`, `list-mailboxes`, `get-unread-count`, `get-mail-stats` — and is why this is a minor release. Three cases:

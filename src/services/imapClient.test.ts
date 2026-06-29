@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   IMAP_ENV,
   isImapAccount,
@@ -796,6 +796,61 @@ describe("connection pooling (#50 / A3)", () => {
     expect(logouts).toBe(2); // both pooled connections logged out on shutdown
     await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfgA });
     expect(connects).toBe(3); // pool was cleared → next call reconnects
+  });
+
+  it("closes the pooled connection after the idle window (at-rest → ZERO open sockets)", async () => {
+    // Regression for the connection-footprint work: after the last read, the
+    // pool's idle timer must fire and LOG OUT the connection, so an instance
+    // that isn't actively serving IMAP holds no socket. Proven with fake timers
+    // + a short idle window so the test is deterministic.
+    vi.useFakeTimers();
+    const prev = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
+    process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS = "1000";
+    try {
+      let logouts = 0;
+      __setPoolConnect(async () => {
+        const c = makeClient([1], {});
+        return {
+          ...c,
+          logout: async () => {
+            logouts++;
+          },
+        };
+      });
+      await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+      expect(logouts).toBe(0); // still pooled immediately after the read
+      await vi.advanceTimersByTimeAsync(1500); // cross the idle window
+      expect(logouts).toBe(1); // idle timer fired → connection closed at rest
+    } finally {
+      if (prev === undefined) delete process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
+      else process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS = prev;
+      vi.useRealTimers();
+    }
+  });
+
+  it("never closes the pooled connection when the idle window is disabled (0)", async () => {
+    vi.useFakeTimers();
+    const prev = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
+    process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS = "0"; // 0 = keep alive forever
+    try {
+      let logouts = 0;
+      __setPoolConnect(async () => {
+        const c = makeClient([1], {});
+        return {
+          ...c,
+          logout: async () => {
+            logouts++;
+          },
+        };
+      });
+      await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(logouts).toBe(0); // explicitly opted out of idle-close
+    } finally {
+      if (prev === undefined) delete process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
+      else process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS = prev;
+      vi.useRealTimers();
+    }
   });
 
   it("single-flights concurrent connects for one account (no orphaned sockets)", async () => {

@@ -686,7 +686,11 @@ function imapIdleMs(): number {
     const n = Number(raw);
     if (Number.isFinite(n) && n >= 0) return n;
   }
-  return 60_000;
+  // Default 30s (v2.6.1): close the pooled connection sooner so this instance
+  // gives its IMAP slot back quickly — important when several instances coexist
+  // against Gmail's ~15-per-account cap and Apple Mail also needs slots. Tune
+  // with APPLE_MAIL_MCP_IMAP_IDLE_MS (0 = never close).
+  return 30_000;
 }
 
 async function dropPool(key: string): Promise<void> {
