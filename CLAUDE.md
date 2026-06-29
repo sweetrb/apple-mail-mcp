@@ -121,6 +121,15 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
   - **no `account` → merge across all accounts**: the query fans out over every configured IMAP account, and AppleScript runs **only for the accounts no IMAP config covers** (the account list is partitioned — IMAP-served accounts aren't re-scanned; if all accounts are IMAP, AppleScript is skipped entirely). Message lists de-dup messages seen in both backends (preferring the IMAP copy and its `imap:` id) and sort newest-first; count tools count each account via exactly one backend so a coverage mismatch can never double-count.
   - With IMAP unconfigured, reads behave exactly as before (pure AppleScript). The mailbox-write ops (`create`/`delete`/`rename-mailbox`) still route to IMAP only for an explicitly-named IMAP account.
 
+### Connection footprint (playing nice with Gmail)
+
+IMAP connections are capped: **Gmail allows at most 15 simultaneous IMAP connections per account**, and Apple Mail itself needs some of those slots, so this server is built to stay light:
+
+- It keeps **one pooled IMAP connection per account**, reused across calls and **closed after ~30s idle** (tune with `APPLE_MAIL_MCP_IMAP_IDLE_MS`; `0` = never close). An instance that isn't actively serving IMAP calls drops to **zero** connections.
+- **IMAP IDLE is opt-in** (`APPLE_MAIL_MCP_IMAP_IDLE=1`) and adds **one persistent connection per account** (a long-lived push watcher) on top of the pooled request connection — leave it off unless you need new-mail notifications.
+- The server **drops all pooled connections on shutdown** (SIGINT/SIGTERM and stdin-EOF) and, as of **v2.6.1**, **self-exits if it becomes orphaned** (a force-quit/crashed parent → reparented to launchd, `ppid === 1`; polled every 30s) so it can't linger holding sockets after its session is gone.
+- **Watch out for many concurrent instances:** a host like the Claude desktop app spawns a separate set of MCP servers per open conversation (respawning them after a crash), so the footprint is **per instance × accounts**. With many active conversations (or IDLE on), the per-account total can approach Gmail's 15-connection cap and starve Apple Mail → intermittent "cannot connect." Mitigate by closing idle conversations, keeping IDLE off, and/or lowering `APPLE_MAIL_MCP_IMAP_IDLE_MS`.
+
 ## Error Handling
 
 | Error                    | Likely Cause                                  |

@@ -424,7 +424,7 @@ for an explicitly-named IMAP account, never on an omitted account.
 | `APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT` | No | = user | Keychain item account |
 | `APPLE_MAIL_MCP_IMAP_ACCOUNTS` | No | — | JSON array of **additional** IMAP accounts for multi-account setups (see below) |
 | `APPLE_MAIL_MCP_IMAP_IDLE` | No | `0` | Set `1` to enable IMAP IDLE push notifications (new-mail alerts) for every configured account |
-| `APPLE_MAIL_MCP_IMAP_IDLE_MS` | No | `60000` | Idle timeout (ms) before a pooled IMAP connection is closed |
+| `APPLE_MAIL_MCP_IMAP_IDLE_MS` | No | `30000` | Idle timeout (ms) before a pooled IMAP connection is closed (`0` = never close) |
 
 **Multiple IMAP accounts (C2):** set `APPLE_MAIL_MCP_IMAP_ACCOUNTS` to a JSON array, e.g.
 `[{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]`.
@@ -445,6 +445,32 @@ config. Gmail label semantics: common names (`All Mail`, `Sent`, `Trash`,
 > to your iCloud address, `APPLE_MAIL_MCP_IMAP_ACCOUNT` to the Mail account name
 > (e.g. `iCloud`), and use an **app-specific password** (from appleid.apple.com)
 > stored in the Keychain.
+
+##### Connection footprint (playing nice with Gmail)
+
+IMAP connections are a shared, capped resource: **Gmail allows at most 15
+simultaneous IMAP connections per account**, and Apple Mail itself needs some of
+those slots. This server keeps its footprint small:
+
+- **One pooled connection per account**, reused across calls and **closed after
+  ~30s idle** (tune with `APPLE_MAIL_MCP_IMAP_IDLE_MS`; `0` = never close). So a
+  server that isn't actively serving IMAP calls holds **zero** connections.
+- **IMAP IDLE is opt-in** (`APPLE_MAIL_MCP_IMAP_IDLE=1`). When on, it adds **one
+  persistent connection per account** (a long-lived watcher), on top of the
+  pooled request connection — leave it off if you don't need push notifications.
+- **Connections are dropped on shutdown** — SIGINT/SIGTERM and stdin-EOF (the
+  MCP client/parent going away). As of **v2.6.1** the server also **self-exits if
+  it becomes orphaned** (parent force-quit/crashed → reparented to launchd),
+  polling every 30s, so it can't linger holding sockets after its session is gone.
+
+The catch is **multiple concurrent instances**. A host like the Claude desktop
+app spawns a *separate* set of MCP servers per open conversation (and respawns
+them after a crash), so the footprint is **per instance × accounts**. With IDLE
+off, an idle instance trends to 0 connections; with many *active* conversations
+or IDLE on, the per-account total climbs toward Gmail's 15-connection cap and can
+starve Apple Mail of slots (→ intermittent "cannot connect"). If you hit that,
+close idle Claude conversations, keep `APPLE_MAIL_MCP_IMAP_IDLE` off unless you
+need push, and/or lower `APPLE_MAIL_MCP_IMAP_IDLE_MS`.
 
 ##### Configuration file (when the host strips `env`)
 
