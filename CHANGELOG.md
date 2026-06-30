@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-06-30
+Flag colors.
+
+### Added
+- **`flag-message` and `batch-flag-messages` accept an optional `color`.** One of `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray` (`grey` accepted as an alias). The color is applied via Mail.app as the message's AppleScript `flag index` (0 red … 6 gray) — the same property a Mail smart mailbox can match on. Omitting `color` keeps the previous behavior (Mail's default flag). The response includes `colorApplied` so a caller can confirm.
+
+### Notes
+- Flag colors are a Mail.app feature. For an **IMAP-routed** message id (`imap:…`) the flag is still set, but the color is **not** applied (IMAP's `\Flagged` is colorless); the response says so. Use a message's AppleScript (numeric) id to color its flag.
+- **Removing flags** is unchanged and confirmed: `unflag-message` / `batch-unflag-messages` clear the flag entirely (which also clears any color) on both the AppleScript and IMAP paths.
+
 ## [2.6.2] - 2026-06-30
 Low-severity hardening and documentation refinements from a code review — no behavior change for normal use.
 

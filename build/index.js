@@ -58,6 +58,23 @@ const BATCH_IDS_SCHEMA = z
     .array(MESSAGE_ID_SCHEMA)
     .min(1, "At least one message ID is required")
     .max(100, "Cannot process more than 100 messages in a single batch");
+/** Apple Mail flag colors → AppleScript `flag index` palette. `grey` is an alias
+ *  for `gray`. Colors are a Mail.app feature (the flag index a smart mailbox can
+ *  match on); the IMAP `\Flagged` flag is colorless. */
+const FLAG_COLOR_INDEX = {
+    red: 0,
+    orange: 1,
+    yellow: 2,
+    green: 3,
+    blue: 4,
+    purple: 5,
+    gray: 6,
+    grey: 6,
+};
+const FLAG_COLOR_SCHEMA = z
+    .enum(["red", "orange", "yellow", "green", "blue", "purple", "gray", "grey"])
+    .optional()
+    .describe("Optional flag color (Apple Mail palette: red, orange, yellow, green, blue, purple, gray — 'grey' accepted). Omit for Mail's default flag. Colors are applied via Mail.app (AppleScript); for an IMAP-routed message id the flag is set but the color is not applied (IMAP flags are colorless).");
 /** Date filter strings must look like natural-language dates (e.g. "March 1, 2026").
  *  Block characters that could escape an AppleScript `date "..."` literal. */
 const DATE_FILTER_SCHEMA = z
@@ -889,20 +906,36 @@ server.registerTool("mark-as-unread", {
 }), "Error marking message as unread"));
 // --- flag-message ---
 server.registerTool("flag-message", {
-    description: "Use when: flagging a single message (by id).\nReturns: a confirmation that the message was flagged.\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.",
+    description: "Use when: flagging a single message (by id), optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: a confirmation that the message was flagged (and the color, when applied).\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.\nNote: flag colors are a Mail.app feature applied via AppleScript; for an IMAP-routed id the flag is set but the color is not applied (IMAP flags are colorless).",
     inputSchema: {
         id: MESSAGE_ID_SCHEMA,
+        color: FLAG_COLOR_SCHEMA,
     },
-    outputSchema: { ok: z.boolean().optional(), id: z.string().optional() },
-}, withErrorHandling(({ id }) => routeMessage(id, {
-    imap: () => imapFlagMessage(id),
-    apple: () => mailManager.flagMessage(id)
-        ? successResponse("Message flagged", { ok: true, id })
-        : errorResponse(`Failed to flag message "${id}"`),
-    ok: "Message flagged",
-    fail: `Failed to flag message "${id}"`,
-    structured: { ok: true, id },
-}), "Error flagging message"));
+    outputSchema: {
+        ok: z.boolean().optional(),
+        id: z.string().optional(),
+        color: z.string().optional(),
+        colorApplied: z.boolean().optional(),
+    },
+}, withErrorHandling(({ id, color }) => {
+    const colorIndex = color ? FLAG_COLOR_INDEX[color] : undefined;
+    return routeMessage(id, {
+        imap: () => imapFlagMessage(id),
+        apple: () => mailManager.flagMessage(id, colorIndex)
+            ? successResponse(color ? `Message flagged (${color})` : "Message flagged", {
+                ok: true,
+                id,
+                ...(color ? { color, colorApplied: true } : {}),
+            })
+            : errorResponse(`Failed to flag message "${id}"`),
+        // IMAP path: the flag is set, but flag colors are a Mail.app-only feature.
+        ok: color
+            ? `Message flagged. Note: the "${color}" color was not applied — this is an IMAP-routed message and IMAP flags are colorless.`
+            : "Message flagged",
+        fail: `Failed to flag message "${id}"`,
+        structured: color ? { ok: true, id, color, colorApplied: false } : { ok: true, id },
+    });
+}, "Error flagging message"));
 // --- unflag-message ---
 server.registerTool("unflag-message", {
     description: "Use when: removing the flag from a single message (by id).\nReturns: a confirmation that the message was unflagged.\nDo not use when: unflagging several at once (use batch-unflag-messages) or adding a flag (use flag-message). Get the id from search-messages or list-messages first.",
@@ -1047,13 +1080,15 @@ server.registerTool("batch-mark-as-unread", {
 }, "Error batch marking messages as unread"));
 // --- batch-flag-messages ---
 server.registerTool("batch-flag-messages", {
-    description: "Use when: flagging multiple messages (1–100 ids) in one call.\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.",
+    description: "Use when: flagging multiple messages (1–100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: flag colors are applied via Mail.app (AppleScript); any IMAP-routed ids in the batch are flagged but not colored (IMAP flags are colorless).",
     inputSchema: {
         ids: BATCH_IDS_SCHEMA,
+        color: FLAG_COLOR_SCHEMA,
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
-}, withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchFlagMessages(n), (im) => imapBatchFlag(im));
+}, withErrorHandling(async ({ ids, color }) => {
+    const colorIndex = color ? FLAG_COLOR_INDEX[color] : undefined;
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(ids, (n) => mailManager.batchFlagMessages(n, colorIndex), (im) => imapBatchFlag(im));
     const structured = { ok: failCount === 0, success: successCount, failed: failCount };
     if (failCount === 0) {
         return successResponse(`Successfully flagged ${successCount} message(s)`, structured);

@@ -689,11 +689,14 @@ Change read status of a message.
 
 #### `flag-message` / `unflag-message`
 
-Flag or unflag a message.
+Flag or unflag a message. `flag-message` optionally takes a flag **color**; `unflag-message` removes the flag entirely (which also clears any color).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Message ID |
+| `color` | string | No | (`flag-message` only) Flag color: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray` (`grey` accepted). Omit for Mail's default flag. |
+
+**Flag colors** are an Apple Mail feature, applied via AppleScript as the message's `flag index` (0 red, 1 orange, 2 yellow, 3 green, 4 blue, 5 purple, 6 gray) — the same property a Mail smart mailbox can match on. For an **IMAP-routed** message id (`imap:…`) the flag is still set, but the color is **not** applied, because IMAP's `\Flagged` flag is colorless. To color a flag, use the message's AppleScript (numeric) id.
 
 ---
 
@@ -776,6 +779,7 @@ All batch operations accept an array of message IDs (max 100 per batch) and retu
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
+| `color` | string | No | (`batch-flag-messages` only) Flag color applied to AppleScript (numeric) ids — see [`flag-message`](#flag-message--unflag-message). Any `imap:` ids in the batch are flagged but not colored. |
 
 ---
 
