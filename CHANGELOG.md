@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.2] - 2026-06-30
+Low-severity hardening and documentation refinements from a code review — no behavior change for normal use.
+
+### Changed
+- **`limit`/`offset` inputs are now bounded.** `search-messages`/`list-messages` `limit` is constrained to an integer `1–500` (default `50`) and `list-messages` `offset` to an integer `≥ 0`. Previously these were unbounded `z.number()`, so on the IMAP read path a huge `limit` flowed straight into a comma-joined FETCH UID range with no cap. Defaults and existing callers are unaffected.
+
+### Fixed
+- **MIME multipart parsing is now depth-bounded.** `walkLeafParts` (attachment/HTML-body extraction) threads a depth counter and stops descending past 20 nested `multipart/*` levels, returning what it has parsed so far instead of recursing without bound on a pathologically nested message. Defense-in-depth; the input is the user's own mail. Real messages nest only a few levels.
+
+### Docs
+- Documented two previously read-but-undocumented environment variables in the README:
+  - **`APPLE_MAIL_MCP_DEFAULT_ACCOUNT`** — pins the account used when a tool call omits `account` (matched by account name or email; a disabled account is otherwise never selected implicitly). Documented in "Working with Accounts".
+  - **`APPLE_MAIL_MCP_MAX_BUFFER`** — overrides the `osascript` output-buffer size in bytes (default 64 MB); the knob for reading messages whose raw MIME (e.g. a large attachment) exceeds the default. Documented under `get-message`.
+- `search-messages`/`list-messages` parameter tables now state the `limit` (1–500) and `offset` (≥ 0) bounds.
+
 ## [2.6.1] - 2026-06-29
 Connection-footprint hardening — keep this server's IMAP usage small so multiple coexisting instances (the Claude desktop app spawns a separate set of MCP servers per open conversation) are less likely to exhaust **Gmail's 15-simultaneous-IMAP-connections-per-account cap** and starve Apple Mail of slots.
 

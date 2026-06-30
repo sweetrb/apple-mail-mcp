@@ -186,7 +186,7 @@ Search for messages matching criteria. Searches all accounts by default.
 | `isFlagged` | boolean | No | Filter by flagged status |
 | `dateFrom` | string | No | Start date filter (e.g., "January 1, 2026") |
 | `dateTo` | string | No | End date filter (e.g., "March 1, 2026") |
-| `limit` | number | No | Max results (default: 50) |
+| `limit` | number | No | Max results, 1–500 (default: 50) |
 
 **Large mailboxes & partial results.** Apple Mail's AppleScript bridge cannot
 search very large IMAP/Gmail mailboxes (tens of thousands of messages) before
@@ -222,6 +222,13 @@ Get the full content of a message.
 
 **Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available).
 
+> **Large messages / attachments:** reading a full message routes through
+> `osascript`, whose captured output buffer defaults to **64 MB**. Override it
+> with the `APPLE_MAIL_MCP_MAX_BUFFER` environment variable (in **bytes**) if you
+> work with messages whose raw MIME (e.g. a large embedded attachment) exceeds
+> that — a value below the message size makes the read fail with a buffer-overflow
+> error rather than truncating ([#27](https://github.com/sweetrb/apple-mail-mcp/issues/27)).
+
 ---
 
 #### `list-messages`
@@ -232,8 +239,8 @@ List messages in a mailbox.
 |-----------|------|----------|-------------|
 | `mailbox` | string | No | Mailbox name (omit to list from all mailboxes) |
 | `account` | string | No | Account name |
-| `limit` | number | No | Max messages (default: 50) |
-| `offset` | number | No | Number of messages to skip (for pagination) |
+| `limit` | number | No | Max messages, 1–500 (default: 50) |
+| `offset` | number | No | Number of messages to skip, ≥ 0 (for pagination) |
 | `from` | string | No | Filter by sender email address or name |
 | `unreadOnly` | boolean | No | Only show unread messages |
 
@@ -1055,6 +1062,13 @@ User: "Show unread emails in my Work account"
 AI: [calls list-messages with account="Work Exchange", mailbox="INBOX"]
     "Your Work account has 5 unread messages..."
 ```
+
+To pin which account is used when a tool call omits `account`, set the
+`APPLE_MAIL_MCP_DEFAULT_ACCOUNT` environment variable to an account **name or
+email**. When unset (the default), the server falls back to Mail.app's
+default-send account if it is enabled, otherwise the first enabled account. A
+**disabled** account is never selected implicitly — this env var (an explicit,
+deliberate pin) is one of the few ways to target one ([#47](https://github.com/sweetrb/apple-mail-mcp/issues/47)).
 
 ### Sending Emails Safely
 
