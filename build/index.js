@@ -265,7 +265,13 @@ server.registerTool("search-messages", {
         isFlagged: z.boolean().optional().describe("Filter by flagged status"),
         dateFrom: DATE_FILTER_SCHEMA.describe("Start date filter (e.g., 'January 1, 2026')"),
         dateTo: DATE_FILTER_SCHEMA.describe("End date filter (e.g., 'March 1, 2026')"),
-        limit: z.number().optional().describe("Maximum number of results (default: 50)"),
+        limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(500)
+            .optional()
+            .describe("Maximum number of results (default: 50, max: 500)"),
     },
     outputSchema: LIST_OUTPUT_SCHEMA,
 }, withErrorHandling(async ({ query, mailbox, account, limit = 50, dateFrom, dateTo, from, subject, isRead, isFlagged, }) => {
@@ -485,8 +491,19 @@ server.registerTool("list-messages", {
             .optional()
             .describe("Mailbox to list messages from. Omit to list from all mailboxes."),
         account: z.string().optional().describe("Account to list messages from"),
-        limit: z.number().optional().describe("Maximum number of messages (default: 50)"),
-        offset: z.number().optional().describe("Number of messages to skip (for pagination)"),
+        limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(500)
+            .optional()
+            .describe("Maximum number of messages (default: 50, max: 500)"),
+        offset: z
+            .number()
+            .int()
+            .min(0)
+            .optional()
+            .describe("Number of messages to skip (for pagination)"),
         from: z.string().optional().describe("Filter by sender email address or name"),
         unreadOnly: z.boolean().optional().describe("Only show unread messages"),
     },

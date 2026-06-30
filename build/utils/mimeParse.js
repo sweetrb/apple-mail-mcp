@@ -108,18 +108,29 @@ function splitMimeParts(source, boundary) {
     return parts;
 }
 /**
+ * Maximum nesting depth for multipart MIME traversal. Bounds recursion so a
+ * pathologically (or maliciously) deeply nested multipart tree can't blow the
+ * stack — past this depth we stop descending and treat the container as a leaf.
+ * Real mail nests only a few levels (e.g. mixed → related → alternative).
+ */
+const MAX_MIME_DEPTH = 20;
+/**
  * Walk a multipart MIME block and return all non-multipart leaf parts,
  * descending into nested multipart/* containers (alternative, related, mixed).
+ *
+ * Descent is bounded by MAX_MIME_DEPTH; once reached, deeper multipart
+ * containers are returned as-is (as leaf parts) rather than recursed into,
+ * yielding what's parsed so far instead of overflowing the stack.
  */
-function walkLeafParts(source, boundary) {
+function walkLeafParts(source, boundary, depth = 0) {
     const result = [];
     const parts = splitMimeParts(source, boundary);
     for (const part of parts) {
         const ct = getHeader(part.headers, "Content-Type");
-        if (ct && /^multipart\//i.test(ct)) {
+        if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
             const nestedBoundary = extractBoundary(ct);
             if (nestedBoundary) {
-                result.push(...walkLeafParts(part.body, nestedBoundary));
+                result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1));
                 continue;
             }
         }

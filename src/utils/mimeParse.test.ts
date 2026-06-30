@@ -349,3 +349,45 @@ just text, no html`;
     expect(extractHtmlBody("")).toBeNull();
   });
 });
+
+// Build a multipart/mixed tree nested `levels` deep, with a single PDF
+// attachment as the innermost leaf. Each level uses a distinct boundary.
+function buildNestedMime(levels: number): string {
+  let inner = `Content-Type: application/pdf; name="bottom.pdf"
+Content-Disposition: attachment; filename="bottom.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjAK
+`;
+  for (let i = levels; i >= 1; i--) {
+    const b = `_d${i}_`;
+    inner = `Content-Type: multipart/mixed;
+\tboundary="${b}"
+
+--${b}
+${inner}
+--${b}--
+`;
+  }
+  return inner;
+}
+
+describe("parseMimeAttachments — recursion depth cap (#defense-in-depth)", () => {
+  it("finds an attachment nested within the depth bound", () => {
+    // 5 levels of nesting is well under the 20-level cap.
+    const result = parseMimeAttachments(buildNestedMime(5));
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("bottom.pdf");
+  });
+
+  it("does not throw or overflow on pathologically deep nesting", () => {
+    // 200 levels far exceeds the cap; the parser must stop descending and
+    // return what it parsed rather than recursing without bound.
+    const deep = buildNestedMime(200);
+    expect(() => parseMimeAttachments(deep)).not.toThrow();
+    // The bottom attachment is below the cap, so it is not surfaced — the
+    // point is that the call completes safely.
+    const result = parseMimeAttachments(deep);
+    expect(Array.isArray(result)).toBe(true);
+  });
+});
