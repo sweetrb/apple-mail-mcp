@@ -381,9 +381,17 @@ export declare class AppleMailManager {
      */
     markAsUnread(id: string): boolean;
     /**
-     * Flag a message.
+     * AppleScript statement(s) to flag a message variable, optionally setting its
+     * color. `colorIndex` is Apple's flag-index palette (0 red, 1 orange,
+     * 2 yellow, 3 green, 4 blue, 5 purple, 6 gray); it is validated to 0-6 by the
+     * schema layer and is a number, so it is safe to interpolate. Omitting it
+     * applies Mail's default flag without touching the color.
      */
-    flagMessage(id: string): boolean;
+    private flagOperation;
+    /**
+     * Flag a message, optionally with a color (see {@link flagOperation}).
+     */
+    flagMessage(id: string, colorIndex?: number): boolean;
     /**
      * Unflag a message.
      */
@@ -472,7 +480,7 @@ export declare class AppleMailManager {
     /**
      * Flag multiple messages at once (single tree walk).
      */
-    batchFlagMessages(ids: string[]): BatchOperationResult[];
+    batchFlagMessages(ids: string[], colorIndex?: number): BatchOperationResult[];
     /**
      * Unflag multiple messages at once (single tree walk).
      */

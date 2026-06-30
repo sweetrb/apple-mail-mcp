@@ -1556,10 +1556,23 @@ export class AppleMailManager {
         return true;
     }
     /**
-     * Flag a message.
+     * AppleScript statement(s) to flag a message variable, optionally setting its
+     * color. `colorIndex` is Apple's flag-index palette (0 red, 1 orange,
+     * 2 yellow, 3 green, 4 blue, 5 purple, 6 gray); it is validated to 0-6 by the
+     * schema layer and is a number, so it is safe to interpolate. Omitting it
+     * applies Mail's default flag without touching the color.
      */
-    flagMessage(id) {
-        const script = this.findMessageScript(id, "set flagged status of msg to true");
+    flagOperation(varName, colorIndex) {
+        const setFlag = `set flagged status of ${varName} to true`;
+        return colorIndex === undefined
+            ? setFlag
+            : `${setFlag}\n          set flag index of ${varName} to ${colorIndex}`;
+    }
+    /**
+     * Flag a message, optionally with a color (see {@link flagOperation}).
+     */
+    flagMessage(id, colorIndex) {
+        const script = this.findMessageScript(id, this.flagOperation("msg", colorIndex));
         const result = executeAppleScript(script, { timeoutMs: 60000 });
         if (!result.success || result.output.startsWith("error:")) {
             console.error(`Failed to flag message: ${result.error || result.output}`);
@@ -1862,8 +1875,8 @@ export class AppleMailManager {
     /**
      * Flag multiple messages at once (single tree walk).
      */
-    batchFlagMessages(ids) {
-        return this.runBatchOperation(ids, "set flagged status of _msg to true");
+    batchFlagMessages(ids, colorIndex) {
+        return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex));
     }
     /**
      * Unflag multiple messages at once (single tree walk).
