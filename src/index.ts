@@ -2724,3 +2724,5 @@ const orphanWatchdog: NodeJS.Timeout = setInterval(() => {
   if (isOrphaned()) shutdown();
 }, 30_000);
 orphanWatchdog.unref?.();
+
+// version-guard selftest — intentional no-op src change (do not merge)
