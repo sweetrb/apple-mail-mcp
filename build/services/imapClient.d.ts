@@ -241,6 +241,19 @@ export declare function imapDeleteMailbox(name: string, deps?: ImapDeps): Promis
 export declare function imapRenameMailbox(oldName: string, newName: string, deps?: ImapDeps): Promise<ImapOpResult>;
 /** Read a message by composite IMAP id; returns "Subject: …\n\n<body>". */
 export declare function imapGetMessage(id: string, preferHtml: boolean, deps?: ImapDeps): Promise<ImapOpResult>;
+/** Normalize an RFC822 Message-ID for backend-independent matching: trim and
+ *  drop any surrounding angle brackets (IMAP envelopes carry `<id>`, Mail.app's
+ *  AppleScript `message id` property returns it bracketless). */
+export declare function normalizeMessageId(mid: string): string;
+/**
+ * Fetch the RFC822 Message-ID for an `imap:` id. This is the join key that lets
+ * the AppleScript backend locate the *same* message and return its numeric
+ * Mail.app id — needed because flag **colors** only apply on the AppleScript
+ * numeric-id path (IMAP `\Flagged` is colorless). Returns the normalized
+ * Message-ID (no angle brackets), or null if `id` isn't an imap: token, the
+ * message/envelope can't be fetched, or it carries no Message-ID.
+ */
+export declare function imapFetchMessageId(id: string, deps?: ImapDeps): Promise<string | null>;
 export declare const imapMarkRead: (id: string, deps?: {}) => Promise<ImapOpResult>;
 export declare const imapMarkUnread: (id: string, deps?: {}) => Promise<ImapOpResult>;
 export declare const imapFlagMessage: (id: string, deps?: {}) => Promise<ImapOpResult>;

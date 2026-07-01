@@ -1581,6 +1581,62 @@ export class AppleMailManager {
         return true;
     }
     /**
+     * Resolve a message's numeric Mail.app id from its RFC822 Message-ID (the
+     * backend-independent join key). This bridges an `imap:` id to the numeric id
+     * required to apply a flag *color* — IMAP flags are colorless, so a smart
+     * mailbox keyed on flag color can only ever match a message flagged via the
+     * AppleScript numeric-id path.
+     *
+     * The Message-ID is matched both bracketless and `<bracketed>` (Mail returns
+     * it bracketless; IMAP envelopes carry the brackets). When `accountName` is
+     * given the search is scoped to that account, checking its INBOX first (swept
+     * messages live there) to avoid scanning huge All Mail/Archive mailboxes.
+     *
+     * @returns the numeric id as a string, or null if no message matches.
+     */
+    findNumericIdByMessageId(messageId, accountName) {
+        const mid = messageId.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+        if (!mid)
+            return null;
+        const q = (s) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        const midLit = `"${q(mid)}"`;
+        const bracketedLit = `"${q(`<${mid}>`)}"`;
+        const matchClause = (mbVar) => `(messages of ${mbVar} whose message id is ${midLit} or message id is ${bracketedLit})`;
+        const acctList = accountName
+            ? `set acctList to (every account whose name is "${q(accountName)}")
+        if (count of acctList) is 0 then set acctList to accounts`
+            : `set acctList to accounts`;
+        const script = buildAppLevelScript(`
+      try
+        ${acctList}
+        repeat with acct in acctList
+          -- INBOX first: swept messages live there; avoids scanning huge mailboxes.
+          try
+            set inMb to mailbox "INBOX" of acct
+            set inHits to ${matchClause("inMb")}
+            if (count of inHits) > 0 then return (id of (item 1 of inHits)) as string
+          end try
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to ${matchClause("mb")}
+              if (count of matchingMsgs) > 0 then
+                return (id of (item 1 of matchingMsgs)) as string
+              end if
+            end try
+          end repeat
+        end repeat
+        return "error:Message not found"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+        const result = executeAppleScript(script, { timeoutMs: 60000 });
+        if (!result.success || result.output.startsWith("error:"))
+            return null;
+        const out = result.output.trim();
+        return /^\d+$/.test(out) ? out : null;
+    }
+    /**
      * Unflag a message.
      */
     unflagMessage(id) {
