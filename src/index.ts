@@ -70,6 +70,8 @@ import {
   imapUnflagMessage,
   imapMoveMessageById,
   imapDeleteMessageById,
+  imapFetchMessageId,
+  decodeImapId,
 } from "@/services/imapClient.js";
 import {
   successResponse,
@@ -1599,6 +1601,53 @@ server.registerTool(
       );
     }
   }, "Error batch unflagging messages")
+);
+
+// --- resolve-message-id ---
+
+server.registerTool(
+  "resolve-message-id",
+  {
+    description:
+      "Use when: you have `imap:` message id(s) and need the numeric Mail.app id(s) — most importantly to apply a flag COLOR, which only sticks on the AppleScript numeric-id path (IMAP `\\Flagged` is colorless, so a smart mailbox keyed on flag color never matches an IMAP-flagged message). Each imap: id is resolved via its RFC822 Message-ID.\nReturns: for each input id, its `numericId` (the AppleScript id) or null when it can't be resolved, plus the `messageId` used; and a `resolvedCount`.\nDo not use when: your ids are already numeric (they pass straight through), or you don't need a color — flag/move/mark tools operate on `imap:` ids directly.",
+    inputSchema: {
+      ids: BATCH_IDS_SCHEMA,
+    },
+    outputSchema: {
+      resolved: z
+        .array(
+          z.object({
+            id: z.string(),
+            numericId: z.string().nullable(),
+            messageId: z.string().nullable(),
+          })
+        )
+        .optional(),
+      count: z.number().optional(),
+      resolvedCount: z.number().optional(),
+    },
+  },
+  withErrorHandling(async ({ ids }) => {
+    const resolved: { id: string; numericId: string | null; messageId: string | null }[] = [];
+    for (const id of ids) {
+      const ref = decodeImapId(id);
+      if (!ref) {
+        // Already a numeric AppleScript id — pass through unchanged.
+        resolved.push({ id, numericId: id, messageId: null });
+        continue;
+      }
+      const messageId = await imapFetchMessageId(id);
+      const numericId = messageId
+        ? mailManager.findNumericIdByMessageId(messageId, ref.account)
+        : null;
+      resolved.push({ id, numericId, messageId });
+    }
+    const resolvedCount = resolved.filter((r) => r.numericId !== null).length;
+    return successResponse(
+      `Resolved ${resolvedCount}/${ids.length} message id(s) to numeric Mail.app id(s)`,
+      { resolved, count: ids.length, resolvedCount }
+    );
+  }, "Error resolving message ids")
 );
 
 // --- list-attachments ---

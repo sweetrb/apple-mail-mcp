@@ -28,7 +28,7 @@ import { writeFileSync } from "fs";
 import { resolve as resolvePath, join as joinPath } from "path";
 import { sendViaSmtp, sendSerialViaSmtp, shouldUseSmtp, isSmtpConfigured, resolveSmtpConfig, } from "./services/smtpMailer.js";
 import { buildReplyOptions, buildForwardOptions, parseOriginalHeaders, } from "./services/replyForward.js";
-import { isImapAccount, shouldUseImap, resolveImapConfigs, dropAllPools, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapListAttachments, imapFetchAttachment, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete, imapBatchMove, imapThread, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, } from "./services/imapClient.js";
+import { isImapAccount, shouldUseImap, resolveImapConfigs, dropAllPools, imapSearchMessages, imapListMessages, imapUnreadCount, imapListMailboxes, imapMailStats, imapListAttachments, imapFetchAttachment, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete, imapBatchMove, imapThread, imapCreateMailbox, imapDeleteMailbox, imapRenameMailbox, imapGetMessage, imapMarkRead, imapMarkUnread, imapFlagMessage, imapUnflagMessage, imapMoveMessageById, imapDeleteMessageById, imapFetchMessageId, decodeImapId, } from "./services/imapClient.js";
 import { successResponse, errorResponse, partialCoverageBlock, withErrorHandling, messageSummary, } from "./tools/respond.js";
 import { fanOutImapMessages, mergeMessages, formatMergedRows, partitionAccountsForCounts, planCountSources, } from "./services/imapMultiAccount.js";
 import { routeMessage } from "./services/messageRouter.js";
@@ -1120,6 +1120,41 @@ server.registerTool("batch-unflag-messages", {
         return successResponse(`Unflagged ${successCount} message(s), ${failCount} failed`, structured);
     }
 }, "Error batch unflagging messages"));
+// --- resolve-message-id ---
+server.registerTool("resolve-message-id", {
+    description: "Use when: you have `imap:` message id(s) and need the numeric Mail.app id(s) — most importantly to apply a flag COLOR, which only sticks on the AppleScript numeric-id path (IMAP `\\Flagged` is colorless, so a smart mailbox keyed on flag color never matches an IMAP-flagged message). Each imap: id is resolved via its RFC822 Message-ID.\nReturns: for each input id, its `numericId` (the AppleScript id) or null when it can't be resolved, plus the `messageId` used; and a `resolvedCount`.\nDo not use when: your ids are already numeric (they pass straight through), or you don't need a color — flag/move/mark tools operate on `imap:` ids directly.",
+    inputSchema: {
+        ids: BATCH_IDS_SCHEMA,
+    },
+    outputSchema: {
+        resolved: z
+            .array(z.object({
+            id: z.string(),
+            numericId: z.string().nullable(),
+            messageId: z.string().nullable(),
+        }))
+            .optional(),
+        count: z.number().optional(),
+        resolvedCount: z.number().optional(),
+    },
+}, withErrorHandling(async ({ ids }) => {
+    const resolved = [];
+    for (const id of ids) {
+        const ref = decodeImapId(id);
+        if (!ref) {
+            // Already a numeric AppleScript id — pass through unchanged.
+            resolved.push({ id, numericId: id, messageId: null });
+            continue;
+        }
+        const messageId = await imapFetchMessageId(id);
+        const numericId = messageId
+            ? mailManager.findNumericIdByMessageId(messageId, ref.account)
+            : null;
+        resolved.push({ id, numericId, messageId });
+    }
+    const resolvedCount = resolved.filter((r) => r.numericId !== null).length;
+    return successResponse(`Resolved ${resolvedCount}/${ids.length} message id(s) to numeric Mail.app id(s)`, { resolved, count: ids.length, resolvedCount });
+}, "Error resolving message ids"));
 // --- list-attachments ---
 server.registerTool("list-attachments", {
     description: "Use when: enumerating a message's attachments (by id) to discover their names, MIME types, and sizes — typically before saving or fetching one.\nReturns: each attachment's name, MIME type, and size, plus a count.\nDo not use when: you want the bytes (use fetch-attachment for inline base64, or save-attachment to write to disk). Get the message id from search-messages or list-messages first.",

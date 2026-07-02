@@ -12,6 +12,8 @@ import {
   imapRenameMailbox,
   encodeImapId,
   decodeImapId,
+  imapFetchMessageId,
+  normalizeMessageId,
   imapGetMessage,
   imapMarkRead,
   imapMarkUnread,
@@ -95,6 +97,51 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
     logout: async () => undefined,
   };
 }
+
+describe("imapFetchMessageId / normalizeMessageId (imap→numeric bridge)", () => {
+  it("normalizeMessageId strips surrounding angle brackets and whitespace", () => {
+    expect(normalizeMessageId("  <abc@ex.com> ")).toBe("abc@ex.com");
+    expect(normalizeMessageId("abc@ex.com")).toBe("abc@ex.com");
+    expect(normalizeMessageId("<<weird>>")).toBe("weird");
+  });
+
+  it("returns null for a non-imap (numeric) id without touching IMAP", async () => {
+    expect(await imapFetchMessageId("12345", { config: cfg })).toBeNull();
+  });
+
+  it("fetches and normalizes the Message-ID for an imap: id", async () => {
+    const id = encodeImapId("rob@example.com", "INBOX", 42);
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      getMailboxLock: async () => ({ release: () => undefined }),
+      fetchOne: async () => ({ uid: 42, envelope: { messageId: "<HELLO@mail.example.com>" } }),
+    };
+    const mid = await imapFetchMessageId(id, { config: cfg, connect: async () => client });
+    expect(mid).toBe("HELLO@mail.example.com");
+  });
+
+  it("returns null when the envelope carries no Message-ID", async () => {
+    const id = encodeImapId("rob@example.com", "INBOX", 7);
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      getMailboxLock: async () => ({ release: () => undefined }),
+      fetchOne: async () => ({ uid: 7, envelope: { subject: "no msgid" } }),
+    };
+    expect(await imapFetchMessageId(id, { config: cfg, connect: async () => client })).toBeNull();
+  });
+
+  it("returns null (not throw) when the fetch fails", async () => {
+    const id = encodeImapId("rob@example.com", "INBOX", 9);
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      getMailboxLock: async () => ({ release: () => undefined }),
+      fetchOne: async () => {
+        throw new Error("connection reset");
+      },
+    };
+    expect(await imapFetchMessageId(id, { config: cfg, connect: async () => client })).toBeNull();
+  });
+});
 
 describe("isImapAccount", () => {
   it("is false when IMAP is not configured", () => {

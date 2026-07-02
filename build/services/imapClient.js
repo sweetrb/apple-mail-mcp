@@ -729,6 +729,35 @@ export async function imapGetMessage(id, preferHtml, deps = {}) {
         return { success: true, info: `Subject: ${subject}\n\n${body}` };
     });
 }
+/** Normalize an RFC822 Message-ID for backend-independent matching: trim and
+ *  drop any surrounding angle brackets (IMAP envelopes carry `<id>`, Mail.app's
+ *  AppleScript `message id` property returns it bracketless). */
+export function normalizeMessageId(mid) {
+    return mid.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
+/**
+ * Fetch the RFC822 Message-ID for an `imap:` id. This is the join key that lets
+ * the AppleScript backend locate the *same* message and return its numeric
+ * Mail.app id — needed because flag **colors** only apply on the AppleScript
+ * numeric-id path (IMAP `\Flagged` is colorless). Returns the normalized
+ * Message-ID (no angle brackets), or null if `id` isn't an imap: token, the
+ * message/envelope can't be fetched, or it carries no Message-ID.
+ */
+export async function imapFetchMessageId(id, deps = {}) {
+    const ref = decodeImapId(id);
+    if (!ref)
+        return null;
+    try {
+        return await withMailbox(ref.path, { ...deps, account: deps.account ?? ref.account }, async (client) => {
+            const msg = await client.fetchOne(String(ref.uid), { envelope: true }, { uid: true });
+            const mid = msg && msg.envelope?.messageId;
+            return mid ? normalizeMessageId(mid) : null;
+        });
+    }
+    catch {
+        return null;
+    }
+}
 function flagOp(id, flag, add, deps) {
     const ref = decodeImapId(id);
     if (!ref)

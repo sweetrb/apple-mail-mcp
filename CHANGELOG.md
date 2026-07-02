@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-07-01
+Resolve `imap:` ids to numeric Mail.app ids (so flag colors can stick over IMAP).
+
+### Added
+- **`resolve-message-id` tool.** Maps `imap:` message id(s) to their numeric Mail.app id(s) via the message's RFC822 Message-ID (the backend-independent join key). This unblocks applying a flag **color** to an IMAP-routed message: colors only apply on the AppleScript numeric-id path — IMAP `\Flagged` is colorless, so a smart mailbox keyed on flag color never matches an IMAP-flagged message. Resolve the id first, then `flag-message` / `batch-flag-messages` the numeric id with `color`. Numeric ids pass through unchanged; unresolvable ids return `numericId: null`. The lookup scopes to the message's account and checks its INBOX first to avoid scanning large All Mail/Archive mailboxes.
+
 ## [2.7.0] - 2026-06-30
 Flag colors.
 

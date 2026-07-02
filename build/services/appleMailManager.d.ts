@@ -393,6 +393,21 @@ export declare class AppleMailManager {
      */
     flagMessage(id: string, colorIndex?: number): boolean;
     /**
+     * Resolve a message's numeric Mail.app id from its RFC822 Message-ID (the
+     * backend-independent join key). This bridges an `imap:` id to the numeric id
+     * required to apply a flag *color* — IMAP flags are colorless, so a smart
+     * mailbox keyed on flag color can only ever match a message flagged via the
+     * AppleScript numeric-id path.
+     *
+     * The Message-ID is matched both bracketless and `<bracketed>` (Mail returns
+     * it bracketless; IMAP envelopes carry the brackets). When `accountName` is
+     * given the search is scoped to that account, checking its INBOX first (swept
+     * messages live there) to avoid scanning huge All Mail/Archive mailboxes.
+     *
+     * @returns the numeric id as a string, or null if no message matches.
+     */
+    findNumericIdByMessageId(messageId: string, accountName?: string): string | null;
+    /**
      * Unflag a message.
      */
     unflagMessage(id: string): boolean;
