@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.2] - 2026-07-03
+Gmail virtual-INBOX scoping/stats and symmetric server-side mailbox create/delete/rename.
+
 ### Fixed
 - **Gmail virtual-INBOX handling (AppleScript path).** On Gmail / Google-Workspace accounts the literal `INBOX` mailbox Mail.app exposes is an empty virtual shell — the real received mail lives under the `All Mail` / `Important` special mailboxes (nested in Mail.app's `[Gmail]` container, so they don't resolve via a flat `mailbox "All Mail"` lookup). Two symptoms are fixed:
   - `search-messages` and `get-thread` scoped with `mailbox="INBOX"` returned `{count:0}` on such accounts even when an unscoped call found the message. INBOX-scoped searches on a Gmail-style account now scan the real receiving set (`All Mail` + `Important`, matched by `name of mb` and de-duped) instead of the empty `INBOX`, so scoped and unscoped calls agree. Non-Gmail accounts and non-INBOX scopes are unchanged.
