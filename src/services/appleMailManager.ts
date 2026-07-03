@@ -516,6 +516,51 @@ const MAILBOX_ALIASES: Record<string, string[]> = {
   archive: ["Archive", "ARCHIVE", "archive", "All Mail"],
 };
 
+/**
+ * The mailbox names (as `list-mailboxes` reports them) that hold a Gmail-style
+ * account's actually-received mail. On Gmail/Google-Workspace accounts the
+ * literal "INBOX" mailbox that Mail.app exposes is a virtual shell that holds
+ * ~0 messages — real inbox mail lives under the "All Mail" (`\All`) and
+ * "Important" (`\Important`) special mailboxes (nested in Mail.app's `[Gmail]`
+ * container, so they DON'T resolve by a flat `mailbox "All Mail"` lookup and
+ * must be found by iterating and matching `name of mb`). "All Mail" is the
+ * superset that contains every inbox message, so scoping/scanning "INBOX" to
+ * this set makes scoped search/get-thread/stats see the same mail an unscoped
+ * call reports. See BUG A / issue: Gmail virtual-INBOX handling.
+ */
+const GMAIL_INBOX_MAILBOXES = ["All Mail", "Important"] as const;
+
+/** Lowercased names that a caller might use to mean "the inbox". */
+const INBOX_SCOPE_NAMES = new Set(["inbox"]);
+
+/** True when `mailbox` (case-insensitively) refers to the inbox. */
+function isInboxScope(mailbox: string): boolean {
+  return INBOX_SCOPE_NAMES.has(mailbox.trim().toLowerCase());
+}
+
+/**
+ * Detect a Gmail-style account from its mailbox-name list: it exposes an
+ * "All Mail" special mailbox. Returns the subset of GMAIL_INBOX_MAILBOXES that
+ * actually exist on the account (so we only scan mailboxes that are present),
+ * or `null` when the account is not Gmail-style (no "All Mail") — callers then
+ * keep the ordinary single-INBOX behavior. Matching is case-insensitive.
+ */
+function gmailReceivingMailboxes(mailboxNames: readonly string[]): string[] | null {
+  const lower = mailboxNames.map((n) => n.toLowerCase());
+  if (!lower.includes("all mail")) return null;
+  const present = GMAIL_INBOX_MAILBOXES.filter((want) => lower.includes(want.toLowerCase()));
+  return present.length > 0 ? present : null;
+}
+
+/**
+ * AppleScript literal list of quoted, lowercased mailbox names, e.g.
+ * `{"all mail", "important"}` — for a case-insensitive `name of mb` membership
+ * test inside a generated script.
+ */
+function appleScriptLowerNameList(names: readonly string[]): string {
+  return "{" + names.map((n) => `"${escapeForAppleScript(n.toLowerCase())}"`).join(", ") + "}";
+}
+
 // =============================================================================
 // Apple Mail Manager Class
 // =============================================================================
@@ -655,6 +700,66 @@ export class AppleMailManager {
     const out = result.output.trim();
     if (out === "true") return true;
     if (out === "false") return false;
+    return null;
+  }
+
+  /**
+   * Reads an account's `account type` from Mail (e.g. "imap", "iCloud", "pop",
+   * ".Mac", or "unknown" for Exchange). Returns the lowercased type string, or
+   * null when the probe is inconclusive (account not found / probe failed).
+   * Used to decide whether AppleScript can safely create/delete/rename a
+   * mailbox on the account (BUG B).
+   */
+  private accountTypeOf(account: string): string | null {
+    const safeAccount = escapeForAppleScript(account);
+    const result = executeAppleScript(
+      buildAppLevelScript(`
+        try
+          return (account type of account "${safeAccount}") as text
+        on error
+          return "missing"
+        end try
+      `)
+    );
+    if (!result.success) return null;
+    const out = result.output.trim().toLowerCase();
+    if (!out || out === "missing") return null;
+    return out;
+  }
+
+  /**
+   * True when the account stores its mailboxes server-side (IMAP / iCloud /
+   * Exchange), so AppleScript CANNOT reliably create, delete, or rename its
+   * folders — those ops must go through the IMAP backend. POP accounts keep
+   * everything local, so their mailboxes ARE AppleScript-writable.
+   *
+   * Returns null when the type can't be determined (fail open: an inconclusive
+   * probe should not block an operation).
+   */
+  private isServerSideAccount(account: string): boolean | null {
+    const type = this.accountTypeOf(account);
+    if (type === null) return null;
+    if (type === "pop") return false;
+    // imap, icloud (".mac"), exchange (reported as "unknown"), and anything else
+    // that isn't a plain local POP store is treated as server-side.
+    return true;
+  }
+
+  /**
+   * Guard for AppleScript create-mailbox on a server-side account (BUG B). When
+   * the account stores mailboxes server-side, AppleScript can CREATE a folder
+   * but cannot later delete or rename it — so a bare create would orphan a
+   * mailbox the server can never remove. If IMAP is configured for the account
+   * the tool layer routes the op to IMAP before reaching here; if it isn't, we
+   * refuse rather than create something we can't remove. Returns an error string
+   * when the op must be refused, else null (POP / local / indeterminate accounts
+   * fall through to AppleScript).
+   */
+  private serverSideCreateGuard(account: string, op: "create" | "rename"): string | null {
+    if (this.isServerSideAccount(account) === true) {
+      const verb = op === "rename" ? "rename" : "create";
+      return `Account "${account}" stores its mailboxes on the server (IMAP / iCloud / Exchange), and Mail.app cannot ${verb} server-side mailboxes via AppleScript — a ${verb} would ${op === "rename" ? "leave a half-created orphan" : "orphan a mailbox that can never be removed"}. Configure IMAP for this account (APPLE_MAIL_MCP_IMAP_*) so mailbox create/delete/rename route through the server, or manage the folder in Mail.app directly.`;
+    }
     return null;
   }
 
@@ -949,7 +1054,47 @@ export class AppleMailManager {
       // timeout is reported as a partial result rather than a false empty.
       const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
 
-      searchCommand = `
+      // Gmail virtual-INBOX (BUG A1): a Gmail-style account's literal "INBOX"
+      // mailbox is an empty shell — the mail actually received lives under the
+      // "All Mail"/"Important" special mailboxes. When the caller scopes to the
+      // inbox on such an account, scan that receiving set (matched by `name of
+      // mb`, since the flat names don't resolve via `mailbox "All Mail"`) and
+      // dedup, so scoped search/get-thread find the same messages the unscoped
+      // call reports as inbox mail.
+      const gmailInbox = isInboxScope(mailbox)
+        ? gmailReceivingMailboxes(this.getCachedMailboxNames(targetAccount))
+        : null;
+
+      if (gmailInbox) {
+        const nameList = appleScriptLowerNameList(gmailInbox);
+        searchCommand = `
+      ${dateSetup}set outputText to ""
+      set _timedOut to false
+      set _notSearched to ""
+      set _wantNames to ${nameList}
+      set msgCount to 0
+      set seenIds to {}
+      repeat with mb in mailboxes
+        if msgCount >= ${limit} then exit repeat
+        set mbName to ""
+        try
+          set mbName to name of mb
+        end try
+        ignoring case
+          if _wantNames contains mbName then
+            try
+              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter })}
+            on error _errMsg number _errNum
+              set _timedOut to true
+              set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
+            end try
+          end if
+        end ignoring
+      end repeat
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=${DIAG_FIELD_SEP}notSearched=" & _notSearched
+    `;
+      } else {
+        searchCommand = `
       ${dateSetup}set outputText to ""
       set _timedOut to false
       set _notSearched to ""
@@ -963,6 +1108,7 @@ export class AppleMailManager {
       end try
       return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=${DIAG_FIELD_SEP}notSearched=" & _notSearched
     `;
+      }
     } else {
       // Search ALL mailboxes — iterate every mailbox in the account, dedup by
       // message ID. Skip mailboxes that exceed the scan threshold (they can't be
@@ -2566,6 +2712,15 @@ export class AppleMailManager {
       return { success: false, error: disabled };
     }
 
+    // BUG B: never create a mailbox on a server-side account we couldn't later
+    // delete/rename via AppleScript (IMAP-configured accounts are routed to IMAP
+    // upstream and never reach here).
+    const serverSide = this.serverSideCreateGuard(targetAccount, "create");
+    if (serverSide) {
+      console.error(`Refusing to create mailbox: ${serverSide}`);
+      return { success: false, error: serverSide };
+    }
+
     const safeName = escapeForAppleScript(name);
     const safeAccount = escapeForAppleScript(targetAccount);
 
@@ -2642,6 +2797,16 @@ export class AppleMailManager {
     account?: string
   ): { success: boolean; error?: string } {
     const targetAccount = this.resolveAccount(account);
+
+    // BUG B: refuse a server-side rename UP FRONT, before creating the
+    // destination. AppleScript can create the destination but can't delete the
+    // source server-side, which historically left a half-created orphan. IMAP-
+    // configured accounts are routed to IMAP upstream and never reach here.
+    const serverSide = this.serverSideCreateGuard(targetAccount, "rename");
+    if (serverSide) {
+      console.error(`Refusing to rename mailbox: ${serverSide}`);
+      return { success: false, error: serverSide };
+    }
 
     // Create the new mailbox. createMailbox runs the disabled-account guard, so
     // a disabled target is refused here before anything is built — no orphan can
@@ -3257,8 +3422,10 @@ ${actionStmts.join("\n")}
   /**
    * Get counts of recently received messages.
    *
-   * Only counts messages in INBOX for performance (scanning all mailboxes
-   * is too slow for large accounts).
+   * Counts messages in each account's receiving mailbox for performance
+   * (scanning all mailboxes is too slow for large accounts): the literal
+   * "INBOX" for ordinary accounts, or the "All Mail" superset for Gmail-style
+   * accounts whose literal "INBOX" is an empty virtual shell (BUG A2).
    *
    * @returns Counts of messages received in last 24h, 7d, and 30d
    */
@@ -3276,7 +3443,43 @@ ${actionStmts.join("\n")}
     // method silently returned 0/0/0 on those Macs — the same locale regression
     // fixed for searchMessages in #15 / surfaced again in #28.
 
-    // Only scan INBOX for performance - scanning all mailboxes is too slow
+    // Scan each account's receiving mailbox for performance — scanning every
+    // mailbox is too slow. For an ordinary account that's the literal "INBOX".
+    // For a Gmail-style account (BUG A2) the literal "INBOX" is an empty shell,
+    // so counting only it reported near-zero recent mail; instead we detect the
+    // "All Mail" special mailbox (matched by `name of mb`, since it's nested in
+    // the [Gmail] container and doesn't resolve by a flat name) and count that
+    // superset of received mail.
+    //
+    // A `whose date received >=` filter is O(n) over the whole mailbox with no
+    // AppleScript index, so on a huge "All Mail" (tens of thousands of messages)
+    // three such counts blow past any reasonable timeout. Two safeguards keep
+    // this fast and non-hanging:
+    //   - a per-mailbox COUNT GUARD (the same APPLE_MAIL_MAX_SEARCH_MAILBOX
+    //     threshold search uses): a receiving mailbox above the threshold is
+    //     skipped rather than scanned. IMAP-configured accounts already get
+    //     fast, correct recent counts via IMAP SEARCH SINCE upstream, so the
+    //     skip only affects an un-IMAP-configured huge Gmail account — which
+    //     previously also reported 0 here, just after a 60 s hang.
+    //   - a single 30-day `whose` pass whose small result set is partitioned
+    //     in-AppleScript into 24 h / 7 d / 30 d buckets — one O(n) scan, not
+    //     three.
+    const scanThreshold = getMailboxScanThreshold();
+    const gmailNameList = appleScriptLowerNameList(["all mail"]);
+    const countGuard =
+      scanThreshold > 0
+        ? `if (count of messages of theInbox) > ${scanThreshold} then error "too-large"`
+        : "";
+    // One 30-day pass, then bucket the (small) result by date without rescanning.
+    const bucketScan = `
+            ${countGuard}
+            set recent30 to (messages of theInbox whose date received >= thirtyDaysAgo)
+            repeat with _m in recent30
+              set _d to date received of _m
+              set last30d to last30d + 1
+              if _d >= sevenDaysAgo then set last7d to last7d + 1
+              if _d >= oneDayAgo then set last24h to last24h + 1
+            end repeat`;
     const script = buildAppLevelScript(`
       set last24h to 0
       set last7d to 0
@@ -3287,17 +3490,39 @@ ${actionStmts.join("\n")}
 
       repeat with acct in accounts
         try
-          -- Try common inbox names
-          set inboxNames to {"INBOX", "Inbox", "inbox"}
-          repeat with inboxName in inboxNames
+          -- Detect a Gmail-style account (has an "All Mail" special mailbox);
+          -- if so, count its receiving superset instead of the empty "INBOX".
+          set _gmailInbox to missing value
+          set _wantNames to ${gmailNameList}
+          repeat with mb in mailboxes of acct
+            set mbName to ""
             try
-              set theInbox to mailbox inboxName of acct
-              set last24h to last24h + (count of (messages of theInbox whose date received >= oneDayAgo))
-              set last7d to last7d + (count of (messages of theInbox whose date received >= sevenDaysAgo))
-              set last30d to last30d + (count of (messages of theInbox whose date received >= thirtyDaysAgo))
-              exit repeat
+              set mbName to name of mb
             end try
+            ignoring case
+              if _wantNames contains mbName then
+                set _gmailInbox to mb
+                exit repeat
+              end if
+            end ignoring
           end repeat
+
+          if _gmailInbox is not missing value then
+            try
+              set theInbox to _gmailInbox
+              ${bucketScan}
+            end try
+          else
+            -- Ordinary account: try common inbox names.
+            set inboxNames to {"INBOX", "Inbox", "inbox"}
+            repeat with inboxName in inboxNames
+              try
+                set theInbox to mailbox inboxName of acct
+                ${bucketScan}
+                exit repeat
+              end try
+            end repeat
+          end if
         end try
       end repeat
 

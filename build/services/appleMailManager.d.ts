@@ -162,6 +162,35 @@ export declare class AppleMailManager {
      */
     private isAccountEnabled;
     /**
+     * Reads an account's `account type` from Mail (e.g. "imap", "iCloud", "pop",
+     * ".Mac", or "unknown" for Exchange). Returns the lowercased type string, or
+     * null when the probe is inconclusive (account not found / probe failed).
+     * Used to decide whether AppleScript can safely create/delete/rename a
+     * mailbox on the account (BUG B).
+     */
+    private accountTypeOf;
+    /**
+     * True when the account stores its mailboxes server-side (IMAP / iCloud /
+     * Exchange), so AppleScript CANNOT reliably create, delete, or rename its
+     * folders — those ops must go through the IMAP backend. POP accounts keep
+     * everything local, so their mailboxes ARE AppleScript-writable.
+     *
+     * Returns null when the type can't be determined (fail open: an inconclusive
+     * probe should not block an operation).
+     */
+    private isServerSideAccount;
+    /**
+     * Guard for AppleScript create-mailbox on a server-side account (BUG B). When
+     * the account stores mailboxes server-side, AppleScript can CREATE a folder
+     * but cannot later delete or rename it — so a bare create would orphan a
+     * mailbox the server can never remove. If IMAP is configured for the account
+     * the tool layer routes the op to IMAP before reaching here; if it isn't, we
+     * refuse rather than create something we can't remove. Returns an error string
+     * when the op must be refused, else null (POP / local / indeterminate accounts
+     * fall through to AppleScript).
+     */
+    private serverSideCreateGuard;
+    /**
      * Guard for AppleScript-backed structural operations (create / delete / rename
      * mailbox). When the target account is disabled in Mail, Mail holds no live
      * server session for it, so the operation fails inside Mail with an opaque
@@ -628,8 +657,10 @@ export declare class AppleMailManager {
     /**
      * Get counts of recently received messages.
      *
-     * Only counts messages in INBOX for performance (scanning all mailboxes
-     * is too slow for large accounts).
+     * Counts messages in each account's receiving mailbox for performance
+     * (scanning all mailboxes is too slow for large accounts): the literal
+     * "INBOX" for ordinary accounts, or the "All Mail" superset for Gmail-style
+     * accounts whose literal "INBOX" is an empty virtual shell (BUG A2).
      *
      * @returns Counts of messages received in last 24h, 7d, and 30d
      */
