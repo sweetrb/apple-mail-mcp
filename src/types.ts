@@ -493,11 +493,7 @@ export type RuleConditionField = "from" | "to" | "cc" | "subject" | "content";
 
 /** How a rule condition compares the field to its value (B2). */
 export type RuleConditionOperator =
-  | "contains"
-  | "notContains"
-  | "equals"
-  | "beginsWith"
-  | "endsWith";
+  "contains" | "notContains" | "equals" | "beginsWith" | "endsWith";
 
 export interface RuleCondition {
   field: RuleConditionField;
