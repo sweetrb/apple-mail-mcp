@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-07-03
+Dependency maintenance.
+
+### Changed
+- Bumped the npm group (6 updates): `imapflow` 1.4.2→1.4.3, `nodemailer` 9.0.1→9.0.3, `@typescript-eslint/*` 8.62.0→8.62.1, `prettier` 3.8.4→3.9.4, `vite` 8.1.0→8.1.2, `@oxc-project/types` 0.137.0→0.138.0. Reformatted `src/types.ts` to satisfy prettier 3.9.4's `format:check` (collapsed a short union type onto one line — no behavior change).
+
 ## [2.8.0] - 2026-07-01
 Resolve `imap:` ids to numeric Mail.app ids (so flag colors can stick over IMAP).
 
