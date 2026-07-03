@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Gmail virtual-INBOX handling (AppleScript path).** On Gmail / Google-Workspace accounts the literal `INBOX` mailbox Mail.app exposes is an empty virtual shell — the real received mail lives under the `All Mail` / `Important` special mailboxes (nested in Mail.app's `[Gmail]` container, so they don't resolve via a flat `mailbox "All Mail"` lookup). Two symptoms are fixed:
+  - `search-messages` and `get-thread` scoped with `mailbox="INBOX"` returned `{count:0}` on such accounts even when an unscoped call found the message. INBOX-scoped searches on a Gmail-style account now scan the real receiving set (`All Mail` + `Important`, matched by `name of mb` and de-duped) instead of the empty `INBOX`, so scoped and unscoped calls agree. Non-Gmail accounts and non-INBOX scopes are unchanged.
+  - `get-mail-stats` → `recentlyReceived` (last 24h/7d/30d) only scanned the literal `INBOX`, reporting near-zero on Gmail. It now detects the `All Mail` superset and counts that. The `whose date received` filter is O(n) with no AppleScript index, so a per-mailbox count guard (`APPLE_MAIL_MAX_SEARCH_MAILBOX`, default 5000) skips an oversized `All Mail` rather than hang, and a huge account's fast, correct recent counts come from the IMAP path (IMAP `SEARCH SINCE`) when configured. A single 30-day pass is bucketed in-AppleScript into the three windows rather than three separate scans.
+- **Symmetric mailbox create/delete/rename on server-side accounts (BUG B).** `create-mailbox` used to succeed on a server-side (IMAP / iCloud / Exchange) account via AppleScript while `delete-mailbox`/`rename-mailbox` failed there, orphaning mailboxes; a failed rename could also leave a half-created destination behind. IMAP-configured accounts already route all three through the server (imapflow `mailboxCreate`/`mailboxDelete`/`mailboxRename`, an atomic server-side RENAME). For a server-side account **without** IMAP configured, the AppleScript path now refuses `create` and `rename` up front (before any destination is created) with an actionable message, so it never creates a folder it cannot later remove. POP / local "On My Mac" mailboxes are unaffected; an inconclusive account-type probe fails open.
+
 ## [2.8.1] - 2026-07-03
 Dependency maintenance.
 

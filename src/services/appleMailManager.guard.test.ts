@@ -48,9 +48,15 @@ function makeRouter(opts: {
   enabled?: "true" | "false" | "missing";
   moveResult?: ScriptResult;
   destEmpty?: boolean;
+  /** Value returned by the `account type of account` probe (BUG B). Default ""
+   *  → inconclusive → server-side guard fails open (unchanged behavior). */
+  accountType?: string;
 }): (script: string) => ScriptResult {
   const enabled = opts.enabled ?? "true";
   return (script: string): ScriptResult => {
+    if (script.includes("account type of account")) {
+      return { success: true, output: opts.accountType ?? "" };
+    }
     if (script.includes("enabled of account")) {
       return { success: true, output: enabled };
     }
@@ -159,6 +165,85 @@ describe("renameMailbox rollback on move failure", () => {
 
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/could not be auto-removed/);
+  });
+});
+
+describe("server-side create/rename guard (BUG B)", () => {
+  it("createMailbox refuses on an IMAP account with no IMAP config, attempting no create", () => {
+    h.router.fn = makeRouter({ enabled: "true", accountType: "imap" });
+    const mgr = new AppleMailManager();
+
+    const res = mgr.createMailbox("Foo", "gmail");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/server/i);
+    expect(ranScript("make new mailbox")).toBe(false);
+  });
+
+  it("createMailbox refuses on an iCloud account (server-side)", () => {
+    h.router.fn = makeRouter({ enabled: "true", accountType: "icloud" });
+    const mgr = new AppleMailManager();
+
+    const res = mgr.createMailbox("Foo", "iCloud");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/server/i);
+    expect(ranScript("make new mailbox")).toBe(false);
+  });
+
+  it("createMailbox refuses on an Exchange account (account type 'unknown')", () => {
+    h.router.fn = makeRouter({ enabled: "true", accountType: "unknown" });
+    const mgr = new AppleMailManager();
+
+    const res = mgr.createMailbox("Foo", "Exchange");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/server/i);
+    expect(ranScript("make new mailbox")).toBe(false);
+  });
+
+  it("createMailbox ALLOWS a local POP account (mailboxes are local)", () => {
+    h.router.fn = makeRouter({ enabled: "true", accountType: "pop" });
+    const mgr = new AppleMailManager();
+
+    const res = mgr.createMailbox("Foo", "pop-account");
+
+    expect(res.success).toBe(true);
+    expect(ranScript("make new mailbox")).toBe(true);
+  });
+
+  it("createMailbox fails open when the account type is inconclusive", () => {
+    h.router.fn = makeRouter({ enabled: "true", accountType: "" });
+    const mgr = new AppleMailManager();
+
+    const res = mgr.createMailbox("Foo", "mystery");
+
+    expect(res.success).toBe(true);
+    expect(ranScript("make new mailbox")).toBe(true);
+  });
+
+  it("renameMailbox refuses on a server-side account and creates no destination", () => {
+    h.router.fn = makeRouter({ enabled: "true", accountType: "imap" });
+    const mgr = new AppleMailManager();
+
+    const res = mgr.renameMailbox("Old", "New", "gmail");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/rename server-side/i);
+    // Crucially: no destination mailbox was created before the refusal.
+    expect(ranScript("make new mailbox")).toBe(false);
+    expect(ranScript("move m to destMailbox")).toBe(false);
+  });
+
+  it("renameMailbox proceeds on a local POP account", () => {
+    h.router.fn = makeRouter({ enabled: "true", accountType: "pop" });
+    const mgr = new AppleMailManager();
+
+    const res = mgr.renameMailbox("Old", "New", "pop-account");
+
+    expect(res.success).toBe(true);
+    expect(ranScript("make new mailbox")).toBe(true);
+    expect(ranScript("move m to destMailbox")).toBe(true);
   });
 });
 
