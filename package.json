@@ -5,7 +5,6 @@
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude and other AI assistants",
   "type": "module",
   "main": "build/index.js",
-  "types": "build/index.d.ts",
   "bin": {
     "apple-mail-mcp": "build/index.js",
     "apple-mail-send": "build/cli.js"
@@ -16,7 +15,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc && tsc-alias",
+    "build": "tsc --noEmit && esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --outdir=build --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
     "start": "node build/index.js",
     "dev": "tsc --watch",
     "test": "vitest run",
@@ -74,12 +73,12 @@
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitest/coverage-v8": "^4.1.9",
+    "esbuild": "^0.28.1",
     "eslint": "^9.0.0",
     "globals": "^17.0.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "prettier": "^3.0.0",
-    "tsc-alias": "^1.8.10",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.51.0",
