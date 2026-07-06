@@ -4,8 +4,12 @@ node_modules/
 # Build output is intentionally tracked so the marketplace plugin works
 # without an npm install step (Claude Code does not run npm install on
 # path-source plugins). Override the global ~/.gitignore entry.
+# Only the bundled entrypoints are tracked; per-module tsc output (e.g. from
+# `npm run dev`) stays ignored.
 !build/
-!build/**
+build/*
+!build/index.js
+!build/cli.js
 
 # Test coverage
 coverage/

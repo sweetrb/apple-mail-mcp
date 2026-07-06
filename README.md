@@ -1122,9 +1122,9 @@ npm install -g github:sweetrb/apple-mail-mcp
 ```bash
 git clone https://github.com/sweetrb/apple-mail-mcp.git
 cd apple-mail-mcp
-npm install
-npm run build
 ```
+
+The repo ships prebuilt, dependency-free `build/index.js` and `build/cli.js` bundles, so a bare clone runs with nothing but Node installed. `npm install` and `npm run build` are only needed when you change the source.
 
 If installed from source, use this configuration:
 ```json
@@ -1140,7 +1140,7 @@ If installed from source, use this configuration:
 
 #### Running from a clone in Claude Code (project-scope `.mcp.json`)
 
-This repo ships a `.mcp.json` at its root so that, when you run `claude` from inside a clone, the server is registered automatically as a **project-scope** server — no manual config needed. After `npm run build`, just launch Claude Code from the repo directory and approve the server when prompted.
+This repo ships a `.mcp.json` at its root so that, when you run `claude` from inside a clone, the server is registered automatically as a **project-scope** server — no manual config needed. Just launch Claude Code from the repo directory and approve the server when prompted (the bundled `build/index.js` is committed, so no build step is required).
 
 The entrypoint is written as:
 
@@ -1265,7 +1265,7 @@ The `\\\\` in JSON becomes `\\` in the actual string, which represents a single 
 
 ### `apple-mail` server fails to connect when run from a clone
 - The root `.mcp.json` resolves its entrypoint via `${CLAUDE_PROJECT_DIR:-.}/build/index.js`. **Launch `claude` from inside the repo directory** — `CLAUDE_PROJECT_DIR` only resolves to the repo root in that case; the bare `.` fallback uses the launching shell's working directory and will point at the wrong place otherwise.
-- Run `npm run build` first — the server is `build/index.js`, which doesn't exist until you build.
+- If you've been editing the source, rerun `npm run build` — the server is `build/index.js`, and the committed bundle only reflects your changes after a rebuild.
 - Run `claude mcp list` to check status. If you see a *conflicting scopes* warning for `apple-mail`, you have it registered at more than one scope; project-scope wins. See [Running from a clone](#running-from-a-clone-in-claude-code-project-scope-mcpjson) for how scope precedence resolves.
 - If `claude mcp get apple-mail` shows **⏸ Pending approval**, approve the project-scope server (Claude Code prompts on startup, or run it again after approving).
 
@@ -1275,7 +1275,7 @@ The `\\\\` in JSON becomes `\\` in the actual string, which represents a single 
 
 ```bash
 npm install            # Install dependencies
-npm run build          # Compile TypeScript
+npm run build          # Typecheck, then bundle src/index.ts + src/cli.ts into build/ (esbuild)
 npm test               # Run unit tests
 npm run test:integration  # Run integration tests (requires Mail.app)
 npm run test:all       # Run all tests (unit + integration)
