@@ -6,6 +6,18 @@ This file provides guidance for AI agents (Claude, etc.) when using this MCP ser
 
 This MCP server enables AI assistants to interact with Apple Mail on macOS via AppleScript. All operations are local - no data leaves the user's machine.
 
+## Configuring IMAP / SMTP (when a user asks to set it up)
+
+The AppleScript backend needs no config. The **opt-in** IMAP (fast search/counts on
+large mailboxes) and SMTP (clean sending, no macOS 15+ `<blockquote>` wrapping)
+backends are configured via non-secret `APPLE_MAIL_MCP_*` settings — supplied in an
+`env` block **or**, for hosts that strip `env` (e.g. Claude Desktop), a
+`config.json` at `~/Library/Application Support/apple-mail-mcp/config.json` (loaded
+into the environment at startup) — with passwords kept in the macOS Keychain.
+**Don't reverse-engineer it: the full walkthrough is [`docs/IMAP-SETUP.md`](docs/IMAP-SETUP.md)**
+(app passwords, Keychain, both config methods, multi-account, SMTP, headless/SSH
+Keychain gotchas). Verify with the `doctor` tool.
+
 ## Critical: Backslash Escaping
 
 **When sending content with backslashes to any tool, you MUST escape them.**
