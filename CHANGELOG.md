@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.4] - 2026-07-08
+### Changed
+- **`doctor` now points a stuck user (or their AI) at the setup guide.** The two "not configured" messages (IMAP and SMTP) previously listed only the `APPLE_MAIL_MCP_*` env vars to set — which doesn't help the most common failure mode: a **Claude Desktop** user whose `env` block is silently stripped, so the env advice does nothing. Both messages now also name the **`config.json`** file method (`~/Library/Application Support/apple-mail-mcp/config.json`) and link the **[IMAP / SMTP Setup Guide](docs/IMAP-SETUP.md)**, so the fix is discoverable from inside the running server — not only from the repo README.
+
 ## [2.8.3] - 2026-07-06
 ### Fixed
 - **A bare git clone now runs the server with nothing but Node present (fixes #78).** The committed `build/` gave a fresh clone the entrypoints, but the compiled output still imported its runtime dependencies from `node_modules/`, which a git clone never has. Claude Code's marketplace auto-update re-clones the plugin from scratch, so every refresh left the server dying at session start on `ERR_MODULE_NOT_FOUND: Cannot find package '@modelcontextprotocol/sdk'`, with no install step anywhere between "marketplace refresh" and "server process starts". `npm run build` now typechecks (`tsc --noEmit`) and bundles `src/index.ts` and `src/cli.ts` with esbuild into self-contained `build/index.js` and `build/cli.js` (shebangs preserved, `@/` path aliases resolved from tsconfig, plus a `createRequire` banner so the CJS dependencies' dynamic `require` calls of Node builtins work under ESM). The only runtime file the bundles read is `../package.json` (for the version string), which every distribution layout ships. `tsc-alias` is no longer needed and was dropped; the per-module compiled files and `.d.ts` output under `build/` are gone (the unused `types` field went with them), and only the two bundled entrypoints are tracked in git. (Thanks @oliverames — #79.)
