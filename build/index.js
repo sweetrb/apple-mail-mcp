@@ -80733,6 +80733,8 @@ async function routeMessage(id, opts) {
 }
 
 // src/tools/doctor.ts
+var SETUP_GUIDE = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
+var CONFIG_FILE_HINT = "If your MCP host ignores the server 'env' block (e.g. Claude Desktop), put these in ~/Library/Application Support/apple-mail-mcp/config.json instead";
 async function runDoctor(mailManager2) {
   const checks = [];
   const hc = mailManager2.healthCheck();
@@ -80764,7 +80766,7 @@ async function runDoctor(mailManager2) {
     checks.push({
       name: "IMAP backend",
       status: "warn",
-      detail: `not configured \u2014 AppleScript is used for all accounts. Set ${IMAP_ENV.user} (+ Keychain/password), or ${IMAP_ENV.accounts} for multiple accounts, to enable server-side search and server-mailbox ops.`
+      detail: `not configured \u2014 AppleScript is used for all accounts. Set ${IMAP_ENV.user} (+ Keychain/password), or ${IMAP_ENV.accounts} for multiple accounts, to enable server-side search and server-mailbox ops. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE}`
     });
   } else {
     for (const label of imapAccounts) {
@@ -80780,7 +80782,7 @@ async function runDoctor(mailManager2) {
   checks.push({
     name: "SMTP transport",
     status: isSmtpConfigured() ? "ok" : "warn",
-    detail: isSmtpConfigured() ? `configured (${smtpHost}); send-email auto-prefers clean SMTP (no Mail.app Sent-folder copy; a non-email "account" label still routes to AppleScript). Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.` : `not configured \u2014 send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} and ${SMTP_ENV.user} (+ password via Keychain) to enable.`
+    detail: isSmtpConfigured() ? `configured (${smtpHost}); send-email auto-prefers clean SMTP (no Mail.app Sent-folder copy; a non-email "account" label still routes to AppleScript). Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.` : `not configured \u2014 send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} and ${SMTP_ENV.user} (+ password via Keychain) to enable. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE}`
   });
   const healthy = !checks.some((c) => c.status === "fail");
   return { healthy, checks };

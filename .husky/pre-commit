@@ -7,6 +7,6 @@ pnpm exec lint-staged
 # Keep them fresh: if any staged file is under src/, rebuild and stage build/.
 if git diff --cached --name-only --diff-filter=ACMR | grep -q '^src/'; then
   echo "src/ changed — rebuilding build/ for plugin distribution"
-  pnpm run build --silent
+  pnpm --silent run build
   git add build
 fi
