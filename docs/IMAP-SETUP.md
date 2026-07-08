@@ -261,6 +261,25 @@ block — switch to the `config.json` method (Method B) and confirm the file is 
 - **Workspace:** your admin disabled app passwords (or requires OAuth) — IMAP via
   app password isn't available for that account.
 
+**Storing the Keychain password over SSH / headless fails with `User interaction is not allowed`.**
+`security add-internet-password` — and the server *reading* the password back —
+need the login Keychain **unlocked**, which normally only happens in a **GUI login
+session**. From a plain `ssh` session the Keychain is locked, so the write fails
+with `SecKeychainAddInternetPassword: User interaction is not allowed` (exit 36),
+and a server started there can't read passwords either. Options:
+
+- **Run it in a GUI session** — a Terminal on the Mac itself, or via Screen Sharing.
+- **Unlock over SSH with a tty:**
+  `ssh -t you@host 'security unlock-keychain && security add-internet-password -U -r imap -s imap.gmail.com -a you@gmail.com -w'`
+  — the `-t` lets `unlock-keychain` prompt for your macOS **login** password, after
+  which the add (and later server reads) succeed. A metadata check —
+  `security find-internet-password -s … -a …` with no `-w` — does work over plain
+  ssh, so you can confirm an item *exists* even when you can't unlock it.
+- **Truly headless** (CI, or a server with no GUI login and no unlockable Keychain):
+  skip the Keychain — set `APPLE_MAIL_MCP_SMTP_PASSWORD` / `APPLE_MAIL_MCP_IMAP_PASSWORD`
+  (or a per-account `"password"` inside `APPLE_MAIL_MCP_IMAP_ACCOUNTS`) directly, and
+  restrict the config file's permissions to the service account.
+
 **Calls aren't routing to IMAP even though `doctor` shows connected.**
 The tool's `account` argument must match the configured account's name/login.
 Set `APPLE_MAIL_MCP_IMAP_ACCOUNT` to the exact Mail.app account name from

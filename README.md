@@ -98,6 +98,25 @@ npm install -g github:sweetrb/apple-mail-mcp
 
 On first use, macOS will ask for permission to automate Mail.app. Click "OK" to allow.
 
+## Configuring email (IMAP & SMTP)
+
+The server works out of the box over AppleScript with **no configuration**. Two
+**opt-in** power features take a one-time setup:
+
+- **Fast IMAP reads** — server-side search, counts, and large-mailbox handling
+  that AppleScript is too slow for (it times out on big Gmail mailboxes).
+- **Clean SMTP sending** — `send-email` submits clean MIME directly, avoiding the
+  macOS 15+ Mail.app `<blockquote>` wrapping that otherwise makes sent mail look
+  quoted/indented like a reply.
+
+Both are driven by non-secret `APPLE_MAIL_MCP_*` settings — supplied via an `env`
+block **or** a `config.json` file (for hosts like Claude Desktop that strip `env`)
+— with passwords kept in the macOS **Keychain**, never in config.
+
+👉 **[IMAP / SMTP Setup Guide](docs/IMAP-SETUP.md)** — step-by-step: app passwords,
+Keychain, both config methods, multi-account, SMTP, verification with the `doctor`
+tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
+
 ## Requirements
 
 - **macOS** - Apple Mail and AppleScript are macOS-only
