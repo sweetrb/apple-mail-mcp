@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.6] - 2026-07-09
+End-user docs/discoverability pass: make setup findable for no-clone installs (npm registry, plugin marketplace) and make "not configured" errors actionable.
+
+### Changed
+- **"Not configured" errors now end with the absolute setup-guide URL + a `doctor` hint.** `SMTP transport is not configured…` / `No SMTP password found…` (`smtpMailer`), `IMAP not configured…` (`imapClient`), and the `apple-mail-send` CLI's config-failure hint all now point at `https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md` and suggest running the **`doctor`** tool, instead of referencing README sections the user may not have on disk. The URL lives in a shared `src/utils/docsUrls.ts` module also used by `doctor`.
+- **"System Preferences" → "System Settings > Privacy & Security > Automation"** in permission-denied messages (`applescript.ts`, `appleMailManager.ts` health check) and in the README/SECURITY/skill docs — matching macOS 13+ naming.
+
+### Fixed
+- **README install commands now use the npm registry** (`npm install -g apple-mail-mcp`) instead of `github:sweetrb/apple-mail-mcp`; the GitHub form is kept only as a From-Source note (it builds from source and requires pnpm).
+- **npm tarball is self-contained for docs:** `docs/` now ships in the package (`files` in `package.json`), and every README cross-file link (setup guide, CONTRIBUTING, LICENSE, plugin configs, TCC notes, header screenshot) is an absolute `github.com`/`raw.githubusercontent.com` URL, so links work from npmjs.com and a tarball install.
+- **Stale Known Limitations rows corrected:** templates *are* persisted (`templates.json` via `APPLE_MAIL_MCP_TEMPLATES_FILE` — row removed); message IDs accept `imap:…` tokens as well as numeric ids; HTML sending exists via the `apple-mail-send` CLI `--html-body-file` (the MCP `send-email` tool itself is plain-text).
+- **`docs/IMAP-SETUP.md` corrections:** `APPLE_MAIL_MCP_IMAP_IDLE_MS` default is `30000` (not `60000`); `APPLE_MAIL_MCP_IMAP_ACCOUNTS` is a JSON **array of objects passed as a single string value**; env-var reference gained the missing `APPLE_MAIL_MCP_TEMPLATES_FILE`, `APPLE_MAIL_MCP_MAX_BUFFER`, and `APPLE_MAIL_MAX_SEARCH_MAILBOX` rows.
+
+### Added
+- **Deterministic Claude Code install one-liner** in Quick Start: `claude mcp add apple-mail -s user -- npx -y apple-mail-mcp`.
+- **Plugin-marketplace config note** (README Quick Start + setup guide Step 3): plugin installs have no editable `env` block — configure IMAP/SMTP via `~/Library/Application Support/apple-mail-mcp/config.json` (Method B).
+
 ## [2.8.5] - 2026-07-08
 ### Fixed
 - **IMAP delete now actually trashes Gmail mail — it was a silent no-op before.** `delete-message` and `batch-delete-messages` (over IMAP) flagged `\Deleted` + EXPUNGE on the message's own mailbox. On Gmail, expunging from `[Gmail]/All Mail` (where the read path addresses messages) **does not trash the message** — the tool reported success, but the mail stayed put. Delete now **moves the message to the account's Trash** — the server's `\Trash` special-use mailbox when advertised, else a `Trash`/`Deleted Messages`-style folder, else the `[Gmail]/Trash` default — which is both what Gmail treats as "trash" and what these tools' `Returns: … moves it to Trash` contract already promised. Messages already in Trash are expunged (the "empty from Trash" case). Non-Gmail servers that trash via a real Trash folder now behave correctly too, and `delete` is recoverable everywhere instead of being an immediate expunge. **This also fixes the autonomous mail-hygiene flows** (spam sweep / obsolete-prune) that trash Gmail mail through this path.

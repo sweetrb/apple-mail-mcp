@@ -30,7 +30,7 @@ This MCP server:
 - Does not store credentials or passwords
 - Requires explicit user confirmation before sending emails (recommended)
 
-The server requires macOS automation permissions to function. These permissions are managed by macOS and can be revoked at any time in System Preferences > Privacy & Security > Automation.
+The server requires macOS automation permissions to function. These permissions are managed by macOS and can be revoked at any time in System Settings > Privacy & Security > Automation.
 
 ## Input Validation & Security Hardening
 

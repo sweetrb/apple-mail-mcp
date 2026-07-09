@@ -24,6 +24,7 @@
  */
 import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
+import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
 
 export const IMAP_ENV = {
@@ -330,7 +331,9 @@ export function resolveImapConfig(
 ): ImapConfig {
   const specs = listImapAccountSpecs(env);
   if (specs.length === 0) {
-    throw new Error(`IMAP not configured. Set ${IMAP_ENV.user} (login address) to enable it.`);
+    throw new Error(
+      `IMAP not configured. Set ${IMAP_ENV.user} (login address) to enable it. ${SETUP_HINT}`
+    );
   }
   let spec: ImapAccountSpec | undefined;
   if (account) {

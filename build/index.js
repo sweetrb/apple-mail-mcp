@@ -76219,7 +76219,7 @@ var ERROR_MAPPINGS = [
   // Permission errors
   {
     pattern: /not authorized|not permitted|access.*denied/i,
-    message: "Permission denied. Grant automation access in System Preferences > Privacy & Security > Automation."
+    message: "Permission denied. Grant automation access in System Settings > Privacy & Security > Automation."
   },
   // Application not running
   {
@@ -79153,7 +79153,7 @@ ${actionStmts.join("\n")}
         message: "Mail.app is accessible"
       });
     } else {
-      const errorHint = mailCheck.error?.includes("not authorized") ? " (check Automation permissions in System Preferences)" : "";
+      const errorHint = mailCheck.error?.includes("not authorized") ? " (check System Settings > Privacy & Security > Automation)" : "";
       checks.push({
         name: "mail_app",
         passed: false,
@@ -79173,7 +79173,7 @@ ${actionStmts.join("\n")}
       checks.push({
         name: "permissions",
         passed: !isPermError,
-        message: isPermError ? "AppleScript permissions denied. Grant access in System Preferences > Privacy & Security > Automation" : `Permission check returned: ${permCheck.error}`
+        message: isPermError ? "AppleScript permissions denied. Grant access in System Settings > Privacy & Security > Automation" : `Permission check returned: ${permCheck.error}`
       });
       if (isPermError) {
         return { healthy: false, checks };
@@ -79409,6 +79409,12 @@ var import_nodemailer = __toESM(require_nodemailer(), 1);
 import { execFileSync } from "child_process";
 import { isAbsolute as isAbsolute2 } from "path";
 import { existsSync as existsSync3 } from "fs";
+
+// src/utils/docsUrls.ts
+var SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
+var SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
+
+// src/services/smtpMailer.ts
 var SMTP_ENV = {
   host: "APPLE_MAIL_MCP_SMTP_HOST",
   port: "APPLE_MAIL_MCP_SMTP_PORT",
@@ -79451,7 +79457,7 @@ function resolveSmtpConfig(env = process.env) {
   if (!user) missing.push(SMTP_ENV.user);
   if (missing.length > 0) {
     throw new Error(
-      `SMTP transport is not configured. Set ${missing.join(" and ")} (plus a password via ${SMTP_ENV.password} or the Keychain). See the README "SMTP transport" section.`
+      `SMTP transport is not configured. Set ${missing.join(" and ")} (plus a password via ${SMTP_ENV.password} or the Keychain). ` + SETUP_HINT
     );
   }
   const secure = /^(1|true|yes)$/i.test(env[SMTP_ENV.secure]?.trim() ?? "");
@@ -79468,7 +79474,7 @@ function resolveSmtpConfig(env = process.env) {
   }
   if (!pass) {
     throw new Error(
-      `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}".`
+      `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
   }
   return { host, port, secure, user, pass, from };
@@ -79811,7 +79817,9 @@ function resolveImapConfigs(env = process.env) {
 function resolveImapConfig(env = process.env, account) {
   const specs = listImapAccountSpecs(env);
   if (specs.length === 0) {
-    throw new Error(`IMAP not configured. Set ${IMAP_ENV.user} (login address) to enable it.`);
+    throw new Error(
+      `IMAP not configured. Set ${IMAP_ENV.user} (login address) to enable it. ${SETUP_HINT}`
+    );
   }
   let spec;
   if (account) {
@@ -80757,7 +80765,6 @@ async function routeMessage(id, opts) {
 }
 
 // src/tools/doctor.ts
-var SETUP_GUIDE = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
 var CONFIG_FILE_HINT = "If your MCP host ignores the server 'env' block (e.g. Claude Desktop), put these in ~/Library/Application Support/apple-mail-mcp/config.json instead";
 async function runDoctor(mailManager2) {
   const checks = [];
@@ -80790,7 +80797,7 @@ async function runDoctor(mailManager2) {
     checks.push({
       name: "IMAP backend",
       status: "warn",
-      detail: `not configured \u2014 AppleScript is used for all accounts. Set ${IMAP_ENV.user} (+ Keychain/password), or ${IMAP_ENV.accounts} for multiple accounts, to enable server-side search and server-mailbox ops. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE}`
+      detail: `not configured \u2014 AppleScript is used for all accounts. Set ${IMAP_ENV.user} (+ Keychain/password), or ${IMAP_ENV.accounts} for multiple accounts, to enable server-side search and server-mailbox ops. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE_URL}`
     });
   } else {
     for (const label of imapAccounts) {
@@ -80806,7 +80813,7 @@ async function runDoctor(mailManager2) {
   checks.push({
     name: "SMTP transport",
     status: isSmtpConfigured() ? "ok" : "warn",
-    detail: isSmtpConfigured() ? `configured (${smtpHost}); send-email auto-prefers clean SMTP (no Mail.app Sent-folder copy; a non-email "account" label still routes to AppleScript). Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.` : `not configured \u2014 send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} and ${SMTP_ENV.user} (+ password via Keychain) to enable. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE}`
+    detail: isSmtpConfigured() ? `configured (${smtpHost}); send-email auto-prefers clean SMTP (no Mail.app Sent-folder copy; a non-email "account" label still routes to AppleScript). Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.` : `not configured \u2014 send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} and ${SMTP_ENV.user} (+ password via Keychain) to enable. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE_URL}`
   });
   const healthy = !checks.some((c) => c.status === "fail");
   return { healthy, checks };

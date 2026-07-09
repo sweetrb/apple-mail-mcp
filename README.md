@@ -12,7 +12,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that e
 [![MCP](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
 
 <p align="center">
-  <img src="codex/assets/screenshot.png" alt="Apple Mail MCP — read, search, send, and organize Apple Mail from Codex, Claude, and other AI assistants" width="680">
+  <img src="https://raw.githubusercontent.com/sweetrb/apple-mail-mcp/main/codex/assets/screenshot.png" alt="Apple Mail MCP — read, search, send, and organize Apple Mail from Codex, Claude, and other AI assistants" width="680">
 </p>
 
 > **Note:** This is the **npm/Node.js** package — install with `npx` or `npm`. There is an unrelated Python project of the same name on PyPI ([`imdinu/apple-mail-mcp`](https://github.com/imdinu/apple-mail-mcp)) installed via `pipx`/`uvx`. If you're using `uvx` and seeing a `cyclopts` dependency error, you're looking for that project, not this one.
@@ -43,6 +43,12 @@ Install the sweetrb/apple-mail-mcp MCP server so you can help me manage my Apple
 
 Claude will handle the installation and configuration automatically.
 
+Or register it deterministically in one command:
+
+```bash
+claude mcp add apple-mail -s user -- npx -y apple-mail-mcp
+```
+
 ### Using the Plugin Marketplace
 
 Install as a Claude Code plugin for automatic configuration and enhanced AI behavior:
@@ -53,6 +59,11 @@ Install as a Claude Code plugin for automatic configuration and enhanced AI beha
 ```
 
 This method also installs a **skill** that teaches Claude when and how to use Apple Mail effectively.
+
+> **Configuring IMAP/SMTP for a plugin install:** a plugin install has no editable `env` block,
+> so supply settings via the config file at `~/Library/Application Support/apple-mail-mcp/config.json`
+> — Method B in the [IMAP / SMTP Setup Guide](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md).
+> Passwords stay in the macOS Keychain; run the `doctor` tool to verify.
 
 ### Using the Codex Marketplace
 
@@ -69,14 +80,14 @@ The Codex package registers the same `apple-mail` MCP server through `npx -y app
 
 Configuration for two more hosts is included — each registers the same `apple-mail` MCP server (`npx -y apple-mail-mcp`):
 
-- **[Hermes Agent](https://hermes-agent.nousresearch.com/)** (NousResearch) — Hermes has no plugin/marketplace drop-in. Add the server with `hermes mcp add apple-mail --command npx --args -y apple-mail-mcp`, or merge [`.hermes-plugin/config.yaml`](.hermes-plugin/config.yaml) into `~/.hermes/config.yaml`. Details: [`.hermes-plugin/README.md`](.hermes-plugin/README.md).
-- **[Antigravity](https://antigravity.google/)** (Google) — add the server entry from [`.antigravity-plugin/mcp_config.json`](.antigravity-plugin/mcp_config.json) to `~/.gemini/config/mcp_config.json` (or via Antigravity's MCP settings).
+- **[Hermes Agent](https://hermes-agent.nousresearch.com/)** (NousResearch) — Hermes has no plugin/marketplace drop-in. Add the server with `hermes mcp add apple-mail --command npx --args -y apple-mail-mcp`, or merge [`.hermes-plugin/config.yaml`](https://github.com/sweetrb/apple-mail-mcp/blob/main/.hermes-plugin/config.yaml) into `~/.hermes/config.yaml`. Details: [`.hermes-plugin/README.md`](https://github.com/sweetrb/apple-mail-mcp/blob/main/.hermes-plugin/README.md).
+- **[Antigravity](https://antigravity.google/)** (Google) — add the server entry from [`.antigravity-plugin/mcp_config.json`](https://github.com/sweetrb/apple-mail-mcp/blob/main/.antigravity-plugin/mcp_config.json) to `~/.gemini/config/mcp_config.json` (or via Antigravity's MCP settings).
 
 ### Manual Installation
 
 **1. Install the server:**
 ```bash
-npm install -g github:sweetrb/apple-mail-mcp
+npm install -g apple-mail-mcp
 ```
 
 **2. Add to Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
@@ -113,7 +124,7 @@ Both are driven by non-secret `APPLE_MAIL_MCP_*` settings — supplied via an `e
 block **or** a `config.json` file (for hosts like Claude Desktop that strip `env`)
 — with passwords kept in the macOS **Keychain**, never in config.
 
-👉 **[IMAP / SMTP Setup Guide](docs/IMAP-SETUP.md)** — step-by-step: app passwords,
+👉 **[IMAP / SMTP Setup Guide](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md)** — step-by-step: app passwords,
 Keychain, both config methods, multi-account, SMTP, verification with the `doctor`
 tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 
@@ -381,7 +392,7 @@ SMTP not configured.
 
 ##### IMAP backend — opt-in
 
-> 📘 **For step-by-step setup (app passwords, Keychain, config methods, multi-account, upgrading, troubleshooting), see the [IMAP / SMTP Setup Guide](docs/IMAP-SETUP.md).** The summary below is the reference; the guide is the walkthrough.
+> 📘 **For step-by-step setup (app passwords, Keychain, config methods, multi-account, upgrading, troubleshooting), see the [IMAP / SMTP Setup Guide](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md).** The summary below is the reference; the guide is the walkthrough.
 
 AppleScript runs `search`/`list` predicates client-side over the Apple Event
 bridge, which is slow and can time out (false-empty) on large Gmail/IMAP
@@ -1133,7 +1144,7 @@ AI: [calls move-message for each, with mailbox="Archive"]
 ### npm (Recommended)
 
 ```bash
-npm install -g github:sweetrb/apple-mail-mcp
+npm install -g apple-mail-mcp
 ```
 
 ### From Source
@@ -1144,6 +1155,8 @@ cd apple-mail-mcp
 ```
 
 The repo ships prebuilt, dependency-free `build/index.js` and `build/cli.js` bundles, so a bare clone runs with nothing but Node installed. `npm install` and `npm run build` are only needed when you change the source.
+
+> You can also install straight from GitHub with `npm install -g github:sweetrb/apple-mail-mcp`, but that builds from source (requires pnpm) — prefer the registry package above.
 
 If installed from source, use this configuration:
 ```json
@@ -1189,13 +1202,12 @@ The entrypoint is written as:
 | Limitation | Reason |
 |------------|--------|
 | macOS only | Apple Mail and AppleScript are macOS-specific |
-| No sending HTML email | Emails are sent as plain text; reading HTML content is supported |
+| MCP `send-email` is plain-text | The `send-email` tool sends plain text (reading HTML content is supported). To send HTML, use the bundled `apple-mail-send` CLI with `--html-body-file` (sends `multipart/alternative` via SMTP) |
 | Attachments require absolute paths | File attachments must use full absolute paths (e.g., `/Users/me/file.pdf`) |
 | No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
 | Very large mailboxes not searchable *via AppleScript* | Apple Mail's AppleScript bridge times out on mailboxes with tens of thousands of messages, so unscoped `search-messages` skips mailboxes above `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default 5000) and reports them as a partial result. Scope with `mailbox` + a date window — or configure the [IMAP backend](#imap-backend--opt-in), which searches these server-side in well under a second. ([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)) |
 | Can't delete/rename server-side mailboxes or mutate drafts *via AppleScript* | Mail.app's AppleScript bridge can only `delete`/`rename` **local "On My Mac"** mailboxes and cannot delete/move drafts — it throws `AppleEvent handler failed` for IMAP/Gmail/Workspace/iCloud/Exchange mailboxes (the GUI can do it). Without IMAP configured, `delete-mailbox`/`rename-mailbox`/`delete-message`/`move-message` return a clear "do it in Mail.app directly" error instead of a generic failure. With the [IMAP backend](#imap-backend--opt-in) configured for the account, these operations run via IMAP and succeed. ([#42](https://github.com/sweetrb/apple-mail-mcp/issues/42)) |
-| In-memory templates | Email templates are not persisted across server restarts |
-| Numeric-only message IDs | Message IDs must contain only digits (validated by schema) |
+| Message ID format | Message IDs must be numeric (AppleScript ids) or `imap:…` tokens from the IMAP read path (validated by schema) |
 | Batch size cap | Batch operations are limited to 100 messages per request |
 | Date filter format | Date filters must be valid parseable dates (e.g., "January 1, 2026" or "2026-03-15"); bare numbers or non-date strings are rejected |
 | Attachment save path restrictions | `save-attachment` only allows saving to home directory, `/tmp`, `/private/tmp`, and `/Volumes`; path traversal is blocked |
@@ -1259,7 +1271,7 @@ The `\\\\` in JSON becomes `\\` in the actual string, which represents a single 
 
 ### "Permission denied"
 - macOS needs automation permission
-- Go to System Preferences > Privacy & Security > Automation
+- Go to System Settings > Privacy & Security > Automation
 - Ensure your terminal/Claude has permission to control Mail
 
 ### "Message not found"
@@ -1315,11 +1327,11 @@ A software consulting, contracting, and development company.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](https://github.com/sweetrb/apple-mail-mcp/blob/main/LICENSE) for details.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! Please see [CONTRIBUTING.md](https://github.com/sweetrb/apple-mail-mcp/blob/main/CONTRIBUTING.md) for guidelines.
 
 ## Related Projects
 
@@ -1331,4 +1343,4 @@ Part of a family of macOS MCP servers:
 
 ## Recurring macOS permission prompts
 
-If macOS keeps re-prompting for Full Disk Access or Automation for `node` (often after a `brew upgrade`), see [docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md](docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md) — the fix is to run this server under the official, Developer-ID-signed Node so the grant survives Node updates.
+If macOS keeps re-prompting for Full Disk Access or Automation for `node` (often after a `brew upgrade`), see [docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md) — the fix is to run this server under the official, Developer-ID-signed Node so the grant survives Node updates.
