@@ -154,6 +154,8 @@ non-secret config goes here — passwords stay in the Keychain.**
 
 > Not sure which method? Configure with Method A; if `doctor` still says "not
 > configured" after a restart, your host strips `env` — switch to Method B.
+> Plugin-marketplace installs (Claude Code `/plugin install apple-mail`) have no
+> editable `env` block at all, so they always use Method B.
 
 ### `APPLE_MAIL_MCP_IMAP_ACCOUNT` and routing
 
@@ -165,7 +167,8 @@ server knows "calls for this account go to IMAP."
 ### Multiple accounts
 
 Configure additional accounts with `APPLE_MAIL_MCP_IMAP_ACCOUNTS`, a JSON **array
-of strings** (each entry's value is itself a JSON object). The legacy single-account
+of objects, passed as a single string value** (the whole array is one env-var /
+config-file string, as in the example below). The legacy single-account
 vars above define the first/default account; the array adds the rest:
 
 ```json
@@ -211,7 +214,7 @@ password for SMTP, as Gmail does.)
 Add `"APPLE_MAIL_MCP_IMAP_IDLE": "1"` to get new-mail notifications for every
 configured IMAP account. See the README's "Push notifications (IMAP IDLE)"
 section for details. Tune the pooled-connection idle timeout with
-`APPLE_MAIL_MCP_IMAP_IDLE_MS` (default `60000`).
+`APPLE_MAIL_MCP_IMAP_IDLE_MS` (default `30000`; `0` = never close).
 
 ---
 
@@ -317,7 +320,7 @@ GUI is ignoring.
 | `APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT` | Keychain item account (default = USER). |
 | `APPLE_MAIL_MCP_IMAP_ACCOUNTS` | JSON array of additional accounts (multi-account). |
 | `APPLE_MAIL_MCP_IMAP_IDLE` | `1` to enable IMAP IDLE new-mail push. |
-| `APPLE_MAIL_MCP_IMAP_IDLE_MS` | Pooled-connection idle timeout in ms (default `60000`). |
+| `APPLE_MAIL_MCP_IMAP_IDLE_MS` | Pooled-connection idle timeout in ms (default `30000`; `0` = never close). |
 | `APPLE_MAIL_MCP_SMTP_HOST` | SMTP host; setting it enables `transport:"smtp"`. |
 | `APPLE_MAIL_MCP_SMTP_PORT` | SMTP port (`465` if secure, else `587`). |
 | `APPLE_MAIL_MCP_SMTP_SECURE` | `true` for implicit TLS (465); else STARTTLS. |
@@ -325,3 +328,6 @@ GUI is ignoring.
 | `APPLE_MAIL_MCP_SMTP_PASSWORD` | Password (discouraged; prefer Keychain). |
 | `APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE` / `_KEYCHAIN_ACCOUNT` | SMTP Keychain reference. |
 | `APPLE_MAIL_MCP_CONFIG_FILE` | Path to the config JSON (default app-support dir). |
+| `APPLE_MAIL_MCP_TEMPLATES_FILE` | Email-templates store path (default `~/Library/Application Support/apple-mail-mcp/templates.json`). |
+| `APPLE_MAIL_MCP_MAX_BUFFER` | Max AppleScript (`osascript`) output buffer in bytes (default 64 MiB). |
+| `APPLE_MAIL_MAX_SEARCH_MAILBOX` | Per-mailbox message-count guard for unscoped AppleScript search (default `5000`; `0` disables). Note: no `_MCP` in the name. |

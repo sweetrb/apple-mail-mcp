@@ -3307,7 +3307,7 @@ ${actionStmts.join("\n")}
       });
     } else {
       const errorHint = mailCheck.error?.includes("not authorized")
-        ? " (check Automation permissions in System Preferences)"
+        ? " (check System Settings > Privacy & Security > Automation)"
         : "";
       checks.push({
         name: "mail_app",
@@ -3332,7 +3332,7 @@ ${actionStmts.join("\n")}
         name: "permissions",
         passed: !isPermError,
         message: isPermError
-          ? "AppleScript permissions denied. Grant access in System Preferences > Privacy & Security > Automation"
+          ? "AppleScript permissions denied. Grant access in System Settings > Privacy & Security > Automation"
           : `Permission check returned: ${permCheck.error}`,
       });
       if (isPermError) {

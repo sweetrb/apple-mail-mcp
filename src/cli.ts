@@ -25,6 +25,7 @@ import { fileURLToPath } from "url";
 import { parseArgs } from "util";
 import { sendViaSmtp, resolveSmtpConfig, SMTP_ENV } from "@/services/smtpMailer.js";
 import type { AttachmentInput } from "@/types.js";
+import { SETUP_GUIDE_URL } from "@/utils/docsUrls.js";
 
 /** sysexits.h codes used so callers can distinguish failure modes. */
 export const EX_USAGE = 64;
@@ -48,7 +49,8 @@ Optional:
   --help                Show this help
 
 SMTP connection comes from ${SMTP_ENV.host} / ${SMTP_ENV.user} (+ password via
-${SMTP_ENV.password} or the macOS Keychain). See the README "SMTP transport".`;
+${SMTP_ENV.password} or the macOS Keychain). Setup guide:
+${SETUP_GUIDE_URL}`;
 
 /** Injectable dependencies, defaulted to the real implementations. */
 export interface CliDeps {
@@ -132,7 +134,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
     config = resolveConfig(env);
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
-    err(`See the README "SMTP transport" section.`);
+    err(`Setup guide: ${SETUP_GUIDE_URL}`);
     return EX_CONFIG;
   }
 

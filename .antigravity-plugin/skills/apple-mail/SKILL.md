@@ -150,7 +150,7 @@ Action: Use delete-message with the message ID
 ## Error Handling
 
 - **"Message not found"**: The message ID may be invalid or the message was deleted. Use search-messages to find it again.
-- **"Permission denied"**: User needs to grant automation permission in System Preferences > Privacy & Security > Automation.
+- **"Permission denied"**: User needs to grant automation permission in System Settings > Privacy & Security > Automation.
 - **"Account not found"**: Account names are case-sensitive. Use list-accounts to see exact names.
 - **"Failed to send"**: Check network connection and Mail.app configuration.
 

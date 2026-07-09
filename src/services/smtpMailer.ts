@@ -21,6 +21,7 @@ import { execFileSync } from "child_process";
 import { isAbsolute } from "path";
 import { existsSync } from "fs";
 import type { AttachmentInput } from "@/types.js";
+import { SETUP_HINT } from "@/utils/docsUrls.js";
 
 /** Options for an SMTP send, mirroring the AppleScript send-email surface. */
 export interface SmtpSendOptions {
@@ -165,7 +166,7 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
     throw new Error(
       `SMTP transport is not configured. Set ${missing.join(" and ")} ` +
         `(plus a password via ${SMTP_ENV.password} or the Keychain). ` +
-        `See the README "SMTP transport" section.`
+        SETUP_HINT
     );
   }
 
@@ -195,7 +196,8 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet ` +
         `password in the Keychain for service "${
           env[SMTP_ENV.keychainService]?.trim() || host
-        }" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}".`
+        }" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` +
+        SETUP_HINT
     );
   }
 

@@ -11868,6 +11868,12 @@ var import_nodemailer = __toESM(require_nodemailer(), 1);
 import { execFileSync } from "child_process";
 import { isAbsolute } from "path";
 import { existsSync } from "fs";
+
+// src/utils/docsUrls.ts
+var SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
+var SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
+
+// src/services/smtpMailer.ts
 var SMTP_ENV = {
   host: "APPLE_MAIL_MCP_SMTP_HOST",
   port: "APPLE_MAIL_MCP_SMTP_PORT",
@@ -11900,7 +11906,7 @@ function resolveSmtpConfig(env = process.env) {
   if (!user) missing.push(SMTP_ENV.user);
   if (missing.length > 0) {
     throw new Error(
-      `SMTP transport is not configured. Set ${missing.join(" and ")} (plus a password via ${SMTP_ENV.password} or the Keychain). See the README "SMTP transport" section.`
+      `SMTP transport is not configured. Set ${missing.join(" and ")} (plus a password via ${SMTP_ENV.password} or the Keychain). ` + SETUP_HINT
     );
   }
   const secure = /^(1|true|yes)$/i.test(env[SMTP_ENV.secure]?.trim() ?? "");
@@ -11917,7 +11923,7 @@ function resolveSmtpConfig(env = process.env) {
   }
   if (!pass) {
     throw new Error(
-      `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}".`
+      `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
   }
   return { host, port, secure, user, pass, from };
@@ -12003,7 +12009,8 @@ Optional:
   --help                Show this help
 
 SMTP connection comes from ${SMTP_ENV.host} / ${SMTP_ENV.user} (+ password via
-${SMTP_ENV.password} or the macOS Keychain). See the README "SMTP transport".`;
+${SMTP_ENV.password} or the macOS Keychain). Setup guide:
+${SETUP_GUIDE_URL}`;
 async function runCli(argv, deps = {}) {
   const send = deps.send ?? sendViaSmtp;
   const resolveConfig = deps.resolveConfig ?? resolveSmtpConfig;
@@ -12052,7 +12059,7 @@ async function runCli(argv, deps = {}) {
     config = resolveConfig(env);
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
-    err(`See the README "SMTP transport" section.`);
+    err(`Setup guide: ${SETUP_GUIDE_URL}`);
     return EX_CONFIG;
   }
   let body;
