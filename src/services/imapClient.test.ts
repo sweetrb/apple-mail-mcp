@@ -491,14 +491,43 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     expect(rec.moved).toEqual([[1], "Archive"]);
   });
 
-  it("delete expunges the uid", async () => {
+  it("delete moves the uid to Trash (recoverable) rather than expunging", async () => {
+    // Gmail expunge on [Gmail]/All Mail is a no-op, so delete must MOVE to Trash.
+    // With an empty LIST the mailbox resolves to the [Gmail]/Trash default.
     const rec: MsgRec = {};
     const r = await imapDeleteMessageById(MID, {
       config: cfg,
       connect: async () => makeMsgClient(rec),
     });
     expect(r.success).toBe(true);
+    expect(rec.moved).toEqual([[1], "[Gmail]/Trash"]);
+    expect(rec.deleted).toBeUndefined();
+  });
+
+  it("delete resolves the server's \\Trash special-use mailbox", async () => {
+    const rec: MsgRec = {};
+    const client: ImapClientLike = {
+      ...makeMsgClient(rec),
+      list: async () => [
+        { path: "INBOX", name: "INBOX" },
+        { path: "Deleted Messages", name: "Deleted Messages", specialUse: "\\Trash" },
+      ],
+    };
+    const r = await imapDeleteMessageById(MID, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(true);
+    expect(rec.moved).toEqual([[1], "Deleted Messages"]);
+  });
+
+  it("delete from within Trash permanently expunges (empty-from-Trash)", async () => {
+    const rec: MsgRec = {};
+    const trashId = encodeImapId("iCloud", "[Gmail]/Trash", 1);
+    const r = await imapDeleteMessageById(trashId, {
+      config: cfg,
+      connect: async () => makeMsgClient(rec),
+    });
+    expect(r.success).toBe(true);
     expect(rec.deleted).toEqual([1]);
+    expect(rec.moved).toBeUndefined();
   });
 
   it("get-message returns subject + decoded body", async () => {

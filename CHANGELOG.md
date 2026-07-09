@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.5] - 2026-07-08
+### Fixed
+- **IMAP delete now actually trashes Gmail mail — it was a silent no-op before.** `delete-message` and `batch-delete-messages` (over IMAP) flagged `\Deleted` + EXPUNGE on the message's own mailbox. On Gmail, expunging from `[Gmail]/All Mail` (where the read path addresses messages) **does not trash the message** — the tool reported success, but the mail stayed put. Delete now **moves the message to the account's Trash** — the server's `\Trash` special-use mailbox when advertised, else a `Trash`/`Deleted Messages`-style folder, else the `[Gmail]/Trash` default — which is both what Gmail treats as "trash" and what these tools' `Returns: … moves it to Trash` contract already promised. Messages already in Trash are expunged (the "empty from Trash" case). Non-Gmail servers that trash via a real Trash folder now behave correctly too, and `delete` is recoverable everywhere instead of being an immediate expunge. **This also fixes the autonomous mail-hygiene flows** (spam sweep / obsolete-prune) that trash Gmail mail through this path.
+
 ## [2.8.4] - 2026-07-08
 ### Changed
 - **`doctor` now points a stuck user (or their AI) at the setup guide.** The two "not configured" messages (IMAP and SMTP) previously listed only the `APPLE_MAIL_MCP_*` env vars to set — which doesn't help the most common failure mode: a **Claude Desktop** user whose `env` block is silently stripped, so the env advice does nothing. Both messages now also name the **`config.json`** file method (`~/Library/Application Support/apple-mail-mcp/config.json`) and link the **[IMAP / SMTP Setup Guide](docs/IMAP-SETUP.md)**, so the fix is discoverable from inside the running server — not only from the repo README.

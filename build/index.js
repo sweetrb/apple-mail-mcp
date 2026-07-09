@@ -80308,6 +80308,28 @@ async function imapMoveMessageById(id, destMailbox, deps = {}) {
     }
   });
 }
+async function resolveTrashPath(client) {
+  try {
+    const boxes = await client.list();
+    const special = boxes.find((b) => b.specialUse === "\\Trash");
+    if (special) return special.path;
+    const named = boxes.find(
+      (b) => /^(trash|deleted messages|deleted items|bin)$/i.test(b.name) || /(^|\/)trash$/i.test(b.path)
+    );
+    if (named) return named.path;
+  } catch {
+  }
+  return resolveMailboxPath("trash", "list");
+}
+async function trashUids(client, uids, srcPath) {
+  const dest = await resolveTrashPath(client);
+  if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
+    await client.messageDelete(uids, { uid: true });
+    return { dest, expunged: true };
+  }
+  await client.messageMove(uids, dest, { uid: true });
+  return { dest, expunged: false };
+}
 async function imapDeleteMessageById(id, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
@@ -80316,9 +80338,11 @@ async function imapDeleteMessageById(id, deps = {}) {
     { ...deps, account: deps.account ?? ref.account },
     async (client) => {
       try {
-        const ok = await client.messageDelete([ref.uid], { uid: true });
-        if (!ok) return { success: false, error: `IMAP delete returned false for UID ${ref.uid}.` };
-        return { success: true, info: `Deleted UID ${ref.uid} from "${ref.path}" via IMAP.` };
+        const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
+        return {
+          success: true,
+          info: expunged ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.` : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`
+        };
       } catch (e) {
         return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
       }
@@ -80445,8 +80469,8 @@ var imapBatchFlag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => 
 var imapBatchUnflag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
   await c.messageFlagsRemove(uids, ["\\Flagged"], { uid: true });
 });
-var imapBatchDelete = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  await c.messageDelete(uids, { uid: true });
+var imapBatchDelete = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids, path) => {
+  await trashUids(c, uids, path);
 });
 function imapBatchMove(ids, destMailbox, deps = {}) {
   return imapBatch(ids, deps, async (c, uids) => {

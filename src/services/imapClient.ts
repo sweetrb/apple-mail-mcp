@@ -102,6 +102,8 @@ interface MailboxLock {
 interface ImapMailboxListing {
   path: string;
   name: string;
+  /** RFC 6154 special-use flag ("\\Trash", "\\Sent", …) when the server advertises it. */
+  specialUse?: string;
 }
 type FlagOpts = { uid: boolean };
 export interface ImapClientLike {
@@ -1064,6 +1066,52 @@ export async function imapMoveMessageById(
   });
 }
 
+/**
+ * Resolve the account's Trash mailbox path: prefer the server's `\Trash`
+ * special-use folder, then a common name/path, then the Gmail default.
+ *
+ * Deleting moves messages here (recoverable) rather than flagging `\Deleted` +
+ * EXPUNGE, because on Gmail expunging a message from `[Gmail]/All Mail` is a
+ * silent no-op — so the old flag+expunge path *reported success but never
+ * actually trashed Gmail mail*. A move to `[Gmail]/Trash` is what Gmail treats
+ * as "trash" (and matches the tools' documented "moves to Trash" contract).
+ */
+async function resolveTrashPath(client: ImapClientLike): Promise<string> {
+  try {
+    const boxes = await client.list();
+    const special = boxes.find((b) => b.specialUse === "\\Trash");
+    if (special) return special.path;
+    const named = boxes.find(
+      (b) =>
+        /^(trash|deleted messages|deleted items|bin)$/i.test(b.name) || /(^|\/)trash$/i.test(b.path)
+    );
+    if (named) return named.path;
+  } catch {
+    // Fall through to the Gmail default if LIST fails.
+  }
+  return resolveMailboxPath("trash", "list");
+}
+
+/**
+ * Trash a set of UIDs from the currently-selected `srcPath`: move them to the
+ * account's Trash mailbox (recoverable). If the messages are *already* in Trash,
+ * expunge them instead (the "empty from Trash" case). Returns the resolved
+ * destination and whether it expunged.
+ */
+async function trashUids(
+  client: ImapClientLike,
+  uids: number[],
+  srcPath: string
+): Promise<{ dest: string; expunged: boolean }> {
+  const dest = await resolveTrashPath(client);
+  if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
+    await client.messageDelete(uids, { uid: true });
+    return { dest, expunged: true };
+  }
+  await client.messageMove(uids, dest, { uid: true });
+  return { dest, expunged: false };
+}
+
 export async function imapDeleteMessageById(
   id: string,
   deps: ImapDeps = {}
@@ -1075,9 +1123,13 @@ export async function imapDeleteMessageById(
     { ...deps, account: deps.account ?? ref.account },
     async (client) => {
       try {
-        const ok = await client.messageDelete([ref.uid], { uid: true });
-        if (!ok) return { success: false, error: `IMAP delete returned false for UID ${ref.uid}.` };
-        return { success: true, info: `Deleted UID ${ref.uid} from "${ref.path}" via IMAP.` };
+        const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
+        return {
+          success: true,
+          info: expunged
+            ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.`
+            : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`,
+        };
       } catch (e) {
         return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
       }
@@ -1273,8 +1325,8 @@ export const imapBatchUnflag = (ids: string[], deps: ImapDeps = {}): Promise<Ima
     await c.messageFlagsRemove(uids, ["\\Flagged"], { uid: true });
   });
 export const imapBatchDelete = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
-  imapBatch(ids, deps, async (c, uids) => {
-    await c.messageDelete(uids, { uid: true });
+  imapBatch(ids, deps, async (c, uids, path) => {
+    await trashUids(c, uids, path);
   });
 export function imapBatchMove(
   ids: string[],
