@@ -2266,7 +2266,7 @@ server.registerTool(
   "search-contacts",
   {
     description:
-      "Use when: looking up a person in Contacts.app by name to find their email address(es) before composing or sending mail.\nReturns: matching contacts with their names and email addresses.\nDo not use when: searching email messages (use search-messages) — this queries Contacts, not the mailbox.",
+      "Use when: looking up a person in Contacts by name, organization, nickname, or email to find their email address(es)/phone(s) before composing or sending mail. Reads the macOS Contacts database directly (needs Full Disk Access; does NOT require Contacts.app to be running or an Automation / Apple-Events grant).\nReturns: matching contacts with their names, email addresses, and phone numbers.\nDo not use when: searching email messages (use search-messages) — this queries Contacts, not the mailbox.",
     inputSchema: {
       query: z.string().min(1, "Search query is required"),
     },

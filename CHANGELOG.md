@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.7] - 2026-07-10
+
+### Changed
+- **`search-contacts` now reads the macOS Contacts database directly (Full Disk Access) instead of driving Contacts.app over AppleScript.** The old `tell application "Contacts"` path required an **Automation / Apple-Events** TCC grant for `node` → Contacts; on headless/scheduled hosts missing that grant it raised an **unanswerable permission prompt that hung until timeout**. The new reader (`src/utils/contactsDb.ts`) scans the AddressBook SQLite files — the top-level `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb` plus every `Sources/*/AddressBook-v22.abcddb` — read-only via the built-in **`node:sqlite`**, needs only **Full Disk Access** (a stable grant the Node runtime already holds), and **prompts for nothing**. It matches the query as a case-insensitive substring of full name, organization, nickname, or any email address, returns emails and phone numbers, and de-duplicates across sources. Locked/absent source DBs are skipped rather than failing the search. Requires **Node ≥ 22.5** for `node:sqlite`; on older runtimes it logs one line and returns an empty list (it does **not** fall back to AppleScript, which would reintroduce the prompt). The `search-contacts` tool contract (inputs/outputs) is unchanged.
+
 ## [2.8.6] - 2026-07-09
 End-user docs/discoverability pass: make setup findable for no-clone installs (npm registry, plugin marketplace) and make "not configured" errors actionable.
 
