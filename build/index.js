@@ -20707,7 +20707,7 @@ var require_thread_stream = __commonJS({
     var { version: version3 } = require_package2();
     var { EventEmitter } = __require("events");
     var { Worker } = __require("worker_threads");
-    var { join: join5 } = __require("path");
+    var { join: join6 } = __require("path");
     var { pathToFileURL } = __require("url");
     var { wait } = require_wait();
     var {
@@ -20758,7 +20758,7 @@ var require_thread_stream = __commonJS({
     function createWorker(stream, opts) {
       const { filename, workerData } = opts;
       const bundlerOverrides = "__bundlerPathsOverrides" in globalThis ? globalThis.__bundlerPathsOverrides : {};
-      const toExecute = bundlerOverrides["thread-stream-worker"] || join5(__dirname, "lib", "worker.js");
+      const toExecute = bundlerOverrides["thread-stream-worker"] || join6(__dirname, "lib", "worker.js");
       const worker = new Worker(toExecute, {
         ...opts.workerOpts,
         name: opts.workerOpts?.name || "thread-stream",
@@ -21224,9 +21224,9 @@ var require_transport = __commonJS({
   "node_modules/.pnpm/pino@10.3.1/node_modules/pino/lib/transport.js"(exports, module) {
     "use strict";
     var { createRequire: createRequire2 } = __require("module");
-    var { existsSync: existsSync5 } = __require("node:fs");
+    var { existsSync: existsSync6 } = __require("node:fs");
     var getCallers = require_caller();
-    var { join: join5, isAbsolute: isAbsolute3, sep: sep2 } = __require("node:path");
+    var { join: join6, isAbsolute: isAbsolute3, sep: sep2 } = __require("node:path");
     var { fileURLToPath } = __require("node:url");
     var sleep2 = require_atomic_sleep();
     var onExit = require_on_exit_leak_free();
@@ -21298,7 +21298,7 @@ var require_transport = __commonJS({
           return false;
         }
       }
-      return isAbsolute3(path) && !existsSync5(path);
+      return isAbsolute3(path) && !existsSync6(path);
     }
     function stripQuotes(value) {
       const first = value[0];
@@ -21379,7 +21379,7 @@ var require_transport = __commonJS({
         throw new Error("only one of target or targets can be specified");
       }
       if (targets) {
-        target = bundlerOverrides["pino-worker"] || join5(__dirname, "worker.js");
+        target = bundlerOverrides["pino-worker"] || join6(__dirname, "worker.js");
         options.targets = targets.filter((dest) => dest.target).map((dest) => {
           return {
             ...dest,
@@ -21397,7 +21397,7 @@ var require_transport = __commonJS({
           });
         });
       } else if (pipeline) {
-        target = bundlerOverrides["pino-worker"] || join5(__dirname, "worker.js");
+        target = bundlerOverrides["pino-worker"] || join6(__dirname, "worker.js");
         options.pipelines = [pipeline.map((dest) => {
           return {
             ...dest,
@@ -21420,7 +21420,7 @@ var require_transport = __commonJS({
           return origin;
         }
         if (origin === "pino/file") {
-          return join5(__dirname, "..", "file.js");
+          return join6(__dirname, "..", "file.js");
         }
         let fixTarget2;
         for (const filePath of callers) {
@@ -22400,7 +22400,7 @@ var require_safe_stable_stringify = __commonJS({
               return circularValue;
             }
             let res = "";
-            let join5 = ",";
+            let join6 = ",";
             const originalIndentation = indentation;
             if (Array.isArray(value)) {
               if (value.length === 0) {
@@ -22414,7 +22414,7 @@ var require_safe_stable_stringify = __commonJS({
                 indentation += spacer;
                 res += `
 ${indentation}`;
-                join5 = `,
+                join6 = `,
 ${indentation}`;
               }
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
@@ -22422,13 +22422,13 @@ ${indentation}`;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyFnReplacer(String(i), value, stack, replacer, spacer, indentation);
                 res += tmp2 !== void 0 ? tmp2 : "null";
-                res += join5;
+                res += join6;
               }
               const tmp = stringifyFnReplacer(String(i), value, stack, replacer, spacer, indentation);
               res += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res += `${join5}"... ${getItemCount(removedKeys)} not stringified"`;
+                res += `${join6}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               if (spacer !== "") {
                 res += `
@@ -22449,7 +22449,7 @@ ${originalIndentation}`;
             let separator = "";
             if (spacer !== "") {
               indentation += spacer;
-              join5 = `,
+              join6 = `,
 ${indentation}`;
               whitespace = " ";
             }
@@ -22463,13 +22463,13 @@ ${indentation}`;
               const tmp = stringifyFnReplacer(key2, value, stack, replacer, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}:${whitespace}${tmp}`;
-                separator = join5;
+                separator = join6;
               }
             }
             if (keyLength > maximumBreadth) {
               const removedKeys = keyLength - maximumBreadth;
               res += `${separator}"...":${whitespace}"${getItemCount(removedKeys)} not stringified"`;
-              separator = join5;
+              separator = join6;
             }
             if (spacer !== "" && separator.length > 1) {
               res = `
@@ -22510,7 +22510,7 @@ ${originalIndentation}`;
             }
             const originalIndentation = indentation;
             let res = "";
-            let join5 = ",";
+            let join6 = ",";
             if (Array.isArray(value)) {
               if (value.length === 0) {
                 return "[]";
@@ -22523,7 +22523,7 @@ ${originalIndentation}`;
                 indentation += spacer;
                 res += `
 ${indentation}`;
-                join5 = `,
+                join6 = `,
 ${indentation}`;
               }
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
@@ -22531,13 +22531,13 @@ ${indentation}`;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyArrayReplacer(String(i), value[i], stack, replacer, spacer, indentation);
                 res += tmp2 !== void 0 ? tmp2 : "null";
-                res += join5;
+                res += join6;
               }
               const tmp = stringifyArrayReplacer(String(i), value[i], stack, replacer, spacer, indentation);
               res += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res += `${join5}"... ${getItemCount(removedKeys)} not stringified"`;
+                res += `${join6}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               if (spacer !== "") {
                 res += `
@@ -22550,7 +22550,7 @@ ${originalIndentation}`;
             let whitespace = "";
             if (spacer !== "") {
               indentation += spacer;
-              join5 = `,
+              join6 = `,
 ${indentation}`;
               whitespace = " ";
             }
@@ -22559,7 +22559,7 @@ ${indentation}`;
               const tmp = stringifyArrayReplacer(key2, value[key2], stack, replacer, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}:${whitespace}${tmp}`;
-                separator = join5;
+                separator = join6;
               }
             }
             if (spacer !== "" && separator.length > 1) {
@@ -22617,20 +22617,20 @@ ${originalIndentation}`;
               indentation += spacer;
               let res2 = `
 ${indentation}`;
-              const join6 = `,
+              const join7 = `,
 ${indentation}`;
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
               let i = 0;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyIndent(String(i), value[i], stack, spacer, indentation);
                 res2 += tmp2 !== void 0 ? tmp2 : "null";
-                res2 += join6;
+                res2 += join7;
               }
               const tmp = stringifyIndent(String(i), value[i], stack, spacer, indentation);
               res2 += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res2 += `${join6}"... ${getItemCount(removedKeys)} not stringified"`;
+                res2 += `${join7}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               res2 += `
 ${originalIndentation}`;
@@ -22646,16 +22646,16 @@ ${originalIndentation}`;
               return '"[Object]"';
             }
             indentation += spacer;
-            const join5 = `,
+            const join6 = `,
 ${indentation}`;
             let res = "";
             let separator = "";
             let maximumPropertiesToStringify = Math.min(keyLength, maximumBreadth);
             if (isTypedArrayWithEntries(value)) {
-              res += stringifyTypedArray(value, join5, maximumBreadth);
+              res += stringifyTypedArray(value, join6, maximumBreadth);
               keys = keys.slice(value.length);
               maximumPropertiesToStringify -= value.length;
-              separator = join5;
+              separator = join6;
             }
             if (deterministic) {
               keys = sort(keys, comparator);
@@ -22666,13 +22666,13 @@ ${indentation}`;
               const tmp = stringifyIndent(key2, value[key2], stack, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}: ${tmp}`;
-                separator = join5;
+                separator = join6;
               }
             }
             if (keyLength > maximumBreadth) {
               const removedKeys = keyLength - maximumBreadth;
               res += `${separator}"...": "${getItemCount(removedKeys)} not stringified"`;
-              separator = join5;
+              separator = join6;
             }
             if (separator !== "") {
               res = `
@@ -76147,9 +76147,9 @@ var StdioServerTransport = class {
 
 // src/services/appleMailManager.ts
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync2, writeFileSync as writeFileSync3, readFileSync as readFileSync2, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "fs";
-import { isAbsolute, resolve, sep, join as join3 } from "path";
-import { homedir as homedir2 } from "os";
+import { existsSync as existsSync3, writeFileSync as writeFileSync3, readFileSync as readFileSync2, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "fs";
+import { isAbsolute, resolve, sep, join as join4 } from "path";
+import { homedir as homedir3 } from "os";
 
 // src/utils/applescript.ts
 import { execSync, spawnSync } from "child_process";
@@ -76685,6 +76685,114 @@ function materializeAttachments(attachments) {
   };
 }
 
+// src/utils/contactsDb.ts
+import { existsSync as existsSync2, readdirSync } from "fs";
+import { join as join3 } from "path";
+import { homedir as homedir2 } from "os";
+function loadSqlite() {
+  try {
+    const mod = __require("node:sqlite");
+    if (!mod || typeof mod.DatabaseSync !== "function") {
+      console.error(
+        "[contactsDb] node:sqlite unavailable (no DatabaseSync export); returning no contacts"
+      );
+      return null;
+    }
+    return mod;
+  } catch (err) {
+    console.error(
+      `[contactsDb] node:sqlite not available (requires Node >= 22.5); returning no contacts: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return null;
+  }
+}
+function resolveContactsDbPaths(baseDir) {
+  const root = baseDir ?? join3(homedir2(), "Library", "Application Support", "AddressBook");
+  const paths = [];
+  const topLevel = join3(root, "AddressBook-v22.abcddb");
+  if (existsSync2(topLevel)) paths.push(topLevel);
+  const sourcesDir = join3(root, "Sources");
+  if (existsSync2(sourcesDir)) {
+    let entries = [];
+    try {
+      entries = readdirSync(sourcesDir);
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      const candidate = join3(sourcesDir, entry, "AddressBook-v22.abcddb");
+      if (existsSync2(candidate)) paths.push(candidate);
+    }
+  }
+  return paths;
+}
+var RECORD_SQL = `
+  SELECT r.Z_PK pk,
+         TRIM(COALESCE(r.ZFIRSTNAME,'')||' '||COALESCE(r.ZLASTNAME,'')) fullname,
+         r.ZORGANIZATION org, r.ZNICKNAME nick
+  FROM ZABCDRECORD r
+  WHERE lower(TRIM(COALESCE(r.ZFIRSTNAME,'')||' '||COALESCE(r.ZLASTNAME,''))) LIKE ?
+     OR lower(COALESCE(r.ZORGANIZATION,'')) LIKE ?
+     OR lower(COALESCE(r.ZNICKNAME,''))     LIKE ?
+     OR r.Z_PK IN (SELECT ZOWNER FROM ZABCDEMAILADDRESS WHERE lower(COALESCE(ZADDRESS,'')) LIKE ?)
+`;
+var EMAILS_SQL = `SELECT ZADDRESS AS v FROM ZABCDEMAILADDRESS WHERE ZOWNER = ? AND ZADDRESS IS NOT NULL`;
+var PHONES_SQL = `SELECT ZFULLNUMBER AS v FROM ZABCDPHONENUMBER WHERE ZOWNER = ? AND ZFULLNUMBER IS NOT NULL`;
+function displayName(row) {
+  const fullname = typeof row.fullname === "string" ? row.fullname.trim() : "";
+  if (fullname) return fullname;
+  const org = typeof row.org === "string" ? row.org.trim() : "";
+  if (org) return org;
+  const nick = typeof row.nick === "string" ? row.nick.trim() : "";
+  if (nick) return nick;
+  return "(no name)";
+}
+function searchOneDb(sqlite, dbPath, like) {
+  let db = null;
+  try {
+    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    const records = db.prepare(RECORD_SQL).all(like, like, like, like);
+    const emailStmt = db.prepare(EMAILS_SQL);
+    const phoneStmt = db.prepare(PHONES_SQL);
+    const contacts = [];
+    for (const rec of records) {
+      const pk = rec.pk;
+      const emails = emailStmt.all(pk).map((r) => r.v).filter((v) => typeof v === "string" && v.length > 0);
+      const phones = phoneStmt.all(pk).map((r) => r.v).filter((v) => typeof v === "string" && v.length > 0);
+      contacts.push({ name: displayName(rec), emails, phones });
+    }
+    return contacts;
+  } catch (err) {
+    console.error(
+      `[contactsDb] skipping unreadable Contacts DB ${dbPath}: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return [];
+  } finally {
+    try {
+      db?.close();
+    } catch {
+    }
+  }
+}
+function searchContactsDb(query, opts) {
+  if (!query || !query.trim()) return [];
+  const sqlite = loadSqlite();
+  if (!sqlite) return [];
+  const dbPaths = opts?.dbPaths ?? resolveContactsDbPaths();
+  const like = `%${query.toLowerCase()}%`;
+  const seen = /* @__PURE__ */ new Set();
+  const results = [];
+  for (const dbPath of dbPaths) {
+    for (const contact of searchOneDb(sqlite, dbPath, like)) {
+      const key = `${contact.name} ${[...contact.emails].sort().join(",")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(contact);
+    }
+  }
+  return results;
+}
+
 // src/services/appleMailManager.ts
 function getMailboxScanThreshold() {
   const raw = process.env.APPLE_MAIL_MAX_SEARCH_MAILBOX;
@@ -76740,7 +76848,7 @@ function splitSearchDiagnostics(output, account) {
   }
   return { payload, diagnostics };
 }
-var ALLOWED_SAVE_ROOTS = [homedir2(), "/tmp", "/private/tmp", "/Volumes"];
+var ALLOWED_SAVE_ROOTS = [homedir3(), "/tmp", "/private/tmp", "/Volumes"];
 function isPathWithinAllowedRoots(resolvedPath) {
   return ALLOWED_SAVE_ROOTS.some((root) => {
     const base = root.endsWith(sep) ? root.slice(0, -1) : root;
@@ -76784,7 +76892,7 @@ function buildAttachmentCommands(attachments) {
     if (!isAbsolute(filePath)) {
       throw new Error(`Attachment path must be absolute: "${filePath}"`);
     }
-    if (!existsSync2(filePath)) {
+    if (!existsSync3(filePath)) {
       throw new Error(`Attachment file not found: "${filePath}"`);
     }
   }
@@ -78606,7 +78714,7 @@ var AppleMailManager = class {
     let dir = null;
     try {
       dir = mkdtempSync2("/private/tmp/amcp-fetch-");
-      const dest = join3(dir, attachmentName.replace(/[/\\]/g, "_"));
+      const dest = join4(dir, attachmentName.replace(/[/\\]/g, "_"));
       const ok = this.saveAttachment(id, attachmentName, dest);
       if (!ok) {
         return {
@@ -79040,60 +79148,16 @@ ${actionStmts.join("\n")}
   // Contacts Integration
   // ===========================================================================
   /**
-   * Search contacts by name or email.
+   * Search contacts by name, organization, nickname, or email address.
+   *
+   * Reads the macOS Contacts (AddressBook) SQLite databases directly via Full
+   * Disk Access — it does NOT drive Contacts.app over AppleScript, so it raises
+   * no Automation / Apple-Events permission prompt (the old path would hang on
+   * that unanswerable prompt on headless/scheduled hosts). See
+   * {@link searchContactsDb}.
    */
   searchContacts(query) {
-    const safeQuery = escapeForAppleScript(query);
-    const script = `
-      tell application "Contacts"
-        set matchedContacts to {}
-        set foundPeople to (every person whose name contains "${safeQuery}") & (every person whose value of emails contains "${safeQuery}")
-
-        -- Deduplicate by tracking IDs
-        set seenIds to {}
-        repeat with p in foundPeople
-          set pid to id of p
-          if seenIds does not contain pid then
-            set end of seenIds to pid
-            -- Per-person try: one malformed contact (e.g. no emails) must not
-            -- abort the whole search and return an empty list (audit finding #13).
-            try
-              set pName to name of p
-              set pEmails to ""
-              repeat with e in emails of p
-                if pEmails is not "" then set pEmails to pEmails & ","
-                set pEmails to pEmails & (value of e)
-              end repeat
-              set pPhones to ""
-              repeat with ph in phones of p
-                if pPhones is not "" then set pPhones to pPhones & ","
-                set pPhones to pPhones & (value of ph)
-              end repeat
-              set end of matchedContacts to pName & "${FIELD_SEP}" & pEmails & "${FIELD_SEP}" & pPhones
-            end try
-          end if
-        end repeat
-
-        set AppleScript's text item delimiters to "${RECORD_SEP}"
-        return matchedContacts as text
-      end tell
-    `;
-    const result = executeAppleScript(script);
-    if (!result.success || !result.output.trim()) {
-      return [];
-    }
-    const items = result.output.split(RECORD_SEP);
-    const contacts = [];
-    for (const item of items) {
-      const parts = item.split(FIELD_SEP);
-      if (parts.length < 3) continue;
-      contacts.push({
-        name: parts[0],
-        emails: parts[1] ? parts[1].split(",").filter(Boolean) : [],
-        phones: parts[2] ? parts[2].split(",").filter(Boolean) : []
-      });
-    }
-    return contacts;
+    return searchContactsDb(query);
   }
   // ===========================================================================
   // Email Templates
@@ -79408,7 +79472,7 @@ import { resolve as resolvePath, join as joinPath } from "path";
 var import_nodemailer = __toESM(require_nodemailer(), 1);
 import { execFileSync } from "child_process";
 import { isAbsolute as isAbsolute2 } from "path";
-import { existsSync as existsSync3 } from "fs";
+import { existsSync as existsSync4 } from "fs";
 
 // src/utils/docsUrls.ts
 var SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
@@ -79484,7 +79548,7 @@ function buildAttachments(attachments) {
   return attachments.map((a) => {
     if (typeof a === "string") {
       if (!isAbsolute2(a)) throw new Error(`Attachment path must be absolute: "${a}"`);
-      if (!existsSync3(a)) throw new Error(`Attachment file not found: "${a}"`);
+      if (!existsSync4(a)) throw new Error(`Attachment file not found: "${a}"`);
       return { path: a };
     }
     if (!a.filename || !a.contentBase64) {
@@ -81078,18 +81142,18 @@ var ImapIdleWatcher = class {
 };
 
 // src/services/fileConfig.ts
-import { existsSync as existsSync4, readFileSync as readFileSync3 } from "fs";
-import { join as join4 } from "path";
-import { homedir as homedir3 } from "os";
+import { existsSync as existsSync5, readFileSync as readFileSync3 } from "fs";
+import { join as join5 } from "path";
+import { homedir as homedir4 } from "os";
 function fileConfigPath(env = process.env) {
   const override = env.APPLE_MAIL_MCP_CONFIG_FILE;
   if (override && override.trim()) return override.trim();
-  return join4(homedir3(), "Library", "Application Support", "apple-mail-mcp", "config.json");
+  return join5(homedir4(), "Library", "Application Support", "apple-mail-mcp", "config.json");
 }
 function loadFileConfig(env = process.env, path = fileConfigPath(env)) {
   const applied = [];
   try {
-    if (!existsSync4(path)) return applied;
+    if (!existsSync5(path)) return applied;
     const parsed = JSON.parse(readFileSync3(path, "utf8"));
     if (!parsed || typeof parsed !== "object") return applied;
     for (const [k, v] of Object.entries(parsed)) {
@@ -82697,7 +82761,7 @@ server.registerTool(
 server.registerTool(
   "search-contacts",
   {
-    description: "Use when: looking up a person in Contacts.app by name to find their email address(es) before composing or sending mail.\nReturns: matching contacts with their names and email addresses.\nDo not use when: searching email messages (use search-messages) \u2014 this queries Contacts, not the mailbox.",
+    description: "Use when: looking up a person in Contacts by name, organization, nickname, or email to find their email address(es)/phone(s) before composing or sending mail. Reads the macOS Contacts database directly (needs Full Disk Access; does NOT require Contacts.app to be running or an Automation / Apple-Events grant).\nReturns: matching contacts with their names, email addresses, and phone numbers.\nDo not use when: searching email messages (use search-messages) \u2014 this queries Contacts, not the mailbox.",
     inputSchema: {
       query: external_exports.string().min(1, "Search query is required")
     },

@@ -21,6 +21,7 @@ import { executeAppleScript } from "@/utils/applescript.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { TemplateStore } from "@/services/templateStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
+import { searchContactsDb } from "@/utils/contactsDb.js";
 import type {
   Message,
   MessageContent,
@@ -3160,66 +3161,16 @@ ${actionStmts.join("\n")}
   // ===========================================================================
 
   /**
-   * Search contacts by name or email.
+   * Search contacts by name, organization, nickname, or email address.
+   *
+   * Reads the macOS Contacts (AddressBook) SQLite databases directly via Full
+   * Disk Access — it does NOT drive Contacts.app over AppleScript, so it raises
+   * no Automation / Apple-Events permission prompt (the old path would hang on
+   * that unanswerable prompt on headless/scheduled hosts). See
+   * {@link searchContactsDb}.
    */
   searchContacts(query: string): Contact[] {
-    const safeQuery = escapeForAppleScript(query);
-
-    const script = `
-      tell application "Contacts"
-        set matchedContacts to {}
-        set foundPeople to (every person whose name contains "${safeQuery}") & (every person whose value of emails contains "${safeQuery}")
-
-        -- Deduplicate by tracking IDs
-        set seenIds to {}
-        repeat with p in foundPeople
-          set pid to id of p
-          if seenIds does not contain pid then
-            set end of seenIds to pid
-            -- Per-person try: one malformed contact (e.g. no emails) must not
-            -- abort the whole search and return an empty list (audit finding #13).
-            try
-              set pName to name of p
-              set pEmails to ""
-              repeat with e in emails of p
-                if pEmails is not "" then set pEmails to pEmails & ","
-                set pEmails to pEmails & (value of e)
-              end repeat
-              set pPhones to ""
-              repeat with ph in phones of p
-                if pPhones is not "" then set pPhones to pPhones & ","
-                set pPhones to pPhones & (value of ph)
-              end repeat
-              set end of matchedContacts to pName & "${FIELD_SEP}" & pEmails & "${FIELD_SEP}" & pPhones
-            end try
-          end if
-        end repeat
-
-        set AppleScript's text item delimiters to "${RECORD_SEP}"
-        return matchedContacts as text
-      end tell
-    `;
-
-    const result = executeAppleScript(script);
-
-    if (!result.success || !result.output.trim()) {
-      return [];
-    }
-
-    const items = result.output.split(RECORD_SEP);
-    const contacts: Contact[] = [];
-
-    for (const item of items) {
-      const parts = item.split(FIELD_SEP);
-      if (parts.length < 3) continue;
-      contacts.push({
-        name: parts[0],
-        emails: parts[1] ? parts[1].split(",").filter(Boolean) : [],
-        phones: parts[2] ? parts[2].split(",").filter(Boolean) : [],
-      });
-    }
-
-    return contacts;
+    return searchContactsDb(query);
   }
 
   // ===========================================================================
