@@ -93,6 +93,7 @@ import { routeMessage } from "@/services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "@/tools/doctor.js";
 import { registerResourcesAndPrompts } from "@/tools/resourcesAndPrompts.js";
 import { normalizeSubject, subjectFromGetMessage } from "@/tools/thread.js";
+import { extractRfcMessageIdFromSource } from "@/utils/mimeParse.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
 import { loadFileConfig } from "@/services/fileConfig.js";
 import { isOrphaned } from "@/utils/orphan.js";
@@ -526,23 +527,41 @@ server.registerTool(
   "get-message",
   {
     description:
-      "Use when: reading the full body of one message whose id you already have (numeric or imap:…); set preferHtml to get the HTML body instead of plain text.\nReturns: the message subject and body (plain text by default, HTML when preferHtml is true).\nDo not use when: you don't yet have an id (use search-messages or list-messages first), or you want the whole conversation (use get-thread).",
+      'Use when: reading the full body of one message whose id you already have (numeric or imap:…); set preferHtml to get the HTML body instead of plain text.\nReturns: the message subject, body (plain text by default, HTML when preferHtml is true), and its stable RFC Message-ID (rfcMessageId) for dedup/threading.\nTip: pass the mailbox+account you got the id from (e.g. from search-messages) to fetch it directly — required for reliable reads of large folders like "Sent Items", which otherwise time out.\nDo not use when: you don\'t yet have an id (use search-messages or list-messages first), or you want the whole conversation (use get-thread).',
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       preferHtml: z
         .boolean()
         .optional()
         .describe("Return the HTML body (extracted from the message source) instead of plain text"),
+      mailbox: z
+        .string()
+        .optional()
+        .describe(
+          'Mailbox that holds the message (e.g. "Sent Items"). Numeric ids are unique per mailbox; supplying this (with account) opens that mailbox directly instead of scanning every mailbox, which is required to read large folders like Sent Items without timing out.'
+        ),
+      account: z
+        .string()
+        .optional()
+        .describe(
+          "Account that holds the message. Pair with `mailbox` for a direct, scan-free fetch."
+        ),
     },
     outputSchema: {
       id: z.string().optional(),
       subject: z.string().optional(),
       body: z.string().optional(),
       isHtml: z.boolean().optional(),
+      rfcMessageId: z
+        .string()
+        .optional()
+        .describe(
+          "Stable RFC 5322 Message-ID (angle brackets stripped); empty when the message has none"
+        ),
     },
   },
   withErrorHandling(
-    ({ id, preferHtml }) =>
+    ({ id, preferHtml, mailbox, account }) =>
       routeMessage(id, {
         // IMAP id (imap:…) → fetch via IMAP (#43 Phase 3); else AppleScript.
         imap: () => imapGetMessage(id, preferHtml === true),
@@ -556,11 +575,18 @@ server.registerTool(
             subject: subjectFromGetMessage(r.info),
             body: sep >= 0 ? r.info.slice(sep + 2) : r.info,
             isHtml: preferHtml === true,
+            rfcMessageId: extractRfcMessageIdFromSource(r.info),
           };
         },
         apple: () => {
           // Only fetch/parse the raw source when HTML is actually requested (#32).
-          const content = mailManager.getMessageContent(id, preferHtml === true);
+          // A mailbox+account hint (from the caller, else the id→location index)
+          // scopes the fetch so large folders like Sent Items resolve instead of
+          // timing out on a full-mailbox scan.
+          const content = mailManager.getMessageContent(id, preferHtml === true, {
+            account,
+            mailbox,
+          });
           if (!content) return errorResponse(`Message with ID "${id}" not found`);
           const isHtml = preferHtml === true && !!content.htmlContent;
           const body = isHtml ? content.htmlContent! : content.plainText;
@@ -569,6 +595,7 @@ server.registerTool(
             subject: content.subject,
             body,
             isHtml,
+            rfcMessageId: content.rfcMessageId ?? "",
           });
         },
         ok: "",

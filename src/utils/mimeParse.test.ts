@@ -1,5 +1,39 @@
 import { describe, it, expect } from "vitest";
-import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "./mimeParse.js";
+import {
+  parseMimeAttachments,
+  extractMimeAttachment,
+  extractHtmlBody,
+  extractRfcMessageIdFromSource,
+} from "./mimeParse.js";
+
+describe("extractRfcMessageIdFromSource", () => {
+  it("extracts a Message-ID header and strips angle brackets", () => {
+    const src = "From: a@b.com\r\nMessage-ID: <abc123@mail.example.com>\r\nSubject: Hi\r\n\r\nBody";
+    expect(extractRfcMessageIdFromSource(src)).toBe("abc123@mail.example.com");
+  });
+
+  it("matches the Message-Id casing variant", () => {
+    const src = "Message-Id: <XYZ@host>\r\n\r\nbody";
+    expect(extractRfcMessageIdFromSource(src)).toBe("XYZ@host");
+  });
+
+  it("returns empty string when there is no Message-ID header", () => {
+    expect(extractRfcMessageIdFromSource("Subject: Hi\r\n\r\nbody")).toBe("");
+  });
+
+  it("returns empty string for a subject+body blob with no header block", () => {
+    expect(extractRfcMessageIdFromSource("Subject: Hello\n\nsome body text")).toBe("");
+  });
+
+  it("ignores a Message-ID-looking line in the body", () => {
+    const src = "Subject: Hi\r\n\r\nMessage-ID: <notheader@x.com>";
+    expect(extractRfcMessageIdFromSource(src)).toBe("");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(extractRfcMessageIdFromSource("")).toBe("");
+  });
+});
 
 const MIME_WITH_PDF = `Content-Type: multipart/mixed;
 \tboundary="_004_TEST"

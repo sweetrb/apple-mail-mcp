@@ -45,6 +45,7 @@ import type {
   SerialEmailResult,
   SearchDiagnostics,
   SearchResult,
+  AppleScriptResult,
 } from "@/types.js";
 
 // =============================================================================
@@ -101,8 +102,20 @@ const DIAG_MARKER = "\x1dDIAG\x1d"; // GS-wrapped — payload/diagnostics bounda
 const DIAG_FIELD_SEP = "\x1dF\x1d"; // between diagnostics fields
 const DIAG_ITEM_SEP = "\x1dM\x1d"; // between diagnostics list items
 const CONTENT_MARKER = "\x1dCONTENT\x1d"; // subject/plain-text boundary
+const MSGID_MARKER = "\x1dMSGID\x1d"; // subject/RFC-Message-ID boundary (get-message content)
 const HTML_MARKER = "\x1dHTML\x1d"; // plain-text/source boundary
 const BATCH_FATAL = "\x1dFATAL\x1d"; // prefix for a whole-batch failure (e.g. bad destination)
+
+/**
+ * Normalize an RFC 5322 Message-ID for backend-independent matching: trim and
+ * drop any surrounding angle brackets. Mail.app's AppleScript `message id`
+ * property returns the value bracketless already, but normalize defensively so
+ * the surfaced value is consistent regardless of source. Returns "" for a
+ * missing/blank value.
+ */
+function normalizeRfcMessageId(mid: string): string {
+  return (mid || "").trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
 
 /**
  * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
@@ -640,6 +653,36 @@ export class AppleMailManager {
 
   /** Cache TTL in milliseconds (60 seconds). */
   private readonly CACHE_TTL_MS = 60_000;
+
+  /**
+   * Remembers where each message id was last seen: id → {account, mailbox}.
+   *
+   * Mail.app numeric message ids are unique *per mailbox*, and by-id fetches
+   * (getMessageContent/getRawSource) otherwise have to linear-scan every mailbox
+   * of every account probing `whose id is N`. On a real multi-account setup that
+   * is 700+ mailboxes; a message in a late-iterated folder (e.g. a large "Sent
+   * Items") isn't reached before the AppleScript timeout fires, so the fetch
+   * returns a false "not found" (only INBOX ids, reached early, worked). Every
+   * search/list/by-id result records its id→location here so a subsequent fetch
+   * opens the one right mailbox directly. A stale entry (message moved) simply
+   * misses and falls back to the full scan, so it can never wedge a lookup.
+   */
+  private idLocationIndex = new Map<string, { account: string; mailbox: string }>();
+
+  /** Cap on the id→location index so a long-lived process can't grow unbounded. */
+  private readonly ID_LOCATION_MAX = 5000;
+
+  /** Record (or refresh) where a message id lives, evicting oldest when full. */
+  private rememberLocation(id: string, account: string, mailbox: string): void {
+    if (!id || !account || !mailbox) return;
+    // Re-insert to keep Map insertion order ~ recency for simple FIFO eviction.
+    if (this.idLocationIndex.has(id)) this.idLocationIndex.delete(id);
+    this.idLocationIndex.set(id, { account, mailbox });
+    if (this.idLocationIndex.size > this.ID_LOCATION_MAX) {
+      const oldest = this.idLocationIndex.keys().next().value;
+      if (oldest !== undefined) this.idLocationIndex.delete(oldest);
+    }
+  }
 
   /**
    * Returns cached accounts or fetches fresh data if cache is expired/empty.
@@ -1253,6 +1296,9 @@ export class AppleMailManager {
     const parts = result.output.split(FIELD_SEP);
     if (parts.length < 9) return null;
 
+    // Record id→location so a subsequent content/source fetch skips the scan.
+    this.rememberLocation(id.toString(), parts[8], parts[7]);
+
     return {
       id: id.toString(),
       subject: parts[0],
@@ -1270,6 +1316,53 @@ export class AppleMailManager {
   }
 
   /**
+   * Build an app-level AppleScript that opens exactly one account+mailbox, finds
+   * the message with numeric `id` in it, and runs `innerAction` (which may assume
+   * `msg` is bound). Used by the by-id fast paths (getMessageContent/getRawSource)
+   * so a message in a late-iterated large folder resolves directly instead of via
+   * the timeout-prone full-mailbox scan.
+   *
+   * The mailbox name is resolved through `resolveMailbox` (so an alias like
+   * "Sent"→"Sent Items" or a casing mismatch like "INBOX"→"Inbox" still opens the
+   * right folder), and matched case-insensitively by iterating the account's
+   * mailboxes — `mailbox "INBOX" of account …` throws on accounts whose inbox is
+   * actually named "Inbox", which would silently drop us back to the slow scan.
+   * Returns "" (found nothing) on any error, so the caller falls back safely.
+   */
+  private scopedByIdScript(
+    account: string,
+    mailbox: string,
+    id: string,
+    innerAction: string
+  ): string {
+    const resolved = this.resolveMailbox(mailbox, account);
+    return buildAppLevelScript(`
+      try
+        set acct to (first account whose name is "${escapeForAppleScript(account)}")
+        set targetMb to missing value
+        ignoring case
+          repeat with mb in mailboxes of acct
+            if (name of mb) is "${escapeForAppleScript(resolved)}" then
+              set targetMb to mb
+              exit repeat
+            end if
+          end repeat
+        end ignoring
+        if targetMb is not missing value then
+          set matchingMsgs to (messages of targetMb whose id is ${Number(id)})
+          if (count of matchingMsgs) > 0 then
+            set msg to item 1 of matchingMsgs
+            ${innerAction}
+          end if
+        end if
+        return ""
+      on error errMsg
+        return ""
+      end try
+    `);
+  }
+
+  /**
    * Get the content of a message.
    *
    * @param id - Message ID
@@ -1279,12 +1372,52 @@ export class AppleMailManager {
    *   path doesn't need it; fetching it unconditionally was both slow and, worse,
    *   returned the entire raw MIME blob mislabeled as HTML (#32).
    */
-  getMessageContent(id: string, includeHtml = false): MessageContent | null {
+  getMessageContent(
+    id: string,
+    includeHtml = false,
+    hint?: { account?: string; mailbox?: string }
+  ): MessageContent | null {
     // Only `source of msg` is fetched when HTML is requested. `content of msg`
     // is the plain-text body and is always cheap.
     const sourceFetch = includeHtml
       ? `set htmlSource to ""\n                try\n                  set htmlSource to source of msg\n                end try`
       : `set htmlSource to ""`;
+
+    // Shared per-message read: subject, RFC Message-ID (`message id`; empty when
+    // the message carries none), plain-text content and — only when requested —
+    // the raw source. `msg` must already be bound.
+    const innerFetch = `
+                set msgSubject to subject of msg
+                set msgRfcId to ""
+                try
+                  set msgRfcId to message id of msg
+                end try
+                set msgContent to content of msg
+                ${sourceFetch}
+                return msgSubject & "${MSGID_MARKER}" & msgRfcId & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource`;
+
+    // Fast path: when we know which account+mailbox holds this id (explicit hint
+    // from the caller, or remembered from a prior search/list/by-id lookup), open
+    // just that one mailbox. The unscoped scan below walks every mailbox of every
+    // account (700+ on a real multi-account setup) and, for a message in a
+    // late-iterated folder like a large "Sent Items", never reaches it before the
+    // AppleScript timeout — returning a false "not found". See idLocationIndex.
+    const loc =
+      hint?.account && hint?.mailbox
+        ? { account: hint.account, mailbox: hint.mailbox }
+        : this.idLocationIndex.get(id.toString());
+
+    if (loc) {
+      const scopedScript = this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch);
+      const scoped = this.parseMessageContent(
+        id,
+        executeAppleScript(scopedScript, { timeoutMs: 60000 }),
+        includeHtml
+      );
+      if (scoped) return scoped;
+      // Scoped lookup missed (stale index — e.g. the message was moved). Fall
+      // through to the full scan below rather than returning a false "not found".
+    }
 
     const script = buildAppLevelScript(`
       try
@@ -1294,10 +1427,7 @@ export class AppleMailManager {
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
-                set msgSubject to subject of msg
-                set msgContent to content of msg
-                ${sourceFetch}
-                return msgSubject & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource
+                ${innerFetch}
               end if
             end try
           end repeat
@@ -1308,10 +1438,25 @@ export class AppleMailManager {
       end try
     `);
 
-    const result = executeAppleScript(script, { timeoutMs: 60000 });
+    return this.parseMessageContent(
+      id,
+      executeAppleScript(script, { timeoutMs: 60000 }),
+      includeHtml
+    );
+  }
 
+  /**
+   * Parse the marker-delimited output of a getMessageContent AppleScript into a
+   * MessageContent, or null when nothing was found / the fetch failed. Shared by
+   * the scoped fast path and the full-mailbox-scan fallback.
+   */
+  private parseMessageContent(
+    id: string,
+    result: AppleScriptResult,
+    includeHtml: boolean
+  ): MessageContent | null {
     if (!result.success || !result.output.trim()) {
-      console.error(`Failed to get message content: ${result.error}`);
+      if (!result.success) console.error(`Failed to get message content: ${result.error}`);
       return null;
     }
 
@@ -1322,6 +1467,12 @@ export class AppleMailManager {
     const parts = contentPart.split(CONTENT_MARKER);
     if (parts.length < 2) return null;
 
+    // parts[0] is `subject{MSGID_MARKER}rfcMessageId` — split the RFC Message-ID
+    // (added for stable, session-independent dedup) back out of the subject.
+    const subjParts = parts[0].split(MSGID_MARKER);
+    const subject = subjParts[0];
+    const rfcMessageId = normalizeRfcMessageId(subjParts.length > 1 ? subjParts[1] : "");
+
     // Extract the actual text/html body from the raw MIME source rather than
     // returning the whole source. Falls back to undefined when the message has
     // no HTML part (e.g. a plain-text-only email).
@@ -1330,9 +1481,10 @@ export class AppleMailManager {
 
     return {
       id: id.toString(),
-      subject: parts[0],
+      subject,
       plainText: parts[1],
       htmlContent,
+      rfcMessageId,
     };
   }
 
@@ -1345,7 +1497,27 @@ export class AppleMailManager {
    * the entire raw message including base64-encoded attachments —
    * a 20MB attachment can take several seconds over Exchange/IMAP.
    */
-  getRawSource(id: string): string | null {
+  getRawSource(id: string, hint?: { account?: string; mailbox?: string }): string | null {
+    // Fast path: fetch from the known mailbox directly (same rationale as
+    // getMessageContent — the unscoped scan below times out for a message in a
+    // late-iterated large folder like "Sent Items"). See idLocationIndex.
+    const loc =
+      hint?.account && hint?.mailbox
+        ? { account: hint.account, mailbox: hint.mailbox }
+        : this.idLocationIndex.get(id.toString());
+
+    if (loc) {
+      const scopedScript = this.scopedByIdScript(
+        loc.account,
+        loc.mailbox,
+        id,
+        "return source of msg"
+      );
+      const scoped = executeAppleScript(scopedScript, { timeoutMs: 120000 });
+      if (scoped.success && scoped.output.trim()) return scoped.output;
+      // Miss (stale index) → fall through to the full scan.
+    }
+
     const script = buildAppLevelScript(`
       try
         repeat with acct in accounts
@@ -1551,8 +1723,9 @@ export class AppleMailManager {
         hasAttachments = parts[6] === "true";
       }
 
+      const msgId = parts[0].trim();
       messages.push({
-        id: parts[0].trim(),
+        id: msgId,
         subject: parts[1],
         sender: parts[2],
         recipients: [],
@@ -1565,6 +1738,10 @@ export class AppleMailManager {
         account,
         hasAttachments,
       });
+      // Remember where this id lives so a later by-id fetch can open the one
+      // right mailbox instead of scanning every mailbox (avoids the Sent-Items
+      // timeout, see idLocationIndex).
+      this.rememberLocation(msgId, account, msgMailbox);
     }
 
     return messages;

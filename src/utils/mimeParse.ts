@@ -322,6 +322,25 @@ export function extractTextBody(source: string): string | null {
 }
 
 /**
+ * Extract the RFC 5322 `Message-ID` header from raw MIME source, normalized to
+ * bare form (surrounding angle brackets stripped). Only the header block (before
+ * the first blank line) is scanned, so a `Message-ID:`-looking string inside the
+ * body can't be mistaken for the header. Returns "" when absent — e.g. when
+ * handed a subject+body blob that carries no headers, which is harmless.
+ *
+ * @param source - Raw MIME source (or any text) that may contain a header block
+ * @returns The bare Message-ID, or "" if none is present
+ */
+export function extractRfcMessageIdFromSource(source: string): string {
+  if (!source || !source.trim()) return "";
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  const headers = blankLineIdx === -1 ? source : source.substring(0, blankLineIdx);
+  const raw = getHeader(headers, "Message-ID") ?? getHeader(headers, "Message-Id");
+  if (!raw) return "";
+  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
+
+/**
  * Extract and decode a specific attachment from MIME source by filename.
  * Supports base64, quoted-printable, and 7bit/8bit/binary transfer encodings.
  * Descends into nested multipart/* containers.
