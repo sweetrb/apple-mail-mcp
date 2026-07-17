@@ -76417,6 +76417,10 @@ function escapeForAppleScript(text) {
   if (!text) return "";
   return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, "");
 }
+function escapeForAppleScriptBody(text) {
+  if (!text) return "";
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r\n|\r|\n/g, "\\n").replace(/\t/g, "\\t").replace(/[\x00-\x1f\x7f]/g, "");
+}
 function buildAttachmentCommands(attachments) {
   if (!attachments || attachments.length === 0) return "";
   for (const filePath of attachments) {
@@ -77420,7 +77424,7 @@ var AppleMailManager = class {
   // ───────────────────────────────────────────────────────────────────
   sendEmail(to, subject, body, cc, bcc, account, attachments) {
     const safeSubject = escapeForAppleScript(subject);
-    const safeBody = escapeForAppleScript(body);
+    const safeBody = escapeForAppleScriptBody(body);
     let recipientCommands = "";
     for (const addr of to) {
       recipientCommands += `make new to recipient at end of to recipients with properties {address:"${escapeForAppleScript(addr)}"}
@@ -77550,7 +77554,7 @@ var AppleMailManager = class {
    */
   createDraft(to, subject, body, cc, bcc, account, attachments) {
     const safeSubject = escapeForAppleScript(subject);
-    const safeBody = escapeForAppleScript(body);
+    const safeBody = escapeForAppleScriptBody(body);
     let recipientCommands = "";
     for (const addr of to) {
       recipientCommands += `make new to recipient at end of to recipients with properties {address:"${escapeForAppleScript(addr)}"}
@@ -77623,7 +77627,7 @@ var AppleMailManager = class {
    * @returns true if reply created/sent successfully
    */
   replyToMessage(id, body, replyAll = false, send = true) {
-    const safeBody = escapeForAppleScript(body);
+    const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
     const sendAction = send ? "send theReply" : "";
     const script = buildAppLevelScript(`
@@ -77664,7 +77668,7 @@ var AppleMailManager = class {
    * @returns true if forward created/sent successfully
    */
   forwardMessage(id, to, body, send = true) {
-    const safeBody = body ? escapeForAppleScript(body) : "";
+    const safeBody = body ? escapeForAppleScriptBody(body) : "";
     const sendAction = send ? "send theForward" : "";
     let recipientCommands = "";
     for (const addr of to) {
