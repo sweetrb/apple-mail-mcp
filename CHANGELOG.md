@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.8] - 2026-07-17
+### Fixed
+- **Message bodies no longer lose their line breaks on the AppleScript paths.** The audit-finding-#10 hardening (`escapeForAppleScript`) strips **all** ASCII control characters — including `\n` — before interpolating values into AppleScript string literals. Right for single-line fields (a raw newline would terminate the literal and open an injection window), but it also flattened every multi-paragraph body into one wall of text in `create-draft`, the AppleScript `send-email` fallback, `reply-to-message`, `forward-message`, and the serial-email / `use-template` flows that funnel through them. Bodies now go through a new body-only escaper (`escapeForAppleScriptBody`) that escapes backslashes and quotes in the same order, then converts CRLF / CR / LF to the two-character AppleScript escape sequence `\n` (a linefeed to AppleScript 2.0+) and tab to `\t`, then strips any remaining control characters — so no raw control character ever enters the emitted literal (the injection defense is fully preserved) while paragraph breaks survive. Subjects, addresses, account/mailbox names, paths, search queries, and rule expressions stay on the strict single-line escaper; SMTP transports were never affected.
+
 ## [2.8.7] - 2026-07-10
 
 ### Changed
