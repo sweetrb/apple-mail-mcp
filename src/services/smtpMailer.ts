@@ -21,6 +21,7 @@ import { execFileSync } from "child_process";
 import { isAbsolute } from "path";
 import { existsSync } from "fs";
 import type { AttachmentInput } from "@/types.js";
+import { decodeInlineAttachment } from "@/utils/attachmentLimits.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 
 /** Options for an SMTP send, mirroring the AppleScript send-email surface. */
@@ -63,6 +64,7 @@ export interface SmtpConfig {
   user: string;
   pass: string;
   from: string;
+  allowedFrom?: string[];
 }
 
 /** Result of an SMTP send. */
@@ -82,6 +84,7 @@ export const SMTP_ENV = {
   secure: "APPLE_MAIL_MCP_SMTP_SECURE",
   user: "APPLE_MAIL_MCP_SMTP_USER",
   from: "APPLE_MAIL_MCP_SMTP_FROM",
+  allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
   password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
   keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
   keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT",
@@ -182,6 +185,10 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
   }
 
   const from = env[SMTP_ENV.from]?.trim() || (user as string);
+  const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 
   // Password: explicit env var wins, otherwise Keychain (service/account
   // default to the host/user but can be overridden).
@@ -201,7 +208,7 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
     );
   }
 
-  return { host: host as string, port, secure, user: user as string, pass, from };
+  return { host: host as string, port, secure, user: user as string, pass, from, allowedFrom };
 }
 
 /**
@@ -219,7 +226,7 @@ function buildAttachments(attachments?: AttachmentInput[]) {
     if (!a.filename || !a.contentBase64) {
       throw new Error("Inline attachment requires both filename and contentBase64.");
     }
-    return { filename: a.filename, content: Buffer.from(a.contentBase64, "base64") };
+    return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
   });
 }
 
@@ -242,6 +249,17 @@ export async function sendViaSmtp(
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 
+  const requestedFrom = opts.from?.trim();
+  const allowedFrom = new Set(
+    [cfg.user, cfg.from, ...(cfg.allowedFrom ?? [])].map((value) => value.trim().toLowerCase())
+  );
+  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
+    return {
+      success: false,
+      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`,
+    };
+  }
+
   let attachments;
   try {
     attachments = buildAttachments(opts.attachments);
@@ -260,7 +278,7 @@ export async function sendViaSmtp(
 
   try {
     const info = await transporter.sendMail({
-      from: opts.from?.trim() || cfg.from,
+      from: requestedFrom || cfg.from,
       to: opts.to,
       cc: opts.cc,
       bcc: opts.bcc,

@@ -541,6 +541,16 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     expect(r.info).toContain("Hello body line");
   });
 
+  it("rejects an account override that disagrees with the composite message id", async () => {
+    await expect(
+      imapGetMessage(MID, false, {
+        account: "Work",
+        config: cfg,
+        connect: async () => makeMsgClient({}),
+      })
+    ).rejects.toThrow(/belongs to account "iCloud", not "Work"/);
+  });
+
   it("rejects a non-IMAP id", async () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
@@ -646,6 +656,20 @@ describe("batch ops via UID STORE/MOVE (I2)", () => {
     expect(r.success).toBe(0);
     expect(r.failed).toBe(1);
     expect(r.errors[0]).toMatch(/Not an IMAP id/);
+  });
+
+  it("fails a group whose composite ids disagree with the requested account", async () => {
+    const connect = vi.fn(async () => makeClient([], {}));
+    const r = await imapBatchMarkRead([encodeImapId("Personal", "INBOX", 1)], {
+      account: "Work",
+      config: cfg,
+      connect,
+    });
+
+    expect(r.success).toBe(0);
+    expect(r.failed).toBe(1);
+    expect(r.errors[0]).toMatch(/belongs to account "Personal", not "Work"/);
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it("moves a UID set to a resolved destination mailbox", async () => {

@@ -292,7 +292,7 @@ Send a new email immediately.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Send from specific account (with `transport: "smtp"`, overrides the From address) |
-| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths (e.g., `"/Users/me/report.pdf"`) and/or inline `{filename, contentBase64}` objects for content not on disk |
+| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths (e.g., `"/Users/me/report.pdf"`) and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 | `transport` | `"applescript"` \| `"smtp"` | No | Send transport. If omitted, **SMTP is used automatically when configured** (otherwise AppleScript). Pass `"smtp"` to require clean MIME, or `"applescript"` to force the Mail.app path — see [SMTP transport](#smtp-transport) |
 
 **Example:**
@@ -342,6 +342,7 @@ read from the macOS **Keychain** by default, so no secret goes in config:
 | `APPLE_MAIL_MCP_SMTP_PORT` | No | `465` if secure, else `587` | SMTP port |
 | `APPLE_MAIL_MCP_SMTP_SECURE` | No | `false` | `true` for implicit TLS (port 465); otherwise STARTTLS |
 | `APPLE_MAIL_MCP_SMTP_FROM` | No | = user | From address |
+| `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` | No | — | Comma-separated sender aliases permitted as per-message From overrides |
 | `APPLE_MAIL_MCP_SMTP_PASSWORD` | No | — | Password (if set, used instead of the Keychain) |
 | `APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE` | No | = host | Keychain item service/server name |
 | `APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT` | No | = user | Keychain item account |
@@ -625,7 +626,7 @@ Save an email to Drafts without sending.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Account for draft |
-| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths and/or inline `{filename, contentBase64}` objects |
+| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 
 **Returns:** Confirmation that draft was created.
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { isAbsolute } from "path";
+import { tmpdir } from "os";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
 
 describe("materializeAttachments (B4)", () => {
@@ -37,6 +38,23 @@ describe("materializeAttachments (B4)", () => {
     expect(() => materializeAttachments([{ filename: "x.txt", contentBase64: "" }])).toThrow(
       /filename and contentBase64/
     );
+  });
+
+  it("cleans up earlier temp files when a later inline attachment is rejected", () => {
+    const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("amcp-att-")));
+    const boundaryOversize = Buffer.alloc(25 * 1024 * 1024 + 1).toString("base64");
+
+    expect(() =>
+      materializeAttachments([
+        { filename: "first.txt", contentBase64: Buffer.from("written first").toString("base64") },
+        { filename: "too-large.bin", contentBase64: boundaryOversize },
+      ])
+    ).toThrow(/25 MiB decoded size limit/);
+
+    const after = readdirSync(tmpdir()).filter(
+      (name) => name.startsWith("amcp-att-") && !before.has(name)
+    );
+    expect(after).toEqual([]);
   });
 
   it("handles the empty/undefined case (incl. its no-op cleanup)", () => {

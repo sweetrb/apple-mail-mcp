@@ -176,6 +176,19 @@ export interface ImapDeps {
   account?: string;
 }
 
+type ImapMessageRef = NonNullable<ReturnType<typeof decodeImapId>>;
+
+function depsForAccount(account: string, deps: ImapDeps): ImapDeps {
+  if (deps.account && deps.account !== account) {
+    throw new Error(`IMAP message id belongs to account "${account}", not "${deps.account}".`);
+  }
+  return { ...deps, account };
+}
+
+function depsForMessageRef(ref: ImapMessageRef, deps: ImapDeps): ImapDeps {
+  return depsForAccount(ref.account, deps);
+}
+
 /**
  * A configured IMAP account *without* its password resolved — cheap to
  * enumerate (no Keychain access), used for routing/listing (C2).
@@ -955,27 +968,23 @@ export async function imapGetMessage(
 ): Promise<ImapOpResult> {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      const msg = await client.fetchOne(
-        String(ref.uid),
-        { envelope: true, source: true },
-        { uid: true }
-      );
-      if (!msg)
-        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-      const subject = msg.envelope?.subject || "(no subject)";
-      const src = msg.source ? msg.source.toString() : "";
-      const body =
-        (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ??
-        extractTextBody(src) ??
-        extractHtmlBody(src) ??
-        "(no readable body)";
-      return { success: true, info: `Subject: ${subject}\n\n${body}` };
-    }
-  );
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(
+      String(ref.uid),
+      { envelope: true, source: true },
+      { uid: true }
+    );
+    if (!msg)
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    const subject = msg.envelope?.subject || "(no subject)";
+    const src = msg.source ? msg.source.toString() : "";
+    const body =
+      (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ??
+      extractTextBody(src) ??
+      extractHtmlBody(src) ??
+      "(no readable body)";
+    return { success: true, info: `Subject: ${subject}\n\n${body}` };
+  });
 }
 
 /** Normalize an RFC822 Message-ID for backend-independent matching: trim and
@@ -997,15 +1006,11 @@ export async function imapFetchMessageId(id: string, deps: ImapDeps = {}): Promi
   const ref = decodeImapId(id);
   if (!ref) return null;
   try {
-    return await withMailbox(
-      ref.path,
-      { ...deps, account: deps.account ?? ref.account },
-      async (client) => {
-        const msg = await client.fetchOne(String(ref.uid), { envelope: true }, { uid: true });
-        const mid = msg && msg.envelope?.messageId;
-        return mid ? normalizeMessageId(mid) : null;
-      }
-    );
+    return await withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+      const msg = await client.fetchOne(String(ref.uid), { envelope: true }, { uid: true });
+      const mid = msg && msg.envelope?.messageId;
+      return mid ? normalizeMessageId(mid) : null;
+    });
   } catch {
     return null;
   }
@@ -1014,25 +1019,21 @@ export async function imapFetchMessageId(id: string, deps: ImapDeps = {}): Promi
 function flagOp(id: string, flag: string, add: boolean, deps: ImapDeps): Promise<ImapOpResult> {
   const ref = decodeImapId(id);
   if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      try {
-        const ok = add
-          ? await client.messageFlagsAdd([ref.uid], [flag], { uid: true })
-          : await client.messageFlagsRemove([ref.uid], [flag], { uid: true });
-        if (!ok)
-          return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
-        return { success: true };
-      } catch (e) {
-        return {
-          success: false,
-          error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}`,
-        };
-      }
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = add
+        ? await client.messageFlagsAdd([ref.uid], [flag], { uid: true })
+        : await client.messageFlagsRemove([ref.uid], [flag], { uid: true });
+      if (!ok)
+        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}`,
+      };
     }
-  );
+  });
 }
 
 export const imapMarkRead = (id: string, deps = {}): Promise<ImapOpResult> =>
@@ -1051,7 +1052,7 @@ export async function imapMoveMessageById(
 ): Promise<ImapOpResult> {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withClient({ ...deps, account: deps.account ?? ref.account }, async (client) => {
+  return withClient(depsForMessageRef(ref, deps), async (client) => {
     const destPath =
       (await findMailboxPath(client, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
@@ -1121,23 +1122,19 @@ export async function imapDeleteMessageById(
 ): Promise<ImapOpResult> {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      try {
-        const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
-        return {
-          success: true,
-          info: expunged
-            ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.`
-            : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`,
-        };
-      } catch (e) {
-        return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
-      }
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
+      return {
+        success: true,
+        info: expunged
+          ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.`
+          : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`,
+      };
+    } catch (e) {
+      return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
     }
-  );
+  });
 }
 
 // ===========================================================================
@@ -1195,23 +1192,19 @@ export async function imapListAttachments(
 ): Promise<{ success: boolean; attachments?: ImapAttachmentInfo[]; error?: string }> {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
-      if (!msg || !msg.bodyStructure) {
-        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-      }
-      const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
-        id: `${id}#${a.part}`,
-        name: a.filename,
-        mimeType: a.mimeType,
-        size: a.size,
-      }));
-      return { success: true, attachments };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+    if (!msg || !msg.bodyStructure) {
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
     }
-  );
+    const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
+      id: `${id}#${a.part}`,
+      name: a.filename,
+      mimeType: a.mimeType,
+      size: a.size,
+    }));
+    return { success: true, attachments };
+  });
 }
 
 /** Fetch one attachment's bytes (base64) via IMAP, matched by filename. */
@@ -1228,33 +1221,29 @@ export async function imapFetchAttachment(
 }> {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
-      if (!msg || !msg.bodyStructure) {
-        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-      }
-      const atts = collectAttachments(msg.bodyStructure);
-      const match = atts.find((a) => a.filename === attachmentName);
-      if (!match) {
-        const names = atts.map((a) => a.filename).join(", ") || "none";
-        return {
-          success: false,
-          error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`,
-        };
-      }
-      const dl = await client.download(String(ref.uid), match.part, { uid: true });
-      const buf = await streamToBuffer(dl.content);
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+    if (!msg || !msg.bodyStructure) {
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    }
+    const atts = collectAttachments(msg.bodyStructure);
+    const match = atts.find((a) => a.filename === attachmentName);
+    if (!match) {
+      const names = atts.map((a) => a.filename).join(", ") || "none";
       return {
-        success: true,
-        base64: buf.toString("base64"),
-        bytes: buf.length,
-        mimeType: match.mimeType,
+        success: false,
+        error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`,
       };
     }
-  );
+    const dl = await client.download(String(ref.uid), match.part, { uid: true });
+    const buf = await streamToBuffer(dl.content);
+    return {
+      success: true,
+      base64: buf.toString("base64"),
+      bytes: buf.length,
+      mimeType: match.mimeType,
+    };
+  });
 }
 
 // ===========================================================================
@@ -1294,7 +1283,7 @@ async function imapBatch(
   let success = 0;
   for (const g of groups.values()) {
     try {
-      await useClient({ ...deps, account: deps.account ?? g.account }, async (client) => {
+      await useClient(depsForAccount(g.account, deps), async (client) => {
         const lock = await client.getMailboxLock(g.path);
         try {
           await op(client, g.uids, g.path);
@@ -1382,7 +1371,7 @@ export async function imapThread(
   const ref = decodeImapId(id);
   if (!ref) return null;
   return useClient(
-    { ...deps, account: deps.account ?? ref.account },
+    depsForMessageRef(ref, deps),
     async (client) => {
       const lock = await client.getMailboxLock(ref.path);
       try {

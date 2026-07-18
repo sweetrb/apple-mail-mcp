@@ -75678,7 +75678,15 @@ var StdioServerTransport = class {
 
 // src/services/appleMailManager.ts
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync3, writeFileSync as writeFileSync3, readFileSync as readFileSync2, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "fs";
+import {
+  existsSync as existsSync3,
+  writeFileSync as writeFileSync3,
+  readFileSync as readFileSync2,
+  mkdtempSync as mkdtempSync2,
+  rmSync as rmSync2,
+  realpathSync,
+  lstatSync
+} from "fs";
 import { isAbsolute, resolve, sep, join as join4 } from "path";
 import { homedir as homedir3 } from "os";
 
@@ -76200,22 +76208,44 @@ var TemplateStore = class {
 import { writeFileSync as writeFileSync2, rmSync, mkdtempSync } from "fs";
 import { join as join2 } from "path";
 import { tmpdir } from "os";
+
+// src/utils/attachmentLimits.ts
+var MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+var MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
+function decodeInlineAttachment(contentBase64) {
+  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_CHARS) {
+    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
+  }
+  const content = Buffer.from(contentBase64, "base64");
+  if (content.length > MAX_INLINE_ATTACHMENT_BYTES) {
+    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
+  }
+  return content;
+}
+
+// src/utils/attachmentMaterialize.ts
 function materializeAttachments(attachments) {
   if (!attachments || attachments.length === 0) {
     return { paths: [], cleanup: () => void 0 };
   }
   let dir = null;
-  const paths = attachments.map((a) => {
-    if (typeof a === "string") return a;
-    if (!a.filename || !a.contentBase64) {
-      throw new Error("Inline attachment requires both filename and contentBase64.");
-    }
-    if (!dir) dir = mkdtempSync(join2(tmpdir(), "amcp-att-"));
-    const safeName = a.filename.replace(/[/\\]/g, "_");
-    const p = join2(dir, safeName);
-    writeFileSync2(p, Buffer.from(a.contentBase64, "base64"));
-    return p;
-  });
+  let paths;
+  try {
+    paths = attachments.map((a) => {
+      if (typeof a === "string") return a;
+      if (!a.filename || !a.contentBase64) {
+        throw new Error("Inline attachment requires both filename and contentBase64.");
+      }
+      if (!dir) dir = mkdtempSync(join2(tmpdir(), "amcp-att-"));
+      const safeName = a.filename.replace(/[/\\]/g, "_");
+      const p = join2(dir, safeName);
+      writeFileSync2(p, decodeInlineAttachment(a.contentBase64));
+      return p;
+    });
+  } catch (error2) {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    throw error2;
+  }
   return {
     paths,
     cleanup: () => {
@@ -76397,6 +76427,25 @@ function isPathWithinAllowedRoots(resolvedPath) {
     const base = root.endsWith(sep) ? root.slice(0, -1) : root;
     return resolvedPath === base || resolvedPath.startsWith(base + sep);
   });
+}
+function resolveAttachmentSaveTarget(savePath, attachmentName) {
+  let saveDirectory;
+  try {
+    saveDirectory = realpathSync(resolve(savePath));
+  } catch {
+    throw new Error(`Save directory "${savePath}" does not exist`);
+  }
+  if (!isPathWithinAllowedRoots(saveDirectory)) {
+    throw new Error(`Save path "${savePath}" is outside allowed directories`);
+  }
+  const savedPath = resolve(saveDirectory, attachmentName);
+  if (!isPathWithinAllowedRoots(savedPath)) {
+    throw new Error(`Output path "${savedPath}" is outside allowed directories`);
+  }
+  if (existsSync3(savedPath) && lstatSync(savedPath).isSymbolicLink()) {
+    throw new Error(`Refusing to overwrite symbolic link "${savedPath}"`);
+  }
+  return { saveDirectory, savedPath };
 }
 var UNSUPPORTED_APPLESCRIPT_OP = /AppleEvent handler failed|-10000/i;
 function describeMailboxOpError(op, raw) {
@@ -77917,7 +77966,7 @@ var AppleMailManager = class {
   findNumericIdByMessageId(messageId, accountName) {
     const mid = messageId.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
     if (!mid) return null;
-    const q = (s) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const q = (s) => escapeForAppleScript(s);
     const midLit = `"${q(mid)}"`;
     const bracketedLit = `"${q(`<${mid}>`)}"`;
     const matchClause = (mbVar) => `(messages of ${mbVar} whose message id is ${midLit} or message id is ${bracketedLit})`;
@@ -78304,13 +78353,15 @@ var AppleMailManager = class {
       console.error(`Invalid attachment name: "${attachmentName}"`);
       return false;
     }
-    const resolvedPath = resolve(savePath);
-    if (!isPathWithinAllowedRoots(resolvedPath)) {
-      console.error(`Save path "${savePath}" is outside allowed directories`);
+    let target;
+    try {
+      target = resolveAttachmentSaveTarget(savePath, attachmentName);
+    } catch (error2) {
+      console.error(error2 instanceof Error ? error2.message : String(error2));
       return false;
     }
     const safeName = escapeForAppleScript(attachmentName);
-    const safePath = escapeForAppleScript(resolvedPath);
+    const safePath = escapeForAppleScript(target.saveDirectory);
     const numericId = Number(id);
     const script = buildAppLevelScript(`
       try
@@ -78352,12 +78403,7 @@ var AppleMailManager = class {
       return false;
     }
     try {
-      const outPath = resolve(resolvedPath, attachmentName);
-      if (!isPathWithinAllowedRoots(outPath)) {
-        console.error(`Output path "${outPath}" is outside allowed directories`);
-        return false;
-      }
-      writeFileSync3(outPath, attachment.data);
+      writeFileSync3(target.savedPath, attachment.data);
       return true;
     } catch (err) {
       console.error(`Failed to write attachment to disk: ${err}`);
@@ -78374,7 +78420,7 @@ var AppleMailManager = class {
     try {
       dir = mkdtempSync2("/private/tmp/amcp-fetch-");
       const dest = join4(dir, attachmentName.replace(/[/\\]/g, "_"));
-      const ok = this.saveAttachment(id, attachmentName, dest);
+      const ok = this.saveAttachment(id, attachmentName, dir);
       if (!ok) {
         return {
           success: false,
@@ -79125,7 +79171,7 @@ ${actionStmts.join("\n")}
 
 // src/index.ts
 import { writeFileSync as writeFileSync4 } from "fs";
-import { resolve as resolvePath, join as joinPath } from "path";
+import { join as joinPath } from "path";
 
 // src/services/smtpMailer.ts
 var import_nodemailer = __toESM(require_nodemailer(), 1);
@@ -79144,6 +79190,7 @@ var SMTP_ENV = {
   secure: "APPLE_MAIL_MCP_SMTP_SECURE",
   user: "APPLE_MAIL_MCP_SMTP_USER",
   from: "APPLE_MAIL_MCP_SMTP_FROM",
+  allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
   password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
   keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
   keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
@@ -79189,6 +79236,7 @@ function resolveSmtpConfig(env = process.env) {
     throw new Error(`Invalid ${SMTP_ENV.port}: "${env[SMTP_ENV.port]}" is not a valid port.`);
   }
   const from = env[SMTP_ENV.from]?.trim() || user;
+  const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   let pass = env[SMTP_ENV.password];
   if (!pass) {
     const service = env[SMTP_ENV.keychainService]?.trim() || host;
@@ -79200,7 +79248,7 @@ function resolveSmtpConfig(env = process.env) {
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
   }
-  return { host, port, secure, user, pass, from };
+  return { host, port, secure, user, pass, from, allowedFrom };
 }
 function buildAttachments(attachments) {
   if (!attachments || attachments.length === 0) return void 0;
@@ -79213,7 +79261,7 @@ function buildAttachments(attachments) {
     if (!a.filename || !a.contentBase64) {
       throw new Error("Inline attachment requires both filename and contentBase64.");
     }
-    return { filename: a.filename, content: Buffer.from(a.contentBase64, "base64") };
+    return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
   });
 }
 async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.default.createTransport) {
@@ -79222,6 +79270,16 @@ async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.de
     cfg = config2 ?? resolveSmtpConfig();
   } catch (error2) {
     return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
+  }
+  const requestedFrom = opts.from?.trim();
+  const allowedFrom = new Set(
+    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((value) => value.trim().toLowerCase())
+  );
+  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
+    return {
+      success: false,
+      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`
+    };
   }
   let attachments;
   try {
@@ -79238,7 +79296,7 @@ async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.de
   const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
   try {
     const info = await transporter.sendMail({
-      from: opts.from?.trim() || cfg.from,
+      from: requestedFrom || cfg.from,
       to: opts.to,
       cc: opts.cc,
       bcc: opts.bcc,
@@ -79447,6 +79505,15 @@ function decodeImapId(id) {
   } catch {
     return null;
   }
+}
+function depsForAccount(account, deps) {
+  if (deps.account && deps.account !== account) {
+    throw new Error(`IMAP message id belongs to account "${account}", not "${deps.account}".`);
+  }
+  return { ...deps, account };
+}
+function depsForMessageRef(ref, deps) {
+  return depsForAccount(ref.account, deps);
 }
 function str(v) {
   return typeof v === "string" && v.trim() ? v.trim() : void 0;
@@ -79955,25 +80022,21 @@ async function withMailbox(path, deps, fn) {
 async function imapGetMessage(id, preferHtml, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      const msg = await client.fetchOne(
-        String(ref.uid),
-        { envelope: true, source: true },
-        { uid: true }
-      );
-      if (!msg)
-        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-      const subject = msg.envelope?.subject || "(no subject)";
-      const src = msg.source ? msg.source.toString() : "";
-      const body = (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ?? extractTextBody(src) ?? extractHtmlBody(src) ?? "(no readable body)";
-      return { success: true, info: `Subject: ${subject}
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(
+      String(ref.uid),
+      { envelope: true, source: true },
+      { uid: true }
+    );
+    if (!msg)
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    const subject = msg.envelope?.subject || "(no subject)";
+    const src = msg.source ? msg.source.toString() : "";
+    const body = (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ?? extractTextBody(src) ?? extractHtmlBody(src) ?? "(no readable body)";
+    return { success: true, info: `Subject: ${subject}
 
 ${body}` };
-    }
-  );
+  });
 }
 function normalizeMessageId(mid) {
   return mid.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
@@ -79982,15 +80045,11 @@ async function imapFetchMessageId(id, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return null;
   try {
-    return await withMailbox(
-      ref.path,
-      { ...deps, account: deps.account ?? ref.account },
-      async (client) => {
-        const msg = await client.fetchOne(String(ref.uid), { envelope: true }, { uid: true });
-        const mid = msg && msg.envelope?.messageId;
-        return mid ? normalizeMessageId(mid) : null;
-      }
-    );
+    return await withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+      const msg = await client.fetchOne(String(ref.uid), { envelope: true }, { uid: true });
+      const mid = msg && msg.envelope?.messageId;
+      return mid ? normalizeMessageId(mid) : null;
+    });
   } catch {
     return null;
   }
@@ -79998,23 +80057,19 @@ async function imapFetchMessageId(id, deps = {}) {
 function flagOp(id, flag, add, deps) {
   const ref = decodeImapId(id);
   if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      try {
-        const ok = add ? await client.messageFlagsAdd([ref.uid], [flag], { uid: true }) : await client.messageFlagsRemove([ref.uid], [flag], { uid: true });
-        if (!ok)
-          return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
-        return { success: true };
-      } catch (e) {
-        return {
-          success: false,
-          error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}`
-        };
-      }
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = add ? await client.messageFlagsAdd([ref.uid], [flag], { uid: true }) : await client.messageFlagsRemove([ref.uid], [flag], { uid: true });
+      if (!ok)
+        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}`
+      };
     }
-  );
+  });
 }
 var imapMarkRead = (id, deps = {}) => flagOp(id, "\\Seen", true, deps);
 var imapMarkUnread = (id, deps = {}) => flagOp(id, "\\Seen", false, deps);
@@ -80023,7 +80078,7 @@ var imapUnflagMessage = (id, deps = {}) => flagOp(id, "\\Flagged", false, deps);
 async function imapMoveMessageById(id, destMailbox, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withClient({ ...deps, account: deps.account ?? ref.account }, async (client) => {
+  return withClient(depsForMessageRef(ref, deps), async (client) => {
     const destPath = await findMailboxPath(client, destMailbox) ?? resolveMailboxPath(destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
@@ -80064,21 +80119,17 @@ async function trashUids(client, uids, srcPath) {
 async function imapDeleteMessageById(id, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      try {
-        const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
-        return {
-          success: true,
-          info: expunged ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.` : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`
-        };
-      } catch (e) {
-        return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
-      }
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
+      return {
+        success: true,
+        info: expunged ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.` : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`
+      };
+    } catch (e) {
+      return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
     }
-  );
+  });
 }
 function collectAttachments(node, out = []) {
   if (!node) return out;
@@ -80104,54 +80155,46 @@ async function streamToBuffer(content) {
 async function imapListAttachments(id, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
-      if (!msg || !msg.bodyStructure) {
-        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-      }
-      const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
-        id: `${id}#${a.part}`,
-        name: a.filename,
-        mimeType: a.mimeType,
-        size: a.size
-      }));
-      return { success: true, attachments };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+    if (!msg || !msg.bodyStructure) {
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
     }
-  );
+    const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
+      id: `${id}#${a.part}`,
+      name: a.filename,
+      mimeType: a.mimeType,
+      size: a.size
+    }));
+    return { success: true, attachments };
+  });
 }
 async function imapFetchAttachment(id, attachmentName, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(
-    ref.path,
-    { ...deps, account: deps.account ?? ref.account },
-    async (client) => {
-      const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
-      if (!msg || !msg.bodyStructure) {
-        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-      }
-      const atts = collectAttachments(msg.bodyStructure);
-      const match = atts.find((a) => a.filename === attachmentName);
-      if (!match) {
-        const names = atts.map((a) => a.filename).join(", ") || "none";
-        return {
-          success: false,
-          error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`
-        };
-      }
-      const dl = await client.download(String(ref.uid), match.part, { uid: true });
-      const buf = await streamToBuffer(dl.content);
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+    if (!msg || !msg.bodyStructure) {
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    }
+    const atts = collectAttachments(msg.bodyStructure);
+    const match = atts.find((a) => a.filename === attachmentName);
+    if (!match) {
+      const names = atts.map((a) => a.filename).join(", ") || "none";
       return {
-        success: true,
-        base64: buf.toString("base64"),
-        bytes: buf.length,
-        mimeType: match.mimeType
+        success: false,
+        error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`
       };
     }
-  );
+    const dl = await client.download(String(ref.uid), match.part, { uid: true });
+    const buf = await streamToBuffer(dl.content);
+    return {
+      success: true,
+      base64: buf.toString("base64"),
+      bytes: buf.length,
+      mimeType: match.mimeType
+    };
+  });
 }
 async function imapBatch(ids, deps, op) {
   const groups = /* @__PURE__ */ new Map();
@@ -80172,7 +80215,7 @@ async function imapBatch(ids, deps, op) {
   let success = 0;
   for (const g of groups.values()) {
     try {
-      await useClient({ ...deps, account: deps.account ?? g.account }, async (client) => {
+      await useClient(depsForAccount(g.account, deps), async (client) => {
         const lock = await client.getMailboxLock(g.path);
         try {
           await op(client, g.uids, g.path);
@@ -80221,7 +80264,7 @@ async function imapThread(id, deps = {}, limit = 50) {
   const ref = decodeImapId(id);
   if (!ref) return null;
   return useClient(
-    { ...deps, account: deps.account ?? ref.account },
+    depsForMessageRef(ref, deps),
     async (client) => {
       const lock = await client.getMailboxLock(ref.path);
       try {
@@ -80860,12 +80903,15 @@ var ATTACHMENTS_SCHEMA = external_exports.array(
   external_exports.union([
     external_exports.string().describe("Absolute path to an existing file"),
     external_exports.object({
-      filename: external_exports.string().min(1).describe("Filename to give the attachment"),
-      contentBase64: external_exports.string().min(1).describe("Base64-encoded file content")
+      filename: external_exports.string().min(1).max(255).describe("Filename to give the attachment"),
+      contentBase64: external_exports.string().min(1).max(
+        MAX_INLINE_ATTACHMENT_BASE64_CHARS,
+        "Inline attachment exceeds the 25 MiB decoded size limit"
+      ).describe("Base64-encoded file content (maximum 25 MiB decoded)")
     })
   ])
 ).max(20, "Cannot attach more than 20 files").optional().describe(
-  "Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or inline {filename, contentBase64} objects for content not on disk."
+  "Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or inline {filename, contentBase64} objects up to 25 MiB decoded each."
 );
 var MESSAGE_ROW_SCHEMA = external_exports.object({}).passthrough();
 var LIST_OUTPUT_SCHEMA = {
@@ -82009,20 +82055,21 @@ server.registerTool(
       if (/[/\\\0]/.test(attachmentName) || attachmentName.includes("..")) {
         return errorResponse(`Invalid attachment name: "${attachmentName}"`);
       }
-      const resolvedDir = resolvePath(savePath);
-      if (!isPathWithinAllowedRoots(resolvedDir)) {
-        return errorResponse(`Save path "${savePath}" is outside allowed directories`);
+      let target;
+      try {
+        target = resolveAttachmentSaveTarget(savePath, attachmentName);
+      } catch (error2) {
+        return errorResponse(error2 instanceof Error ? error2.message : String(error2));
       }
       const r = await imapFetchAttachment(id, attachmentName);
       if (!r.success || !r.base64) {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
-      const savedPath = joinPath(resolvedDir, attachmentName);
-      writeFileSync4(savedPath, Buffer.from(r.base64, "base64"));
+      writeFileSync4(target.savedPath, Buffer.from(r.base64, "base64"));
       return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`, {
         ok: true,
         attachmentName,
-        savedPath
+        savedPath: target.savedPath
       });
     }
     const success = mailManager.saveAttachment(id, attachmentName, savePath);

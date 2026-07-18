@@ -14,7 +14,15 @@
  */
 
 import { spawnSync } from "child_process";
-import { existsSync, writeFileSync, readFileSync, mkdtempSync, rmSync } from "fs";
+import {
+  existsSync,
+  writeFileSync,
+  readFileSync,
+  mkdtempSync,
+  rmSync,
+  realpathSync,
+  lstatSync,
+} from "fs";
 import { isAbsolute, resolve, sep, join } from "path";
 import { homedir } from "os";
 import { executeAppleScript } from "@/utils/applescript.js";
@@ -218,6 +226,33 @@ export function isPathWithinAllowedRoots(resolvedPath: string): boolean {
     const base = root.endsWith(sep) ? root.slice(0, -1) : root;
     return resolvedPath === base || resolvedPath.startsWith(base + sep);
   });
+}
+
+/** Resolve and validate an attachment save directory and its final output path. */
+export function resolveAttachmentSaveTarget(
+  savePath: string,
+  attachmentName: string
+): { saveDirectory: string; savedPath: string } {
+  let saveDirectory: string;
+  try {
+    saveDirectory = realpathSync(resolve(savePath));
+  } catch {
+    throw new Error(`Save directory "${savePath}" does not exist`);
+  }
+
+  if (!isPathWithinAllowedRoots(saveDirectory)) {
+    throw new Error(`Save path "${savePath}" is outside allowed directories`);
+  }
+
+  const savedPath = resolve(saveDirectory, attachmentName);
+  if (!isPathWithinAllowedRoots(savedPath)) {
+    throw new Error(`Output path "${savedPath}" is outside allowed directories`);
+  }
+  if (existsSync(savedPath) && lstatSync(savedPath).isSymbolicLink()) {
+    throw new Error(`Refusing to overwrite symbolic link "${savedPath}"`);
+  }
+
+  return { saveDirectory, savedPath };
 }
 
 /**
@@ -2259,7 +2294,7 @@ export class AppleMailManager {
     const mid = messageId.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
     if (!mid) return null;
 
-    const q = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const q = (s: string) => escapeForAppleScript(s);
     const midLit = `"${q(mid)}"`;
     const bracketedLit = `"${q(`<${mid}>`)}"`;
     const matchClause = (mbVar: string) =>
@@ -2718,15 +2753,16 @@ export class AppleMailManager {
       return false;
     }
 
-    // Resolve the save path to prevent symlink / ".." traversal bypass
-    const resolvedPath = resolve(savePath);
-    if (!isPathWithinAllowedRoots(resolvedPath)) {
-      console.error(`Save path "${savePath}" is outside allowed directories`);
+    let target: { saveDirectory: string; savedPath: string };
+    try {
+      target = resolveAttachmentSaveTarget(savePath, attachmentName);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
       return false;
     }
 
     const safeName = escapeForAppleScript(attachmentName);
-    const safePath = escapeForAppleScript(resolvedPath);
+    const safePath = escapeForAppleScript(target.saveDirectory);
     const numericId = Number(id);
 
     // Attempt 1: AppleScript save
@@ -2776,13 +2812,7 @@ export class AppleMailManager {
     }
 
     try {
-      const outPath = resolve(resolvedPath, attachmentName);
-      // Verify the resolved output path is still within allowed directories
-      if (!isPathWithinAllowedRoots(outPath)) {
-        console.error(`Output path "${outPath}" is outside allowed directories`);
-        return false;
-      }
-      writeFileSync(outPath, attachment.data);
+      writeFileSync(target.savedPath, attachment.data);
       return true;
     } catch (err) {
       console.error(`Failed to write attachment to disk: ${err}`);
@@ -2803,7 +2833,7 @@ export class AppleMailManager {
     try {
       dir = mkdtempSync("/private/tmp/amcp-fetch-");
       const dest = join(dir, attachmentName.replace(/[/\\]/g, "_"));
-      const ok = this.saveAttachment(id, attachmentName, dest);
+      const ok = this.saveAttachment(id, attachmentName, dir);
       if (!ok) {
         return {
           success: false,

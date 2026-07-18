@@ -199,6 +199,7 @@ the macOS 15+ blockquote wrapping. SMTP is single-account (the default sender):
   "APPLE_MAIL_MCP_SMTP_PORT": "587",
   "APPLE_MAIL_MCP_SMTP_USER": "you@gmail.com",
   "APPLE_MAIL_MCP_SMTP_FROM": "you@gmail.com",
+  "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM": "alias@example.com",
   "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE": "imap.gmail.com",
   "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT": "you@gmail.com"
 }
