@@ -118,6 +118,14 @@ export interface MessageContent {
 
   /** HTML content (if available) */
   htmlContent?: string;
+
+  /**
+   * Stable RFC 5322 Message-ID header for the message (angle brackets stripped),
+   * e.g. `abc123@mail.example.com`. Read from Mail.app's `message id` property.
+   * Empty string when the message carries no Message-ID. Used as a backend- and
+   * session-independent join key (e.g. sent-mail dedup logs).
+   */
+  rfcMessageId?: string;
 }
 
 /**
