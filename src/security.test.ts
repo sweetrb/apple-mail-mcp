@@ -7,6 +7,7 @@ import { resolve, isAbsolute } from "path";
 import { homedir } from "os";
 import { existsSync } from "fs";
 import { z } from "zod";
+import { escapeForAppleScript, escapeForAppleScriptBody } from "@/services/appleMailManager.js";
 
 // Re-define the schemas here to test them in isolation (they're module-scoped in index.ts)
 const MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
@@ -250,5 +251,65 @@ describe("buildAttachmentCommands validation", () => {
   it("accepts exactly 20 attachments at schema level", () => {
     const paths = Array.from({ length: 20 }, (_, i) => `/tmp/file${i}.pdf`);
     expect(ATTACHMENTS_SCHEMA.parse(paths)).toHaveLength(20);
+  });
+});
+
+describe("escapeForAppleScript vs escapeForAppleScriptBody (audit #10 + body newlines)", () => {
+  // These test the REAL exported functions from appleMailManager.ts, not a
+  // local mirror. The single-line variant strips control chars entirely; the
+  // body variant converts line breaks to the two-character AppleScript escape
+  // sequence `\n` so paragraph breaks survive without any raw control
+  // character ever entering the emitted literal.
+
+  it("body: newlines survive as the \\n escape sequence", () => {
+    const body = "Paragraph one.\n\nParagraph two.\nLine three.";
+    const escaped = escapeForAppleScriptBody(body);
+    expect(escaped).toBe("Paragraph one.\\n\\nParagraph two.\\nLine three.");
+    // No raw control characters in the emitted literal
+    // eslint-disable-next-line no-control-regex
+    expect(escaped).not.toMatch(/[\x00-\x1f\x7f]/);
+  });
+
+  it("body: CRLF and lone CR normalize to \\n", () => {
+    expect(escapeForAppleScriptBody("a\r\nb\rc\nd")).toBe("a\\nb\\nc\\nd");
+  });
+
+  it("body: tabs become the \\t escape sequence", () => {
+    expect(escapeForAppleScriptBody("col1\tcol2")).toBe("col1\\tcol2");
+  });
+
+  it("body: injection combining quotes and raw newlines cannot escape the literal", () => {
+    const attack = '"\ntell application "Finder" to delete every file\n"';
+    const escaped = escapeForAppleScriptBody(attack);
+    // Quotes are escaped, newlines are the two-char sequence — the payload
+    // stays inside the AppleScript string literal.
+    expect(escaped).toBe('\\"\\ntell application \\"Finder\\" to delete every file\\n\\"');
+    // eslint-disable-next-line no-control-regex
+    expect(escaped).not.toMatch(/[\x00-\x1f\x7f]/);
+  });
+
+  it("body: backslash escaped before quote/newline (no double-escape confusion)", () => {
+    // A literal backslash followed by the letter n must NOT collapse into a
+    // linefeed escape ambiguity: input \n (two chars) → \\n (three chars out).
+    expect(escapeForAppleScriptBody("\\n")).toBe("\\\\n");
+    // And a real newline after a backslash: \ + LF → \\ + \n
+    expect(escapeForAppleScriptBody("\\\n")).toBe("\\\\\\n");
+  });
+
+  it("body: strips remaining control characters (NUL, ESC, DEL)", () => {
+    expect(escapeForAppleScriptBody("a\x00b\x1bc\x7fd")).toBe("abcd");
+  });
+
+  it("single-line: still strips ALL control chars including newlines", () => {
+    expect(escapeForAppleScript("Subject\nline\r\ntwo\ttabbed\x00")).toBe("Subjectlinetwotabbed");
+  });
+
+  it("single-line: quote/backslash escaping unchanged", () => {
+    expect(escapeForAppleScript('say "hi" \\ bye')).toBe('say \\"hi\\" \\\\ bye');
+  });
+
+  it("both: empty and falsy input yield empty string", () => {
+    expect(escapeForAppleScript("")).toBe("");
+    expect(escapeForAppleScriptBody("")).toBe("");
   });
 });

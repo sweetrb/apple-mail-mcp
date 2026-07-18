@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Re-dispatched by dependabot-rebuild.yml after it pushes a rebuilt bundle to
+  # a Dependabot PR branch: a GITHUB_TOKEN push only creates held,
+  # approval-required pull_request runs, so the required checks have to be
+  # re-run via dispatch to complete on the new head.
+  workflow_dispatch:
 
 # Least privilege: CI only needs to read the repo (checkout + pnpm). Publishing
 # and code-scanning grant their own scoped tokens in their own workflows.

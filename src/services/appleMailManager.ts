@@ -299,6 +299,35 @@ export function escapeForAppleScript(text: string): string {
 }
 
 /**
+ * Escape a message BODY for interpolation into an AppleScript string literal.
+ *
+ * Same injection defense as {@link escapeForAppleScript} (backslash then quote,
+ * in that order), but instead of stripping line breaks it converts CRLF / CR /
+ * LF to the two-character sequence `\n` (and tab to `\t`), which AppleScript
+ * 2.0+ interprets as a linefeed/tab inside a double-quoted literal. No raw
+ * control character ever reaches the emitted literal, so the audit finding #10
+ * fix is preserved — but paragraph breaks survive in bodies instead of
+ * collapsing into a wall of text. Any remaining control characters are
+ * stripped exactly as in the single-line variant.
+ *
+ * Use ONLY for body/content values. Subjects, addresses, account/mailbox
+ * names, paths, queries, and rule expressions must stay on
+ * {@link escapeForAppleScript} so they remain single-line.
+ */
+export function escapeForAppleScriptBody(text: string): string {
+  if (!text) return "";
+  return (
+    text
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\r\n|\r|\n/g, "\\n")
+      .replace(/\t/g, "\\t")
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1f\x7f]/g, "")
+  );
+}
+
+/**
  * Validates attachment file paths and builds AppleScript commands to attach them.
  *
  * @param attachments - Absolute file paths to attach
@@ -1790,7 +1819,7 @@ export class AppleMailManager {
     attachments?: AttachmentInput[]
   ): boolean {
     const safeSubject = escapeForAppleScript(subject);
-    const safeBody = escapeForAppleScript(body);
+    const safeBody = escapeForAppleScriptBody(body);
 
     // Build recipient additions
     let recipientCommands = "";
@@ -1955,7 +1984,7 @@ export class AppleMailManager {
     attachments?: AttachmentInput[]
   ): boolean {
     const safeSubject = escapeForAppleScript(subject);
-    const safeBody = escapeForAppleScript(body);
+    const safeBody = escapeForAppleScriptBody(body);
 
     // Build recipient additions
     let recipientCommands = "";
@@ -2040,7 +2069,7 @@ export class AppleMailManager {
    * @returns true if reply created/sent successfully
    */
   replyToMessage(id: string, body: string, replyAll = false, send = true): boolean {
-    const safeBody = escapeForAppleScript(body);
+    const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
     const sendAction = send ? "send theReply" : "";
 
@@ -2086,7 +2115,7 @@ export class AppleMailManager {
    * @returns true if forward created/sent successfully
    */
   forwardMessage(id: string, to: string[], body?: string, send = true): boolean {
-    const safeBody = body ? escapeForAppleScript(body) : "";
+    const safeBody = body ? escapeForAppleScriptBody(body) : "";
     const sendAction = send ? "send theForward" : "";
 
     // Build recipient additions
