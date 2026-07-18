@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Attachment reads and saves now enforce filesystem and size boundaries.** Saved attachments are resolved beneath the requested destination directory, reject traversal and existing symlink targets, and route temporary Base64 extraction through a directory rather than a caller-influenced file path. Inline attachments are capped at 25 MiB decoded, partial temporary materialization is cleaned up on failure, and standards-wrapped Base64 is measured without counting decoder-ignored whitespace.
+- **SMTP From overrides are restricted to configured sender identities.** `send-email` email-form `account` values and `apple-mail-send --from` must match the SMTP login user, `APPLE_MAIL_MCP_SMTP_FROM`, or an address in `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM`; rejected identities fail before a transport connection is created.
+
+### Fixed
+
+- **IMAP composite ids cannot be silently routed through a different account.** Single-message, thread, and batch operations now reject a genuinely mismatched account selector while treating a configured account label and its login email as equivalent aliases.
+- **Message-ID lookup uses the shared AppleScript string escaper.** RFC Message-ID values are escaped consistently before interpolation into Mail.app queries.
+
 ## [2.8.9] - 2026-07-18
 ### Fixed
 - **`get-message` now returns the stable RFC Message-ID on the AppleScript path, not just over IMAP.** A prior change surfaced `rfcMessageId` only in the IMAP branch; the Mail.app/AppleScript path still returned `null`, leaving callers with no stable `<…@…>` identifier for dedup/threading. It now reads Mail.app's native `message id` property (normalized, angle brackets stripped) so both backends return the Message-ID. Thanks to @Goaleve1 (#93).

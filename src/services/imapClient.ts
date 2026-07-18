@@ -178,8 +178,29 @@ export interface ImapDeps {
 
 type ImapMessageRef = NonNullable<ReturnType<typeof decodeImapId>>;
 
+function sameImapAccount(left: string, right: string, deps: ImapDeps): boolean {
+  if (left === right) return true;
+
+  // Injected configs are the normal test seam and also give us both aliases
+  // without consulting process.env or the Keychain.
+  if (deps.config) {
+    const aliases = new Set([deps.config.accountLabel, deps.config.user]);
+    if (aliases.has(left) && aliases.has(right)) return true;
+  }
+
+  // Composite ids encode the stable account label, while callers may select
+  // that same account by its login address. Resolve both selectors against the
+  // same config list before deciding that the id belongs to another account.
+  const specs = listImapAccountSpecs();
+  const matches = (selector: string, spec: ImapAccountSpec) =>
+    spec.accountLabel === selector || spec.user === selector;
+  const leftSpec = specs.find((spec) => matches(left, spec));
+  const rightSpec = specs.find((spec) => matches(right, spec));
+  return leftSpec !== undefined && leftSpec === rightSpec;
+}
+
 function depsForAccount(account: string, deps: ImapDeps): ImapDeps {
-  if (deps.account && deps.account !== account) {
+  if (deps.account && !sameImapAccount(account, deps.account, deps)) {
     throw new Error(`IMAP message id belongs to account "${account}", not "${deps.account}".`);
   }
   return { ...deps, account };

@@ -92,7 +92,10 @@ import type { Account, SearchDiagnostics, SearchResult } from "@/types.js";
 import { routeMessage } from "@/services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "@/tools/doctor.js";
 import { registerResourcesAndPrompts } from "@/tools/resourcesAndPrompts.js";
-import { MAX_INLINE_ATTACHMENT_BASE64_CHARS } from "@/utils/attachmentLimits.js";
+import {
+  isInlineAttachmentBase64WithinLimit,
+  MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS,
+} from "@/utils/attachmentLimits.js";
 import { normalizeSubject, subjectFromGetMessage } from "@/tools/thread.js";
 import { extractRfcMessageIdFromSource } from "@/utils/mimeParse.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
@@ -167,7 +170,11 @@ const ATTACHMENTS_SCHEMA = z
           .string()
           .min(1)
           .max(
-            MAX_INLINE_ATTACHMENT_BASE64_CHARS,
+            MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS,
+            "Inline attachment exceeds the 25 MiB decoded size limit"
+          )
+          .refine(
+            isInlineAttachmentBase64WithinLimit,
             "Inline attachment exceeds the 25 MiB decoded size limit"
           )
           .describe("Base64-encoded file content (maximum 25 MiB decoded)"),

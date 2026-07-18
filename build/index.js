@@ -76212,8 +76212,17 @@ import { tmpdir } from "os";
 // src/utils/attachmentLimits.ts
 var MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 var MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
+var MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
+function isInlineAttachmentBase64WithinLimit(contentBase64) {
+  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS) return false;
+  let encodedChars = 0;
+  for (const char of contentBase64) {
+    if (!/\s/u.test(char) && ++encodedChars > MAX_INLINE_ATTACHMENT_BASE64_CHARS) return false;
+  }
+  return true;
+}
 function decodeInlineAttachment(contentBase64) {
-  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_CHARS) {
+  if (!isInlineAttachmentBase64WithinLimit(contentBase64)) {
     throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
   }
   const content = Buffer.from(contentBase64, "base64");
@@ -79506,8 +79515,20 @@ function decodeImapId(id) {
     return null;
   }
 }
+function sameImapAccount(left, right, deps) {
+  if (left === right) return true;
+  if (deps.config) {
+    const aliases = /* @__PURE__ */ new Set([deps.config.accountLabel, deps.config.user]);
+    if (aliases.has(left) && aliases.has(right)) return true;
+  }
+  const specs = listImapAccountSpecs();
+  const matches = (selector, spec) => spec.accountLabel === selector || spec.user === selector;
+  const leftSpec = specs.find((spec) => matches(left, spec));
+  const rightSpec = specs.find((spec) => matches(right, spec));
+  return leftSpec !== void 0 && leftSpec === rightSpec;
+}
 function depsForAccount(account, deps) {
-  if (deps.account && deps.account !== account) {
+  if (deps.account && !sameImapAccount(account, deps.account, deps)) {
     throw new Error(`IMAP message id belongs to account "${account}", not "${deps.account}".`);
   }
   return { ...deps, account };
@@ -80905,7 +80926,10 @@ var ATTACHMENTS_SCHEMA = external_exports.array(
     external_exports.object({
       filename: external_exports.string().min(1).max(255).describe("Filename to give the attachment"),
       contentBase64: external_exports.string().min(1).max(
-        MAX_INLINE_ATTACHMENT_BASE64_CHARS,
+        MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS,
+        "Inline attachment exceeds the 25 MiB decoded size limit"
+      ).refine(
+        isInlineAttachmentBase64WithinLimit,
         "Inline attachment exceeds the 25 MiB decoded size limit"
       ).describe("Base64-encoded file content (maximum 25 MiB decoded)")
     })

@@ -551,6 +551,23 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     ).rejects.toThrow(/belongs to account "iCloud", not "Work"/);
   });
 
+  it("accepts the login-address selector for a label-encoded message id", async () => {
+    const aliasCfg = {
+      ...cfg,
+      user: "person@example.com",
+      accountLabel: "Personal",
+    };
+    const id = encodeImapId("Personal", "INBOX", 1);
+    const result = await imapGetMessage(id, false, {
+      account: "person@example.com",
+      config: aliasCfg,
+      connect: async () => makeMsgClient({}, "Content-Type: text/plain\r\n\r\nAlias body"),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.info).toContain("Alias body");
+  });
+
   it("rejects a non-IMAP id", async () => {
     const r = await imapDeleteMessageById("57820");
     expect(r.success).toBe(false);
@@ -670,6 +687,28 @@ describe("batch ops via UID STORE/MOVE (I2)", () => {
     expect(r.failed).toBe(1);
     expect(r.errors[0]).toMatch(/belongs to account "Personal", not "Work"/);
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("batch-moves a label-encoded id when the account selector is its login address", async () => {
+    const aliasCfg = {
+      ...cfg,
+      user: "person@example.com",
+      accountLabel: "Personal",
+    };
+    const rec: MsgRec = {};
+    const client: ImapClientLike = {
+      ...makeMsgClient(rec),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+    };
+
+    const result = await imapBatchMove([encodeImapId("Personal", "INBOX", 1)], "Archive", {
+      account: "person@example.com",
+      config: aliasCfg,
+      connect: async () => client,
+    });
+
+    expect(result).toMatchObject({ success: 1, failed: 0, errors: [] });
+    expect(rec.moved).toEqual([[1], "Archive"]);
   });
 
   it("moves a UID set to a resolved destination mailbox", async () => {

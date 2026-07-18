@@ -11872,8 +11872,17 @@ import { existsSync } from "fs";
 // src/utils/attachmentLimits.ts
 var MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 var MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
+var MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
+function isInlineAttachmentBase64WithinLimit(contentBase64) {
+  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS) return false;
+  let encodedChars = 0;
+  for (const char of contentBase64) {
+    if (!/\s/u.test(char) && ++encodedChars > MAX_INLINE_ATTACHMENT_BASE64_CHARS) return false;
+  }
+  return true;
+}
 function decodeInlineAttachment(contentBase64) {
-  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_CHARS) {
+  if (!isInlineAttachmentBase64WithinLimit(contentBase64)) {
     throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
   }
   const content = Buffer.from(contentBase64, "base64");
@@ -12021,7 +12030,8 @@ var EX_CONFIG = 78;
 var USAGE = `apple-mail-send \u2014 send a clean email via SMTP (no Mail.app blockquote wrapping).
 
 Required:
-  --from <addr>         Sender address (must be allowed by the SMTP server)
+  --from <addr>         Sender address (SMTP user/configured From, or an alias in
+                        ${SMTP_ENV.allowedFrom})
   --to <addr>           Recipient (repeatable)
   --subject <text>      Subject line
   --body-file <path>    UTF-8 file with the plain-text body
