@@ -168,5 +168,6 @@ describe("runCli", () => {
     expect(code).toBe(0);
     expect(send).not.toHaveBeenCalled();
     expect(out.join("\n")).toMatch(/apple-mail-send/);
+    expect(out.join("\n")).toContain("APPLE_MAIL_MCP_SMTP_ALLOWED_FROM");
   });
 });

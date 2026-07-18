@@ -35,7 +35,8 @@ export const EX_CONFIG = 78;
 const USAGE = `apple-mail-send — send a clean email via SMTP (no Mail.app blockquote wrapping).
 
 Required:
-  --from <addr>         Sender address (must be allowed by the SMTP server)
+  --from <addr>         Sender address (SMTP user/configured From, or an alias in
+                        ${SMTP_ENV.allowedFrom})
   --to <addr>           Recipient (repeatable)
   --subject <text>      Subject line
   --body-file <path>    UTF-8 file with the plain-text body

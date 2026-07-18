@@ -11869,6 +11869,29 @@ import { execFileSync } from "child_process";
 import { isAbsolute } from "path";
 import { existsSync } from "fs";
 
+// src/utils/attachmentLimits.ts
+var MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+var MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
+var MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
+function isInlineAttachmentBase64WithinLimit(contentBase64) {
+  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS) return false;
+  let encodedChars = 0;
+  for (const char of contentBase64) {
+    if (!/\s/u.test(char) && ++encodedChars > MAX_INLINE_ATTACHMENT_BASE64_CHARS) return false;
+  }
+  return true;
+}
+function decodeInlineAttachment(contentBase64) {
+  if (!isInlineAttachmentBase64WithinLimit(contentBase64)) {
+    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
+  }
+  const content = Buffer.from(contentBase64, "base64");
+  if (content.length > MAX_INLINE_ATTACHMENT_BYTES) {
+    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
+  }
+  return content;
+}
+
 // src/utils/docsUrls.ts
 var SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
 var SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
@@ -11880,6 +11903,7 @@ var SMTP_ENV = {
   secure: "APPLE_MAIL_MCP_SMTP_SECURE",
   user: "APPLE_MAIL_MCP_SMTP_USER",
   from: "APPLE_MAIL_MCP_SMTP_FROM",
+  allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
   password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
   keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
   keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
@@ -11915,6 +11939,7 @@ function resolveSmtpConfig(env = process.env) {
     throw new Error(`Invalid ${SMTP_ENV.port}: "${env[SMTP_ENV.port]}" is not a valid port.`);
   }
   const from = env[SMTP_ENV.from]?.trim() || user;
+  const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   let pass = env[SMTP_ENV.password];
   if (!pass) {
     const service = env[SMTP_ENV.keychainService]?.trim() || host;
@@ -11926,7 +11951,7 @@ function resolveSmtpConfig(env = process.env) {
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
   }
-  return { host, port, secure, user, pass, from };
+  return { host, port, secure, user, pass, from, allowedFrom };
 }
 function buildAttachments(attachments) {
   if (!attachments || attachments.length === 0) return void 0;
@@ -11939,7 +11964,7 @@ function buildAttachments(attachments) {
     if (!a.filename || !a.contentBase64) {
       throw new Error("Inline attachment requires both filename and contentBase64.");
     }
-    return { filename: a.filename, content: Buffer.from(a.contentBase64, "base64") };
+    return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
   });
 }
 async function sendViaSmtp(opts, config, createTransport = import_nodemailer.default.createTransport) {
@@ -11948,6 +11973,16 @@ async function sendViaSmtp(opts, config, createTransport = import_nodemailer.def
     cfg = config ?? resolveSmtpConfig();
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  const requestedFrom = opts.from?.trim();
+  const allowedFrom = new Set(
+    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((value) => value.trim().toLowerCase())
+  );
+  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
+    return {
+      success: false,
+      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`
+    };
   }
   let attachments;
   try {
@@ -11964,7 +11999,7 @@ async function sendViaSmtp(opts, config, createTransport = import_nodemailer.def
   const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
   try {
     const info = await transporter.sendMail({
-      from: opts.from?.trim() || cfg.from,
+      from: requestedFrom || cfg.from,
       to: opts.to,
       cc: opts.cc,
       bcc: opts.bcc,
@@ -11995,7 +12030,8 @@ var EX_CONFIG = 78;
 var USAGE = `apple-mail-send \u2014 send a clean email via SMTP (no Mail.app blockquote wrapping).
 
 Required:
-  --from <addr>         Sender address (must be allowed by the SMTP server)
+  --from <addr>         Sender address (SMTP user/configured From, or an alias in
+                        ${SMTP_ENV.allowedFrom})
   --to <addr>           Recipient (repeatable)
   --subject <text>      Subject line
   --body-file <path>    UTF-8 file with the plain-text body

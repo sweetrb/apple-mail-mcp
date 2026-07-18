@@ -70,4 +70,14 @@ describe("findNumericIdByMessageId (imap→numeric bridge)", () => {
     const s = lastScript();
     expect(s).toContain('a\\"b\\\\c@ex.com');
   });
+
+  it("strips control characters from Message-ID and account literals", () => {
+    h.output = "1";
+    mgr.findNumericIdByMessageId("abc\n@ex.com", "work\raccount");
+    const s = lastScript();
+    expect(s).not.toContain("abc\n@ex.com");
+    expect(s).not.toContain("work\raccount");
+    expect(s).toContain("abc@ex.com");
+    expect(s).toContain("workaccount");
+  });
 });

@@ -32,6 +32,7 @@ const testConfig: SmtpConfig = {
   user: "alice@example.com",
   pass: "s3cret",
   from: "alice@example.com",
+  allowedFrom: ["team@example.com"],
 };
 
 describe("resolveSmtpConfig", () => {
@@ -59,6 +60,14 @@ describe("resolveSmtpConfig", () => {
     });
     expect(cfg.port).toBe(2525);
     expect(cfg.from).toBe("noreply@example.com");
+  });
+
+  it("parses an explicit comma-separated sender alias allowlist", () => {
+    const cfg = resolveSmtpConfig({
+      ...baseEnv,
+      [SMTP_ENV.allowedFrom]: "team@example.com, billing@example.com",
+    });
+    expect(cfg.allowedFrom).toEqual(["team@example.com", "billing@example.com"]);
   });
 
   it("throws an actionable error when host/user are missing", () => {
@@ -134,6 +143,24 @@ describe("shouldUseSmtp (send-email transport decision)", () => {
 });
 
 describe("sendViaSmtp", () => {
+  it("rejects a From override outside the configured SMTP identities", async () => {
+    const createTransport = vi.fn();
+    const result = await sendViaSmtp(
+      {
+        to: ["bob@example.com"],
+        subject: "Hi",
+        body: "Body",
+        from: "spoofed@example.net",
+      },
+      testConfig,
+      createTransport as never
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/not a configured sender identity/);
+    expect(createTransport).not.toHaveBeenCalled();
+  });
+
   it("sends clean MIME via the injected transporter and reports success", async () => {
     const sendMail = vi.fn().mockResolvedValue({ messageId: "<abc@example.com>" });
     const close = vi.fn();

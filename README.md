@@ -291,8 +291,8 @@ Send a new email immediately.
 | `body` | string | Yes | Email body (plain text) |
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
-| `account` | string | No | Send from specific account (with `transport: "smtp"`, overrides the From address) |
-| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths (e.g., `"/Users/me/report.pdf"`) and/or inline `{filename, contentBase64}` objects for content not on disk |
+| `account` | string | No | Mail.app account label, or an email-form SMTP From override. An SMTP override must match `APPLE_MAIL_MCP_SMTP_USER`, `APPLE_MAIL_MCP_SMTP_FROM`, or an address in `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` |
+| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths (e.g., `"/Users/me/report.pdf"`) and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 | `transport` | `"applescript"` \| `"smtp"` | No | Send transport. If omitted, **SMTP is used automatically when configured** (otherwise AppleScript). Pass `"smtp"` to require clean MIME, or `"applescript"` to force the Mail.app path — see [SMTP transport](#smtp-transport) |
 
 **Example:**
@@ -326,7 +326,11 @@ Two differences to know when SMTP is auto-preferred:
   is used as the From address only when it is an email address; a Mail.app
   account *label* (e.g. `"Work"`) can't select an account over SMTP, so a call
   that passes one is left on the AppleScript path automatically. To force
-  account selection, pass `transport: "applescript"` explicitly.
+  account selection, pass `transport: "applescript"` explicitly. For sender
+  safety, an email-form override must match the SMTP login user, the configured
+  `APPLE_MAIL_MCP_SMTP_FROM`, or an address listed in the comma-separated
+  `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM`; any other From address is rejected before
+  connecting.
 
 Both plain-text and HTML bodies are supported — over SMTP an HTML body (CLI
 `--html-body-file`) is sent as `multipart/alternative` with the plain-text
@@ -342,6 +346,7 @@ read from the macOS **Keychain** by default, so no secret goes in config:
 | `APPLE_MAIL_MCP_SMTP_PORT` | No | `465` if secure, else `587` | SMTP port |
 | `APPLE_MAIL_MCP_SMTP_SECURE` | No | `false` | `true` for implicit TLS (port 465); otherwise STARTTLS |
 | `APPLE_MAIL_MCP_SMTP_FROM` | No | = user | From address |
+| `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` | No | — | Comma-separated sender aliases permitted as per-message From overrides |
 | `APPLE_MAIL_MCP_SMTP_PASSWORD` | No | — | Password (if set, used instead of the Keychain) |
 | `APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE` | No | = host | Keychain item service/server name |
 | `APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT` | No | = user | Keychain item account |
@@ -625,7 +630,7 @@ Save an email to Drafts without sending.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Account for draft |
-| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths and/or inline `{filename, contentBase64}` objects |
+| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 
 **Returns:** Confirmation that draft was created.
 

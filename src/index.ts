@@ -24,9 +24,9 @@ import { createRequire } from "module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { AppleMailManager, isPathWithinAllowedRoots } from "@/services/appleMailManager.js";
+import { AppleMailManager, resolveAttachmentSaveTarget } from "@/services/appleMailManager.js";
 import { writeFileSync } from "fs";
-import { resolve as resolvePath, join as joinPath } from "path";
+import { join as joinPath } from "path";
 import {
   sendViaSmtp,
   sendSerialViaSmtp,
@@ -92,6 +92,10 @@ import type { Account, SearchDiagnostics, SearchResult } from "@/types.js";
 import { routeMessage } from "@/services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "@/tools/doctor.js";
 import { registerResourcesAndPrompts } from "@/tools/resourcesAndPrompts.js";
+import {
+  isInlineAttachmentBase64WithinLimit,
+  MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS,
+} from "@/utils/attachmentLimits.js";
 import { normalizeSubject, subjectFromGetMessage } from "@/tools/thread.js";
 import { extractRfcMessageIdFromSource } from "@/utils/mimeParse.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
@@ -161,8 +165,19 @@ const ATTACHMENTS_SCHEMA = z
     z.union([
       z.string().describe("Absolute path to an existing file"),
       z.object({
-        filename: z.string().min(1).describe("Filename to give the attachment"),
-        contentBase64: z.string().min(1).describe("Base64-encoded file content"),
+        filename: z.string().min(1).max(255).describe("Filename to give the attachment"),
+        contentBase64: z
+          .string()
+          .min(1)
+          .max(
+            MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS,
+            "Inline attachment exceeds the 25 MiB decoded size limit"
+          )
+          .refine(
+            isInlineAttachmentBase64WithinLimit,
+            "Inline attachment exceeds the 25 MiB decoded size limit"
+          )
+          .describe("Base64-encoded file content (maximum 25 MiB decoded)"),
       }),
     ])
   )
@@ -170,7 +185,7 @@ const ATTACHMENTS_SCHEMA = z
   .optional()
   .describe(
     "Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or " +
-      "inline {filename, contentBase64} objects for content not on disk."
+      "inline {filename, contentBase64} objects up to 25 MiB decoded each."
   );
 
 // =============================================================================
@@ -1748,20 +1763,21 @@ server.registerTool(
       if (/[/\\\0]/.test(attachmentName) || attachmentName.includes("..")) {
         return errorResponse(`Invalid attachment name: "${attachmentName}"`);
       }
-      const resolvedDir = resolvePath(savePath);
-      if (!isPathWithinAllowedRoots(resolvedDir)) {
-        return errorResponse(`Save path "${savePath}" is outside allowed directories`);
+      let target: { saveDirectory: string; savedPath: string };
+      try {
+        target = resolveAttachmentSaveTarget(savePath, attachmentName);
+      } catch (error) {
+        return errorResponse(error instanceof Error ? error.message : String(error));
       }
       const r = await imapFetchAttachment(id, attachmentName);
       if (!r.success || !r.base64) {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
-      const savedPath = joinPath(resolvedDir, attachmentName);
-      writeFileSync(savedPath, Buffer.from(r.base64, "base64"));
+      writeFileSync(target.savedPath, Buffer.from(r.base64, "base64"));
       return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`, {
         ok: true,
         attachmentName,
-        savedPath,
+        savedPath: target.savedPath,
       });
     }
 
