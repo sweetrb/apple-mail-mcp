@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.11] - 2026-07-18
+
+### Fixed
+
+- **`list-messages` now gets the same Gmail virtual-INBOX redirect as `search-messages`.** A Gmail-style account's literal "INBOX" mailbox is an empty shell — real received mail lives under the "All Mail"/"Important" special mailboxes. `search-messages` already redirected an INBOX-scoped call to that receiving set (BUG A1, 2.8.x), but `list-messages`/`listMessagesWithDiagnostics` bound the empty shell directly, so it silently returned a small, shifting subset of the account's real inbox (backed by Mail.app's own internal `id of msg`, which is not a stable identifier and is reassigned when the local envelope cache resyncs). Callers doing `list-messages` then `batch-move-messages`/`batch-flag-messages` on those ids could act on stale/incorrect message references. `list-messages` now scans the same "All Mail"/"Important" receiving set as `search-messages` for an INBOX-scoped call on a Gmail-style account, so the two report consistent results.
+
 ## [2.8.10] - 2026-07-18
 
 ### Security

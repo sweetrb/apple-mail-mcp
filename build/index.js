@@ -77455,7 +77455,38 @@ var AppleMailManager = class {
     let listCommand;
     if (mailbox) {
       const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
-      listCommand = `
+      const gmailInbox = isInboxScope(mailbox) ? gmailReceivingMailboxes(this.getCachedMailboxNames(targetAccount)) : null;
+      if (gmailInbox) {
+        const nameList = appleScriptLowerNameList(gmailInbox);
+        listCommand = `
+      set outputText to ""
+      set _timedOut to false
+      set _notSearched to ""
+      set _wantNames to ${nameList}
+      set msgCount to 0
+      set skipped to 0
+      set seenIds to {}
+      repeat with mb in mailboxes
+        if msgCount >= ${limit} then exit repeat
+        set mbName to ""
+        try
+          set mbName to name of mb
+        end try
+        ignoring case
+          if _wantNames contains mbName then
+            try
+              ${buildMessageRowLoop({ collection: `messages of mb ${fromFilter}`, limit, offset, dedup: true, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
+            on error _errMsg number _errNum
+              set _timedOut to true
+              set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
+            end try
+          end if
+        end ignoring
+      end repeat
+      return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=${DIAG_FIELD_SEP}notSearched=" & _notSearched
+    `;
+      } else {
+        listCommand = `
       set outputText to ""
       set _timedOut to false
       set _notSearched to ""
@@ -77470,6 +77501,7 @@ var AppleMailManager = class {
       end try
       return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=${DIAG_FIELD_SEP}notSearched=" & _notSearched
     `;
+      }
     } else {
       const scanGuard = scanThreshold > 0 ? `mbCount > ${scanThreshold}` : "false";
       listCommand = `
