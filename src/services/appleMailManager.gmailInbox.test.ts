@@ -10,6 +10,9 @@
  *       so it finds the messages an unscoped call reports; and a NON-Gmail
  *       account keeps the plain single-INBOX scan.
  *   A2) getRecentlyReceivedStats scans "All Mail" for Gmail-style accounts.
+ *   A3) list-messages gets the same INBOX-scoped redirect as search-messages
+ *       (previously it did not, which is why list-messages and search-messages
+ *       disagreed about a Gmail account's INBOX contents).
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -145,6 +148,70 @@ describe("A1: INBOX-scoped search on a NON-Gmail account is unchanged", () => {
     const mgr = new AppleMailManager();
 
     mgr.searchMessages(undefined, "Sent Mail", "robert.b.sweet@gmail.com", 50);
+
+    const scan = lastScript("set outputText to");
+    expect(scan).toMatch(/set theMailbox to mailbox "Sent Mail"/);
+  });
+});
+
+describe("A3: INBOX-scoped list-messages on a Gmail-style account", () => {
+  it("scans the receiving set (All Mail / Important) by name, not the empty INBOX", () => {
+    h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES });
+    const mgr = new AppleMailManager();
+
+    mgr.listMessages("INBOX", "robert.b.sweet@gmail.com", 50);
+
+    const scan = lastScript("set outputText to");
+    expect(scan).toBeDefined();
+    expect(scan).toMatch(/repeat with mb in mailboxes/);
+    expect(scan).toContain('"all mail"');
+    expect(scan).toContain('"important"');
+    expect(scan).not.toMatch(/set theMailbox to mailbox "INBOX"/);
+  });
+
+  it("case-insensitively treats 'inbox' as the inbox scope", () => {
+    h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES });
+    const mgr = new AppleMailManager();
+
+    mgr.listMessages("inbox", "robert.b.sweet@gmail.com", 50);
+
+    const scan = lastScript("set outputText to");
+    expect(scan).toContain('"all mail"');
+  });
+
+  it("finds messages the receiving-set scan returns, and agrees with search-messages", () => {
+    // One row: id 100, in All Mail. 7 FIELD_SEP fields (list-messages requests
+    // withAttachments, so the row schema is one field longer than search's).
+    const row = ["100", "Hello", "a@b.com", "2026-7-1-9-0-0", "false", "false", "false"].join(
+      FIELD_SEP
+    );
+    h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, searchOutput: row });
+    const mgr = new AppleMailManager();
+
+    const msgs = mgr.listMessages("INBOX", "robert.b.sweet@gmail.com", 50);
+
+    expect(msgs.map((m) => m.id)).toContain("100");
+  });
+});
+
+describe("A3: INBOX-scoped list-messages on a NON-Gmail account is unchanged", () => {
+  it("binds the single INBOX mailbox directly (no receiving-set iteration)", () => {
+    h.router.fn = makeRouter({ mailboxNames: NON_GMAIL_MAILBOXES });
+    const mgr = new AppleMailManager();
+
+    mgr.listMessages("INBOX", "rob@superiortech.io", 50);
+
+    const scan = lastScript("set outputText to");
+    expect(scan).toBeDefined();
+    expect(scan).toMatch(/set theMailbox to mailbox "INBOX"/);
+    expect(scan).not.toContain('"all mail"');
+  });
+
+  it("a non-INBOX scope on a Gmail account still binds that mailbox directly", () => {
+    h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES });
+    const mgr = new AppleMailManager();
+
+    mgr.listMessages("Sent Mail", "robert.b.sweet@gmail.com", 50);
 
     const scan = lastScript("set outputText to");
     expect(scan).toMatch(/set theMailbox to mailbox "Sent Mail"/);
