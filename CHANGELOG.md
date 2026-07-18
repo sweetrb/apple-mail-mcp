@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.10] - 2026-07-18
+
 ### Security
 
 - **Attachment reads and saves now enforce filesystem and size boundaries.** Saved attachments are resolved beneath the requested destination directory, reject traversal and existing symlink targets, and route temporary Base64 extraction through a directory rather than a caller-influenced file path. Inline attachments are capped at 25 MiB decoded, partial temporary materialization is cleaned up on failure, and standards-wrapped Base64 is measured without counting decoder-ignored whitespace.
