@@ -161,8 +161,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref || github.ref_name }}
-          # Full history: the auto-bump step below compares the version field
-          # against the fork point (merge-base with origin/main).
+          # Full history so the auto-bump step can compute the fork point
+          # (merge-base with origin/main) the same way version-guard does.
           fetch-depth: 0
 
       - name: Abort if the branch moved since the rebuild
@@ -196,43 +196,49 @@ jobs:
           path: build/
 
       - name: Auto-bump patch version for shipped-byte change
-        # version-guard now treats build/** as SHIPPED BYTES: the rebuilt
-        # bundle changes what npm users receive, so without this bump every
-        # bundle-changing Dependabot PR would fail the require-version-bump
-        # check (and, worse, merge without ever publishing). Token-split
-        # invariant: this job must run NO dependency lifecycle code, so the
-        # bump is done with bare `node -e` edits + the repo-owned dep-free
-        # sync script — no pnpm, no install.
+        # version-guard now treats build/** as shipped bytes; without this
+        # auto-bump, every bundle-changing Dependabot PR would fail that
+        # required check (the rebuilt bundle changes what users receive, but
+        # the bot never bumps package.json). Token-split invariant: NO pnpm
+        # and NO install in this job — dependency lifecycle code must never
+        # run with the write token — so the edits below are plain `node -e`
+        # plus the repo-owned, dependency-free sync script.
         if: needs.rebuild.outputs.changed == 'true'
         run: |
+          set -euo pipefail
+          # Same fork-point semantics as version-guard: compare package.json's
+          # version field between the merge-base with origin/main and HEAD.
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
           BASE="$(git merge-base origin/main HEAD)"
           OLDV="$(git show "${BASE}:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')"
           NEWV="$(node -p "require('./package.json').version")"
           if [ "$OLDV" != "$NEWV" ]; then
-            echo "Version already bumped on this branch (${OLDV} -> ${NEWV}) — skipping auto-bump."
+            echo "Version already bumped vs fork point (${OLDV} -> ${NEWV}) — skipping auto-bump."
             exit 0
           fi
           node -e '
             const fs = require("fs");
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            const [maj, min, pat] = pkg.version.split(".").map(Number);
-            pkg.version = [maj, min, pat + 1].join(".");
+            const p = pkg.version.split(".");
+            p[2] = String(Number(p[2]) + 1);
+            pkg.version = p.join(".");
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
-            console.log("package.json: " + [maj, min, pat].join(".") + " -> " + pkg.version);
+            console.log("Auto-bumped version to " + pkg.version);
           '
           node scripts/sync-plugin-version.mjs
-          node -e '
+          NEWV="$(node -p "require('./package.json').version")" node -e '
             const fs = require("fs");
-            const v = require("./package.json").version;
+            const v = process.env.NEWV;
             const date = new Date().toISOString().slice(0, 10);
+            const entry = "## [" + v + "] - " + date + "\n### Changed\n- Dependency bump via Dependabot; committed bundle rebuilt. (automated)\n";
             const cl = fs.readFileSync("CHANGELOG.md", "utf8");
             const marker = "## [Unreleased]";
             const i = cl.indexOf(marker);
-            if (i === -1) { console.error("CHANGELOG.md: no [Unreleased] section"); process.exit(1); }
-            const entry = "## [" + v + "] - " + date + "\n\n### Changed\n\n- Dependency bump via Dependabot; committed bundle rebuilt. (automated)";
+            if (i === -1) { console.error("no [Unreleased] section in CHANGELOG.md"); process.exit(1); }
             const at = i + marker.length;
-            fs.writeFileSync("CHANGELOG.md", cl.slice(0, at) + "\n\n" + entry + cl.slice(at));
-            console.log("CHANGELOG.md: added entry for " + v);
+            const rest = cl.slice(at).replace(/^\n*/, "");
+            fs.writeFileSync("CHANGELOG.md", cl.slice(0, at) + "\n\n" + entry + "\n" + rest);
+            console.log("Prepended CHANGELOG entry for " + v);
           '
           git add package.json CHANGELOG.md build .claude-plugin .agents codex .hermes-plugin .antigravity-plugin 2>/dev/null || true
 
