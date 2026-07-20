@@ -12,10 +12,10 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 2. **Install dependencies**
    ```bash
-   pnpm install
+   corepack enable && pnpm install --frozen-lockfile
    ```
 
-   This repo pins pnpm via `packageManager` in `package.json` — `corepack enable` provides it. Development needs Node >= 22.13 (CI tests on Node 22 and 24); the published server itself runs on Node >= 20.
+   This repo pins pnpm via `packageManager` in `package.json` — `corepack enable` provides it. Development needs Node >= 22.13 (CI tests on Node 22 and 24); the published server itself runs on Node >= 20. A `preinstall` guard rejects `npm install`/`yarn` in a git checkout: they resolve dependencies off-lockfile, so the committed bundle would mismatch CI.
 
 3. **Build the project**
    ```bash
@@ -24,7 +24,8 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 4. **Run tests**
    ```bash
-   pnpm test
+   pnpm test                 # unit tests (fast, no Mail.app needed)
+   pnpm run test:integration # live Mail.app interaction (requires a configured macOS Mail.app)
    ```
 
 ## Code Style
@@ -32,22 +33,15 @@ Thank you for your interest in contributing! This document provides guidelines f
 This project uses ESLint and Prettier for code quality and formatting.
 
 ```bash
-# Check for linting issues
-pnpm run lint
-
-# Auto-fix linting issues
-pnpm run lint:fix
-
-# Format code
-pnpm run format
-
-# Check formatting
+pnpm run lint        # check
+pnpm run lint:fix    # auto-fix
+pnpm run format      # format
 pnpm run format:check
 ```
 
 ## Testing
 
-All new features should include tests. We use Vitest for testing.
+All new features should include tests. We use Vitest.
 
 ```bash
 # Run unit tests
@@ -91,36 +85,19 @@ A green CI run alone does not exercise the live Mail.app behavior.
 
 ## Pull Request Process
 
-1. **Create a feature branch**
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
+1. Create a feature branch (`git checkout -b feature/your-feature-name`).
+2. Make your changes — follow the existing style, add JSDoc, add tests.
+3. Run all checks: `pnpm run lint && pnpm run typecheck && pnpm run format:check && pnpm test && pnpm run build`.
+4. Make sure your PR satisfies everything in "What CI requires of your PR" below.
+5. Commit with clear messages referencing any related issues.
+6. Push and open a PR describing what it does and linking related issues.
 
-2. **Make your changes**
-   - Follow the existing code style
-   - Add JSDoc comments for new functions
-   - Add tests for new functionality
+## What CI requires of your PR
 
-3. **Run all checks**
-   ```bash
-   pnpm run lint
-   pnpm run typecheck
-   pnpm run format:check
-   pnpm test
-   pnpm run build
-   ```
-
-4. **Version bump & committed bundle** (shipped-code changes only)
-   - Any change to shipped code (`src/**` excluding tests, or the runtime `dependencies` in `package.json`) must bump `package.json` at least a patch (`pnpm version patch --no-git-tag-version`) and add a CHANGELOG.md entry in the same PR — the `require-version-bump` CI check fails the PR otherwise. Docs-only and test-only PRs are exempt.
-   - The bundled `build/index.js` and `build/cli.js` are committed to git: after source changes, rebuild (`pnpm run build`) and commit the updated bundle alongside `src/` — CI verifies the committed bundle matches the source.
-
-5. **Commit your changes**
-   - Use clear, descriptive commit messages
-   - Reference any related issues
-
-6. **Push and create a PR**
-   - Describe what your PR does
-   - Link any related issues
+- **Patch bump + CHANGELOG for shipped code.** Any change to shipped bytes (`src/**` excluding tests, the runtime `dependencies` in `package.json`, or the committed `build/` bundle) must bump `package.json` at least a patch (`pnpm version patch --no-git-tag-version`) and add a CHANGELOG.md entry in the same PR — the `require-version-bump` check fails the PR otherwise. Docs-only and test-only PRs are exempt.
+- **Committed, rebuilt `build/`.** The bundled `build/index.js` and `build/cli.js` are committed to git: after source changes, rebuild (`pnpm run build`) and commit the updated bundle alongside `src/` — CI verifies the committed bundle matches the source and boots it standalone on Node 20.
+- **Prettier-clean.** `pnpm run format:check` must pass (CI gates formatting separately from lint).
+- **Tests green.** `pnpm test` must pass on Node 22 and 24; run the integration suite locally for AppleScript-path changes (see above).
 
 ## Adding New Tools
 

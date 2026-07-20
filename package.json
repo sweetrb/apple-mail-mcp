@@ -1,6 +1,6 @@
 {
   "name": "apple-mail-mcp",
-  "version": "2.8.11",
+  "version": "2.8.12",
   "packageManager": "pnpm@11.9.0",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude and other AI assistants",
   "type": "module",
@@ -16,7 +16,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc --noEmit && esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --outdir=build --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
+    "preinstall": "node -e \"const fs=require('fs');const ua=process.env.npm_config_user_agent||'';if(fs.existsSync('.git')&&!ua.startsWith('pnpm')){console.error('\\nThis repo uses pnpm. npm/yarn resolve dependencies off-lockfile and the committed bundle will mismatch CI.\\n\\n  corepack enable && pnpm install --frozen-lockfile\\n');process.exit(1)}\"",
+    "build": "tsc --noEmit && esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node20 --outdir=build --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
     "start": "node build/index.js",
     "dev": "tsc --watch",
     "test": "vitest run",

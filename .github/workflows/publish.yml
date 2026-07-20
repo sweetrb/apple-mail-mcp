@@ -1,3 +1,15 @@
+# ┌─────────────────────────── RENAME HAZARD ───────────────────────────┐
+# │ Three names in this pipeline are LOAD-BEARING COUPLINGS:            │
+# │  1. This FILE's name (publish.yml) is the npm Trusted Publisher     │
+# │     key — rename it and OIDC publishing breaks (photos hit this:    │
+# │     auto-release.yml had to be renamed to match).                   │
+# │  2. `workflows: [CI]` below matches ci.yml's `name:` — retitle CI   │
+# │     and this workflow never fires again (the daily schedule below   │
+# │     is the safety net that turns that silent break into a loud one).│
+# │  3. ci.yml's `test` job + matrix [22, 24] produce the required      │
+# │     branch-protection contexts `test (22)` / `test (24)` — rename   │
+# │     the job or matrix and merges block on phantom checks.           │
+# └─────────────────────────────────────────────────────────────────────┘
 name: Publish to npm
 
 on:
@@ -7,14 +19,24 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  # Manual retry for a stranded publish (e.g. CI flake recovered by
+  # re-dispatching CI, whose green run a workflow_run trigger would
+  # otherwise accept only for `push` events).
+  workflow_dispatch:
+  # Daily watchdog: retries any pending publish (version on main absent from
+  # npm) and self-heals a missed GitHub Release. Converts every silent
+  # never-publish variant — severed trigger coupling, race, transient npm or
+  # gh failure — into automatic recovery within 24h, or a RED run (email)
+  # when recovery fails. Runs read-only when nothing is pending.
+  schedule:
+    - cron: "17 9 * * *"
 
-# Each release lands two pushes on main (the PR merge commit, then the
-# `chore(release)` version-bump commit), so two CI runs complete and each
-# triggers a publish. Without serialization they race: both read the
-# pre-publish version, both attempt `npm publish`, and the loser fails with a
-# 403 "cannot publish over existing version" (noisy failure emails). A
-# concurrency group serializes them; the second then sees the version already
-# published and skips cleanly.
+# Each release can land multiple pushes on main in quick succession, so
+# multiple CI runs complete and each triggers a publish. Without
+# serialization they race: both read the pre-publish version, both attempt
+# publish, and the loser fails with a 403 "cannot publish over existing
+# version" (noisy failure emails). A concurrency group serializes them; the
+# later run then sees the version already published and skips cleanly.
 concurrency:
   group: publish-to-npm
   cancel-in-progress: false
@@ -24,36 +46,53 @@ jobs:
     runs-on: macos-latest
     if: >
       (github.event_name == 'release') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'schedule') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
     permissions:
       id-token: write
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Checkout repository (the CI-validated commit, not a moving ref)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # For workflow_run, check out exactly the commit CI validated —
+          # otherwise a push landing between CI completion and this checkout
+          # publishes bytes (and provenance, and a Release tag) that no CI
+          # run ever saw. Other events check out their natural ref
+          # (main for schedule/dispatch, the tag for release).
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
           cache: "pnpm"
 
-      - name: Check if version is already published
+      - name: Check if this exact version is already published
         id: check
+        # Exact-version existence (`npm view pkg@version`), NOT latest-equality:
+        # immune to the registry's `latest` CDN lag, and a manual Release
+        # created for an old version is a clean no-op instead of a re-publish
+        # attempt.
         run: |
+          PKG=$(node -p "require('./package.json').name")
           LOCAL_VERSION=$(node -p "require('./package.json').version")
-          PUBLISHED_VERSION=$(npm view apple-mail-mcp version 2>/dev/null || echo "0.0.0")
+          EXISTS=$(npm view "${PKG}@${LOCAL_VERSION}" version 2>/dev/null || echo "")
+          echo "pkg=$PKG" >> "$GITHUB_OUTPUT"
           echo "local=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
-          echo "published=$PUBLISHED_VERSION" >> "$GITHUB_OUTPUT"
-          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
+          if [ -n "$EXISTS" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "${PKG}@${LOCAL_VERSION} is already on npm — nothing to publish."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "${PKG}@${LOCAL_VERSION} is not on npm — publishing."
           fi
 
       - name: Install dependencies
@@ -74,33 +113,34 @@ jobs:
 
       - name: Publish to npm (pnpm + OIDC trusted publishing)
         if: steps.check.outputs.skip == 'false'
-        # Phase 2 of the pnpm migration: release via `pnpm publish` (Phase 1 still
-        # used `npm publish`). `--no-git-checks` skips pnpm's clean-tree/branch
-        # guard, which CI does not satisfy. The read-only `npm view` version checks
-        # below stay on npm (provided by setup-node).
+        # `pnpm publish` does the OIDC exchange + provenance (no token).
+        # `--no-git-checks` skips pnpm's clean-tree/branch guard, which CI
+        # does not satisfy.
         #
-        # Tolerate the publish race: a release pushes two commits, so two CI runs
-        # complete and each triggers a publish. The concurrency group serializes
-        # them, but npm's registry read (`npm view`, CDN-cached) lags the write,
-        # so the second run's "already published?" check can still see the old
-        # version, attempt to publish, and get a 403 for the version the first
-        # run just pushed. Treat that specific case as success.
+        # Tolerate the publish race: the concurrency group serializes runs,
+        # but npm's registry read lags the write, so a later run's existence
+        # check can miss the version a concurrent run just pushed, attempt to
+        # publish, and get a 403. Re-check and treat that case as success.
         run: |
           if pnpm publish --provenance --no-git-checks; then
             echo "Published."
           else
-            LOCAL=$(node -p "require('./package.json').version")
-            PUBLISHED=$(npm view apple-mail-mcp version 2>/dev/null || echo "")
-            if [ "$PUBLISHED" = "$LOCAL" ]; then
-              echo "Version $LOCAL is already on npm (published by a concurrent run); treating as success."
+            PKG="${{ steps.check.outputs.pkg }}"
+            LOCAL="${{ steps.check.outputs.local }}"
+            NOW_EXISTS=$(npm view "${PKG}@${LOCAL}" version 2>/dev/null || echo "")
+            if [ -n "$NOW_EXISTS" ]; then
+              echo "${PKG}@${LOCAL} is already on npm (published by a concurrent run); treating as success."
             else
-              echo "::error::pnpm publish failed and $LOCAL is not on npm."
+              echo "::error::pnpm publish failed and ${PKG}@${LOCAL} is not on npm."
               exit 1
             fi
           fi
 
-      - name: Create GitHub Release (keep Releases in sync with npm)
-        if: steps.check.outputs.skip == 'false'
+      - name: Sync GitHub Release (self-healing — runs on every trigger)
+        # Deliberately NOT gated on the skip flag: idempotent via
+        # `gh release view`, so a Release missed by a transient failure in an
+        # earlier run is healed by ANY later run, including the daily
+        # schedule.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -111,7 +151,7 @@ jobs:
             NOTES=$(awk -v v="## [$VERSION]" 'index($0,v)==1{p=1;next} p&&/^## \[/{exit} p' CHANGELOG.md)
             [ -z "$NOTES" ] && NOTES="Published to npm as v$VERSION."
             gh release create "v$VERSION" --target "$(git rev-parse HEAD)" --title "v$VERSION" --notes "$NOTES" \
-              || echo "::warning::Failed to create GitHub Release v$VERSION (npm publish still succeeded)"
+              || echo "::warning::Failed to create GitHub Release v$VERSION (will self-heal on the next run)"
           fi
 
       - name: Skip publish (version already published)
