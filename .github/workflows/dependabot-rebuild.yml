@@ -76,7 +76,7 @@ jobs:
       built_from: ${{ steps.head.outputs.sha }}
     steps:
       - name: Checkout PR head branch
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           persist-credentials: false
@@ -105,7 +105,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.guard.outputs.skip != 'true'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: "pnpm"
@@ -158,9 +158,12 @@ jobs:
     steps:
       - name: Checkout PR head branch
         if: needs.rebuild.outputs.changed == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref || github.ref_name }}
+          # Full history so the auto-bump step can compute the fork point
+          # (merge-base with origin/main) the same way version-guard does.
+          fetch-depth: 0
 
       - name: Abort if the branch moved since the rebuild
         if: needs.rebuild.outputs.changed == 'true'
@@ -191,6 +194,53 @@ jobs:
         with:
           name: rebuilt-bundle
           path: build/
+
+      - name: Auto-bump patch version for shipped-byte change
+        # version-guard now treats build/** as shipped bytes; without this
+        # auto-bump, every bundle-changing Dependabot PR would fail that
+        # required check (the rebuilt bundle changes what users receive, but
+        # the bot never bumps package.json). Token-split invariant: NO pnpm
+        # and NO install in this job — dependency lifecycle code must never
+        # run with the write token — so the edits below are plain `node -e`
+        # plus the repo-owned, dependency-free sync script.
+        if: needs.rebuild.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          # Same fork-point semantics as version-guard: compare package.json's
+          # version field between the merge-base with origin/main and HEAD.
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          BASE="$(git merge-base origin/main HEAD)"
+          OLDV="$(git show "${BASE}:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')"
+          NEWV="$(node -p "require('./package.json').version")"
+          if [ "$OLDV" != "$NEWV" ]; then
+            echo "Version already bumped vs fork point (${OLDV} -> ${NEWV}) — skipping auto-bump."
+            exit 0
+          fi
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const p = pkg.version.split(".");
+            p[2] = String(Number(p[2]) + 1);
+            pkg.version = p.join(".");
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+            console.log("Auto-bumped version to " + pkg.version);
+          '
+          node scripts/sync-plugin-version.mjs
+          NEWV="$(node -p "require('./package.json').version")" node -e '
+            const fs = require("fs");
+            const v = process.env.NEWV;
+            const date = new Date().toISOString().slice(0, 10);
+            const entry = "## [" + v + "] - " + date + "\n### Changed\n- Dependency bump via Dependabot; committed bundle rebuilt. (automated)\n";
+            const cl = fs.readFileSync("CHANGELOG.md", "utf8");
+            const marker = "## [Unreleased]";
+            const i = cl.indexOf(marker);
+            if (i === -1) { console.error("no [Unreleased] section in CHANGELOG.md"); process.exit(1); }
+            const at = i + marker.length;
+            const rest = cl.slice(at).replace(/^\n*/, "");
+            fs.writeFileSync("CHANGELOG.md", cl.slice(0, at) + "\n\n" + entry + "\n" + rest);
+            console.log("Prepended CHANGELOG entry for " + v);
+          '
+          git add package.json CHANGELOG.md build .claude-plugin .agents codex .hermes-plugin .antigravity-plugin 2>/dev/null || true
 
       - name: Commit and push the rebuilt bundle
         if: needs.rebuild.outputs.changed == 'true'

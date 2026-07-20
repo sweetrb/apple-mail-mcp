@@ -1,3 +1,6 @@
+# RENAME HAZARD: `name: CI` is publish.yml's workflow_run trigger key, and the
+# `test` job's matrix produces required branch-protection contexts
+# `test (22)` / `test (24)`. Renaming either silently severs publishing/merging.
 name: CI
 
 on:
@@ -30,13 +33,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
@@ -55,6 +58,9 @@ jobs:
       - name: Check formatting
         run: pnpm run format:check
 
+      - name: Verify plugin manifests match package.json version
+        run: node scripts/sync-plugin-version.mjs --check
+
       - name: Type check
         run: pnpm run typecheck
 
@@ -63,7 +69,7 @@ jobs:
 
       - name: Upload coverage reports
         if: matrix.node-version == 22
-        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
@@ -74,6 +80,11 @@ jobs:
 
       - name: Verify committed build/ matches source
         run: |
+          UNTRACKED=$(git status --porcelain --ignored -- build/ | grep -E '^(\?\?|!!)' || true)
+          if [ -n "$UNTRACKED" ]; then
+            echo "::error::Build emitted files into build/ that are not tracked:"; echo "$UNTRACKED"
+            exit 1
+          fi
           if ! git diff --quiet build/; then
             echo "::error::build/ is out of date. Run 'pnpm run build' locally and commit the changes."
             git --no-pager diff --stat build/
@@ -83,6 +94,35 @@ jobs:
       - name: outputSchema contract (boots the built server over stdio)
         if: matrix.node-version == 22
         run: pnpm exec vitest run --config vitest.integration.config.ts test/output-schema.test.ts
+
+  # The committed bundle must run with ONLY Node — no node_modules, and on the
+  # oldest supported runtime (engines.node >= 20). This is exactly how a
+  # marketplace/plugin clone executes it. (macOS runners have no `timeout`
+  # binary, so a perl alarm wrapper bounds the boot.)
+  bundle-boots:
+    name: bundle-boots (standalone, Node 20)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: Boot the committed bundle standalone (no node_modules, Node 20)
+        run: |
+          set -euo pipefail
+          DIR=$(mktemp -d)
+          cp package.json "$DIR/"
+          cp -R build "$DIR/build"
+          cd "$DIR"
+          RESP=$(printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci-boot","version":"0"}}}' \
+            | perl -e 'alarm 30; exec @ARGV' node build/index.js | head -1)
+          echo "$RESP" | node -e '
+            let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+              const j=JSON.parse(s);
+              if(!j.result||!j.result.serverInfo||!j.result.serverInfo.version){console.error("no serverInfo in initialize response");process.exit(1)}
+              console.log("bundle boots standalone on Node 20: v"+j.result.serverInfo.version);
+            })'
 
   # IMAP backend integration tests run against a real IMAP server (GreenMail).
   # Unlike the Mail.app integration suite, the IMAP code path needs no macOS, so
@@ -102,13 +142,13 @@ jobs:
             -Dgreenmail.verbose
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "pnpm"

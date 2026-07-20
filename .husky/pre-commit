@@ -1,12 +1,8 @@
-set -e
-
 pnpm exec lint-staged
-
-# Marketplace path-source plugins are git-cloned without `pnpm install`, so the
-# `build/` artifacts must be committed for the plugin to work after install.
-# Keep them fresh: if any staged file is under src/, rebuild and stage build/.
-if git diff --cached --name-only --diff-filter=ACMR | grep -q '^src/'; then
-  echo "src/ changed — rebuilding build/ for plugin distribution"
-  pnpm --silent run build
+# Rebuild the committed bundle when shipped inputs are staged, so a stale
+# build/ can never be committed alongside source (CI's verify step would
+# fail the PR otherwise).
+if git diff --cached --name-only | grep -qE '^(src/|package\.json$|pnpm-lock\.yaml$)'; then
+  pnpm run build
   git add build
 fi

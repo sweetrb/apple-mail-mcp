@@ -58296,7 +58296,7 @@ var require_imap_flow = __commonJS({
         );
         for (let key of Object.keys(this.clientInfo)) {
           if (typeof this.clientInfo[key] === "string") {
-            this.clientInfo[key] = this.clientInfo[key].normalize("NFD").replace(/\p{Diacritic}/gu, "");
+            this.clientInfo[key] = this.clientInfo[key].normalize("NFD").replace(new RegExp("\\p{Diacritic}", "gu"), "");
           }
         }
         this.serverInfo = null;
