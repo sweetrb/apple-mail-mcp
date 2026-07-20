@@ -1,6 +1,6 @@
 ---
 name: apple-mail
-description: Use this skill when the user wants to interact with Apple Mail on macOS - reading, searching, sending, replying to, forwarding, or organizing emails and mailboxes. This skill provides access to the full Apple Mail app through MCP tools.
+description: Use this skill when the user wants to manage Apple Mail on macOS - reading, searching, sending, replying to, forwarding, and organizing emails and mailboxes. This skill provides access to Apple Mail through MCP tools.
 ---
 
 # Apple Mail Skill
@@ -27,19 +27,36 @@ Use this skill when the user:
 
 | Tool | Purpose |
 |------|---------|
-| `list-messages` | List messages in a mailbox (default: INBOX) |
+| `list-messages` | List messages in a mailbox (all mailboxes if omitted) |
 | `search-messages` | Find messages by sender, subject, or content |
 | `get-message` | Read the full content of a message |
+| `get-thread` | Get the full conversation thread for a message |
 | `send-email` | Send a new email immediately |
+| `send-serial-email` | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders) |
 | `create-draft` | Save an email to Drafts for review |
 | `reply-to-message` | Reply to a message (supports reply-all) |
 | `forward-message` | Forward a message to new recipients |
 | `mark-as-read` | Mark a message as read |
 | `mark-as-unread` | Mark a message as unread |
-| `flag-message` | Flag a message for follow-up |
+| `flag-message` | Flag a message for follow-up (optional color) |
 | `unflag-message` | Remove flag from a message |
 | `delete-message` | Move a message to Trash |
 | `move-message` | Move a message to a different mailbox |
+| `resolve-message-id` | Convert `imap:` ids to numeric Mail.app ids (needed for flag colors) |
+| `list-attachments` | List a message's attachments (name, MIME type, size) |
+| `save-attachment` | Save an attachment to disk |
+| `fetch-attachment` | Fetch an attachment's bytes inline as base64 |
+
+### Batch Operations (1-100 ids per call)
+
+| Tool | Purpose |
+|------|---------|
+| `batch-delete-messages` | Move multiple messages to Trash |
+| `batch-move-messages` | Move multiple messages to a mailbox |
+| `batch-mark-as-read` | Mark multiple messages as read |
+| `batch-mark-as-unread` | Mark multiple messages as unread |
+| `batch-flag-messages` | Flag multiple messages (optional color) |
+| `batch-unflag-messages` | Remove flags from multiple messages |
 
 ### Mailbox Operations
 
@@ -47,6 +64,9 @@ Use this skill when the user:
 |------|---------|
 | `list-mailboxes` | List all mailboxes/folders in an account |
 | `get-unread-count` | Get count of unread messages |
+| `create-mailbox` | Create a new mailbox/folder |
+| `delete-mailbox` | Delete a mailbox |
+| `rename-mailbox` | Rename a mailbox |
 
 ### Account Operations
 
@@ -54,12 +74,40 @@ Use this skill when the user:
 |------|---------|
 | `list-accounts` | List configured email accounts |
 
+### Rules
+
+| Tool | Purpose |
+|------|---------|
+| `list-rules` | List Mail rules and their enabled state |
+| `create-rule` | Create a Mail rule (conditions + actions) |
+| `enable-rule` | Enable a rule by name |
+| `disable-rule` | Disable a rule by name |
+| `delete-rule` | Delete a rule by name |
+
+### Contacts
+
+| Tool | Purpose |
+|------|---------|
+| `search-contacts` | Look up people in macOS Contacts to find their email addresses |
+
+### Templates
+
+| Tool | Purpose |
+|------|---------|
+| `save-template` | Create or update a reusable email template |
+| `list-templates` | List saved templates |
+| `get-template` | Read a template's full contents |
+| `use-template` | Compose a draft from a template (with overrides) |
+| `delete-template` | Delete a template |
+
 ### Diagnostics
 
 | Tool | Purpose |
 |------|---------|
 | `health-check` | Verify Mail.app connectivity |
+| `doctor` | Diagnose setup problems (permissions, accounts, IMAP/SMTP) with remediation steps |
 | `get-mail-stats` | Get message and unread statistics |
+| `get-sync-status` | Check whether Mail.app is running and syncing |
 
 ## Usage Patterns
 
@@ -142,7 +190,7 @@ Action: Use delete-message with the message ID
 
 1. **Message IDs**: All message operations require an ID. Get IDs from `list-messages` or `search-messages` first.
 2. **Recipient Arrays**: The `to`, `cc`, and `bcc` parameters must be arrays, even for single recipients: `["email@example.com"]`
-3. **Default Account**: Operations default to the first configured account. Use `account` parameter for others.
+3. **Account Selection**: Read tools (`list-messages`, `search-messages`) cover all accounts when `account` is omitted; other operations default to Mail's default account (first enabled account as fallback). Use the `account` parameter to target a specific one.
 4. **Draft vs Send**: Use `create-draft` when the user wants to review before sending. Recommend this for important emails.
 5. **Backslash Escaping**: When email content contains backslashes, escape them as `\\` in the JSON.
 6. **macOS Only**: This skill only works on macOS systems.
@@ -150,7 +198,7 @@ Action: Use delete-message with the message ID
 ## Error Handling
 
 - **"Message not found"**: The message ID may be invalid or the message was deleted. Use search-messages to find it again.
-- **"Permission denied"**: User needs to grant automation permission in System Settings > Privacy & Security > Automation.
+- **"Permission denied"**: User needs to grant automation permission in System Settings > Privacy & Security > Automation. Run the `doctor` tool for a full diagnosis.
 - **"Account not found"**: Account names are case-sensitive. Use list-accounts to see exact names.
 - **"Failed to send"**: Check network connection and Mail.app configuration.
 
