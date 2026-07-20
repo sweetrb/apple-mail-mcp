@@ -2106,6 +2106,92 @@ server.registerTool(
   }, "Error renaming mailbox")
 );
 
+// --- list-smart-mailboxes (intelligente Postfächer) ---
+
+server.tool(
+  "list-smart-mailboxes",
+  {},
+  withErrorHandling(() => {
+    const list = mailManager.listSmartMailboxes();
+    if (list.length === 0) {
+      return successResponse("No smart mailboxes found");
+    }
+    const lines = list
+      .map((s: any) => `  - ${s.name}${s.criteriaSummary ? ` (${s.criteriaSummary})` : ""}`)
+      .join("\n");
+    return successResponse(`Found ${list.length} smart mailbox(es):\n${lines}`);
+  }, "Error listing smart mailboxes")
+);
+
+// --- create-smart-mailbox ---
+
+server.tool(
+  "create-smart-mailbox",
+  {
+    name: z.string().min(1, "Smart mailbox name is required"),
+    fromContains: z.string().optional().describe("Match sender (From contains)"),
+    subjectContains: z.string().optional().describe("Match subject (contains)"),
+    bodyContains: z.string().optional().describe("Match body (contains)"),
+  },
+  withErrorHandling(({ name, fromContains, subjectContains, bodyContains }) => {
+    const ok = mailManager.createSmartMailbox(
+      name,
+      fromContains || "",
+      subjectContains || "",
+      bodyContains || ""
+    );
+    if (!ok) {
+      return errorResponse(`Failed to create smart mailbox "${name}"`);
+    }
+    return successResponse(`Smart mailbox "${name}" created (or already existed)`);
+  }, "Error creating smart mailbox")
+);
+
+// --- delete-smart-mailbox ---
+
+server.tool(
+  "delete-smart-mailbox",
+  {
+    name: z.string().min(1, "Smart mailbox name is required"),
+  },
+  withErrorHandling(({ name }) => {
+    const ok = mailManager.deleteSmartMailbox(name);
+    if (!ok) {
+      return errorResponse(`Failed to delete smart mailbox "${name}"`);
+    }
+    return successResponse(`Smart mailbox "${name}" deleted`);
+  }, "Error deleting smart mailbox")
+);
+
+// --- create-newsletter-smart-mailboxes (the main use-case: from Inbox) ---
+
+server.tool(
+  "create-newsletter-smart-mailboxes",
+  {
+    dryRun: z.boolean().default(true).describe("If true, only propose; if false, actually create"),
+    minCount: z
+      .number()
+      .int()
+      .min(1)
+      .default(3)
+      .describe("Minimum messages from sender in the period"),
+    days: z.number().int().min(1).default(90).describe("Look back this many days in INBOXes"),
+  },
+  withErrorHandling(({ dryRun, minCount, days }) => {
+    const result = mailManager.createNewsletterSmartMailboxes(!!dryRun, minCount, days);
+    const lines = result.createdOrProposed
+      .map(
+        (c: any) =>
+          `  - ${c.name || c.suggestedName || c.email} (score ${c.score || "?"}${c.wouldCreate ? ", dry-run" : ""})`
+      )
+      .join("\n");
+    const prefix = result.dryRun ? "DRY RUN - would create" : "Created";
+    return successResponse(
+      `${prefix} ${result.count} newsletter smart mailbox(es):\n${lines || "  (none met the threshold)"}`
+    );
+  }, "Error creating newsletter smart mailboxes")
+);
+
 // =============================================================================
 // Account Tools
 // =============================================================================

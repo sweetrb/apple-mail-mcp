@@ -146,6 +146,21 @@ export interface Mailbox {
 }
 
 /**
+ * Represents a smart mailbox (intelligentes Postfach) in Apple Mail.
+ * These are virtual, criteria-based views (not real folders).
+ */
+export interface SmartMailbox {
+  /** Display name of the smart mailbox */
+  name: string;
+
+  /** Internal ID from the plist */
+  id?: string;
+
+  /** Human readable summary of the matching criteria */
+  criteriaSummary?: string;
+}
+
+/**
  * Represents an email account in Apple Mail.
  */
 export interface Account {
