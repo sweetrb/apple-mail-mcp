@@ -879,6 +879,59 @@ Rename a mailbox (creates new, moves messages, deletes old).
 
 ---
 
+### Smart Mailbox Operations (intelligente Postfächer)
+
+Smart mailboxes are virtual (criteria-based views, not real folders). These tools let you create dedicated smart views for newsletters etc. directly from the Inbox without moving messages.
+
+#### `list-smart-mailboxes`
+
+List existing smart mailboxes.
+
+**Parameters:** None
+
+**Returns:** List of smart mailbox names + criteria summary.
+
+---
+
+#### `create-smart-mailbox`
+
+Create a smart mailbox with a simple contains rule.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Name for the smart mailbox |
+| `fromContains` | string | No | Match if From contains this |
+| `subjectContains` | string | No | Match if Subject contains this |
+| `bodyContains` | string | No | Match if Body contains this |
+
+Exactly one of the three contains fields should be provided.
+
+---
+
+#### `delete-smart-mailbox`
+
+Delete a smart mailbox by name.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Smart mailbox name |
+
+---
+
+#### `create-newsletter-smart-mailboxes`
+
+High-level tool: scan recent messages in your INBOXes, detect likely newsletters (volume + signals like List-Unsubscribe, noreply, repetitive subjects), and create smart mailboxes for them (names prefixed "NL: ...").
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `dryRun` | boolean | No | Default true — only propose, do not create |
+| `minCount` | number | No | Min messages from a sender (default 3) |
+| `days` | number | No | Lookback window in days (default 90) |
+
+Use with `dryRun: false` to actually create the smart folders for newsletters cluttering your Inbox.
+
+---
+
 ### Account Operations
 
 #### `list-accounts`
