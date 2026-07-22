@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.14] - 2026-07-22
+
+### Security
+- Override the MCP SDK's transitive `@hono/node-server` and `fast-uri` dependencies to patched releases (`@hono/node-server` 2.0.10, `fast-uri` 3.1.4), clearing the Hono static-file path-traversal advisory and the two `fast-uri` host-confusion advisories that the SDK's own ranges still resolve to. Fleet-wide companion to sweetrb/apple-notes-mcp#104 (@oliverames).
+
+
 ## [2.8.13] - 2026-07-21
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
