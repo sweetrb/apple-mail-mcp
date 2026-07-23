@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.15] - 2026-07-23
+
+### Fixed
+- `get-unread-count` with no `mailbox` now counts **INBOX** instead of summing UNSEEN across every mailbox. The old sweep was both slow — a STATUS per label on a cold IMAP connection, dozens of serial round-trips that could overrun the MCP client's tool-call timeout — and **wrong on Gmail**, where one unread message simultaneously lives in INBOX, `[Gmail]/All Mail`, and each of its labels and so was counted several times over. Both backends are fixed: IMAP (`imapUnreadCount`) and AppleScript (`getUnreadCount`, which also carried the audit-#8 30s-timeout risk). INBOX is the meaningful "unread messages" figure; pass an explicit `mailbox` for any other scope. Per-account totals (no `account` given) are unaffected in shape — each account still contributes exactly once, now via its INBOX.
+
 ## [2.8.14] - 2026-07-22
 
 ### Security

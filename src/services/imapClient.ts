@@ -568,25 +568,22 @@ export function imapListMessages(
 // AppleScript on large mailboxes (where the per-message walk times out, #8/#24).
 // ===========================================================================
 
-/** Unread count via IMAP STATUS (UNSEEN). No mailbox → sum across all mailboxes. */
+/**
+ * Unread count via IMAP STATUS (UNSEEN). No mailbox → INBOX.
+ *
+ * This used to sum UNSEEN across every mailbox, which was both slow — a STATUS
+ * per label on a cold pooled connection, dozens of serial round-trips that
+ * overran the MCP client's tool-call timeout — and WRONG on Gmail, where one
+ * unread message simultaneously lives in INBOX, [Gmail]/All Mail, and each of
+ * its labels and so got counted several times over. INBOX is the meaningful
+ * "unread messages" figure; pass `mailbox` for any other scope.
+ */
 export function imapUnreadCount(mailbox: string | undefined, deps: ImapDeps = {}): Promise<number> {
   return useClient(
     deps,
     async (client) => {
-      if (mailbox) {
-        const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
-        return s.unseen ?? 0;
-      }
-      let total = 0;
-      for (const b of await client.list()) {
-        try {
-          const s = await client.status(b.path, { unseen: true });
-          total += s.unseen ?? 0;
-        } catch {
-          // skip mailboxes that can't be STATUS'd (e.g. \Noselect parents)
-        }
-      }
-      return total;
+      const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
+      return s.unseen ?? 0;
     },
     true
   );
