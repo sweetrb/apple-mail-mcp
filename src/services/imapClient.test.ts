@@ -813,13 +813,14 @@ describe("STATUS-based counts (I3/I4/I6)", () => {
     expect(n).toBe(7);
   });
 
-  it("imapUnreadCount sums UNSEEN across all mailboxes when none given", async () => {
+  it("imapUnreadCount defaults to INBOX (no cross-mailbox double-count) when none given", async () => {
     const n = await imapUnreadCount(undefined, {
       config: cfg,
       connect: async () =>
         statusClient({ INBOX: { unseen: 7 }, "[Gmail]/Sent Mail": { unseen: 2 } }),
     });
-    expect(n).toBe(9);
+    // INBOX only — the old sum-all behaviour double-counted Gmail labels/All Mail.
+    expect(n).toBe(7);
   });
 
   it("imapListMailboxes returns per-mailbox message/unseen counts", async () => {

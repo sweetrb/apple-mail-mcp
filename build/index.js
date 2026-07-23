@@ -78534,20 +78534,9 @@ var AppleMailManager = class {
    */
   getUnreadCount(mailbox, account) {
     const targetAccount = this.resolveAccount(account);
-    let command;
-    if (mailbox) {
-      const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
-      const safeMailbox = escapeForAppleScript(targetMailbox);
-      command = `return unread count of mailbox "${safeMailbox}"`;
-    } else {
-      command = `
-        set total to 0
-        repeat with mb in mailboxes
-          set total to total + (unread count of mb)
-        end repeat
-        return total
-      `;
-    }
+    const targetMailbox = this.resolveMailbox(mailbox || "INBOX", targetAccount);
+    const safeMailbox = escapeForAppleScript(targetMailbox);
+    const command = `return unread count of mailbox "${safeMailbox}"`;
     const script = buildAccountScopedScript(targetAccount, command);
     const result = executeAppleScript(script, { timeoutMs: 6e4 });
     if (!result.success) {
@@ -79815,19 +79804,8 @@ function imapUnreadCount(mailbox, deps = {}) {
   return useClient(
     deps,
     async (client) => {
-      if (mailbox) {
-        const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
-        return s.unseen ?? 0;
-      }
-      let total = 0;
-      for (const b of await client.list()) {
-        try {
-          const s = await client.status(b.path, { unseen: true });
-          total += s.unseen ?? 0;
-        } catch {
-        }
-      }
-      return total;
+      const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
+      return s.unseen ?? 0;
     },
     true
   );
@@ -82268,9 +82246,9 @@ ${mailboxList}`, structured);
 server.registerTool(
   "get-unread-count",
   {
-    description: "Use when: you only need the number of unread messages (optionally scoped to one mailbox and/or account), without listing the messages themselves.\nReturns: the unread count for the requested scope.\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals (use get-mail-stats).",
+    description: "Use when: you only need the number of unread messages \u2014 INBOX by default, or scoped to one mailbox and/or account \u2014 without listing the messages themselves.\nReturns: the unread count for the requested scope (INBOX when no mailbox is given).\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals across every mailbox (use get-mail-stats).",
     inputSchema: {
-      mailbox: external_exports.string().optional().describe("Mailbox to check (default: all)"),
+      mailbox: external_exports.string().optional().describe("Mailbox to check (default: INBOX)"),
       account: external_exports.string().optional().describe("Account to check")
     },
     outputSchema: {

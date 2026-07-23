@@ -2949,25 +2949,16 @@ export class AppleMailManager {
   getUnreadCount(mailbox?: string, account?: string): number {
     const targetAccount = this.resolveAccount(account);
 
-    let command: string;
-    if (mailbox) {
-      const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
-      const safeMailbox = escapeForAppleScript(targetMailbox);
-      command = `return unread count of mailbox "${safeMailbox}"`;
-    } else {
-      // Get total unread across all mailboxes
-      command = `
-        set total to 0
-        repeat with mb in mailboxes
-          set total to total + (unread count of mb)
-        end repeat
-        return total
-      `;
-    }
+    // No mailbox → INBOX. Summing unread across every mailbox was slow (audit
+    // #8: could exceed 30s and then degrade silently to 0 = "all read") and
+    // wrong on Gmail, where one unread message also lives in All Mail and each
+    // of its labels and got counted several times. INBOX is the meaningful
+    // "unread messages" figure; this mirrors an explicit mailbox:"INBOX".
+    const targetMailbox = this.resolveMailbox(mailbox || "INBOX", targetAccount);
+    const safeMailbox = escapeForAppleScript(targetMailbox);
+    const command = `return unread count of mailbox "${safeMailbox}"`;
 
     const script = buildAccountScopedScript(targetAccount, command);
-    // Summing unread across every mailbox can exceed the default 30s; a timeout
-    // previously degraded silently to 0 ("all read") — audit finding #8.
     const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success) {

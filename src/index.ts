@@ -1937,9 +1937,9 @@ server.registerTool(
   "get-unread-count",
   {
     description:
-      "Use when: you only need the number of unread messages (optionally scoped to one mailbox and/or account), without listing the messages themselves.\nReturns: the unread count for the requested scope.\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals (use get-mail-stats).",
+      "Use when: you only need the number of unread messages — INBOX by default, or scoped to one mailbox and/or account — without listing the messages themselves.\nReturns: the unread count for the requested scope (INBOX when no mailbox is given).\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals across every mailbox (use get-mail-stats).",
     inputSchema: {
-      mailbox: z.string().optional().describe("Mailbox to check (default: all)"),
+      mailbox: z.string().optional().describe("Mailbox to check (default: INBOX)"),
       account: z.string().optional().describe("Account to check"),
     },
     outputSchema: {
@@ -1950,8 +1950,11 @@ server.registerTool(
   },
   withErrorHandling(async ({ mailbox, account }) => {
     // IMAP (I4): STATUS (UNSEEN) is authoritative and fast even on huge
-    // mailboxes. Prefer-IMAP (v2.6.0). Counts are ACCOUNT-CENTRIC so each account
-    // is counted exactly once even if the coverage heuristic mis-matches:
+    // mailboxes. Prefer-IMAP (v2.6.0). No mailbox → each account's INBOX (the
+    // meaningful "unread" figure; summing every mailbox was slow and, on Gmail,
+    // counted one unread message once per label + All Mail). Counts are
+    // ACCOUNT-CENTRIC so each account is counted exactly once even if the
+    // coverage heuristic mis-matches:
     //   - explicit IMAP account → IMAP UNSEEN for that account;
     //   - no account + IMAP configured → planCountSources assigns each account
     //     ONE source (its matching IMAP config, else AppleScript) and counts any
