@@ -938,6 +938,28 @@ describe("connection pooling (#50 / A3)", () => {
     expect(connects).toBe(3); // pool was cleared → next call reconnects
   });
 
+  it("force-closes the socket even when logout() rejects (CLOSE_WAIT leak fix)", async () => {
+    let logouts = 0;
+    let closes = 0;
+    __setPoolConnect(async () => {
+      const c = makeClient([1], {});
+      return {
+        ...c,
+        logout: async () => {
+          logouts++;
+          throw new Error("socket half-closed — LOGOUT cannot complete");
+        },
+        close: () => {
+          closes++;
+        },
+      };
+    });
+    await imapListMessages({ mailbox: "INBOX", limit: 5 }, { config: cfg });
+    await dropAllPools(); // dropPool: logout() rejects (caught) → close() must still fire
+    expect(logouts).toBe(1); // graceful logout was attempted
+    expect(closes).toBe(1); // socket force-closed anyway → no leaked CLOSE_WAIT FD
+  });
+
   it("closes the pooled connection after the idle window (at-rest → ZERO open sockets)", async () => {
     // Regression for the connection-footprint work: after the last read, the
     // pool's idle timer must fire and LOG OUT the connection, so an instance

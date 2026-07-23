@@ -136,6 +136,10 @@ export interface ImapClientLike {
   messageDelete(range: number[], opts: FlagOpts): Promise<boolean>;
   noop(): Promise<void>;
   logout(): Promise<void>;
+  /** Hard socket teardown (ImapFlow.close): destroys the connection even when a
+   *  graceful logout() can't complete on a half-closed socket. Optional so test
+   *  mocks needn't implement it. */
+  close?(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -734,7 +738,14 @@ async function dropPool(key: string): Promise<void> {
   if (!e) return;
   if (e.idle) clearTimeout(e.idle);
   pools.delete(key);
+  // Graceful logout, THEN a hard close. When Gmail has already half-closed the
+  // socket (its idle timeout / a server BYE → the FD sits in CLOSE_WAIT),
+  // logout() cannot complete and throws; without the force-close that socket
+  // leaked and accumulated against Gmail's ~15-per-account cap (observed: 10
+  // ESTABLISHED + 12 CLOSE_WAIT to Gmail per instance). close() destroys it
+  // unconditionally so the FD/slot is always released.
   await e.client.logout().catch(() => undefined);
+  e.client.close?.();
 }
 
 /**
@@ -848,6 +859,7 @@ async function useClient<T>(
       return await fn(client, cfg);
     } finally {
       await client.logout().catch(() => undefined);
+      client.close?.();
     }
   }
   const key = poolKey(cfg);

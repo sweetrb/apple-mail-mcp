@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.16] - 2026-07-23
+
+### Fixed
+- **IMAP connection leak.** The pool released a dropped connection with only a graceful `logout()`, which can't complete once the server (Gmail) has already half-closed the socket — the FD then lingered in `CLOSE_WAIT` and, over hours of idle-timeout/reconnect churn, accumulated against Gmail's ~15-connections-per-account cap (observed ~10 `ESTABLISHED` + 12 `CLOSE_WAIT` to Gmail per long-lived server instance, the real source of the intermittent "cannot connect" cap pressure). `dropPool` and the per-call connect path now force-close the socket via `ImapFlow.close()` after the logout attempt, so the connection is torn down unconditionally even when the graceful path throws.
+
 ## [2.8.15] - 2026-07-23
 
 ### Fixed

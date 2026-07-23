@@ -79895,6 +79895,7 @@ async function dropPool(key) {
   if (e.idle) clearTimeout(e.idle);
   pools.delete(key);
   await e.client.logout().catch(() => void 0);
+  e.client.close?.();
 }
 async function dropAllPools() {
   await Promise.all([...pools.keys()].map((k) => dropPool(k)));
@@ -79968,6 +79969,7 @@ async function useClient(deps, fn, retryOnDrop = false) {
       return await fn(client, cfg);
     } finally {
       await client.logout().catch(() => void 0);
+      client.close?.();
     }
   }
   const key = poolKey(cfg);
