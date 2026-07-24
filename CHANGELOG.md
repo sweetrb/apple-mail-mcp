@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-07-23
+
+### Added
+- **Smart mailbox tools** — `list-smart-mailboxes`, `create-smart-mailbox`, `delete-smart-mailbox`, and `create-newsletter-smart-mailboxes`. Smart mailboxes are Apple Mail's criteria-based virtual views; AppleScript's `smart mailbox` / `intelligentes Postfach` terms don't compile reliably on localized (e.g. German) macOS, so these read and edit `~/Library/Mail/V*/MailData/SyncedSmartMailboxes.plist` directly. `create-newsletter-smart-mailboxes` scans recent INBOX mail for likely newsletter senders (volume plus List-Unsubscribe / noreply / repetitive-subject signals) and, with `dryRun: false`, creates one "NL: …" smart view per sender (defaults to a dry run). Thanks to @maf4711 (#105) for the feature and the German-localization diagnosis.
+- **Safe, non-destructive plist writes for the smart-mailbox tools.** Each create/delete backs the plist up to `SyncedSmartMailboxes.plist.bak`, mutates a temp copy with a lossless single-entry edit (`plutil -insert -json` to append, `PlistBuddy Delete` to remove), validates it with `plutil -lint`, then atomically renames it into place — so existing smart mailboxes, including any with `<date>`/`<data>` criteria that `plutil -convert json` cannot represent, are preserved byte-for-byte and the live file is only ever replaced by a validated copy. The tools no longer run `killall Mail`; changes appear the next time Mail is launched.
+
 ## [2.8.16] - 2026-07-23
 
 ### Fixed
