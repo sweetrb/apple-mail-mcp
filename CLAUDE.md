@@ -235,6 +235,26 @@ IMAP connections are capped: **Gmail allows at most 15 simultaneous IMAP connect
 4. delete-mailbox name="Old Folder" → delete
 ```
 
+### Manage smart mailboxes (intelligente Postfächer)
+
+Smart mailboxes are **criteria-based virtual views**, not real folders — use these instead of `*-mailbox` when the user wants a saved filter/search (e.g. "a folder that shows all mail from X"). They work on localized macOS (e.g. German), where AppleScript's smart-mailbox terms fail, because they edit `SyncedSmartMailboxes.plist` directly (backed up + atomic; existing smart mailboxes are never rewritten).
+
+```text
+1. list-smart-mailboxes → see existing smart mailboxes
+2. create-smart-mailbox name="From Boss" fromContains="boss@company.com"
+   (provide at least one of fromContains / subjectContains / bodyContains)
+3. delete-smart-mailbox name="From Boss" → remove it
+```
+
+For decluttering an inbox full of newsletters, prefer the high-level tool — it defaults to a **dry run**:
+
+```text
+1. create-newsletter-smart-mailboxes → dry run: proposes "NL: <sender>" smart views by score
+2. create-newsletter-smart-mailboxes dryRun=false → actually create the proposed views
+```
+
+Changes appear the next time Mail is launched — these tools do **not** quit or restart Mail. For reliable results, have the user quit Mail before creating/deleting smart mailboxes.
+
 ### Work with mail rules
 
 ```text

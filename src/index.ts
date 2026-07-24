@@ -2108,86 +2108,155 @@ server.registerTool(
 
 // --- list-smart-mailboxes (intelligente Postfächer) ---
 
-server.tool(
+server.registerTool(
   "list-smart-mailboxes",
-  {},
+  {
+    description:
+      "Use when: listing Apple Mail smart mailboxes (criteria-based virtual views), including on German-localized macOS where AppleScript's smart-mailbox terms do not compile.\nReturns: each smart mailbox's name and a short criteria summary.\nDo not use when: listing real folders/mailboxes (use list-mailboxes).",
+    inputSchema: {},
+    outputSchema: {
+      count: z.number().optional(),
+      smartMailboxes: z
+        .array(
+          z.object({
+            name: z.string(),
+            id: z.string().optional(),
+            criteriaSummary: z.string().optional(),
+          })
+        )
+        .optional(),
+    },
+  },
   withErrorHandling(() => {
     const list = mailManager.listSmartMailboxes();
     if (list.length === 0) {
-      return successResponse("No smart mailboxes found");
+      return successResponse("No smart mailboxes found", { count: 0, smartMailboxes: [] });
     }
     const lines = list
-      .map((s: any) => `  - ${s.name}${s.criteriaSummary ? ` (${s.criteriaSummary})` : ""}`)
+      .map((s) => `  - ${s.name}${s.criteriaSummary ? ` (${s.criteriaSummary})` : ""}`)
       .join("\n");
-    return successResponse(`Found ${list.length} smart mailbox(es):\n${lines}`);
+    return successResponse(`Found ${list.length} smart mailbox(es):\n${lines}`, {
+      count: list.length,
+      smartMailboxes: list.map((s) => ({
+        name: s.name,
+        id: s.id,
+        criteriaSummary: s.criteriaSummary,
+      })),
+    });
   }, "Error listing smart mailboxes")
 );
 
 // --- create-smart-mailbox ---
 
-server.tool(
+server.registerTool(
   "create-smart-mailbox",
   {
-    name: z.string().min(1, "Smart mailbox name is required"),
-    fromContains: z.string().optional().describe("Match sender (From contains)"),
-    subjectContains: z.string().optional().describe("Match subject (contains)"),
-    bodyContains: z.string().optional().describe("Match body (contains)"),
+    description:
+      "Use when: creating an Apple Mail smart mailbox (a criteria-based virtual view) that matches a sender, subject, or body substring — works on German-localized macOS where AppleScript's smart-mailbox terms fail.\nReturns: confirmation of creation, or a note that a smart mailbox with that name already existed.\nDo not use when: creating a real folder (use create-mailbox).\nSafety: edits Apple Mail's SyncedSmartMailboxes.plist directly. It backs the file up (.bak) and writes atomically, and never rewrites your existing smart mailboxes. It does not quit Mail — quit Mail first for reliable results, since a running Mail may not show the new smart mailbox until relaunched and can overwrite plist edits it did not make.",
+    inputSchema: {
+      name: z.string().min(1, "Smart mailbox name is required"),
+      fromContains: z.string().optional().describe("Match sender (From contains)"),
+      subjectContains: z.string().optional().describe("Match subject (contains)"),
+      bodyContains: z.string().optional().describe("Match body (contains)"),
+    },
+    outputSchema: {
+      ok: z.boolean().optional(),
+      name: z.string().optional(),
+      alreadyExisted: z.boolean().optional(),
+    },
   },
   withErrorHandling(({ name, fromContains, subjectContains, bodyContains }) => {
-    const ok = mailManager.createSmartMailbox(
+    if (!fromContains && !subjectContains && !bodyContains) {
+      return errorResponse("Provide at least one of fromContains / subjectContains / bodyContains");
+    }
+    const r = mailManager.createSmartMailbox(
       name,
       fromContains || "",
       subjectContains || "",
       bodyContains || ""
     );
-    if (!ok) {
-      return errorResponse(`Failed to create smart mailbox "${name}"`);
+    if (r.alreadyExisted) {
+      return successResponse(`Smart mailbox "${name}" already exists`, {
+        ok: true,
+        name,
+        alreadyExisted: true,
+      });
     }
-    return successResponse(`Smart mailbox "${name}" created (or already existed)`);
+    if (!r.created) {
+      return errorResponse(r.error || `Failed to create smart mailbox "${name}"`);
+    }
+    return successResponse(`Smart mailbox "${name}" created. Quit and reopen Mail to see it.`, {
+      ok: true,
+      name,
+      alreadyExisted: false,
+    });
   }, "Error creating smart mailbox")
 );
 
 // --- delete-smart-mailbox ---
 
-server.tool(
+server.registerTool(
   "delete-smart-mailbox",
   {
-    name: z.string().min(1, "Smart mailbox name is required"),
+    description:
+      "Use when: deleting an Apple Mail smart mailbox (virtual view) by name.\nReturns: confirmation of deletion.\nDo not use when: deleting a real folder (use delete-mailbox) or messages (use delete-message / batch-delete-messages).\nSafety: destructive — removes the smart mailbox from Apple Mail's SyncedSmartMailboxes.plist. It backs the file up (.bak) and writes atomically, preserving every other smart mailbox, but the removal is not undoable in-app. Confirm the exact name with list-smart-mailboxes first, and quit Mail first for reliable results.",
+    inputSchema: {
+      name: z.string().min(1, "Smart mailbox name is required"),
+    },
+    outputSchema: {
+      ok: z.boolean().optional(),
+      name: z.string().optional(),
+    },
   },
   withErrorHandling(({ name }) => {
-    const ok = mailManager.deleteSmartMailbox(name);
-    if (!ok) {
-      return errorResponse(`Failed to delete smart mailbox "${name}"`);
+    const r = mailManager.deleteSmartMailbox(name);
+    if (!r.deleted) {
+      return errorResponse(r.error || `Failed to delete smart mailbox "${name}"`);
     }
-    return successResponse(`Smart mailbox "${name}" deleted`);
+    return successResponse(`Smart mailbox "${name}" deleted. Quit and reopen Mail to refresh.`, {
+      ok: true,
+      name,
+    });
   }, "Error deleting smart mailbox")
 );
 
 // --- create-newsletter-smart-mailboxes (the main use-case: from Inbox) ---
 
-server.tool(
+server.registerTool(
   "create-newsletter-smart-mailboxes",
   {
-    dryRun: z.boolean().default(true).describe("If true, only propose; if false, actually create"),
-    minCount: z
-      .number()
-      .int()
-      .min(1)
-      .default(3)
-      .describe("Minimum messages from sender in the period"),
-    days: z.number().int().min(1).default(90).describe("Look back this many days in INBOXes"),
+    description:
+      'Use when: auto-discovering newsletter/bulk senders in your INBOX(es) and (optionally) creating a dedicated smart mailbox per sender (named "NL: <sender>"). Defaults to a safe dry run that only proposes.\nReturns: the proposed or created smart mailboxes with their match scores.\nDo not use when: you already know the exact sender (use create-smart-mailbox) or want real folders (use create-mailbox).\nSafety: with dryRun=false it edits Apple Mail\'s SyncedSmartMailboxes.plist (backed up, atomic, existing entries preserved) and can create many smart mailboxes at once — review a dryRun first. It scans up to ~400 recent messages per inbox via AppleScript, which can be slow on large mailboxes.',
+    inputSchema: {
+      dryRun: z
+        .boolean()
+        .default(true)
+        .describe("If true (default), only propose; if false, actually create"),
+      minCount: z
+        .number()
+        .int()
+        .min(1)
+        .default(3)
+        .describe("Minimum messages from sender in the period"),
+      days: z.number().int().min(1).default(90).describe("Look back this many days in INBOXes"),
+    },
+    outputSchema: {
+      dryRun: z.boolean().optional(),
+      count: z.number().optional(),
+    },
   },
   withErrorHandling(({ dryRun, minCount, days }) => {
     const result = mailManager.createNewsletterSmartMailboxes(!!dryRun, minCount, days);
     const lines = result.createdOrProposed
       .map(
         (c: any) =>
-          `  - ${c.name || c.suggestedName || c.email} (score ${c.score || "?"}${c.wouldCreate ? ", dry-run" : ""})`
+          `  - ${c.name || c.suggestedName || c.email} (score ${c.score ?? "?"}${c.wouldCreate ? ", dry-run" : c.alreadyExisted ? ", already existed" : c.error ? `, error: ${c.error}` : ""})`
       )
       .join("\n");
     const prefix = result.dryRun ? "DRY RUN - would create" : "Created";
     return successResponse(
-      `${prefix} ${result.count} newsletter smart mailbox(es):\n${lines || "  (none met the threshold)"}`
+      `${prefix} ${result.count} newsletter smart mailbox(es):\n${lines || "  (none met the threshold)"}`,
+      { dryRun: result.dryRun, count: result.count }
     );
   }, "Error creating newsletter smart mailboxes")
 );

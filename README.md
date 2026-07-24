@@ -881,7 +881,9 @@ Rename a mailbox (creates new, moves messages, deletes old).
 
 ### Smart Mailbox Operations (intelligente Postfächer)
 
-Smart mailboxes are virtual (criteria-based views, not real folders). These tools let you create dedicated smart views for newsletters etc. directly from the Inbox without moving messages.
+Smart mailboxes are Apple Mail's **criteria-based virtual views** — not real folders, so no messages are moved. AppleScript's `smart mailbox` / `intelligentes Postfach` terms don't compile reliably on localized (e.g. German) macOS, so these tools read and edit `~/Library/Mail/V*/MailData/SyncedSmartMailboxes.plist` directly.
+
+**How writes stay safe:** creating or deleting a smart mailbox first backs the plist up to `SyncedSmartMailboxes.plist.bak`, edits a temp copy with `plutil`/`PlistBuddy`, validates it with `plutil -lint`, and only then atomically renames it into place. Your **existing** smart mailboxes — including any with date/data criteria — are never rewritten, only the single target entry is added or removed. These tools do **not** quit or restart Mail: **quit Mail first** for reliable results, since a running Mail may not show a new smart mailbox until it's relaunched and can overwrite plist edits it didn't make.
 
 #### `list-smart-mailboxes`
 
@@ -904,7 +906,9 @@ Create a smart mailbox with a simple contains rule.
 | `subjectContains` | string | No | Match if Subject contains this |
 | `bodyContains` | string | No | Match if Body contains this |
 
-Exactly one of the three contains fields should be provided.
+Provide at least one of the three `*Contains` fields.
+
+**⚠️ Safety:** edits `SyncedSmartMailboxes.plist` (backed up + atomic, existing smart mailboxes preserved). Quit Mail first for reliable results; the new smart mailbox appears the next time Mail launches.
 
 ---
 
@@ -915,6 +919,8 @@ Delete a smart mailbox by name.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | Yes | Smart mailbox name |
+
+**⚠️ Safety:** destructive — removes the smart mailbox from `SyncedSmartMailboxes.plist` (backed up + atomic; every other smart mailbox is preserved). Not undoable in-app. Confirm the exact name with `list-smart-mailboxes` first, and quit Mail first for reliable results.
 
 ---
 
@@ -928,7 +934,9 @@ High-level tool: scan recent messages in your INBOXes, detect likely newsletters
 | `minCount` | number | No | Min messages from a sender (default 3) |
 | `days` | number | No | Lookback window in days (default 90) |
 
-Use with `dryRun: false` to actually create the smart folders for newsletters cluttering your Inbox.
+Defaults to a **safe dry run** that only proposes. Pass `dryRun: false` to actually create the smart mailboxes for newsletters cluttering your Inbox.
+
+**⚠️ Safety:** with `dryRun: false` this edits `SyncedSmartMailboxes.plist` (backed up + atomic, existing entries preserved) and can create many smart mailboxes at once — review a dry run first. Scans up to ~400 recent messages per inbox via AppleScript, which can be slow on large mailboxes.
 
 ---
 

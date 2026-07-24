@@ -75697,13 +75697,15 @@ import {
   readFileSync as readFileSync2,
   readdirSync as readdirSync2,
   unlinkSync,
+  copyFileSync,
+  renameSync,
   mkdtempSync as mkdtempSync2,
   rmSync as rmSync2,
   realpathSync,
   lstatSync
 } from "fs";
 import { isAbsolute, resolve, sep, join as join4 } from "path";
-import { homedir as homedir3, tmpdir as tmpdir2 } from "os";
+import { homedir as homedir3 } from "os";
 import { randomUUID } from "crypto";
 
 // src/utils/applescript.ts
@@ -78700,34 +78702,94 @@ var AppleMailManager = class {
     }
     return null;
   }
-  loadSmartMailboxes(plistPath) {
-    if (!plistPath) return [];
-    try {
-      const tmpJson = join4(tmpdir2(), `smart-${Date.now()}.json`);
-      const r = spawnSync2("plutil", ["-convert", "json", "-o", tmpJson, plistPath], {
-        encoding: "utf8"
-      });
-      if (r.status !== 0) return [];
-      const data = JSON.parse(readFileSync2(tmpJson, "utf8"));
-      unlinkSync(tmpJson);
-      return Array.isArray(data) ? data : [];
-    } catch {
-      return [];
+  /**
+   * Read all smart-mailbox entries without ever mutating the plist.
+   *
+   * Fast path: `plutil -convert json`. That converter *rejects* any plist
+   * containing <data>/<date> values ("Invalid object in plist for JSON
+   * format") — and smart-mailbox date criteria can contain exactly those — so
+   * on such libraries we fall back to structural probing with PlistBuddy. (The
+   * previous implementation used the json path unconditionally and, on
+   * failure, treated the whole file as empty, which then overwrote every
+   * existing smart mailbox on the next save.)
+   */
+  readSmartMailboxEntries(plistPath) {
+    if (!plistPath || !existsSync3(plistPath)) return [];
+    const j = spawnSync2("plutil", ["-convert", "json", "-o", "-", plistPath], {
+      encoding: "utf8"
+    });
+    if (j.status === 0 && j.stdout) {
+      try {
+        const data = JSON.parse(j.stdout);
+        if (Array.isArray(data)) {
+          return data.map((m) => ({
+            name: m?.MailboxName ?? "",
+            id: m?.MailboxID,
+            criteriaSummary: this.summarizeCriteria(m?.MailboxCriteria)
+          }));
+        }
+      } catch {
+      }
     }
+    return this.probeSmartMailboxEntries(plistPath);
   }
-  saveSmartMailboxes(plistPath, mailboxes) {
-    if (!plistPath) return false;
-    try {
-      const tmpJson = join4(tmpdir2(), `smart-${Date.now()}.json`);
-      writeFileSync3(tmpJson, JSON.stringify(mailboxes, null, 2), "utf8");
-      const r = spawnSync2("plutil", ["-convert", "binary1", "-o", plistPath, tmpJson], {
+  /**
+   * Structural enumeration for plists the json converter rejects (date/data
+   * criteria). Probes array indices via PlistBuddy until one is out of range.
+   */
+  probeSmartMailboxEntries(plistPath) {
+    const buddy = "/usr/libexec/PlistBuddy";
+    const out = [];
+    for (let i = 0; i < 1e3; i++) {
+      const exists = spawnSync2(buddy, ["-c", `Print :${i}`, plistPath], { encoding: "utf8" });
+      if (exists.status !== 0) break;
+      const nameR = spawnSync2(buddy, ["-c", `Print :${i}:MailboxName`, plistPath], {
         encoding: "utf8"
       });
-      unlinkSync(tmpJson);
-      return r.status === 0;
-    } catch {
+      const idR = spawnSync2(buddy, ["-c", `Print :${i}:MailboxID`, plistPath], {
+        encoding: "utf8"
+      });
+      out.push({
+        name: nameR.status === 0 ? (nameR.stdout || "").trim() : "",
+        id: idR.status === 0 ? (idR.stdout || "").trim() || void 0 : void 0
+      });
+    }
+    return out;
+  }
+  summarizeCriteria(crits) {
+    if (!Array.isArray(crits)) return void 0;
+    const summary = crits.map((c) => {
+      const n = c?.Name || c?.Header || "";
+      return c?.Expression ? `${n}=${String(c.Expression).slice(0, 25)}` : n;
+    }).filter(Boolean).join("; ").slice(0, 100);
+    return summary || void 0;
+  }
+  /**
+   * Back up `plistPath` to `<plist>.bak` and return a sibling temp-file path
+   * (same directory → same filesystem, so the later rename is atomic) seeded
+   * with the current contents. Callers mutate the temp copy, then
+   * commitSmartPlist() lints and atomically renames it into place — so the live
+   * plist is only ever replaced wholesale by a validated file, never edited in
+   * place and never left half-written.
+   */
+  prepareSmartPlistWrite(plistPath) {
+    copyFileSync(plistPath, `${plistPath}.bak`);
+    const temp = `${plistPath}.tmp-${randomUUID()}`;
+    copyFileSync(plistPath, temp);
+    return temp;
+  }
+  /** Lint the mutated temp file and atomically move it into place. */
+  commitSmartPlist(temp, plistPath) {
+    const lint = spawnSync2("plutil", ["-lint", temp], { encoding: "utf8" });
+    if (lint.status !== 0) {
+      try {
+        unlinkSync(temp);
+      } catch {
+      }
       return false;
     }
+    renameSync(temp, plistPath);
+    return true;
   }
   buildSmartMailboxEntry(name, fromContains = "", subjectContains = "", bodyContains = "") {
     const newUuid = () => randomUUID().toUpperCase();
@@ -78772,59 +78834,107 @@ var AppleMailManager = class {
    */
   listSmartMailboxes() {
     const plist = this.findSyncedSmartPlist();
-    const raw = this.loadSmartMailboxes(plist);
-    return raw.map((m) => {
-      const crits = m.MailboxCriteria || [];
-      const summary = crits.map((c) => {
-        const n = c.Name || c.Header || "";
-        return c.Expression ? `${n}=${String(c.Expression).slice(0, 25)}` : n;
-      }).filter(Boolean).join("; ").slice(0, 100);
-      return {
-        name: m.MailboxName || "",
-        id: m.MailboxID,
-        criteriaSummary: summary || void 0
-      };
-    });
+    return this.readSmartMailboxEntries(plist).map((m) => ({
+      name: m.name || "",
+      id: m.id,
+      criteriaSummary: m.criteriaSummary
+    }));
   }
   /**
-   * Create a new smart mailbox with simple contains criteria.
-   * Provide exactly one of fromContains / subjectContains / bodyContains.
+   * Create a new smart mailbox with a simple contains criterion.
+   * Provide at least one of fromContains / subjectContains / bodyContains.
+   *
+   * The new entry is appended to SyncedSmartMailboxes.plist with a lossless
+   * `plutil -insert -json` on a backed-up temp copy — existing smart mailboxes
+   * (including any with date/data criteria) are preserved byte-for-byte, and
+   * the live file is only ever replaced by a lint-validated copy. Does NOT quit
+   * or restart Mail; the new mailbox appears the next time Mail is launched.
    */
   createSmartMailbox(name, fromContains = "", subjectContains = "", bodyContains = "") {
     if (!name || !fromContains && !subjectContains && !bodyContains) {
-      return false;
+      return {
+        created: false,
+        alreadyExisted: false,
+        error: "Provide a name and at least one of fromContains / subjectContains / bodyContains"
+      };
     }
     const plist = this.findSyncedSmartPlist();
     if (!plist) {
-      console.error("No SyncedSmartMailboxes.plist found (launch Mail at least once)");
-      return false;
+      return {
+        created: false,
+        alreadyExisted: false,
+        error: "No SyncedSmartMailboxes.plist found (launch Mail at least once)"
+      };
     }
-    const mbs = this.loadSmartMailboxes(plist);
-    if (mbs.some((m) => m.MailboxName === name)) {
-      return true;
+    return this.createSmartMailboxAtPath(plist, name, fromContains, subjectContains, bodyContains);
+  }
+  /** Path-injectable core of createSmartMailbox (unit-testable against a fixture plist). */
+  createSmartMailboxAtPath(plistPath, name, fromContains = "", subjectContains = "", bodyContains = "") {
+    const entries = this.readSmartMailboxEntries(plistPath);
+    if (entries.some((e) => e.name === name)) {
+      return { created: false, alreadyExisted: true };
     }
     const entry = this.buildSmartMailboxEntry(name, fromContains, subjectContains, bodyContains);
-    mbs.push(entry);
-    const ok = this.saveSmartMailboxes(plist, mbs);
-    if (ok) {
+    const temp = this.prepareSmartPlistWrite(plistPath);
+    const ins = spawnSync2(
+      "plutil",
+      ["-insert", String(entries.length), "-json", JSON.stringify(entry), temp],
+      { encoding: "utf8" }
+    );
+    if (ins.status !== 0) {
       try {
-        spawnSync2("killall", ["Mail"], { stdio: "ignore" });
+        unlinkSync(temp);
       } catch {
       }
+      return {
+        created: false,
+        alreadyExisted: false,
+        error: (ins.stderr || "plutil insert failed").trim()
+      };
     }
-    return ok;
+    if (!this.commitSmartPlist(temp, plistPath)) {
+      return {
+        created: false,
+        alreadyExisted: false,
+        error: "Edited plist failed validation; original left untouched"
+      };
+    }
+    return { created: true, alreadyExisted: false };
   }
   /**
-   * Delete a smart mailbox by name (removes from the plist).
+   * Delete a smart mailbox by name. Removes exactly the matching entry via
+   * PlistBuddy on a backed-up temp copy; every other smart mailbox is
+   * preserved. Does NOT quit or restart Mail.
    */
   deleteSmartMailbox(name) {
     const plist = this.findSyncedSmartPlist();
-    if (!plist) return false;
-    const mbs = this.loadSmartMailboxes(plist);
-    const before = mbs.length;
-    const filtered = mbs.filter((m) => m.MailboxName !== name);
-    if (filtered.length === before) return false;
-    return this.saveSmartMailboxes(plist, filtered);
+    if (!plist) {
+      return { deleted: false, error: "No SyncedSmartMailboxes.plist found" };
+    }
+    return this.deleteSmartMailboxAtPath(plist, name);
+  }
+  /** Path-injectable core of deleteSmartMailbox (unit-testable against a fixture plist). */
+  deleteSmartMailboxAtPath(plistPath, name) {
+    const entries = this.readSmartMailboxEntries(plistPath);
+    const idx = entries.findIndex((e) => e.name === name);
+    if (idx < 0) {
+      return { deleted: false, error: `Smart mailbox "${name}" not found` };
+    }
+    const temp = this.prepareSmartPlistWrite(plistPath);
+    const del = spawnSync2("/usr/libexec/PlistBuddy", ["-c", `Delete :${idx}`, temp], {
+      encoding: "utf8"
+    });
+    if (del.status !== 0) {
+      try {
+        unlinkSync(temp);
+      } catch {
+      }
+      return { deleted: false, error: (del.stderr || "PlistBuddy delete failed").trim() };
+    }
+    if (!this.commitSmartPlist(temp, plistPath)) {
+      return { deleted: false, error: "Edited plist failed validation; original left untouched" };
+    }
+    return { deleted: true };
   }
   // --- Newsletter smart mailbox discovery (high level helper) ---
   extractEmail(sender) {
@@ -78832,10 +78942,12 @@ var AppleMailManager = class {
     return m ? m[1].toLowerCase().trim() : (sender || "").toLowerCase().trim();
   }
   /**
-   * Scan recent messages and return likely newsletter senders with scores.
-   * Uses existing search/list capabilities + source sampling for List-Unsubscribe etc.
+   * Scan recent INBOX messages and return raw [sender, subject, source] rows.
+   * This is the only AppleScript-touching part of newsletter discovery; the
+   * grouping/scoring is factored into groupAndScoreNewsletters() so it can be
+   * unit-tested without a running Mail.
    */
-  findNewsletterCandidates(days = 90, minCount = 3) {
+  scanInboxRows(days) {
     const script = `
 tell application "Mail"
   set outLines to ""
@@ -78862,10 +78974,22 @@ tell application "Mail"
 end tell`;
     const res = executeAppleScript(script, { timeoutMs: 12e4 });
     if (!res.success || !res.output) return [];
-    const groups = {};
+    const rows = [];
     for (const line of res.output.split("\n")) {
       if (!line.includes("|")) continue;
       const [snd = "", subj = "", src = ""] = line.split("|", 3);
+      rows.push({ sender: snd, subject: subj, source: src });
+    }
+    return rows;
+  }
+  /**
+   * Pure grouping + scoring over scanned rows. Groups by sender email, keeps
+   * senders at/above minCount, and scores by volume plus newsletter signals
+   * (List-Unsubscribe, noreply/newsletter keywords, repetitive subjects).
+   */
+  groupAndScoreNewsletters(rows, minCount) {
+    const groups = {};
+    for (const { sender: snd, subject: subj, source: src } of rows) {
       const email2 = this.extractEmail(snd);
       if (!email2 || !email2.includes("@")) continue;
       if (!groups[email2]) {
@@ -78874,7 +78998,7 @@ end tell`;
       const g = groups[email2];
       g.count++;
       if (g.subjects.length < 6) g.subjects.push(subj);
-      if (!g.sample) g.sample = src.slice(0, 3e3);
+      if (!g.sample) g.sample = (src || "").slice(0, 3e3);
     }
     const out = [];
     for (const g of Object.values(groups)) {
@@ -78909,6 +79033,12 @@ end tell`;
     return out.slice(0, 50);
   }
   /**
+   * Scan recent messages and return likely newsletter senders with scores.
+   */
+  findNewsletterCandidates(days = 90, minCount = 3) {
+    return this.groupAndScoreNewsletters(this.scanInboxRows(days), minCount);
+  }
+  /**
    * High-level: discover likely newsletters from INBOX and (optionally) create smart mailboxes for them.
    */
   createNewsletterSmartMailboxes(dryRun = true, minCount = 3, days = 90) {
@@ -78920,8 +79050,15 @@ end tell`;
         results.push({ name: nm, email: c.email, wouldCreate: true, score: c.score });
         continue;
       }
-      const ok = this.createSmartMailbox(nm, c.email);
-      results.push({ name: nm, email: c.email, success: ok, score: c.score });
+      const r = this.createSmartMailbox(nm, c.email);
+      results.push({
+        name: nm,
+        email: c.email,
+        success: r.created || r.alreadyExisted,
+        alreadyExisted: r.alreadyExisted,
+        error: r.error,
+        score: c.score
+      });
     }
     return { dryRun, createdOrProposed: results, count: results.length };
   }
@@ -82629,69 +82766,132 @@ server.registerTool(
     });
   }, "Error renaming mailbox")
 );
-server.tool(
+server.registerTool(
   "list-smart-mailboxes",
-  {},
+  {
+    description: "Use when: listing Apple Mail smart mailboxes (criteria-based virtual views), including on German-localized macOS where AppleScript's smart-mailbox terms do not compile.\nReturns: each smart mailbox's name and a short criteria summary.\nDo not use when: listing real folders/mailboxes (use list-mailboxes).",
+    inputSchema: {},
+    outputSchema: {
+      count: external_exports.number().optional(),
+      smartMailboxes: external_exports.array(
+        external_exports.object({
+          name: external_exports.string(),
+          id: external_exports.string().optional(),
+          criteriaSummary: external_exports.string().optional()
+        })
+      ).optional()
+    }
+  },
   withErrorHandling(() => {
     const list = mailManager.listSmartMailboxes();
     if (list.length === 0) {
-      return successResponse("No smart mailboxes found");
+      return successResponse("No smart mailboxes found", { count: 0, smartMailboxes: [] });
     }
     const lines = list.map((s) => `  - ${s.name}${s.criteriaSummary ? ` (${s.criteriaSummary})` : ""}`).join("\n");
     return successResponse(`Found ${list.length} smart mailbox(es):
-${lines}`);
+${lines}`, {
+      count: list.length,
+      smartMailboxes: list.map((s) => ({
+        name: s.name,
+        id: s.id,
+        criteriaSummary: s.criteriaSummary
+      }))
+    });
   }, "Error listing smart mailboxes")
 );
-server.tool(
+server.registerTool(
   "create-smart-mailbox",
   {
-    name: external_exports.string().min(1, "Smart mailbox name is required"),
-    fromContains: external_exports.string().optional().describe("Match sender (From contains)"),
-    subjectContains: external_exports.string().optional().describe("Match subject (contains)"),
-    bodyContains: external_exports.string().optional().describe("Match body (contains)")
+    description: "Use when: creating an Apple Mail smart mailbox (a criteria-based virtual view) that matches a sender, subject, or body substring \u2014 works on German-localized macOS where AppleScript's smart-mailbox terms fail.\nReturns: confirmation of creation, or a note that a smart mailbox with that name already existed.\nDo not use when: creating a real folder (use create-mailbox).\nSafety: edits Apple Mail's SyncedSmartMailboxes.plist directly. It backs the file up (.bak) and writes atomically, and never rewrites your existing smart mailboxes. It does not quit Mail \u2014 quit Mail first for reliable results, since a running Mail may not show the new smart mailbox until relaunched and can overwrite plist edits it did not make.",
+    inputSchema: {
+      name: external_exports.string().min(1, "Smart mailbox name is required"),
+      fromContains: external_exports.string().optional().describe("Match sender (From contains)"),
+      subjectContains: external_exports.string().optional().describe("Match subject (contains)"),
+      bodyContains: external_exports.string().optional().describe("Match body (contains)")
+    },
+    outputSchema: {
+      ok: external_exports.boolean().optional(),
+      name: external_exports.string().optional(),
+      alreadyExisted: external_exports.boolean().optional()
+    }
   },
   withErrorHandling(({ name, fromContains, subjectContains, bodyContains }) => {
-    const ok = mailManager.createSmartMailbox(
+    if (!fromContains && !subjectContains && !bodyContains) {
+      return errorResponse("Provide at least one of fromContains / subjectContains / bodyContains");
+    }
+    const r = mailManager.createSmartMailbox(
       name,
       fromContains || "",
       subjectContains || "",
       bodyContains || ""
     );
-    if (!ok) {
-      return errorResponse(`Failed to create smart mailbox "${name}"`);
+    if (r.alreadyExisted) {
+      return successResponse(`Smart mailbox "${name}" already exists`, {
+        ok: true,
+        name,
+        alreadyExisted: true
+      });
     }
-    return successResponse(`Smart mailbox "${name}" created (or already existed)`);
+    if (!r.created) {
+      return errorResponse(r.error || `Failed to create smart mailbox "${name}"`);
+    }
+    return successResponse(`Smart mailbox "${name}" created. Quit and reopen Mail to see it.`, {
+      ok: true,
+      name,
+      alreadyExisted: false
+    });
   }, "Error creating smart mailbox")
 );
-server.tool(
+server.registerTool(
   "delete-smart-mailbox",
   {
-    name: external_exports.string().min(1, "Smart mailbox name is required")
+    description: "Use when: deleting an Apple Mail smart mailbox (virtual view) by name.\nReturns: confirmation of deletion.\nDo not use when: deleting a real folder (use delete-mailbox) or messages (use delete-message / batch-delete-messages).\nSafety: destructive \u2014 removes the smart mailbox from Apple Mail's SyncedSmartMailboxes.plist. It backs the file up (.bak) and writes atomically, preserving every other smart mailbox, but the removal is not undoable in-app. Confirm the exact name with list-smart-mailboxes first, and quit Mail first for reliable results.",
+    inputSchema: {
+      name: external_exports.string().min(1, "Smart mailbox name is required")
+    },
+    outputSchema: {
+      ok: external_exports.boolean().optional(),
+      name: external_exports.string().optional()
+    }
   },
   withErrorHandling(({ name }) => {
-    const ok = mailManager.deleteSmartMailbox(name);
-    if (!ok) {
-      return errorResponse(`Failed to delete smart mailbox "${name}"`);
+    const r = mailManager.deleteSmartMailbox(name);
+    if (!r.deleted) {
+      return errorResponse(r.error || `Failed to delete smart mailbox "${name}"`);
     }
-    return successResponse(`Smart mailbox "${name}" deleted`);
+    return successResponse(`Smart mailbox "${name}" deleted. Quit and reopen Mail to refresh.`, {
+      ok: true,
+      name
+    });
   }, "Error deleting smart mailbox")
 );
-server.tool(
+server.registerTool(
   "create-newsletter-smart-mailboxes",
   {
-    dryRun: external_exports.boolean().default(true).describe("If true, only propose; if false, actually create"),
-    minCount: external_exports.number().int().min(1).default(3).describe("Minimum messages from sender in the period"),
-    days: external_exports.number().int().min(1).default(90).describe("Look back this many days in INBOXes")
+    description: `Use when: auto-discovering newsletter/bulk senders in your INBOX(es) and (optionally) creating a dedicated smart mailbox per sender (named "NL: <sender>"). Defaults to a safe dry run that only proposes.
+Returns: the proposed or created smart mailboxes with their match scores.
+Do not use when: you already know the exact sender (use create-smart-mailbox) or want real folders (use create-mailbox).
+Safety: with dryRun=false it edits Apple Mail's SyncedSmartMailboxes.plist (backed up, atomic, existing entries preserved) and can create many smart mailboxes at once \u2014 review a dryRun first. It scans up to ~400 recent messages per inbox via AppleScript, which can be slow on large mailboxes.`,
+    inputSchema: {
+      dryRun: external_exports.boolean().default(true).describe("If true (default), only propose; if false, actually create"),
+      minCount: external_exports.number().int().min(1).default(3).describe("Minimum messages from sender in the period"),
+      days: external_exports.number().int().min(1).default(90).describe("Look back this many days in INBOXes")
+    },
+    outputSchema: {
+      dryRun: external_exports.boolean().optional(),
+      count: external_exports.number().optional()
+    }
   },
   withErrorHandling(({ dryRun, minCount, days }) => {
     const result = mailManager.createNewsletterSmartMailboxes(!!dryRun, minCount, days);
     const lines = result.createdOrProposed.map(
-      (c) => `  - ${c.name || c.suggestedName || c.email} (score ${c.score || "?"}${c.wouldCreate ? ", dry-run" : ""})`
+      (c) => `  - ${c.name || c.suggestedName || c.email} (score ${c.score ?? "?"}${c.wouldCreate ? ", dry-run" : c.alreadyExisted ? ", already existed" : c.error ? `, error: ${c.error}` : ""})`
     ).join("\n");
     const prefix = result.dryRun ? "DRY RUN - would create" : "Created";
     return successResponse(
       `${prefix} ${result.count} newsletter smart mailbox(es):
-${lines || "  (none met the threshold)"}`
+${lines || "  (none met the threshold)"}`,
+      { dryRun: result.dryRun, count: result.count }
     );
   }, "Error creating newsletter smart mailboxes")
 );
