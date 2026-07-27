@@ -1,5 +1,7 @@
 # Apple Mail MCP Server
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fsweetrb%2Fapple-mail-mcp.svg)](https://mcptoplist.com/server/glama%2Fsweetrb%2Fapple-mail-mcp)
+
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that enables AI assistants like Claude to read, send, search, and manage emails in Apple Mail on macOS.
 
 [![npm version](https://img.shields.io/npm/v/apple-mail-mcp)](https://www.npmjs.com/package/apple-mail-mcp)
