@@ -23,3 +23,12 @@ minimumReleaseAge: 1440
 overrides:
   "@hono/node-server": 2.0.10
   fast-uri: 3.1.4
+  # Security floors for dev-only transitives (js-yaml via @eslint/eslintrc,
+  # postcss via vite), originally added in 29b0221 to clear npm audit advisories
+  # while this repo still used npm. pnpm has never read npm's bare top-level
+  # package.json "overrides" field, so the floors went inert at the pnpm
+  # migration; they live here now, which is the only place pnpm 11 reads them.
+  # Both currently resolve above these ranges on their own — the overrides exist
+  # so a future eslint/vite bump cannot drag them back down.
+  js-yaml: ^4.2.0
+  postcss: ^8.5.15

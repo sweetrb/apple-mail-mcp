@@ -95,9 +95,5 @@
       "eslint --fix",
       "prettier --write"
     ]
-  },
-  "overrides": {
-    "js-yaml": "^4.2.0",
-    "postcss": "^8.5.15"
   }
 }
