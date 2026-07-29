@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **`.hermes-plugin/` packaging docs** (`README.md`, `config.yaml`). Hermes Agent has no plugin/marketplace drop-in, so a directory of manifest-looking files was easy to misread as an installable package. The setup it documented is not lost — the `hermes mcp add` command, the `~/.hermes/config.yaml` `mcp_servers:` snippet, and the restart note now live inline in the README's "Other Hosts" section, which is where users actually look. Thanks to @maf4711 (#115). No effect on the published package: `.hermes-plugin/` was never in `package.json` `files[]`.
+
+### Fixed
+- **`pnpm version` no longer fails after the `.hermes-plugin/` removal.** The `version` lifecycle script still ran `git add … .hermes-plugin …`; `git add` exits 128 on a pathspec that matches nothing, which would have broken the documented release step (`pnpm version <patch|minor|major> --no-git-tag-version`) for every subsequent release. The stale path is dropped from the `git add` list (#115).
+
 ## [2.9.1] - 2026-07-29
 
 ### Changed
