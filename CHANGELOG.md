@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ## [2.9.1] - 2026-07-29
+
 ### Changed
-- Dependency bump via Dependabot; committed bundle rebuilt. (automated)
+- **imapflow 1.4.7 → 1.4.8** (runtime dependency — ships inlined in the committed bundle). Upstream fixes a non-secure connection defaulting to POP3 port 110 instead of IMAP 143, and corrects the connection described in the OAUTHBEARER auth payload. Neither path is reachable from this server's configuration (TLS on 993 with password auth), so IMAP behavior is unchanged; verified against live Gmail and iCloud accounts.
+- Dev tooling: `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, and `typescript-eslint` 8.64.0 → 8.65.0. Committed bundle rebuilt.
 
 ## [2.9.0] - 2026-07-23
 
