@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "apple-mail",
-      "version": "2.9.0",
+      "version": "2.9.1",
       "description": "Manage Apple Mail through natural language - read, search, send, reply, forward, and organize emails and mailboxes, with diagnostics, attachments, templates, and mail-merge support (macOS only).",
       "source": {
         "source": "local",
