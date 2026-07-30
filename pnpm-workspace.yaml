@@ -17,9 +17,6 @@ allowBuilds:
 # so it is documented and stable across pnpm upgrades. See https://pnpm.io/supply-chain-security.
 minimumReleaseAge: 1440
 
-minimumReleaseAgeExclude:
-  - brace-expansion@1.1.17
-
 # Keep transitive dependencies above their security floors until their direct
 # parents' ranges move past the patched releases.
 overrides:
