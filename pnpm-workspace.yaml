@@ -21,9 +21,12 @@ minimumReleaseAge: 1440
 # parents' ranges move past the patched releases.
 overrides:
   "@hono/node-server": 2.0.10
-  # Preserve minimatch 3's CommonJS contract while applying the v1 security
-  # complete sequence-bound backport for GHSA-mh99-v99m-4gvg.
-  brace-expansion@<1.1.18: 1.1.18
+  # GHSA-mh99-v99m-4gvg: floor each brace-expansion major independently on its
+  # own complete (sequence-bounded) release. The bounds must be two-sided —
+  # a bare "<5.0.9" also matches 1.1.18 and 2.1.4 under semver and would drag
+  # minimatch 3's CommonJS path onto the v5 ESM API ("expand is not a function").
+  "brace-expansion@>=1.0.0 <1.1.18": 1.1.18
+  "brace-expansion@>=5.0.0 <5.0.9": 5.0.9
   fast-uri: 3.1.4
   # Security floors for dev-only transitives (js-yaml via @eslint/eslintrc,
   # postcss via vite), originally added in 29b0221 to clear npm audit advisories
