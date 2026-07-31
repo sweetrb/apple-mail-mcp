@@ -22,8 +22,8 @@ minimumReleaseAge: 1440
 overrides:
   "@hono/node-server": 2.0.10
   # Preserve minimatch 3's CommonJS contract while applying the v1 security
-  # backport for GHSA-mh99-v99m-4gvg.
-  brace-expansion@<1.1.17: 1.1.17
+  # complete sequence-bound backport for GHSA-mh99-v99m-4gvg.
+  brace-expansion@<1.1.18: 1.1.18
   fast-uri: 3.1.4
   # Security floors for dev-only transitives (js-yaml via @eslint/eslintrc,
   # postcss via vite), originally added in 29b0221 to clear npm audit advisories

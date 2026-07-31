@@ -9,6 +9,14 @@
 - **`pnpm version` no longer fails after the `.hermes-plugin/` removal.** The `version` lifecycle script still ran `git add … .hermes-plugin …`; `git add` exits 128 on a pathspec that matches nothing, which would have broken the documented release step (`pnpm version <patch|minor|major> --no-git-tag-version`) for every subsequent release. The stale path is dropped from the `git add` list (#115).
 
 ### Security
+- **Completed the dev-only `brace-expansion` sequence-path bounds** by lifting
+  the CommonJS-compatible v1 override from `1.1.17` to `1.1.18` and the
+  independent v5 path from `5.0.8` to `5.0.9`. Both releases now enforce the
+  shared character budget inside numeric and alphabetic sequence generation,
+  closing the intermediate-work gap left by the earlier accumulator-only
+  mitigation. They were adopted only after clearing the repository's 24-hour
+  `minimumReleaseAge` gate, without an exclusion or audit suppression. Dev
+  toolchain only; the committed shipped bundle is byte-identical (#121).
 - **Moved the dev-only `brace-expansion@1` path onto the `1.1.17` security backport** (GHSA-mh99-v99m-4gvg / CVE-2026-14257, high). ESLint reaches `brace-expansion` through `minimatch@3.1.5`, which requires the v1 CommonJS API — forcing the v5 line the advisory names as patched into that path fails with `expand is not a function` — so the upstream v1 backport is the only fix that applies without crossing that API boundary. The independent `minimatch@10.2.6` path is untouched on `5.0.8`. No audit suppression was added: `pnpm audit` keeps reporting the advisory until GitHub's metadata recognises the v1 backport. **Deliberately partial** — `1.1.18` and `5.0.9` (both published 2026-07-30) bound the *sequence* expansion path that `1.1.17` and `5.0.8` left uncapped, and are deferred only until they clear this repo's 24-hour `minimumReleaseAge` supply-chain gate rather than being pulled in an hour old behind a carve-out; tracked in #121. Dev toolchain only — `brace-expansion` is not in the shipped bundle, so the published package is unaffected and no version bump is owed. Thanks to @jjoanna2-debug (#119).
 
 ## [2.9.1] - 2026-07-29
