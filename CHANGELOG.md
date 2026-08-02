@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Added
+- **`version-guard` now requires every version bump to be documented under a real `## [X.Y.Z]` CHANGELOG heading.** The guard already refused a bump to a version that was already on npm, but it never checked that the new version was described anywhere. Notes parked under `## [Unreleased]` are orphaned the moment the release ships: nothing in the release path renames that section — the `version` lifecycle script only syncs the plugin manifests — so the published version goes out undocumented while its release notes sit under a heading still claiming they are unreleased. apple-notes-mcp shipped 2.6.10 and 2.6.11 exactly that way before this check existed. A bump whose version has no matching heading now hard-fails the PR, with an error naming the heading to add. Keep an empty `## [Unreleased]` at the top regardless — `dependabot-rebuild.yml` hard-exits without that marker, and since it already inserts a real heading, bot PRs pass unchanged. The guard file lives in `.github/`, which does not ship, so this owes no version bump. (#124)
+
 ### Removed
 - **`.hermes-plugin/` packaging docs** (`README.md`, `config.yaml`). Hermes Agent has no plugin/marketplace drop-in, so a directory of manifest-looking files was easy to misread as an installable package. The setup it documented is not lost — the `hermes mcp add` command, the `~/.hermes/config.yaml` `mcp_servers:` snippet, and the restart note now live inline in the README's "Other Hosts" section, which is where users actually look. Thanks to @maf4711 (#115). No effect on the published package: `.hermes-plugin/` was never in `package.json` `files[]`.
 
