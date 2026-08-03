@@ -126,9 +126,11 @@ const BATCH_IDS_SCHEMA = z
   .min(1, "At least one message ID is required")
   .max(100, "Cannot process more than 100 messages in a single batch");
 
-/** Apple Mail flag colors → AppleScript `flag index` palette. `grey` is an alias
- *  for `gray`. Colors are a Mail.app feature (the flag index a smart mailbox can
- *  match on); the IMAP `\Flagged` flag is colorless. */
+/** Apple Mail flag colors → the 0-6 palette index. `grey` is an alias for `gray`.
+ *  Works on BOTH routes: AppleScript sets `flag index`, and the IMAP path writes
+ *  the same index as the `$MailFlagBit0/1/2` keyword bitfield Mail.app uses on the
+ *  wire. `\Flagged` alone is colorless, but the bits ride alongside it, so a smart
+ *  mailbox keyed on flag color matches either way. */
 const FLAG_COLOR_INDEX: Record<string, number> = {
   red: 0,
   orange: 1,
@@ -1315,7 +1317,7 @@ server.registerTool(
   "flag-message",
   {
     description:
-      "Use when: flagging a single message (by id), optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: a confirmation that the message was flagged (and the color, when applied).\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.\nNote: flag colors are a Mail.app feature applied via AppleScript; for an IMAP-routed id the flag is set but the color is not applied (IMAP flags are colorless).",
+      "Use when: flagging a single message (by id), optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: a confirmation that the message was flagged (and the color, when applied).\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.\nNote: the color is applied on both routes — AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       color: FLAG_COLOR_SCHEMA,
@@ -1330,7 +1332,7 @@ server.registerTool(
   withErrorHandling(({ id, color }) => {
     const colorIndex = color ? FLAG_COLOR_INDEX[color] : undefined;
     return routeMessage(id, {
-      imap: () => imapFlagMessage(id),
+      imap: () => imapFlagMessage(id, colorIndex),
       apple: () =>
         mailManager.flagMessage(id, colorIndex)
           ? successResponse(color ? `Message flagged (${color})` : "Message flagged", {
@@ -1598,7 +1600,7 @@ server.registerTool(
     const { success: successCount, fail: failCount } = await hybridBatchCounts(
       ids,
       (n) => mailManager.batchFlagMessages(n, colorIndex),
-      (im) => imapBatchFlag(im)
+      (im) => imapBatchFlag(im, colorIndex)
     );
     const structured = { ok: failCount === 0, success: successCount, failed: failCount };
 
@@ -1651,7 +1653,7 @@ server.registerTool(
   "resolve-message-id",
   {
     description:
-      "Use when: you have `imap:` message id(s) and need the numeric Mail.app id(s) — most importantly to apply a flag COLOR, which only sticks on the AppleScript numeric-id path (IMAP `\\Flagged` is colorless, so a smart mailbox keyed on flag color never matches an IMAP-flagged message). Each imap: id is resolved via its RFC822 Message-ID.\nReturns: for each input id, its `numericId` (the AppleScript id) or null when it can't be resolved, plus the `messageId` used; and a `resolvedCount`.\nDo not use when: your ids are already numeric (they pass straight through), or you don't need a color — flag/move/mark tools operate on `imap:` ids directly.",
+      "Use when: you have `imap:` message id(s) and genuinely need the numeric Mail.app id(s) — e.g. for reply-to-message/forward-message, which are numeric-id only. NOTE: as of 2.10.0 you no longer need this to apply a flag COLOR — flag-message/batch-flag-messages write the color over IMAP directly via Mail.app's $MailFlagBit0/1/2 keywords, so a smart mailbox keyed on flag color matches an IMAP-flagged message. Each imap: id is resolved via its RFC822 Message-ID.\nReturns: for each input id, its `numericId` (the AppleScript id) or null when it can't be resolved, plus the `messageId` used; and a `resolvedCount`.\nDo not use when: your ids are already numeric (they pass straight through), or you don't need a color — flag/move/mark tools operate on `imap:` ids directly.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
     },

@@ -474,11 +474,30 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
 
   it("flag / unflag toggle \\Flagged", async () => {
     const recF: MsgRec = {};
-    await imapFlagMessage(MID, { config: cfg, connect: async () => makeMsgClient(recF) });
+    // colorIndex omitted -> plain flag, no color keywords touched
+    await imapFlagMessage(MID, undefined, {
+      config: cfg,
+      connect: async () => makeMsgClient(recF),
+    });
     expect(recF.flagsAdded).toEqual(["\\Flagged"]);
     const recU: MsgRec = {};
     await imapUnflagMessage(MID, { config: cfg, connect: async () => makeMsgClient(recU) });
-    expect(recU.flagsRemoved).toEqual(["\\Flagged"]);
+    // Unflag clears the color bits too, or Mail.app keeps rendering the color.
+    expect(recU.flagsRemoved).toEqual([
+      "\\Flagged",
+      "$MailFlagBit0",
+      "$MailFlagBit1",
+      "$MailFlagBit2",
+    ]);
+  });
+
+  it("flagging with a color sets \\Flagged plus that color's bits", async () => {
+    const rec: MsgRec = {};
+    // 5 = purple = bit0 + bit2
+    await imapFlagMessage(MID, 5, { config: cfg, connect: async () => makeMsgClient(rec) });
+    expect(rec.flagsAdded).toEqual(["\\Flagged", "$MailFlagBit0", "$MailFlagBit2"]);
+    // bit1 must be cleared, so re-flagging in a new color replaces rather than OR-ing
+    expect(rec.flagsRemoved).toEqual(["$MailFlagBit1"]);
   });
 
   it("move routes the uid to the resolved destination", async () => {

@@ -1,3 +1,13 @@
+## [2.10.0] - 2026-08-03
+
+### Added
+- **Flag COLORS now work over IMAP — `resolve-message-id` is no longer needed for them.** Apple Mail stores a flag's color as the custom IMAP keywords `$MailFlagBit0/1/2`, a plain 3-bit field holding the 0–6 palette index. It is not carried by `\Flagged` (which really is colorless), but the bits ride alongside it in an ordinary `UID STORE`, so color is fully readable **and writable** over IMAP. `flag-message` and `batch-flag-messages` now apply the requested color on the IMAP route instead of reporting `colorApplied: false`, and reads expose `flagColorIndex`. Encoding verified against live Mail.app state: green (3) = bit0+bit1, blue (4) = bit2, purple (5) = bit0+bit2.
+
+  This removes the last Mail.app dependency from color-keyed workflows. Previously a smart mailbox keyed on flag color could never match an IMAP-flagged message, so applying a color meant resolving to a numeric id and going through AppleScript — which needs Mail.app running, responsive, and holding a TCC Automation grant, and fails as an opaque 10s timeout when it is not.
+
+### Fixed
+- **Unflagging over IMAP now clears the color bits too.** Removing only `\Flagged` left `$MailFlagBitN` set, so a message read as unflagged over IMAP while Mail.app kept rendering it color-flagged until it resynced. Re-flagging in a different color also clears the bits it does not want, so the new color replaces the old index rather than OR-ing into a wrong one.
+
 ## [Unreleased]
 
 ### Added
