@@ -80234,6 +80234,7 @@ function structuredRow(m, account, path) {
     dateReceived: env.date ? new Date(env.date).toISOString() : "",
     isRead: m.flags?.has("\\Seen") ?? false,
     isFlagged: m.flags?.has("\\Flagged") ?? false,
+    flagColorIndex: mailFlagColorIndex(m.flags),
     mailbox: path,
     account,
     hasAttachments: false,
@@ -80594,6 +80595,28 @@ async function imapFetchMessageId(id, deps = {}) {
     return null;
   }
 }
+var MAIL_FLAG_BITS = ["$MailFlagBit0", "$MailFlagBit1", "$MailFlagBit2"];
+function mailFlagBitsFor(colorIndex) {
+  const set = [];
+  const clear = [];
+  for (let b = 0; b < MAIL_FLAG_BITS.length; b++) {
+    (colorIndex >> b & 1 ? set : clear).push(MAIL_FLAG_BITS[b]);
+  }
+  return { set, clear };
+}
+function mailFlagColorIndex(flags) {
+  if (!flags) return void 0;
+  const have = new Set(flags);
+  let idx = 0;
+  let any = false;
+  for (let b = 0; b < MAIL_FLAG_BITS.length; b++) {
+    if (have.has(MAIL_FLAG_BITS[b])) {
+      idx |= 1 << b;
+      any = true;
+    }
+  }
+  return any ? idx : void 0;
+}
 function flagOp(id, flag, add, deps) {
   const ref = decodeImapId(id);
   if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
@@ -80613,8 +80636,38 @@ function flagOp(id, flag, add, deps) {
 }
 var imapMarkRead = (id, deps = {}) => flagOp(id, "\\Seen", true, deps);
 var imapMarkUnread = (id, deps = {}) => flagOp(id, "\\Seen", false, deps);
-var imapFlagMessage = (id, deps = {}) => flagOp(id, "\\Flagged", true, deps);
-var imapUnflagMessage = (id, deps = {}) => flagOp(id, "\\Flagged", false, deps);
+function imapFlagMessage(id, colorIndex, deps = {}) {
+  if (colorIndex === void 0) return flagOp(id, "\\Flagged", true, deps);
+  const ref = decodeImapId(id);
+  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
+  const { set, clear } = mailFlagBitsFor(colorIndex);
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = await client.messageFlagsAdd([ref.uid], ["\\Flagged", ...set], { uid: true });
+      if (!ok)
+        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
+      if (clear.length) await client.messageFlagsRemove([ref.uid], clear, { uid: true });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}` };
+    }
+  });
+}
+function imapUnflagMessage(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = await client.messageFlagsRemove([ref.uid], ["\\Flagged", ...MAIL_FLAG_BITS], {
+        uid: true
+      });
+      if (!ok) return { success: false, error: `IMAP unflag returned false for UID ${ref.uid}.` };
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: `IMAP unflag failed for UID ${ref.uid}: ${errText(e)}` };
+    }
+  });
+}
 async function imapMoveMessageById(id, destMailbox, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
@@ -80777,11 +80830,17 @@ var imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids)
 var imapBatchMarkUnread = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
   await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
 });
-var imapBatchFlag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+var imapBatchFlag = (ids, colorIndex, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+  if (colorIndex === void 0) {
+    await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+    return;
+  }
+  const { set, clear } = mailFlagBitsFor(colorIndex);
+  await c.messageFlagsAdd(uids, ["\\Flagged", ...set], { uid: true });
+  if (clear.length) await c.messageFlagsRemove(uids, clear, { uid: true });
 });
 var imapBatchUnflag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  await c.messageFlagsRemove(uids, ["\\Flagged"], { uid: true });
+  await c.messageFlagsRemove(uids, ["\\Flagged", ...MAIL_FLAG_BITS], { uid: true });
 });
 var imapBatchDelete = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids, path) => {
   await trashUids(c, uids, path);
@@ -82235,7 +82294,7 @@ server.registerTool(
 server.registerTool(
   "flag-message",
   {
-    description: "Use when: flagging a single message (by id), optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: a confirmation that the message was flagged (and the color, when applied).\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.\nNote: flag colors are a Mail.app feature applied via AppleScript; for an IMAP-routed id the flag is set but the color is not applied (IMAP flags are colorless).",
+    description: "Use when: flagging a single message (by id), optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: a confirmation that the message was flagged (and the color, when applied).\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.\nNote: the color is applied on both routes \u2014 AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       color: FLAG_COLOR_SCHEMA
@@ -82250,7 +82309,7 @@ server.registerTool(
   withErrorHandling(({ id, color }) => {
     const colorIndex = color ? FLAG_COLOR_INDEX[color] : void 0;
     return routeMessage(id, {
-      imap: () => imapFlagMessage(id),
+      imap: () => imapFlagMessage(id, colorIndex),
       apple: () => mailManager.flagMessage(id, colorIndex) ? successResponse(color ? `Message flagged (${color})` : "Message flagged", {
         ok: true,
         id,
@@ -82467,7 +82526,7 @@ server.registerTool(
     const { success: successCount, fail: failCount } = await hybridBatchCounts(
       ids,
       (n) => mailManager.batchFlagMessages(n, colorIndex),
-      (im) => imapBatchFlag(im)
+      (im) => imapBatchFlag(im, colorIndex)
     );
     const structured = { ok: failCount === 0, success: successCount, failed: failCount };
     if (failCount === 0) {
@@ -82510,7 +82569,7 @@ server.registerTool(
 server.registerTool(
   "resolve-message-id",
   {
-    description: "Use when: you have `imap:` message id(s) and need the numeric Mail.app id(s) \u2014 most importantly to apply a flag COLOR, which only sticks on the AppleScript numeric-id path (IMAP `\\Flagged` is colorless, so a smart mailbox keyed on flag color never matches an IMAP-flagged message). Each imap: id is resolved via its RFC822 Message-ID.\nReturns: for each input id, its `numericId` (the AppleScript id) or null when it can't be resolved, plus the `messageId` used; and a `resolvedCount`.\nDo not use when: your ids are already numeric (they pass straight through), or you don't need a color \u2014 flag/move/mark tools operate on `imap:` ids directly.",
+    description: "Use when: you have `imap:` message id(s) and genuinely need the numeric Mail.app id(s) \u2014 e.g. for reply-to-message/forward-message, which are numeric-id only. NOTE: as of 2.10.0 you no longer need this to apply a flag COLOR \u2014 flag-message/batch-flag-messages write the color over IMAP directly via Mail.app's $MailFlagBit0/1/2 keywords, so a smart mailbox keyed on flag color matches an IMAP-flagged message. Each imap: id is resolved via its RFC822 Message-ID.\nReturns: for each input id, its `numericId` (the AppleScript id) or null when it can't be resolved, plus the `messageId` used; and a `resolvedCount`.\nDo not use when: your ids are already numeric (they pass straight through), or you don't need a color \u2014 flag/move/mark tools operate on `imap:` ids directly.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA
     },

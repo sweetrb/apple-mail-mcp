@@ -469,6 +469,7 @@ function structuredRow(m: ImapMessage, account: string, path: string): Record<st
     dateReceived: env.date ? new Date(env.date).toISOString() : "",
     isRead: m.flags?.has("\\Seen") ?? false,
     isFlagged: m.flags?.has("\\Flagged") ?? false,
+    flagColorIndex: mailFlagColorIndex(m.flags),
     mailbox: path,
     account,
     hasAttachments: false,
@@ -1046,6 +1047,48 @@ export async function imapFetchMessageId(id: string, deps: ImapDeps = {}): Promi
   }
 }
 
+/**
+ * Apple Mail encodes a flag COLOR as custom IMAP keywords `$MailFlagBit0/1/2`,
+ * a plain 3-bit field holding the 0-6 palette index. It is NOT carried by
+ * `\Flagged`, which is colorless — but the bits ride alongside it in an
+ * ordinary UID STORE, so color is fully readable AND writable over IMAP.
+ *
+ * Verified against live Mail.app state 2026-08-03:
+ *   $MailFlagBit0 + $MailFlagBit1            -> 3 = green
+ *   $MailFlagBit2                            -> 4 = blue
+ *   $MailFlagBit0 + $MailFlagBit2            -> 5 = purple
+ *
+ * This is what lets a smart mailbox keyed on flag color match a message flagged
+ * over IMAP. Before this, color required resolving to a numeric id and going
+ * through AppleScript, which needed Mail.app running plus a TCC grant.
+ */
+const MAIL_FLAG_BITS = ["$MailFlagBit0", "$MailFlagBit1", "$MailFlagBit2"] as const;
+
+/** Keywords to SET for a palette index (0-6), and the ones to CLEAR. */
+export function mailFlagBitsFor(colorIndex: number): { set: string[]; clear: string[] } {
+  const set: string[] = [];
+  const clear: string[] = [];
+  for (let b = 0; b < MAIL_FLAG_BITS.length; b++) {
+    ((colorIndex >> b) & 1 ? set : clear).push(MAIL_FLAG_BITS[b]);
+  }
+  return { set, clear };
+}
+
+/** Palette index carried by a message's IMAP keywords, or undefined when none. */
+export function mailFlagColorIndex(flags: Iterable<string> | undefined): number | undefined {
+  if (!flags) return undefined;
+  const have = new Set(flags);
+  let idx = 0;
+  let any = false;
+  for (let b = 0; b < MAIL_FLAG_BITS.length; b++) {
+    if (have.has(MAIL_FLAG_BITS[b])) {
+      idx |= 1 << b;
+      any = true;
+    }
+  }
+  return any ? idx : undefined;
+}
+
 function flagOp(id: string, flag: string, add: boolean, deps: ImapDeps): Promise<ImapOpResult> {
   const ref = decodeImapId(id);
   if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
@@ -1070,10 +1113,51 @@ export const imapMarkRead = (id: string, deps = {}): Promise<ImapOpResult> =>
   flagOp(id, "\\Seen", true, deps);
 export const imapMarkUnread = (id: string, deps = {}): Promise<ImapOpResult> =>
   flagOp(id, "\\Seen", false, deps);
-export const imapFlagMessage = (id: string, deps = {}): Promise<ImapOpResult> =>
-  flagOp(id, "\\Flagged", true, deps);
-export const imapUnflagMessage = (id: string, deps = {}): Promise<ImapOpResult> =>
-  flagOp(id, "\\Flagged", false, deps);
+/**
+ * Flag over IMAP, optionally with a color. Bits for the requested color are
+ * ADDED and the other bits REMOVED, so re-flagging with a different color
+ * replaces it rather than OR-ing into a wrong index.
+ */
+export function imapFlagMessage(
+  id: string,
+  colorIndex?: number,
+  deps: ImapDeps = {}
+): Promise<ImapOpResult> {
+  if (colorIndex === undefined) return flagOp(id, "\\Flagged", true, deps);
+  const ref = decodeImapId(id);
+  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
+  const { set, clear } = mailFlagBitsFor(colorIndex);
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = await client.messageFlagsAdd([ref.uid], ["\\Flagged", ...set], { uid: true });
+      if (!ok)
+        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
+      // Non-fatal: the flag and its color are already set; a failure here can only
+      // leave a stale higher bit, which is cosmetic.
+      if (clear.length) await client.messageFlagsRemove([ref.uid], clear, { uid: true });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}` };
+    }
+  });
+}
+
+/** Unflag clears the color bits too — otherwise Mail.app keeps rendering the color. */
+export function imapUnflagMessage(id: string, deps: ImapDeps = {}): Promise<ImapOpResult> {
+  const ref = decodeImapId(id);
+  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = await client.messageFlagsRemove([ref.uid], ["\\Flagged", ...MAIL_FLAG_BITS], {
+        uid: true,
+      });
+      if (!ok) return { success: false, error: `IMAP unflag returned false for UID ${ref.uid}.` };
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: `IMAP unflag failed for UID ${ref.uid}: ${errText(e)}` };
+    }
+  });
+}
 
 export async function imapMoveMessageById(
   id: string,
@@ -1338,13 +1422,25 @@ export const imapBatchMarkUnread = (ids: string[], deps: ImapDeps = {}): Promise
   imapBatch(ids, deps, async (c, uids) => {
     await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
   });
-export const imapBatchFlag = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
+export const imapBatchFlag = (
+  ids: string[],
+  colorIndex?: number,
+  deps: ImapDeps = {}
+): Promise<ImapBatchResult> =>
   imapBatch(ids, deps, async (c, uids) => {
-    await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+    if (colorIndex === undefined) {
+      await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+      return;
+    }
+    const { set, clear } = mailFlagBitsFor(colorIndex);
+    await c.messageFlagsAdd(uids, ["\\Flagged", ...set], { uid: true });
+    // Clear the unwanted bits so re-flagging with a new color replaces it.
+    if (clear.length) await c.messageFlagsRemove(uids, clear, { uid: true });
   });
 export const imapBatchUnflag = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
   imapBatch(ids, deps, async (c, uids) => {
-    await c.messageFlagsRemove(uids, ["\\Flagged"], { uid: true });
+    // Clear the color bits too, or Mail.app keeps rendering the color.
+    await c.messageFlagsRemove(uids, ["\\Flagged", ...MAIL_FLAG_BITS], { uid: true });
   });
 export const imapBatchDelete = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
   imapBatch(ids, deps, async (c, uids, path) => {
