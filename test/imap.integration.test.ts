@@ -22,6 +22,7 @@ import {
   imapRenameMailbox,
   imapMarkRead,
   imapFlagMessage,
+  imapUnflagMessage,
   imapMoveMessageById,
   imapDeleteMessageById,
   imapUnreadCount,
@@ -106,7 +107,16 @@ run("IMAP backend (GreenMail) integration", () => {
     const list = (await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps)).text;
     const id = firstImapId(list);
     expect((await imapMarkRead(id, deps)).success).toBe(true);
-    expect((await imapFlagMessage(id, deps)).success).toBe(true);
+    expect((await imapFlagMessage(id, undefined, deps)).success).toBe(true);
+  });
+
+  it("flag color round-trips through the $MailFlagBitN keywords", async () => {
+    const list = (await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps)).text;
+    const id = firstImapId(list);
+    // 5 = purple = bit0 + bit2
+    expect((await imapFlagMessage(id, 5, deps)).success).toBe(true);
+    // unflag must clear \Flagged AND every color bit, or Mail.app keeps the color
+    expect((await imapUnflagMessage(id, deps)).success).toBe(true);
   });
 
   it("create / rename / delete mailbox round-trips", async () => {
