@@ -1938,7 +1938,7 @@ server.registerTool(
   "get-unread-count",
   {
     description:
-      "Use when: you only need the number of unread messages — INBOX by default, or scoped to one mailbox and/or account — without listing the messages themselves.\nReturns: the unread count for the requested scope (INBOX when no mailbox is given).\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals across every mailbox (use get-mail-stats).",
+      "Use when: you only need the number of unread messages — INBOX by default, or scoped to one mailbox and/or account — without listing the messages themselves.\nReturns: the unread count for the requested scope (INBOX when no mailbox is given). If a source cannot be read the result carries `partial: true` + `failedAccounts`, and a total AppleScript failure returns an ERROR — a plain count is never a disguised transport failure.\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals across every mailbox (use get-mail-stats).",
     inputSchema: {
       mailbox: z.string().optional().describe("Mailbox to check (default: INBOX)"),
       account: z.string().optional().describe("Account to check"),
@@ -1947,6 +1947,8 @@ server.registerTool(
       unread: z.number().optional(),
       mailbox: z.string().optional(),
       account: z.string().optional(),
+      partial: z.boolean().optional(),
+      failedAccounts: z.array(z.string()).optional(),
     },
   },
   withErrorHandling(async ({ mailbox, account }) => {
@@ -1962,6 +1964,10 @@ server.registerTool(
     //     config that matched no account once via IMAP — no double-counting;
     //   - explicit non-IMAP account (or IMAP unconfigured) → AppleScript.
     let count: number;
+    // Accounts whose count could not be read. A failed source must never be
+    // folded in as a silent 0 — that turns a wedged transport into "inbox
+    // zero", which reads as a real answer. (#130)
+    const failedAccounts: string[] = [];
     if (shouldUseImap(account)) {
       if (account !== undefined) {
         count = await imapUnreadCount(mailbox, { account });
@@ -1974,17 +1980,37 @@ server.registerTool(
               total += await imapUnreadCount(mailbox, { config: src.config });
             } catch (e) {
               console.error(`IMAP unread-count failed for "${src.label}": ${String(e)}`);
+              failedAccounts.push(src.label);
             }
           } else {
-            total += mailManager.getUnreadCount(mailbox, src.account.name);
+            const r = mailManager.getUnreadCountChecked(mailbox, src.account.name);
+            if (r.failed) failedAccounts.push(src.account.name);
+            else total += r.count ?? 0;
           }
         }
         count = total;
       }
     } else {
-      count = mailManager.getUnreadCount(mailbox, account);
+      const r = mailManager.getUnreadCountChecked(mailbox, account);
+      if (r.failed) {
+        return errorResponse(
+          `Could not read the unread count — the AppleScript transport failed: ${r.error}. ` +
+            `This is NOT the same as zero unread. Mail may be busy, wedged, or missing an ` +
+            `Automation grant; run the "doctor" tool to check.`
+        );
+      }
+      count = r.count ?? 0;
     }
     const location = mailbox ? ` in "${mailbox}"` : "";
+
+    if (failedAccounts.length > 0) {
+      return successResponse(
+        `${count} unread message(s)${location} — PARTIAL: ${failedAccounts.length} account(s) ` +
+          `could not be read (${failedAccounts.join(", ")}), so the real total is higher. ` +
+          `Run the "doctor" tool to check.`,
+        { unread: count, mailbox, account, partial: true, failedAccounts }
+      );
+    }
 
     return successResponse(`${count} unread message(s)${location}`, {
       unread: count,
@@ -2272,16 +2298,30 @@ server.registerTool(
   "list-accounts",
   {
     description:
-      "Use when: discovering the configured Mail accounts (e.g. iCloud, Gmail) so you can pass an exact account name to other tools.\nReturns: the account names and a count.\nDo not use when: you want the folders within an account (use list-mailboxes) or messages (use list-messages / search-messages).",
+      "Use when: discovering the configured Mail accounts (e.g. iCloud, Gmail) so you can pass an exact account name to other tools.\nReturns: the account names and a count. If the AppleScript transport fails (timeout / wedged Mail / missing Automation grant) this returns an ERROR rather than an empty list — an empty list always means Mail really has no accounts.\nDo not use when: you want the folders within an account (use list-mailboxes) or messages (use list-messages / search-messages).",
     inputSchema: {},
     outputSchema: {
       accounts: z.array(z.object({}).passthrough()).optional(),
       count: z.number().optional(),
+      partial: z.boolean().optional(),
+      error: z.string().optional(),
     },
   },
   withErrorHandling(() => {
-    const accounts = mailManager.listAccounts();
-    const structured = { accounts, count: accounts.length };
+    const { accounts, failed, error } = mailManager.listAccountsChecked();
+    const structured = failed
+      ? { accounts, count: accounts.length, partial: true, error }
+      : { accounts, count: accounts.length };
+
+    // A wedged/timed-out AppleScript transport must never render as a confident
+    // "No Mail accounts found" — that reads as a real answer. (#130)
+    if (failed) {
+      return errorResponse(
+        `Could not read the Mail account list — the AppleScript transport failed: ${error}. ` +
+          `This is NOT the same as having no accounts. Mail may be busy, wedged, or missing an ` +
+          `Automation grant; run the "doctor" tool to check.`
+      );
+    }
 
     if (accounts.length === 0) {
       return successResponse("No Mail accounts found", structured);
