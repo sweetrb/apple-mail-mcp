@@ -27,7 +27,25 @@ overrides:
   # minimatch 3's CommonJS path onto the v5 ESM API ("expand is not a function").
   "brace-expansion@>=1.0.0 <1.1.18": 1.1.18
   "brace-expansion@>=5.0.0 <5.0.9": 5.0.9
-  fast-uri: 3.1.4
+  # ⚠️ These are FLOORS, not pins. `fast-uri: 3.1.4` (exact) was written here as a
+  # security floor and then became a CEILING: when GHSA-7p8r-x3mc-p8w7 landed with
+  # a 3.1.5 fix, the exact pin held the tree on the vulnerable 3.1.4 and the
+  # advisory could not clear. Use a caret range so patch fixes flow in on their own
+  # while staying inside the major that the parent's API expects.
+  fast-uri: ^3.1.5
+  # GHSA-mwp4-54f8-5fhr (high) + GHSA-4xrf-jv44-h6hh + GHSA-22jq-vg5j-6vgg.
+  # express-rate-limit -> @modelcontextprotocol/sdk pulled ip-address 10.2.0 while
+  # imapflow -> socks already resolved a clean 10.3.1, so the tree carried two
+  # copies and shipped the vulnerable one in the bundle. This floors both onto
+  # 10.3.1 and dedupes them.
+  ip-address: ^10.3.1
+  # ⏳ GHSA-8j4g-w8fx-2239 (hono, medium) is NOT floored here yet on purpose:
+  # hono@4.12.34 was published 2026-08-03T02:36Z and is still inside this repo's
+  # 24h `minimumReleaseAge` supply-chain gate, so `^4.12.34` fails the install with
+  # ERR_PNPM_NO_MATURE_MATCHING_VERSION. No `minimumReleaseAgeExclude` carve-out —
+  # the gate is the point. hono is reached via @hono/node-server and is NOT in the
+  # esbuild bundle (0 references in build/index.js), so nothing vulnerable ships
+  # meanwhile. Add `hono: ^4.12.34` once the release clears the gate.
   # Security floors for dev-only transitives (js-yaml via @eslint/eslintrc,
   # postcss via vite), originally added in 29b0221 to clear npm audit advisories
   # while this repo still used npm. pnpm has never read npm's bare top-level
