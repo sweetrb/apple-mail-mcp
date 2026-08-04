@@ -2326,9 +2326,13 @@ export class AppleMailManager {
   /**
    * Resolve a message's numeric Mail.app id from its RFC822 Message-ID (the
    * backend-independent join key). This bridges an `imap:` id to the numeric id
-   * required to apply a flag *color* — IMAP flags are colorless, so a smart
-   * mailbox keyed on flag color can only ever match a message flagged via the
-   * AppleScript numeric-id path.
+   * required by the AppleScript-only tools — `reply-to-message` and
+   * `forward-message`.
+   *
+   * Note: flag *color* no longer needs this (since 2.10.0). Mail.app stores the
+   * color as the `$MailFlagBit0/1/2` keywords, which ride alongside `\Flagged`
+   * in an ordinary `UID STORE`, so flag-message/batch-flag-messages color an
+   * `imap:` id directly and a smart mailbox keyed on flag color matches it.
    *
    * The Message-ID is matched both bracketless and `<bracketed>` (Mail returns
    * it bracketless; IMAP envelopes carry the brackets). When `accountName` is

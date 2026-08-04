@@ -78120,9 +78120,13 @@ var AppleMailManager = class {
   /**
    * Resolve a message's numeric Mail.app id from its RFC822 Message-ID (the
    * backend-independent join key). This bridges an `imap:` id to the numeric id
-   * required to apply a flag *color* — IMAP flags are colorless, so a smart
-   * mailbox keyed on flag color can only ever match a message flagged via the
-   * AppleScript numeric-id path.
+   * required by the AppleScript-only tools — `reply-to-message` and
+   * `forward-message`.
+   *
+   * Note: flag *color* no longer needs this (since 2.10.0). Mail.app stores the
+   * color as the `$MailFlagBit0/1/2` keywords, which ride alongside `\Flagged`
+   * in an ordinary `UID STORE`, so flag-message/batch-flag-messages color an
+   * `imap:` id directly and a smart mailbox keyed on flag color matches it.
    *
    * The Message-ID is matched both bracketless and `<bracketed>` (Mail returns
    * it bracketless; IMAP envelopes carry the brackets). When `accountName` is
@@ -81490,7 +81494,7 @@ var FLAG_COLOR_INDEX = {
   grey: 6
 };
 var FLAG_COLOR_SCHEMA = external_exports.enum(["red", "orange", "yellow", "green", "blue", "purple", "gray", "grey"]).optional().describe(
-  "Optional flag color (Apple Mail palette: red, orange, yellow, green, blue, purple, gray \u2014 'grey' accepted). Omit for Mail's default flag. Colors are applied via Mail.app (AppleScript); for an IMAP-routed message id the flag is set but the color is not applied (IMAP flags are colorless)."
+  "Optional flag color (Apple Mail palette: red, orange, yellow, green, blue, purple, gray \u2014 'grey' accepted). Omit for Mail's default flag. The color is applied on both routes: AppleScript sets the flag index, and IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads \u2014 so a smart mailbox keyed on flag color matches either way."
 );
 var DATE_FILTER_SCHEMA = external_exports.string().regex(
   /^[a-zA-Z0-9 ,/\-:]+$/,
@@ -82315,10 +82319,11 @@ server.registerTool(
         id,
         ...color ? { color, colorApplied: true } : {}
       }) : errorResponse(`Failed to flag message "${id}"`),
-      // IMAP path: the flag is set, but flag colors are a Mail.app-only feature.
-      ok: color ? `Message flagged. Note: the "${color}" color was not applied \u2014 this is an IMAP-routed message and IMAP flags are colorless.` : "Message flagged",
+      // IMAP path: imapFlagMessage writes the color as $MailFlagBit0/1/2 keywords,
+      // so the outcome matches the AppleScript route above.
+      ok: color ? `Message flagged (${color})` : "Message flagged",
       fail: `Failed to flag message "${id}"`,
-      structured: color ? { ok: true, id, color, colorApplied: false } : { ok: true, id }
+      structured: color ? { ok: true, id, color, colorApplied: true } : { ok: true, id }
     });
   }, "Error flagging message")
 );
@@ -82514,7 +82519,7 @@ server.registerTool(
 server.registerTool(
   "batch-flag-messages",
   {
-    description: "Use when: flagging multiple messages (1\u2013100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: flag colors are applied via Mail.app (AppleScript); any IMAP-routed ids in the batch are flagged but not colored (IMAP flags are colorless).",
+    description: "Use when: flagging multiple messages (1\u2013100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: the color is applied on both routes \u2014 AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads \u2014 so a mixed batch of numeric and `imap:` ids all end up colored.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
       color: FLAG_COLOR_SCHEMA

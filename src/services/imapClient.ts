@@ -1028,8 +1028,9 @@ export function normalizeMessageId(mid: string): string {
 /**
  * Fetch the RFC822 Message-ID for an `imap:` id. This is the join key that lets
  * the AppleScript backend locate the *same* message and return its numeric
- * Mail.app id — needed because flag **colors** only apply on the AppleScript
- * numeric-id path (IMAP `\Flagged` is colorless). Returns the normalized
+ * Mail.app id — needed by the numeric-id-only tools, `reply-to-message` and
+ * `forward-message`. (Flag **colors** no longer need it: since 2.10.0 they are
+ * written over IMAP as the `$MailFlagBit0/1/2` keywords.) Returns the normalized
  * Message-ID (no angle brackets), or null if `id` isn't an imap: token, the
  * message/envelope can't be fetched, or it carries no Message-ID.
  */

@@ -746,7 +746,7 @@ Flag or unflag a message. `flag-message` optionally takes a flag **color**; `unf
 | `id` | string | Yes | Message ID |
 | `color` | string | No | (`flag-message` only) Flag color: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray` (`grey` accepted). Omit for Mail's default flag. |
 
-**Flag colors** are an Apple Mail feature, applied via AppleScript as the message's `flag index` (0 red, 1 orange, 2 yellow, 3 green, 4 blue, 5 purple, 6 gray) — the same property a Mail smart mailbox can match on. For an **IMAP-routed** message id (`imap:…`) the flag is still set, but the color is **not** applied, because IMAP's `\Flagged` flag is colorless. To color a flag, use the message's AppleScript (numeric) id.
+**Flag colors** are an Apple Mail feature — the message's `flag index` (0 red, 1 orange, 2 yellow, 3 green, 4 blue, 5 purple, 6 gray), which is the property a Mail smart mailbox can match on. **The color is applied on both routes** (since 2.10.0): AppleScript sets the flag index directly, and for an **IMAP-routed** id (`imap:…`) the color is written as Mail.app's `$MailFlagBit0/1/2` keywords — a 3-bit field holding the same palette index. `\Flagged` on its own really is colorless, but those keywords ride alongside it in an ordinary `UID STORE`, so a smart mailbox keyed on flag color matches an IMAP-flagged message too. You do **not** need to resolve to a numeric id just to color a flag.
 
 ---
 
@@ -829,7 +829,7 @@ All batch operations accept an array of message IDs (max 100 per batch) and retu
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
-| `color` | string | No | (`batch-flag-messages` only) Flag color applied to AppleScript (numeric) ids — see [`flag-message`](#flag-message--unflag-message). Any `imap:` ids in the batch are flagged but not colored. |
+| `color` | string | No | (`batch-flag-messages` only) Flag color — see [`flag-message`](#flag-message--unflag-message). Applied on both routes, so a mixed batch of numeric and `imap:` ids all end up colored. |
 
 ---
 
