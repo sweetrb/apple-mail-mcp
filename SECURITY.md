@@ -25,9 +25,9 @@ You will receive a response within 48 hours acknowledging receipt. Security issu
 
 This MCP server:
 - Runs locally on your machine
-- Uses AppleScript to interact with Mail.app
-- Does not transmit data to external servers
-- Does not store credentials or passwords
+- Uses AppleScript to interact with Mail.app, and — when you configure the opt-in IMAP/SMTP backends — connects directly to **your own** mail provider over TLS
+- Does not transmit data to this project or any third party. With the default AppleScript backend everything stays on-device; the opt-in IMAP/SMTP backends necessarily reach your provider, which is their purpose
+- Does not store credentials or passwords (IMAP/SMTP passwords are read from the macOS Keychain at use time)
 - Requires explicit user confirmation before sending emails (recommended)
 
 The server requires macOS automation permissions to function. These permissions are managed by macOS and can be revoked at any time in System Settings > Privacy & Security > Automation.
@@ -37,7 +37,7 @@ The server requires macOS automation permissions to function. These permissions 
 The server enforces multiple layers of input validation to prevent injection and abuse:
 
 ### Message ID Validation
-All message IDs are validated against a numeric-only schema (`/^\d+$/`). Non-numeric IDs are rejected before reaching AppleScript. As a defense-in-depth measure, all ID values are also coerced through `Number(id)` at every AppleScript interpolation point.
+Message IDs are validated against `/^(\d+|imap:[A-Za-z0-9_-]+)$/` — either an AppleScript numeric id or an opaque `imap:` token from the IMAP read path. Anything else is rejected before reaching a backend. As defense-in-depth, numeric ids are additionally coerced through `Number(id)` at every AppleScript interpolation point, and `imap:` ids never reach AppleScript at all — they are decoded and used as IMAP UIDs, so they cannot participate in AppleScript injection.
 
 ### Batch Operation Limits
 Batch operations (`batch-delete-messages`, `batch-move-messages`, `batch-mark-as-read`, `batch-mark-as-unread`, `batch-flag-messages`, `batch-unflag-messages`) are capped at 100 messages per request to prevent resource exhaustion.

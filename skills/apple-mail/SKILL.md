@@ -42,7 +42,7 @@ Use this skill when the user:
 | `unflag-message` | Remove flag from a message |
 | `delete-message` | Move a message to Trash |
 | `move-message` | Move a message to a different mailbox |
-| `resolve-message-id` | Convert `imap:` ids to numeric Mail.app ids (needed for flag colors) |
+| `resolve-message-id` | Convert `imap:` ids to numeric Mail.app ids — needed **only** for `reply-to-message` / `forward-message`, which are numeric-id only. **Not** for flag colors: since 2.10.0 `flag-message`/`batch-flag-messages` write the color over IMAP directly |
 | `list-attachments` | List a message's attachments (name, MIME type, size) |
 | `save-attachment` | Save an attachment to disk |
 | `fetch-attachment` | Fetch an attachment's bytes inline as base64 |
@@ -73,6 +73,25 @@ Use this skill when the user:
 | Tool | Purpose |
 |------|---------|
 | `list-accounts` | List configured email accounts |
+
+### Smart Mailbox Operations
+
+Smart mailboxes are **criteria-based virtual views**, not real folders — use these
+when the user wants a saved filter/search rather than moving mail. They work on
+localized macOS because they edit `SyncedSmartMailboxes.plist` directly (backed up
+and atomic; existing smart mailboxes are never rewritten).
+
+| Tool | Purpose |
+|------|---------|
+| `list-smart-mailboxes` | List smart mailboxes and their criteria |
+| `create-smart-mailbox` | Create one (needs at least one of fromContains / subjectContains / bodyContains) |
+| `delete-smart-mailbox` | Delete one by name |
+| `create-newsletter-smart-mailboxes` | Propose "NL: <sender>" views for newsletter senders — **defaults to `dryRun: true`**; pass `dryRun: false` to actually create them |
+
+Requires Full Disk Access for the Node runtime (`~/Library/Mail` is TCC-protected);
+without it these report "no smart mailboxes" rather than a permission error.
+Changes appear the next time Mail is launched — **have the user quit Mail first**
+for reliable results. These tools never quit or restart Mail themselves.
 
 ### Rules
 

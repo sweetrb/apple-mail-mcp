@@ -1,13 +1,13 @@
 {
   "name": "apple-mail-mcp",
   "metadata": {
-    "description": "Apple Mail integration marketplace for Claude Code, Codex, Hermes, and Antigravity.",
+    "description": "Apple Mail integration marketplace for Claude Code, Codex, and Antigravity.",
     "version": "1.0.0"
   },
   "plugins": [
     {
       "name": "apple-mail",
-      "version": "2.10.2",
+      "version": "2.10.3",
       "description": "Manage Apple Mail through natural language - read, search, send, reply, forward, and organize emails and mailboxes, with diagnostics, attachments, templates, and mail-merge support (macOS only).",
       "source": {
         "source": "local",

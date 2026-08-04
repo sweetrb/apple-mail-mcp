@@ -76079,6 +76079,10 @@ function executeAppleScript(script, options = {}) {
   return lastError;
 }
 
+// src/utils/docsUrls.ts
+var SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
+var SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
+
 // src/utils/mimeParse.ts
 function extractBoundary(source) {
   const match = source.match(/boundary="?([^";\s\r\n]+)"?/i);
@@ -76974,7 +76978,7 @@ var AppleMailManager = class {
   serverSideCreateGuard(account, op) {
     if (this.isServerSideAccount(account) === true) {
       const verb = op === "rename" ? "rename" : "create";
-      return `Account "${account}" stores its mailboxes on the server (IMAP / iCloud / Exchange), and Mail.app cannot ${verb} server-side mailboxes via AppleScript \u2014 a ${verb} would ${op === "rename" ? "leave a half-created orphan" : "orphan a mailbox that can never be removed"}. Configure IMAP for this account (APPLE_MAIL_MCP_IMAP_*) so mailbox create/delete/rename route through the server, or manage the folder in Mail.app directly.`;
+      return `Account "${account}" stores its mailboxes on the server (IMAP / iCloud / Exchange), and Mail.app cannot ${verb} server-side mailboxes via AppleScript \u2014 a ${verb} would ${op === "rename" ? "leave a half-created orphan" : "orphan a mailbox that can never be removed"}. Configure IMAP for this account (APPLE_MAIL_MCP_IMAP_*) so mailbox create/delete/rename route through the server, or manage the folder in Mail.app directly. ${SETUP_HINT}`;
     }
     return null;
   }
@@ -79739,12 +79743,6 @@ var import_nodemailer = __toESM(require_nodemailer(), 1);
 import { execFileSync } from "child_process";
 import { isAbsolute as isAbsolute2 } from "path";
 import { existsSync as existsSync4 } from "fs";
-
-// src/utils/docsUrls.ts
-var SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
-var SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
-
-// src/services/smtpMailer.ts
 var SMTP_ENV = {
   host: "APPLE_MAIL_MCP_SMTP_HOST",
   port: "APPLE_MAIL_MCP_SMTP_PORT",
@@ -80144,7 +80142,7 @@ function specToConfig(spec) {
   }
   if (!pass) {
     throw new Error(
-      `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account.`
+      `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account. ${SETUP_HINT}`
     );
   }
   return {
@@ -83252,7 +83250,7 @@ server.registerTool(
   withErrorHandling(({ query }) => {
     const contacts = mailManager.searchContacts(query);
     const structured = {
-      contacts: contacts.map((c) => ({ name: c.name, emails: c.emails })),
+      contacts: contacts.map((c) => ({ name: c.name, emails: c.emails, phones: c.phones })),
       count: contacts.length
     };
     if (contacts.length === 0) {
@@ -83260,7 +83258,8 @@ server.registerTool(
     }
     const contactList = contacts.map((c) => {
       const emails = c.emails.length > 0 ? c.emails.join(", ") : "no email";
-      return `  - ${c.name} (${emails})`;
+      const phones = c.phones.length > 0 ? `; ${c.phones.join(", ")}` : "";
+      return `  - ${c.name} (${emails}${phones})`;
     }).join("\n");
     return successResponse(`Found ${contacts.length} contact(s):
 ${contactList}`, structured);
