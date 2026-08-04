@@ -726,6 +726,13 @@ export class AppleMailManager {
   private readonly CACHE_TTL_MS = 60_000;
 
   /**
+   * Last AppleScript transport error from an account/count read, or null when the
+   * last one succeeded. Lets a tool report "the transport failed" instead of
+   * presenting a fallback zero/empty as a real answer. (#130)
+   */
+  private lastAccountsError: string | null = null;
+
+  /**
    * Remembers where each message id was last seen: id → {account, mailbox}.
    *
    * Mail.app numeric message ids are unique *per mailbox*, and by-id fetches
@@ -764,6 +771,14 @@ export class AppleMailManager {
       return this.cache.accounts.data;
     }
     const accounts = this.fetchAccounts();
+    if (accounts === null) {
+      // Transport failure. Do NOT cache it — caching an empty list here poisoned
+      // every subsequent call for the whole TTL, so one timeout made Mail look
+      // account-less long after it recovered. Serve the last known-good list if
+      // we have one; the error stays readable via consumeAccountsError(). (#130)
+      return this.cache.accounts?.data ?? [];
+    }
+    this.lastAccountsError = null;
     this.cache.accounts = { data: accounts, expiry: now + this.CACHE_TTL_MS };
     return accounts;
   }
@@ -2974,6 +2989,7 @@ export class AppleMailManager {
 
     if (!result.success) {
       console.error(`Failed to get unread count: ${result.error}`);
+      this.lastAccountsError = result.error ?? "AppleScript transport failed";
       return 0;
     }
 
@@ -3655,10 +3671,44 @@ end tell`;
   }
 
   /**
+   * listAccounts() plus whether the underlying AppleScript read actually worked.
+   *
+   * `failed: true` means the list is a fallback (stale cache or empty) because the
+   * transport errored — NOT that Mail has no accounts. (#130)
+   */
+  listAccountsChecked(): { accounts: Account[]; failed: boolean; error?: string } {
+    this.lastAccountsError = null;
+    const accounts = this.getCachedAccounts();
+    const error = this.lastAccountsError;
+    return error ? { accounts, failed: true, error } : { accounts, failed: false };
+  }
+
+  /**
+   * getUnreadCount() plus whether the AppleScript read actually worked.
+   *
+   * On failure the count is `null` rather than 0, so a caller can never mistake a
+   * wedged transport for an empty inbox. (#130)
+   */
+  getUnreadCountChecked(
+    mailbox?: string,
+    account?: string
+  ): { count: number | null; failed: boolean; error?: string } {
+    this.lastAccountsError = null;
+    const count = this.getUnreadCount(mailbox, account);
+    const error = this.lastAccountsError;
+    return error ? { count: null, failed: true, error } : { count, failed: false };
+  }
+
+  /**
    * Fetches account list directly from Mail.app via AppleScript.
    * Used internally by the cache; prefer getCachedAccounts() or listAccounts().
+   *
+   * Returns `null` when the AppleScript transport itself failed (timeout, wedged
+   * Mail, denied Automation). That is deliberately distinct from `[]`, which means
+   * "Mail answered, and there genuinely are no accounts" — collapsing the two is
+   * what let a wedged transport report a confident "No Mail accounts found". (#130)
    */
-  private fetchAccounts(): Account[] {
+  private fetchAccounts(): Account[] | null {
     const script = buildAppLevelScript(`
       set accountList to {}
       repeat with acct in accounts
@@ -3679,7 +3729,8 @@ end tell`;
 
     if (!result.success) {
       console.error(`Failed to list accounts: ${result.error}`);
-      return [];
+      this.lastAccountsError = result.error ?? "AppleScript transport failed";
+      return null;
     }
 
     if (!result.output.trim()) return [];
