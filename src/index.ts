@@ -2479,8 +2479,11 @@ server.registerTool(
   },
   withErrorHandling(({ query }) => {
     const contacts = mailManager.searchContacts(query);
+    // Phones are read by the same query that reads emails (contactsDb PHONES_SQL),
+    // so surfacing them costs nothing — and the tool description, README and
+    // CLAUDE.md have always promised them.
     const structured = {
-      contacts: contacts.map((c) => ({ name: c.name, emails: c.emails })),
+      contacts: contacts.map((c) => ({ name: c.name, emails: c.emails, phones: c.phones })),
       count: contacts.length,
     };
 
@@ -2491,7 +2494,8 @@ server.registerTool(
     const contactList = contacts
       .map((c) => {
         const emails = c.emails.length > 0 ? c.emails.join(", ") : "no email";
-        return `  - ${c.name} (${emails})`;
+        const phones = c.phones.length > 0 ? `; ${c.phones.join(", ")}` : "";
+        return `  - ${c.name} (${emails}${phones})`;
       })
       .join("\n");
 

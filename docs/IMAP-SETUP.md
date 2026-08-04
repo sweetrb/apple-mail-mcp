@@ -160,9 +160,22 @@ non-secret config goes here — passwords stay in the Keychain.**
 ### `APPLE_MAIL_MCP_IMAP_ACCOUNT` and routing
 
 `APPLE_MAIL_MCP_IMAP_ACCOUNT` should equal the **Mail.app account name** (what
-`list-accounts` shows). A tool call routes to IMAP only when its `account`
-argument matches a configured account's name or login — so this value is how the
-server knows "calls for this account go to IMAP."
+`list-accounts` shows), because that is how an **explicitly named** `account`
+argument is matched to an IMAP config.
+
+**Since v2.6.0 you do not need to pass `account` at all for reads.** When any
+IMAP account is configured, the read tools (`search-messages`, `get-thread`,
+`list-messages`, `list-mailboxes`, `get-unread-count`, `get-mail-stats`) prefer
+IMAP automatically:
+
+- explicit IMAP `account` → that account over IMAP;
+- explicit non-IMAP `account` → AppleScript;
+- **no `account` → fan out over every configured IMAP account**, with AppleScript
+  used only for the accounts no IMAP config covers.
+
+The name still matters for targeting a specific account and for the
+mailbox-write ops (`create`/`delete`/`rename-mailbox`), which route to IMAP only
+for an explicitly named IMAP account.
 
 ### Multiple accounts
 
@@ -285,9 +298,17 @@ and a server started there can't read passwords either. Options:
   restrict the config file's permissions to the service account.
 
 **Calls aren't routing to IMAP even though `doctor` shows connected.**
-The tool's `account` argument must match the configured account's name/login.
-Set `APPLE_MAIL_MCP_IMAP_ACCOUNT` to the exact Mail.app account name from
-`list-accounts`, and pass that same `account` to tools.
+For the six **read** tools this should not happen since v2.6.0 — they prefer IMAP
+as soon as any account is configured, with no `account` argument needed. If reads
+still look like AppleScript (slow, or partial-coverage warnings), the usual cause
+is that the server never saw your settings at all: a host that strips the `env`
+block (use the `config.json` method), or a Keychain service/account mismatch so
+the password lookup fails. Run `doctor` — it reports each account separately.
+
+For **targeting one specific account**, and for the mailbox-write ops
+(`create`/`delete`/`rename-mailbox`), the `account` argument must match the
+configured account's name/login: set `APPLE_MAIL_MCP_IMAP_ACCOUNT` to the exact
+Mail.app account name from `list-accounts` and pass that same `account`.
 
 **A disabled Mail account.** IMAP connects to the server directly, so it works
 even if the account is disabled in Mail.app — useful for reaching an account the

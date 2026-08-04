@@ -292,7 +292,7 @@ function specToConfig(spec: ImapAccountSpec): ImapConfig {
   }
   if (!pass) {
     throw new Error(
-      `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account.`
+      `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account. ${SETUP_HINT}`
     );
   }
   return {

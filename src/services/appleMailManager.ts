@@ -31,6 +31,7 @@ import { isAbsolute, resolve, sep, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { executeAppleScript } from "@/utils/applescript.js";
+import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { TemplateStore } from "@/services/templateStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
@@ -872,7 +873,7 @@ export class AppleMailManager {
   private serverSideCreateGuard(account: string, op: "create" | "rename"): string | null {
     if (this.isServerSideAccount(account) === true) {
       const verb = op === "rename" ? "rename" : "create";
-      return `Account "${account}" stores its mailboxes on the server (IMAP / iCloud / Exchange), and Mail.app cannot ${verb} server-side mailboxes via AppleScript — a ${verb} would ${op === "rename" ? "leave a half-created orphan" : "orphan a mailbox that can never be removed"}. Configure IMAP for this account (APPLE_MAIL_MCP_IMAP_*) so mailbox create/delete/rename route through the server, or manage the folder in Mail.app directly.`;
+      return `Account "${account}" stores its mailboxes on the server (IMAP / iCloud / Exchange), and Mail.app cannot ${verb} server-side mailboxes via AppleScript — a ${verb} would ${op === "rename" ? "leave a half-created orphan" : "orphan a mailbox that can never be removed"}. Configure IMAP for this account (APPLE_MAIL_MCP_IMAP_*) so mailbox create/delete/rename route through the server, or manage the folder in Mail.app directly. ${SETUP_HINT}`;
     }
     return null;
   }

@@ -1,7 +1,7 @@
 {
   "name": "apple-mail-mcp",
   "metadata": {
-    "description": "Apple Mail integration marketplace for Claude Code, Codex, Hermes, and Antigravity.",
+    "description": "Apple Mail integration marketplace for Claude Code, Codex, and Antigravity.",
     "version": "1.0.0"
   },
   "plugins": [

@@ -147,6 +147,7 @@ tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 
 - **macOS** - Apple Mail and AppleScript are macOS-only
 - **Node.js 20+** - Required for the MCP server
+- **Node.js 22.5+ and Full Disk Access** - Required by `search-contacts` only. It reads the Contacts database directly through Node's built-in `node:sqlite`, which does not exist before 22.5. On an older runtime, or without Full Disk Access for the Node binary, it logs one line to stderr and returns **an empty list rather than an error** — so "no contacts found" can mean "cannot read Contacts". Every other tool works on Node 20+. See [Node runtime & TCC permissions](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md).
 - **Apple Mail** - Must have at least one account configured (iCloud, Gmail, Exchange, etc.)
 
 ## Features
@@ -264,6 +265,8 @@ Get the full content of a message.
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Message ID |
 | `preferHtml` | boolean | No | Return HTML source instead of plain text |
+| `mailbox` | string | No | Mailbox holding the message (e.g. `"Sent Items"`). With `account`, opens that mailbox directly instead of scanning every mailbox — this is the fix for timeouts on large folders |
+| `account` | string | No | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan |
 
 **Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available).
 
@@ -668,7 +671,7 @@ Return an attachment's bytes as base64 (the read counterpart to inline-base64 se
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | Yes | Numeric message ID |
+| `id` | string | Yes | Message ID (numeric or `imap:…`) |
 | `attachmentName` | string | Yes | Attachment filename (from `list-attachments`) |
 
 **Returns:** The attachment bytes, base64-encoded (also in `structuredContent.contentBase64`).
@@ -747,6 +750,8 @@ Flag or unflag a message. `flag-message` optionally takes a flag **color**; `unf
 | `color` | string | No | (`flag-message` only) Flag color: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray` (`grey` accepted). Omit for Mail's default flag. |
 
 **Flag colors** are an Apple Mail feature — the message's `flag index` (0 red, 1 orange, 2 yellow, 3 green, 4 blue, 5 purple, 6 gray), which is the property a Mail smart mailbox can match on. **The color is applied on both routes** (since 2.10.0): AppleScript sets the flag index directly, and for an **IMAP-routed** id (`imap:…`) the color is written as Mail.app's `$MailFlagBit0/1/2` keywords — a 3-bit field holding the same palette index. `\Flagged` on its own really is colorless, but those keywords ride alongside it in an ordinary `UID STORE`, so a smart mailbox keyed on flag color matches an IMAP-flagged message too. You do **not** need to resolve to a numeric id just to color a flag.
+
+To **read** a color, the IMAP read path returns `flagColorIndex` in `structuredContent` — the same 0-6 palette index, omitted when the message carries no color bits. The AppleScript read path does not populate it.
 
 ---
 
@@ -853,8 +858,12 @@ Get unread message count.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `mailbox` | string | No | Mailbox to check (omit for total) |
-| `account` | string | No | Account to check |
+| `mailbox` | string | No | Mailbox to check (omit for **INBOX**) |
+| `account` | string | No | Account to check (omit to sum each account's INBOX) |
+
+**Returns:** The unread count for the requested scope.
+
+> Omitting `mailbox` counts **INBOX**, not a cross-mailbox total. This changed in 2.8.15: summing every mailbox was slow and wrong on Gmail, where one message appears in INBOX, All Mail and every label it carries. For account-wide totals use [`get-mail-stats`](#get-mail-stats).
 
 ---
 
@@ -895,6 +904,8 @@ Rename a mailbox (creates new, moves messages, deletes old).
 ---
 
 ### Smart Mailbox Operations (intelligente Postfächer)
+
+> **Requires Full Disk Access.** These tools read and write `~/Library/Mail/V*/MailData/SyncedSmartMailboxes.plist`, which is TCC-protected. Without Full Disk Access for the server's Node runtime the read simply finds nothing, and the tools report "no smart mailboxes" or "launch Mail at least once" rather than a permission error — see [Node runtime & TCC permissions](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md).
 
 Smart mailboxes are Apple Mail's **criteria-based virtual views** — not real folders, so no messages are moved. AppleScript's `smart mailbox` / `intelligentes Postfach` terms don't compile reliably on localized (e.g. German) macOS, so these tools read and edit `~/Library/Mail/V*/MailData/SyncedSmartMailboxes.plist` directly.
 
@@ -1030,14 +1041,15 @@ Delete a mail rule by name.
 
 #### `search-contacts`
 
-Search contacts in Contacts.app.
+Search the macOS Contacts database by name, organization, nickname, or email substring.
+
+Since 2.8.7 this reads the AddressBook SQLite files directly rather than driving Contacts.app over AppleScript, so **Contacts.app need not be running and no Automation grant is involved** — but the Node runtime does need **Full Disk Access**, and **Node 22.5+** (see [Requirements](#requirements)). Without either, the tool returns an empty list rather than an error.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | Yes | Name to search for |
-| `limit` | number | No | Max results (default: 10) |
+| `query` | string | Yes | Substring matched against full name, organization, nickname, or any email address |
 
-**Returns:** List of contacts with name, email addresses, and phone numbers.
+**Returns:** List of contacts with name, email addresses, and phone numbers. Results are **not** truncated — a broad query returns every match.
 
 ---
 
@@ -1130,7 +1142,9 @@ Run a full setup diagnostic: Mail.app automation permission, account state (flag
 
 Get mail statistics.
 
-**Parameters:** None
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `account` | string | No | Limit to one account (uses fast IMAP `STATUS` when that account is IMAP-configured). Omit to merge across all accounts. |
 
 **Returns:** Total and per-account message/unread counts, plus recently received stats (24h, 7d, 30d).
 
@@ -1271,7 +1285,7 @@ The entrypoint is written as:
 
 ## Security and Privacy
 
-- **Local only** - All operations happen locally via AppleScript. No data is sent to external servers.
+- **No third parties** - The server talks only to Mail.app on this Mac (AppleScript) and, when you configure them, directly to **your own** mail provider over TLS (IMAP/SMTP). Nothing is sent to this project or any other service. With the default AppleScript backend everything stays on-device; the opt-in IMAP/SMTP backends necessarily reach your provider, which is what they are for.
 - **Permission required** - macOS will prompt for automation permission on first use.
 - **No credential storage** - The server doesn't store any passwords or authentication tokens.
 - **Email safety** - Use `create-draft` to review emails before sending.
@@ -1285,7 +1299,7 @@ The entrypoint is written as:
 | macOS only | Apple Mail and AppleScript are macOS-specific |
 | MCP `send-email` is plain-text | The `send-email` tool sends plain text (reading HTML content is supported). To send HTML, use the bundled `apple-mail-send` CLI with `--html-body-file` (sends `multipart/alternative` via SMTP) |
 | Attachments require absolute paths | File attachments must use full absolute paths (e.g., `/Users/me/file.pdf`) |
-| No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
+| Smart mailboxes need Mail quit | Smart mailboxes are supported (see [Smart Mailbox Operations](#smart-mailbox-operations-intelligente-postfächer)), but `create-`/`delete-smart-mailbox` edit `SyncedSmartMailboxes.plist` directly — a running Mail may not show a new one until relaunched, and can overwrite plist edits it didn't make. Quit Mail first. Reading them needs Full Disk Access for the Node runtime |
 | Very large mailboxes not searchable *via AppleScript* | Apple Mail's AppleScript bridge times out on mailboxes with tens of thousands of messages, so unscoped `search-messages` skips mailboxes above `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default 5000) and reports them as a partial result. Scope with `mailbox` + a date window — or configure the [IMAP backend](#imap-backend--opt-in), which searches these server-side in well under a second. ([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)) |
 | Can't delete/rename server-side mailboxes or mutate drafts *via AppleScript* | Mail.app's AppleScript bridge can only `delete`/`rename` **local "On My Mac"** mailboxes and cannot delete/move drafts — it throws `AppleEvent handler failed` for IMAP/Gmail/Workspace/iCloud/Exchange mailboxes (the GUI can do it). Without IMAP configured, `delete-mailbox`/`rename-mailbox`/`delete-message`/`move-message` return a clear "do it in Mail.app directly" error instead of a generic failure. With the [IMAP backend](#imap-backend--opt-in) configured for the account, these operations run via IMAP and succeed. ([#42](https://github.com/sweetrb/apple-mail-mcp/issues/42)) |
 | Message ID format | Message IDs must be numeric (AppleScript ids) or `imap:…` tokens from the IMAP read path (validated by schema) |
@@ -1385,14 +1399,16 @@ The `\\\\` in JSON becomes `\\` in the actual string, which represents a single 
 
 ## Development
 
+This repo is **pnpm-only** — `package.json`'s `preinstall` guard hard-fails an `npm install`, because npm resolves off-lockfile and the committed bundle would then mismatch CI.
+
 ```bash
-npm install            # Install dependencies
-npm run build          # Typecheck, then bundle src/index.ts + src/cli.ts into build/ (esbuild)
-npm test               # Run unit tests
-npm run test:integration  # Run integration tests (requires Mail.app)
-npm run test:all       # Run all tests (unit + integration)
-npm run lint           # Check code style
-npm run format         # Format code
+corepack enable && pnpm install --frozen-lockfile   # Install dependencies
+pnpm run build             # Typecheck, then bundle src/index.ts + src/cli.ts into build/ (esbuild)
+pnpm test                  # Run unit tests
+pnpm run test:integration  # Run integration tests (requires Mail.app)
+pnpm run test:all          # Run all tests (unit + integration)
+pnpm run lint              # Check code style
+pnpm run format            # Format code
 ```
 
 ---
