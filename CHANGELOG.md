@@ -1,13 +1,3 @@
-## [2.10.0] - 2026-08-03
-
-### Added
-- **Flag COLORS now work over IMAP — `resolve-message-id` is no longer needed for them.** Apple Mail stores a flag's color as the custom IMAP keywords `$MailFlagBit0/1/2`, a plain 3-bit field holding the 0–6 palette index. It is not carried by `\Flagged` (which really is colorless), but the bits ride alongside it in an ordinary `UID STORE`, so color is fully readable **and writable** over IMAP. `flag-message` and `batch-flag-messages` now apply the requested color on the IMAP route instead of reporting `colorApplied: false`, and reads expose `flagColorIndex`. Encoding verified against live Mail.app state: green (3) = bit0+bit1, blue (4) = bit2, purple (5) = bit0+bit2.
-
-  This removes the last Mail.app dependency from color-keyed workflows. Previously a smart mailbox keyed on flag color could never match an IMAP-flagged message, so applying a color meant resolving to a numeric id and going through AppleScript — which needs Mail.app running, responsive, and holding a TCC Automation grant, and fails as an opaque 10s timeout when it is not.
-
-### Fixed
-- **Unflagging over IMAP now clears the color bits too.** Removing only `\Flagged` left `$MailFlagBitN` set, so a message read as unflagged over IMAP while Mail.app kept rendering it color-flagged until it resynced. Re-flagging in a different color also clears the bits it does not want, so the new color replaces the old index rather than OR-ing into a wrong one.
-
 ## [Unreleased]
 
 ### Added
@@ -23,6 +13,21 @@
 
 ### Security
 - **Moved both dev-only `brace-expansion` paths onto their complete fixes for GHSA-mh99-v99m-4gvg / CVE-2026-14257 (high)** — `1.1.18` on the v1 line and `5.0.9` on the v5 line. The two majors are floored independently because they are not API-compatible: ESLint reaches `brace-expansion` through `minimatch@3.1.5`, which requires the v1 CommonJS API, so forcing the v5 line the advisory names as patched into that path fails with `expand is not a function`; the upstream v1 backport is the only fix that applies without crossing that boundary. `minimatch@10.2.6` reaches the v5 line independently. Both floors are written as two-sided ranges (`>=1.0.0 <1.1.18`, `>=5.0.0 <5.0.9`) — a bare `<5.0.9` also matches `1.1.18` under semver and would drag the CommonJS path onto v5. The advisory's own first-patched versions (`1.1.17` / `5.0.8`) are **not sufficient**: they bound the accumulator in `combine` but never thread `maxLength` into `expandSequence`, leaving the sequence path (`{1..N}`, `{a..z..k}`) capped only by item count, so a padded sequence still materialises ~100,000 intermediate strings before the outer bound truncates (measured 4,606 ms / 176 MB RSS on `1.1.17` vs 9 ms / 61 MB on `1.1.18`, identical final output). `1.1.18` and `5.0.9` add the missing bound. Both were adopted only after clearing this repo's 24-hour `minimumReleaseAge` supply-chain gate, with no `minimumReleaseAgeExclude` carve-out and no audit suppression — `pnpm audit` will keep reporting the advisory until GitHub's metadata (which still lists `5.0.8` as first-patched, and so marks the entire v1 line vulnerable under semver) catches up. Dev toolchain only: `brace-expansion` is not in the shipped bundle, so the published package is unaffected, the committed bundle is byte-identical, and no version bump is owed. Thanks to @jjoanna2-debug (#119, #121, #123).
+
+## [2.10.1] - 2026-08-03
+
+### Fixed
+- **Corrected the flag-color documentation and response that still said colors don't work over IMAP.** 2.10.0 made `flag-message` and `batch-flag-messages` write the color over IMAP as Mail.app's `$MailFlagBit0/1/2` keywords, but several places kept describing the old behavior, and one of them was not merely stale text: on the IMAP route `flag-message` returned `colorApplied: false` and the message `the "<color>" color was not applied — this is an IMAP-routed message and IMAP flags are colorless`, while in fact applying it. A caller checking `colorApplied` was told the opposite of what happened. Also corrected: the `color` parameter description, the `batch-flag-messages` tool description, the README's "Flag colors" note and its `batch-flag-messages` parameter row, and two source comments implying `resolve-message-id` is still required for color. This matters beyond tidiness — an agent reading those descriptions would resolve `imap:` ids to numeric ones purely to get a color, reintroducing the AppleScript/TCC dependency that 2.10.0 removed and that previously killed four consecutive scheduled jobs.
+
+## [2.10.0] - 2026-08-03
+
+### Added
+- **Flag COLORS now work over IMAP — `resolve-message-id` is no longer needed for them.** Apple Mail stores a flag's color as the custom IMAP keywords `$MailFlagBit0/1/2`, a plain 3-bit field holding the 0–6 palette index. It is not carried by `\Flagged` (which really is colorless), but the bits ride alongside it in an ordinary `UID STORE`, so color is fully readable **and writable** over IMAP. `flag-message` and `batch-flag-messages` now apply the requested color on the IMAP route instead of reporting `colorApplied: false`, and reads expose `flagColorIndex`. Encoding verified against live Mail.app state: green (3) = bit0+bit1, blue (4) = bit2, purple (5) = bit0+bit2.
+
+  This removes the last Mail.app dependency from color-keyed workflows. Previously a smart mailbox keyed on flag color could never match an IMAP-flagged message, so applying a color meant resolving to a numeric id and going through AppleScript — which needs Mail.app running, responsive, and holding a TCC Automation grant, and fails as an opaque 10s timeout when it is not.
+
+### Fixed
+- **Unflagging over IMAP now clears the color bits too.** Removing only `\Flagged` left `$MailFlagBitN` set, so a message read as unflagged over IMAP while Mail.app kept rendering it color-flagged until it resynced. Re-flagging in a different color also clears the bits it does not want, so the new color replaces the old index rather than OR-ing into a wrong one.
 
 ## [2.9.1] - 2026-07-29
 

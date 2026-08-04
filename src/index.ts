@@ -145,7 +145,7 @@ const FLAG_COLOR_SCHEMA = z
   .enum(["red", "orange", "yellow", "green", "blue", "purple", "gray", "grey"])
   .optional()
   .describe(
-    "Optional flag color (Apple Mail palette: red, orange, yellow, green, blue, purple, gray — 'grey' accepted). Omit for Mail's default flag. Colors are applied via Mail.app (AppleScript); for an IMAP-routed message id the flag is set but the color is not applied (IMAP flags are colorless)."
+    "Optional flag color (Apple Mail palette: red, orange, yellow, green, blue, purple, gray — 'grey' accepted). Omit for Mail's default flag. The color is applied on both routes: AppleScript sets the flag index, and IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads — so a smart mailbox keyed on flag color matches either way."
   );
 
 /** Date filter strings must look like natural-language dates (e.g. "March 1, 2026").
@@ -1341,12 +1341,11 @@ server.registerTool(
               ...(color ? { color, colorApplied: true } : {}),
             })
           : errorResponse(`Failed to flag message "${id}"`),
-      // IMAP path: the flag is set, but flag colors are a Mail.app-only feature.
-      ok: color
-        ? `Message flagged. Note: the "${color}" color was not applied — this is an IMAP-routed message and IMAP flags are colorless.`
-        : "Message flagged",
+      // IMAP path: imapFlagMessage writes the color as $MailFlagBit0/1/2 keywords,
+      // so the outcome matches the AppleScript route above.
+      ok: color ? `Message flagged (${color})` : "Message flagged",
       fail: `Failed to flag message "${id}"`,
-      structured: color ? { ok: true, id, color, colorApplied: false } : { ok: true, id },
+      structured: color ? { ok: true, id, color, colorApplied: true } : { ok: true, id },
     });
   }, "Error flagging message")
 );
@@ -1588,7 +1587,7 @@ server.registerTool(
   "batch-flag-messages",
   {
     description:
-      "Use when: flagging multiple messages (1–100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: flag colors are applied via Mail.app (AppleScript); any IMAP-routed ids in the batch are flagged but not colored (IMAP flags are colorless).",
+      "Use when: flagging multiple messages (1–100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: the color is applied on both routes — AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads — so a mixed batch of numeric and `imap:` ids all end up colored.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
       color: FLAG_COLOR_SCHEMA,
