@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [2.10.5] - 2026-08-05
+### Changed
+- Dependency bump via Dependabot; committed bundle rebuilt. (automated)
+
 ### Security
 - **Floored `hono` to `^4.12.34`, clearing GHSA-8j4g-w8fx-2239 (moderate) — the last open advisory on this repo.** 2.10.2 deliberately left this one out: the fix release was still inside the 24-hour `minimumReleaseAge` supply-chain soak, missing the cutoff by 41 minutes, and `pnpm install` refused it with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`. No `minimumReleaseAgeExclude` carve-out was added then and none was added now — the soak is the point, and `hono` has **0 references in `build/index.js`**, so nothing vulnerable shipped while it waited. It matured at 2026-08-04T02:36:40Z. `pnpm audit` now reports **no known vulnerabilities**. The committed bundle is byte-identical, so no version bump is owed.
 
