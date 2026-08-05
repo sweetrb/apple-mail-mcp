@@ -23224,9 +23224,9 @@ var require_pino = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/logger.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/logger.js
 var require_logger = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/logger.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/logger.js"(exports, module) {
     "use strict";
     var logger = require_pino()();
     logger.level = "trace";
@@ -48419,9 +48419,9 @@ var require_mailsplit = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/limited-passthrough.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/limited-passthrough.js
 var require_limited_passthrough = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LimitedPassthrough = class extends Transform {
@@ -48455,12 +48455,31 @@ var require_limited_passthrough = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-stream.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/limits.js
+var require_limits = __commonJS({
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
+    "use strict";
+    var MAX_LITERAL_SIZE = 1024 * 1024 * 1024;
+    var MAX_LINE_SIZE = MAX_LITERAL_SIZE;
+    var normalizeLimit = (value, defaultValue) => Number.isInteger(value) && value >= 0 ? value : defaultValue;
+    var createLiteralTooLargeError = (literalSize, maxSize, reason) => {
+      const err = new Error(`Literal size ${literalSize} exceeds ${reason || `maximum allowed size of ${maxSize} bytes`}`);
+      err.code = "LiteralTooLarge";
+      err.literalSize = literalSize;
+      err.maxSize = maxSize;
+      return err;
+    };
+    module.exports = { MAX_LITERAL_SIZE, MAX_LINE_SIZE, normalizeLimit, createLiteralTooLargeError };
+  }
+});
+
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-stream.js
 var require_imap_stream = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var logger = require_logger();
+    var { MAX_LITERAL_SIZE, MAX_LINE_SIZE, normalizeLimit, createLiteralTooLargeError } = require_limits();
     var LINE = 1;
     var LITERAL = 2;
     var LF = 10;
@@ -48469,8 +48488,6 @@ var require_imap_stream = __commonJS({
     var NUM_9 = 57;
     var CURLY_OPEN = 123;
     var CURLY_CLOSE = 125;
-    var MAX_LITERAL_SIZE = 1024 * 1024 * 1024;
-    var MAX_LINE_SIZE = MAX_LITERAL_SIZE;
     var ImapStream = class extends Transform {
       /**
        * Creates a new ImapStream instance.
@@ -48483,10 +48500,15 @@ var require_imap_stream = __commonJS({
        * @param {number} [options.maxLineLength] - Maximum allowed length (in bytes) of a single
        *   line (a response without a literal). Defaults to MAX_LITERAL_SIZE (1GB). Guards against a
        *   malicious or broken server that never sends a line terminator, which would otherwise grow
-       *   the internal line buffer without bound.
+       *   the internal line buffer without bound. The line terminator counts toward the limit, and a
+       *   line exactly at the limit is accepted. Exceeding it is terminal: the stream is destroyed
+       *   with a `LineTooLarge` error and no further input is parsed.
        * @param {number} [options.maxLiteralSize] - Maximum allowed size (in bytes) of a single
        *   literal block. Defaults to MAX_LITERAL_SIZE (1GB). Lower it to bound peak memory
-       *   allocation against a malicious or broken server announcing an oversized literal.
+       *   allocation against a malicious or broken server announcing an oversized literal. A literal
+       *   exactly at the limit is accepted. Exceeding it is terminal: the stream is destroyed with a
+       *   `LiteralTooLarge` error, the marker line is not emitted, and no byte of the rejected
+       *   literal body is parsed as protocol.
        */
       constructor(options) {
         super({
@@ -48501,8 +48523,8 @@ var require_imap_stream = __commonJS({
           cid: this.cid
         });
         this.readBytesCounter = 0;
-        this.maxLineLength = Number.isInteger(this.options.maxLineLength) && this.options.maxLineLength >= 0 ? this.options.maxLineLength : MAX_LINE_SIZE;
-        this.maxLiteralSize = Number.isInteger(this.options.maxLiteralSize) && this.options.maxLiteralSize >= 0 ? this.options.maxLiteralSize : MAX_LITERAL_SIZE;
+        this.maxLineLength = normalizeLimit(this.options.maxLineLength, MAX_LINE_SIZE);
+        this.maxLiteralSize = normalizeLimit(this.options.maxLiteralSize, MAX_LITERAL_SIZE);
         this.state = LINE;
         this.literalWaiting = 0;
         this.inputBuffer = [];
@@ -48514,6 +48536,47 @@ var require_imap_stream = __commonJS({
         this.secureConnection = this.options.secureConnection;
         this.processingInput = false;
         this.inputQueue = [];
+        this.activeInput = null;
+        this.pendingPush = null;
+      }
+      /**
+       * Terminally fails the stream. Used for response limit violations and for any other
+       * error raised while parsing.
+       *
+       * The stream is destroyed instead of only emitting `error`: emitting on a Transform leaves
+       * it running, so the caller would keep scanning the rejected payload and could emit it as
+       * protocol (an oversized literal body contains attacker-chosen CRLF delimited lines).
+       * Destroying stops all parsing, drops the offending line, and releases every queued
+       * transform callback exactly once (see `_destroy()`).
+       *
+       * `destroyed` (set synchronously by destroy()) is the single liveness flag every other path
+       * checks, so a second failure attempt is a no-op and nothing is parsed after the first.
+       *
+       * @param {Error} err - The error to destroy the stream with.
+       * @returns {boolean} Always false, so callers can `return this.failStream(err)`.
+       */
+      failStream(err) {
+        if (this.destroyed) {
+          return false;
+        }
+        this.destroy(err);
+        return false;
+      }
+      /**
+       * Releases a queued input chunk's transform callback exactly once, signalling the writable
+       * side that the chunk was consumed. The mirror image of ImapFlow's releaseStreamData(), which
+       * releases the readable items this stream pushes downstream.
+       *
+       * @param {Object} item - Queue entry holding the chunk and its transform callback.
+       */
+      releaseInput(item) {
+        if (!item || item.released) {
+          return;
+        }
+        item.released = true;
+        if (typeof item.next === "function") {
+          item.next();
+        }
       }
       /**
        * Checks whether the given line buffer ends with an IMAP literal size marker
@@ -48550,12 +48613,7 @@ var require_imap_stream = __commonJS({
           if (c === CURLY_OPEN && numBytes.length) {
             const literalSize = Number(Buffer.from(numBytes).toString());
             if (literalSize > this.maxLiteralSize) {
-              const err = new Error(`Literal size ${literalSize} exceeds maximum allowed size of ${this.maxLiteralSize} bytes`);
-              err.code = "LiteralTooLarge";
-              err.literalSize = literalSize;
-              err.maxSize = this.maxLiteralSize;
-              this.emit("error", err);
-              return false;
+              return this.failStream(createLiteralTooLargeError(literalSize, this.maxLiteralSize));
             }
             this.state = LITERAL;
             this.literalWaiting = literalSize;
@@ -48564,6 +48622,24 @@ var require_imap_stream = __commonJS({
           return false;
         }
         return false;
+      }
+      /**
+       * Enforces the configured line-length cap for a projected line length. The projected length
+       * covers every byte of the line, the line terminator included, whether or not the line was
+       * split across input chunks. A line exactly at the limit is accepted.
+       *
+       * @param {number} lineLength - Total length the current line would reach.
+       * @returns {boolean} True if the line is within the limit, false if the stream was failed.
+       */
+      checkLineLength(lineLength) {
+        if (lineLength <= this.maxLineLength) {
+          return true;
+        }
+        const err = new Error(`Line length ${lineLength} exceeds maximum allowed size of ${this.maxLineLength} bytes`);
+        err.code = "LineTooLarge";
+        err.lineLength = lineLength;
+        err.maxSize = this.maxLineLength;
+        return this.failStream(err);
       }
       /**
        * Processes a single input chunk of raw data. In LINE state, scans for LF-terminated
@@ -48577,7 +48653,7 @@ var require_imap_stream = __commonJS({
        */
       async processInputChunk(chunk, startPos) {
         startPos = startPos || 0;
-        if (startPos >= chunk.length) {
+        if (this.destroyed || startPos >= chunk.length) {
           return;
         }
         switch (this.state) {
@@ -48585,13 +48661,21 @@ var require_imap_stream = __commonJS({
             let lineStart = startPos;
             for (let i = startPos, len = chunk.length; i < len; i++) {
               if (chunk[i] === LF) {
-                this.lineBuffer.push(chunk.slice(lineStart, i + 1));
+                let segment = chunk.slice(lineStart, i + 1);
+                if (!this.checkLineLength(this.lineBytes + segment.length)) {
+                  return;
+                }
+                this.lineBuffer.push(segment);
                 lineStart = i + 1;
-                let line = Buffer.concat(this.lineBuffer);
-                this.inputBuffer.push(line);
+                let line = this.lineBuffer.length === 1 ? this.lineBuffer[0] : Buffer.concat(this.lineBuffer);
                 this.lineBuffer = [];
                 this.lineBytes = 0;
-                if (this.checkLiteralMarker(line)) {
+                let isLiteralMarker = this.checkLiteralMarker(line);
+                if (this.destroyed) {
+                  return;
+                }
+                this.inputBuffer.push(line);
+                if (isLiteralMarker) {
                   return await this.processInputChunk(chunk, lineStart);
                 }
                 let payload = this.inputBuffer.length === 1 ? this.inputBuffer[0] : Buffer.concat(this.inputBuffer);
@@ -48609,24 +48693,23 @@ var require_imap_stream = __commonJS({
                   if (payload.length) {
                     let trailingAfterLine = lineStart < chunk.length || this.inputQueue.length > 0;
                     await new Promise((resolve2) => {
+                      this.pendingPush = resolve2;
                       this.push({ payload, literals, next: resolve2, trailingAfterLine });
                     });
+                    this.pendingPush = null;
+                    if (this.destroyed) {
+                      return;
+                    }
                   }
                 }
               }
             }
             if (lineStart < chunk.length) {
               let tail = chunk.slice(lineStart);
-              let lineLength = this.lineBytes + tail.length;
-              if (lineLength > this.maxLineLength) {
-                const err = new Error(`Line length ${lineLength} exceeds maximum allowed size of ${this.maxLineLength} bytes`);
-                err.code = "LineTooLarge";
-                err.lineLength = lineLength;
-                err.maxSize = this.maxLineLength;
-                this.emit("error", err);
+              if (!this.checkLineLength(this.lineBytes + tail.length)) {
                 return;
               }
-              this.lineBytes = lineLength;
+              this.lineBytes += tail.length;
               this.lineBuffer.push(tail);
             }
             break;
@@ -48659,9 +48742,11 @@ var require_imap_stream = __commonJS({
       async processInput() {
         let data;
         let processedCount = 0;
-        while (data = this.inputQueue.shift()) {
+        while (!this.destroyed && (data = this.inputQueue.shift())) {
+          this.activeInput = data;
           await this.processInputChunk(data.chunk);
-          data.next();
+          this.activeInput = null;
+          this.releaseInput(data);
           processedCount++;
           if (processedCount % 10 === 0) {
             await new Promise((resolve2) => setImmediate(resolve2));
@@ -48695,10 +48780,13 @@ var require_imap_stream = __commonJS({
             cid: this.cid
           });
         }
+        if (this.destroyed) {
+          return next();
+        }
         this.inputQueue.push({ chunk, next });
         if (!this.processingInput) {
           this.processingInput = true;
-          this.processInput().catch((err) => this.emit("error", err)).finally(() => this.processingInput = false);
+          this.processInput().catch((err) => this.failStream(err)).finally(() => this.processingInput = false);
         }
       }
       /**
@@ -48722,11 +48810,15 @@ var require_imap_stream = __commonJS({
         this.lineBytes = 0;
         this.literalBuffer = [];
         this.literals = [];
+        if (typeof this.pendingPush === "function") {
+          const resolve2 = this.pendingPush;
+          this.pendingPush = null;
+          resolve2();
+        }
+        this.releaseInput(this.activeInput);
+        this.activeInput = null;
         while (this.inputQueue.length) {
-          const item = this.inputQueue.shift();
-          if (typeof item.next === "function") {
-            item.next();
-          }
+          this.releaseInput(this.inputQueue.shift());
         }
         callback(err);
       }
@@ -48735,9 +48827,9 @@ var require_imap_stream = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-formal-syntax.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-formal-syntax.js
 var require_imap_formal_syntax = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
     "use strict";
     function expandRange(start, end) {
       let chars = [];
@@ -48881,11 +48973,12 @@ var require_imap_formal_syntax = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/token-parser.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/token-parser.js
 var require_token_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
+    var { MAX_LITERAL_SIZE, normalizeLimit, createLiteralTooLargeError } = require_limits();
     var STATE_ATOM = 1;
     var STATE_LITERAL = 2;
     var STATE_NORMAL = 3;
@@ -48905,11 +48998,14 @@ var require_token_parser = __commonJS({
        * @param {Object} [options] - Parser options.
        * @param {boolean} [options.literalPlus] - Whether the LITERAL+ extension is in use.
        * @param {Array<Buffer>} [options.literals] - Pre-parsed literal values from the input stream.
+       * @param {number} [options.maxLiteralSize] - Maximum size (in bytes) of a literal parsed inline
+       *   from the input, i.e. when no pre-parsed literal buffers were supplied. Defaults to 1GB.
        */
       constructor(parent, startPos, str2, options) {
         this.str = (str2 || "").toString();
         this.options = options || {};
         this.parent = parent;
+        this.maxLiteralSize = normalizeLimit(this.options.maxLiteralSize, MAX_LITERAL_SIZE);
         this.tree = this.currentNode = this.createNode();
         this.pos = startPos || 0;
         this.currentNode.type = "TREE";
@@ -49319,6 +49415,9 @@ var require_token_parser = __commonJS({
                 }
                 this.currentNode.literalLength = Number(this.currentNode.literalLength);
                 if (!this.currentNode.literalLength) {
+                  if (this.options.literals && this.options.literals.length) {
+                    this.currentNode.value = this.options.literals.shift();
+                  }
                   this.currentNode.endPos = this.pos + i;
                   this.currentNode.isClosed = true;
                   this.currentNode = this.currentNode.parentNode;
@@ -49333,6 +49432,18 @@ var require_token_parser = __commonJS({
                   this.state = STATE_NORMAL;
                   checkSP();
                 } else {
+                  let available = this.str.length - i - 1;
+                  let literalLength = this.currentNode.literalLength;
+                  if (literalLength > this.maxLiteralSize || literalLength > available) {
+                    let overMax = literalLength > this.maxLiteralSize;
+                    let error2 = createLiteralTooLargeError(
+                      literalLength,
+                      overMax ? this.maxLiteralSize : available,
+                      overMax ? null : `the ${available} bytes available in the input`
+                    );
+                    error2.parserContext = { input: this.str, pos: this.pos + i, chr };
+                    throw error2;
+                  }
                   this.currentNode.started = true;
                   this.currentNode.chBuffer = Buffer.alloc(this.currentNode.literalLength);
                   this.currentNode.chPos = 0;
@@ -49431,9 +49542,9 @@ var require_token_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/parser-instance.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/parser-instance.js
 var require_parser_instance = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { TokenParser } = require_token_parser();
@@ -49620,9 +49731,9 @@ var require_parser_instance = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-parser.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-parser.js
 var require_imap_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { ParserInstance } = require_parser_instance();
@@ -49677,9 +49788,9 @@ var require_imap_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-compiler.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-compiler.js
 var require_imap_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var formatRespEntry = (entry, returnEmpty) => {
@@ -49757,9 +49868,9 @@ var require_imap_compiler = __commonJS({
             if (isLogging) {
               resp.push(formatRespEntry('"(* ' + node.value.length + 'B literal *)"'));
             } else {
-              let literalLength = !node.value ? 0 : Math.max(node.value.length, 0);
-              let canAppend = !asArray || literalPlus || literalMinus && literalLength <= 4096;
-              let usePlus = canAppend && (literalMinus || literalPlus);
+              let literalLength = !node.value ? 0 : Buffer.isBuffer(node.value) ? node.value.length : Buffer.byteLength(node.value.toString());
+              let usePlus = literalPlus || literalMinus && literalLength <= 4096;
+              let canAppend = !asArray || usePlus;
               resp.push(formatRespEntry(`${node.isLiteral8 ? "~" : ""}{${literalLength}${usePlus ? "+" : ""}}\r
 `));
               if (canAppend) {
@@ -49827,9 +49938,9 @@ var require_imap_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-handler.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-handler.js
 var require_imap_handler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
     "use strict";
     var parser = require_imap_parser();
     var compiler = require_imap_compiler();
@@ -49840,20 +49951,22 @@ var require_imap_handler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/package.json
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/package.json
 var require_package4 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/package.json"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/package.json"(exports, module) {
     module.exports = {
       name: "imapflow",
-      version: "1.4.8",
+      version: "1.6.3",
       description: "IMAP Client for Node",
       main: "lib/imap-flow.js",
       types: "lib/imap-flow.d.ts",
       scripts: {
         test: "grunt",
         coverage: "c8 --reporter=text --reporter=html npx nodeunit test/*-test.js",
+        "test:rev2": "bash test/integration/run-rev2-tests.sh",
         update: "rm -rf node_modules package-lock.json && ncu -u && npm install",
         format: 'prettier --write "**/*.{js,json,md,yml,yaml}" --ignore-path .prettierignore',
+        "format:check": 'prettier --check "**/*.{js,json,md,yml,yaml}" --ignore-path .prettierignore',
         lint: "eslint ."
       },
       repository: {
@@ -49873,16 +49986,16 @@ var require_package4 = __commonJS({
       homepage: "https://imapflow.com/",
       devDependencies: {
         "@eslint/js": "10.0.1",
-        "@types/node": "26.1.1",
+        "@types/node": "26.1.2",
         c8: "12.0.0",
-        eslint: "10.7.0",
+        eslint: "10.8.0",
         "eslint-config-nodemailer": "1.2.0",
         "eslint-config-prettier": "10.1.8",
         grunt: "1.6.2",
         "grunt-cli": "1.5.0",
         "grunt-contrib-nodeunit": "5.0.0",
         "grunt-eslint": "26.0.0",
-        prettier: "3.9.5",
+        prettier: "3.9.6",
         proxyquire: "^2.1.3",
         typescript: "7.0.2"
       },
@@ -49893,7 +50006,6 @@ var require_package4 = __commonJS({
         libbase64: "1.3.0",
         libmime: "5.4.1",
         libqp: "2.1.1",
-        nodemailer: "9.0.3",
         pino: "10.3.1",
         socks: "2.8.9"
       }
@@ -51268,9 +51380,9 @@ var require_util3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/address-error.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/address-error.js
 var require_address_error = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/address-error.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/address-error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.AddressError = void 0;
@@ -51285,15 +51397,16 @@ var require_address_error = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/common.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/common.js
 var require_common = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/common.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/common.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.isInSubnet = isInSubnet;
     exports.isHostInSubnet = isHostInSubnet;
     exports.isCorrect = isCorrect;
     exports.prefixLengthFromMask = prefixLengthFromMask;
+    exports.assertByteArray = assertByteArray;
     exports.numberToPaddedHex = numberToPaddedHex;
     exports.stringToPaddedHex = stringToPaddedHex;
     exports.testBit = testBit;
@@ -51308,7 +51421,7 @@ var require_common = __commonJS({
       return this.mask(address.subnetMask) === address.mask();
     }
     function isCorrect(defaultBits) {
-      return function() {
+      return function isCorrectForm() {
         if (this.addressMinusSuffix !== this.correctForm()) {
           return false;
         }
@@ -51332,6 +51445,16 @@ var require_common = __commonJS({
       }
       return firstZero;
     }
+    function assertByteArray(bytes, byteCount, family, minimum) {
+      if (bytes.length !== byteCount) {
+        throw new address_error_1.AddressError(`${family} addresses require exactly ${byteCount} bytes`);
+      }
+      for (let i = 0; i < bytes.length; i++) {
+        if (!Number.isInteger(bytes[i]) || bytes[i] < minimum || bytes[i] > 255) {
+          throw new address_error_1.AddressError(`All bytes must be integers between ${minimum} and 255`);
+        }
+      }
+    }
     function numberToPaddedHex(number3) {
       return number3.toString(16).padStart(2, "0");
     }
@@ -51349,9 +51472,9 @@ var require_common = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/v4/constants.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v4/constants.js
 var require_constants3 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/v4/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v4/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RE_SUBNET_STRING = exports.RE_ADDRESS = exports.GROUPS = exports.BITS = void 0;
@@ -51362,9 +51485,9 @@ var require_constants3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/ipv4.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv4.js
 var require_ipv4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/ipv4.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv4.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -51436,7 +51559,7 @@ var require_ipv4 = __commonJS({
         try {
           new _Address4(address);
           return true;
-        } catch (e) {
+        } catch {
           return false;
         }
       }
@@ -51686,7 +51809,7 @@ var require_ipv4 = __commonJS({
        * @returns {Address4}
        */
       static fromBigInt(bigInt) {
-        if (bigInt < 0n || bigInt > 0xffffffffn) {
+        if (bigInt < BigInt(0) || bigInt > BigInt(4294967295)) {
           throw new address_error_1.AddressError("IPv4 BigInt must be in the range 0 to 2**32 - 1");
         }
         return _Address4.fromHex(bigInt.toString(16).padStart(8, "0"));
@@ -51699,14 +51822,7 @@ var require_ipv4 = __commonJS({
        * @returns {Address4}
        */
       static fromByteArray(bytes) {
-        if (bytes.length !== 4) {
-          throw new address_error_1.AddressError("IPv4 addresses require exactly 4 bytes");
-        }
-        for (let i = 0; i < bytes.length; i++) {
-          if (!Number.isInteger(bytes[i]) || bytes[i] < 0 || bytes[i] > 255) {
-            throw new address_error_1.AddressError("All bytes must be integers between 0 and 255");
-          }
-        }
+        common.assertByteArray(bytes, 4, "IPv4", 0);
         return this.fromUnsignedByteArray(bytes);
       }
       /**
@@ -51838,9 +51954,9 @@ var require_ipv4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/v6/constants.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/constants.js
 var require_constants4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/v6/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RE_URL_WITH_PORT = exports.RE_URL = exports.RE_ZONE_STRING = exports.RE_SUBNET_STRING = exports.RE_BAD_ADDRESS = exports.RE_BAD_CHARACTERS = exports.TYPES = exports.SCOPES = exports.GROUPS = exports.BITS = void 0;
@@ -51895,9 +52011,9 @@ var require_constants4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/v6/helpers.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/helpers.js
 var require_helpers = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/v6/helpers.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/helpers.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.escapeHtml = escapeHtml;
@@ -51934,9 +52050,9 @@ var require_helpers = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/v6/regular-expressions.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/regular-expressions.js
 var require_regular_expressions = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52026,9 +52142,9 @@ var require_regular_expressions = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/ipv6.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv6.js
 var require_ipv6 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/ipv6.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv6.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52153,7 +52269,7 @@ var require_ipv6 = __commonJS({
         try {
           new _Address6(address);
           return true;
-        } catch (e) {
+        } catch {
           return false;
         }
       }
@@ -52168,7 +52284,7 @@ var require_ipv6 = __commonJS({
        * address.correctForm(); // '::e8:d4a5:1000'
        */
       static fromBigInt(bigInt) {
-        if (bigInt < 0n || bigInt > (1n << BigInt(constants6.BITS)) - 1n) {
+        if (bigInt < BigInt(0) || bigInt > (BigInt(1) << BigInt(constants6.BITS)) - BigInt(1)) {
           throw new address_error_1.AddressError("IPv6 BigInt must be in the range 0 to 2**128 - 1");
         }
         const hex = bigInt.toString(16).padStart(32, "0");
@@ -52189,6 +52305,7 @@ var require_ipv6 = __commonJS({
        * addressAndPort.port; // 8080
        */
       static fromURL(url) {
+        var _a;
         let host;
         let port = null;
         let result;
@@ -52213,7 +52330,7 @@ var require_ipv6 = __commonJS({
               port: null
             };
           }
-          host = result[1] ?? result[2];
+          host = (_a = result[1]) !== null && _a !== void 0 ? _a : result[2];
         }
         if (port) {
           port = parseInt(port, 10);
@@ -52834,7 +52951,14 @@ var require_ipv6 = __commonJS({
           bits = prefixBits.slice(0, 96) + v4Bits;
         } else {
           const beforeU = 64 - pl;
-          bits = prefixBits.slice(0, pl) + v4Bits.slice(0, beforeU) + "00000000" + v4Bits.slice(beforeU) + "0".repeat(128 - 72 - (32 - beforeU));
+          bits = [
+            prefixBits.slice(0, pl),
+            v4Bits.slice(0, beforeU),
+            // Bits 64 to 71 are the reserved u octet and are always zero.
+            "00000000",
+            v4Bits.slice(beforeU),
+            "0".repeat(128 - 72 - (32 - beforeU))
+          ].join("");
         }
         const hex = BigInt(`0b${bits}`).toString(16).padStart(32, "0");
         const groups = [];
@@ -52900,19 +53024,28 @@ var require_ipv6 = __commonJS({
       /**
        * Convert a byte array to an Address6 object.
        *
+       * Accepts unsigned bytes (0 to 255) or signed bytes (-128 to 127, as an
+       * `Int8Array` or a Java `byte[]` holds them), folding signed values to their
+       * unsigned equivalent. Throws `AddressError` unless given exactly 16
+       * integers from -128 to 255.
+       *
        * To convert from a Node.js `Buffer`, spread it: `Address6.fromByteArray([...buf])`.
        * @returns {Address6}
        */
       static fromByteArray(bytes) {
+        common.assertByteArray(bytes, 16, "IPv6", -128);
         return this.fromUnsignedByteArray(bytes.map(unsignByte));
       }
       /**
        * Convert an unsigned byte array to an Address6 object.
        *
+       * Throws `AddressError` unless given exactly 16 integers from 0 to 255.
+       *
        * To convert from a Node.js `Buffer`, spread it: `Address6.fromUnsignedByteArray([...buf])`.
        * @returns {Address6}
        */
       static fromUnsignedByteArray(bytes) {
+        common.assertByteArray(bytes, 16, "IPv6", 0);
         const BYTE_MAX = BigInt("256");
         let result = BigInt("0");
         let multiplier = BigInt("1");
@@ -53243,9 +53376,9 @@ var require_ipv6 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/ip-address.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ip-address.js
 var require_ip_address = __commonJS({
-  "node_modules/.pnpm/ip-address@10.3.1/node_modules/ip-address/dist/ip-address.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ip-address.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -54152,20 +54285,129 @@ var require_build = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/proxy-connection.js
-var require_proxy_connection = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/connection-deadline.js
+var require_connection_deadline = __commonJS({
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
     "use strict";
-    var httpProxyClient = require_http_proxy_client();
+    var CONNECT_TIMEOUT = 90 * 1e3;
+    var ConnectionDeadline = class {
+      /**
+       * @param {Number} [timeout] Configured connection timeout in milliseconds. Normalized once
+       *   here; 0 and any other falsy or invalid value fall back to the 90 second default.
+       */
+      constructor(timeout) {
+        this.timeout = Number(timeout) || CONNECT_TIMEOUT;
+        this.startedAt = Date.now();
+      }
+      /**
+       * @returns {Number} Milliseconds left in the budget, never negative.
+       */
+      remaining() {
+        return Math.max(0, this.timeout - (Date.now() - this.startedAt));
+      }
+      /**
+       * @returns {Error} The shared `CONNECT_TIMEOUT` error.
+       */
+      error() {
+        let err = new Error("Failed to establish connection in required time");
+        err.code = "CONNECT_TIMEOUT";
+        err.details = { connectionTimeout: this.timeout };
+        return err;
+      }
+      /**
+       * Maps a dependency's own expiry onto the shared `CONNECT_TIMEOUT` shape, so callers see one
+       * timeout error whichever layer noticed first. The original error is kept as `_err`. Anything
+       * that is not a timeout is returned unchanged.
+       *
+       * @param {Error} err Error raised by a dependency during a connection phase.
+       * @returns {Error} Either the normalized timeout error or the original error.
+       */
+      normalize(err) {
+        if (!err || err.code === "CONNECT_TIMEOUT") {
+          return err;
+        }
+        if (err.code !== "ETIMEDOUT" && !/timed out/i.test(err.message || "")) {
+          return err;
+        }
+        let normalized = this.error();
+        normalized._err = err;
+        return normalized;
+      }
+      /**
+       * Throws before a phase is started if the budget is already used up, so no work is begun
+       * that could only ever time out.
+       */
+      check() {
+        if (!this.remaining()) {
+          throw this.error();
+        }
+      }
+      /**
+       * Races a phase against the remaining budget. The timer is always cleared, so a completed
+       * phase never leaves a pending timer behind.
+       *
+       * @param {Promise} promise Phase to run under the deadline.
+       * @returns {Promise<*>} Resolves with the phase result, rejects with `CONNECT_TIMEOUT`.
+       */
+      async race(promise) {
+        this.check();
+        let timer = null;
+        try {
+          return await Promise.race([
+            promise,
+            new Promise((resolve2, reject) => {
+              timer = setTimeout(() => reject(this.error()), this.remaining());
+            })
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    };
+    module.exports = { ConnectionDeadline, CONNECT_TIMEOUT };
+  }
+});
+
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/proxy-connection.js
+var require_proxy_connection = __commonJS({
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
+    "use strict";
     var { SocksClient } = require_build();
-    var util2 = __require("util");
-    var httpProxyClientAsync = util2.promisify(httpProxyClient);
     var dns = __require("dns").promises;
     var net = __require("net");
-    var hidePassword = (proxyUrl) => {
-      if (proxyUrl.password) {
-        proxyUrl.password = "(hidden)";
+    var tls = __require("tls");
+    var { ConnectionDeadline } = require_connection_deadline();
+    var MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
+    var DEFAULT_SOCKS_PORT = 1080;
+    var unbracketAddress = (host) => typeof host === "string" && host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+    var formatAuthority = (host, port) => {
+      let address = unbracketAddress(host);
+      return net.isIPv6(address) ? `[${address}]:${port}` : `${address}:${port}`;
+    };
+    var redactUrl = (proxyUrl) => {
+      let redacted = new URL(proxyUrl.href);
+      if (redacted.password) {
+        redacted.password = "(hidden)";
       }
+      return redacted.href;
+    };
+    var proxyError = (message, code) => {
+      let err = new Error(message);
+      err.code = code || "ProxyError";
+      return err;
+    };
+    var decodeUserInfo = (value) => {
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return value;
+      }
+    };
+    var stripProxyCredentials = (err) => {
+      if (err && typeof err === "object" && err.options) {
+        delete err.options;
+      }
+      return err;
     };
     var attachEarlyErrorHandler = (logger, socket) => {
       if (!socket || typeof socket.on !== "function") {
@@ -54182,108 +54424,232 @@ var require_proxy_connection = __commonJS({
         socket._earlyErrorHandler = null;
       }
     };
-    var proxyConnection = async (logger, connectionUrl, host, port) => {
+    var httpConnect = async ({ logger, proxyUrl, secureProxy, proxyHost, proxyPort, host, port, deadline }) => {
+      let destinationPort = Number(port) || 0;
+      if (!destinationPort || /[\r\n]/.test(host)) {
+        throw proxyError("Invalid proxy destination", "EPROXY");
+      }
+      let authority = formatAuthority(host, destinationPort);
+      let remaining = deadline.remaining();
+      if (!remaining) {
+        throw deadline.error();
+      }
+      let socket = null;
+      return await new Promise((resolve2, reject) => {
+        let settled = false;
+        let timer = null;
+        let headers = "";
+        const onSocketData = (chunk) => {
+          let searchFrom = Math.max(0, headers.length - 3);
+          headers += chunk.toString("binary");
+          let terminator = headers.indexOf("\r\n\r\n", searchFrom);
+          if (terminator < 0) {
+            if (headers.length > MAX_RESPONSE_HEADER_BYTES) {
+              fail(proxyError("Proxy response headers too large", "EPROXY"));
+            }
+            return;
+          }
+          socket.removeListener("data", onSocketData);
+          socket.pause();
+          let headerBytes = terminator + 4;
+          let consumedFromChunk = chunk.length - (headers.length - headerBytes);
+          if (consumedFromChunk < chunk.length) {
+            socket.unshift(chunk.subarray(consumedFromChunk));
+          }
+          headers = headers.slice(0, terminator);
+          let status = headers.match(/^HTTP\/\d+\.\d+ (\d+)/i);
+          if (!status || (status[1] || "").charAt(0) !== "2") {
+            return fail(proxyError(`Invalid response from proxy${status ? `: ${status[1]}` : ""}`, "EPROXY"));
+          }
+          succeed();
+        };
+        const cleanup = () => {
+          clearTimeout(timer);
+          timer = null;
+          if (socket) {
+            socket.removeListener("connect", onConnected);
+            socket.removeListener("data", onSocketData);
+            socket.removeListener("error", fail);
+            socket.removeListener("close", onEarlyClose);
+          }
+        };
+        function fail(err) {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          if (socket) {
+            socket.destroy();
+          }
+          reject(err);
+        }
+        function succeed() {
+          settled = true;
+          cleanup();
+          resolve2(socket);
+        }
+        function onEarlyClose() {
+          fail(proxyError("Proxy closed the connection before the tunnel was established", "EPROXY"));
+        }
+        timer = setTimeout(() => fail(deadline.error()), remaining);
+        let connectOptions = { host: proxyHost, port: proxyPort };
+        if (secureProxy) {
+          if (!net.isIP(proxyHost)) {
+            connectOptions.servername = proxyHost;
+          }
+        }
+        function onConnected() {
+          let requestHeaders = {
+            Host: authority,
+            Connection: "close"
+          };
+          if (proxyUrl.username || proxyUrl.password) {
+            let credentials = `${decodeUserInfo(proxyUrl.username)}:${decodeUserInfo(proxyUrl.password)}`;
+            requestHeaders["Proxy-Authorization"] = `Basic ${Buffer.from(credentials).toString("base64")}`;
+          }
+          socket.write(
+            `CONNECT ${authority} HTTP/1.1\r
+` + Object.keys(requestHeaders).map((key) => `${key}: ${requestHeaders[key]}`).join("\r\n") + "\r\n\r\n"
+          );
+          socket.on("data", onSocketData);
+        }
+        socket = secureProxy ? tls.connect(connectOptions, onConnected) : net.connect(connectOptions, onConnected);
+        socket.once("error", fail);
+        socket.once("close", onEarlyClose);
+      }).then((established) => {
+        logger.info({
+          msg: `Established a socket via HTTP proxy`,
+          proxyUrl: redactUrl(proxyUrl),
+          port,
+          host
+        });
+        attachEarlyErrorHandler(logger, established);
+        return established;
+      }).catch((err) => {
+        logger.error({
+          msg: "Failed to establish a socket via HTTP proxy",
+          proxyUrl: redactUrl(proxyUrl),
+          port,
+          host,
+          err
+        });
+        throw err;
+      });
+    };
+    var resolveIPv4 = async (hostname2, deadline) => {
+      let addresses = await deadline.race(dns.resolve4(hostname2));
+      if (!addresses || !addresses.length) {
+        throw proxyError(`Could not resolve an IPv4 address for ${hostname2}`, "EPROXY");
+      }
+      return addresses[0];
+    };
+    var socksConnect = async ({ logger, proxyUrl, protocol, proxyHost, proxyPort, host, port, deadline }) => {
+      let proxyType = protocol === "socks4" || protocol === "socks4a" ? 4 : 5;
+      let destinationHost = unbracketAddress(host);
+      try {
+        if (proxyType === 4) {
+          if (net.isIPv6(destinationHost)) {
+            throw proxyError(`SOCKS4 and SOCKS4a cannot address IPv6 destinations (${destinationHost})`, "UnsupportedProxyAddress");
+          }
+          if (protocol === "socks4" && !net.isIP(destinationHost)) {
+            destinationHost = await resolveIPv4(destinationHost, deadline);
+          }
+        }
+        let connectionOpts = {
+          proxy: {
+            // The endpoint is handed to net.Socket.connect() by the dependency, so a hostname
+            // is left unresolved and gets Node's normal lookup and connection behavior.
+            host: proxyHost,
+            port: proxyPort,
+            type: proxyType
+          },
+          destination: {
+            host: destinationHost,
+            port
+          },
+          command: "connect",
+          set_tcp_nodelay: true
+        };
+        if (proxyUrl.username || proxyUrl.password) {
+          connectionOpts.proxy.userId = proxyUrl.username;
+          connectionOpts.proxy.password = proxyUrl.password;
+        }
+        let remaining = deadline.remaining();
+        if (!remaining) {
+          throw deadline.error();
+        }
+        connectionOpts.timeout = remaining;
+        const info = await deadline.race(SocksClient.createConnection(connectionOpts));
+        if (!info || !info.socket) {
+          throw proxyError("SOCKS proxy did not return a socket", "EPROXY");
+        }
+        logger.info({
+          msg: "Established a socket via SOCKS proxy",
+          proxyUrl: redactUrl(proxyUrl),
+          port,
+          host
+        });
+        attachEarlyErrorHandler(logger, info.socket);
+        return info.socket;
+      } catch (caught) {
+        let err = deadline.normalize(stripProxyCredentials(caught));
+        stripProxyCredentials(err._err);
+        logger.error({
+          msg: "Failed to establish a socket via SOCKS proxy",
+          proxyUrl: redactUrl(proxyUrl),
+          port,
+          host,
+          err
+        });
+        throw err;
+      }
+    };
+    var proxyConnection = async (logger, connectionUrl, host, port, options) => {
+      options = options || {};
+      let deadline = options.deadline || new ConnectionDeadline(options.connectionTimeout);
+      deadline.check();
       let proxyUrl = new URL(connectionUrl);
       let protocol = proxyUrl.protocol.replace(/:$/, "").toLowerCase();
-      if (!net.isIP(host)) {
-        let resolveResult = await dns.resolve(host);
-        if (resolveResult && resolveResult.length) {
-          host = resolveResult[0];
-        }
-      }
+      let proxyHost = unbracketAddress(proxyUrl.hostname);
       switch (protocol) {
         // Connect using a HTTP CONNECT method
         case "http":
-        case "https": {
-          try {
-            let socket = await httpProxyClientAsync(proxyUrl.href, port, host);
-            if (socket) {
-              hidePassword(proxyUrl);
-              logger.info({
-                msg: "Established a socket via HTTP proxy",
-                proxyUrl: proxyUrl.href,
-                port,
-                host
-              });
-              attachEarlyErrorHandler(logger, socket);
-            }
-            return socket;
-          } catch (err) {
-            hidePassword(proxyUrl);
-            logger.error({
-              msg: "Failed to establish a socket via HTTP proxy",
-              proxyUrl: proxyUrl.href,
-              port,
-              host,
-              err
-            });
-            throw err;
-          }
-        }
+        case "https":
+          return await httpConnect({
+            logger,
+            proxyUrl,
+            secureProxy: protocol === "https",
+            proxyHost,
+            proxyPort: Number(proxyUrl.port) || (protocol === "https" ? 443 : 80),
+            host,
+            port,
+            deadline
+          });
         // SOCKS proxy
         case "socks":
         case "socks5":
         case "socks4":
-        case "socks4a": {
-          let proxyType = Number(protocol.replace(/\D/g, "")) || 5;
-          let targetHost = proxyUrl.hostname;
-          if (!net.isIP(targetHost)) {
-            let resolveResult = await dns.resolve(targetHost);
-            if (resolveResult && resolveResult.length) {
-              targetHost = resolveResult[0];
-            }
-          }
-          let connectionOpts = {
-            proxy: {
-              host: targetHost,
-              port: Number(proxyUrl.port) || 1080,
-              type: proxyType
-            },
-            destination: {
-              host,
-              port
-            },
-            command: "connect",
-            set_tcp_nodelay: true
-          };
-          if (proxyUrl.username || proxyUrl.password) {
-            connectionOpts.proxy.userId = proxyUrl.username;
-            connectionOpts.proxy.password = proxyUrl.password;
-          }
-          try {
-            const info = await SocksClient.createConnection(connectionOpts);
-            if (info && info.socket) {
-              hidePassword(proxyUrl);
-              logger.info({
-                msg: "Established a socket via SOCKS proxy",
-                proxyUrl: proxyUrl.href,
-                port,
-                host
-              });
-              attachEarlyErrorHandler(logger, info.socket);
-            }
-            return info.socket;
-          } catch (err) {
-            hidePassword(proxyUrl);
-            logger.error({
-              msg: "Failed to establish a socket via SOCKS proxy",
-              proxyUrl: proxyUrl.href,
-              port,
-              host,
-              err
-            });
-            throw err;
-          }
-        }
+        case "socks4a":
+          return await socksConnect({
+            logger,
+            proxyUrl,
+            protocol,
+            proxyHost,
+            proxyPort: Number(proxyUrl.port) || DEFAULT_SOCKS_PORT,
+            host,
+            port,
+            deadline
+          });
       }
     };
     module.exports = { proxyConnection, detachEarlyErrorHandler };
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/charsets.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/charsets.js
 var require_charsets2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/charsets.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/charsets.js"(exports, module) {
     "use strict";
     var CHARACTER_SETS = [
       "US-ASCII",
@@ -54560,9 +54926,9 @@ var require_charsets2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/jp-decoder.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/jp-decoder.js
 var require_jp_decoder = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var encodingJapanese = require_src();
@@ -54615,9 +54981,9 @@ var require_jp_decoder = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/tools.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/tools.js
 var require_tools2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/tools.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/tools.js"(exports, module) {
     "use strict";
     var libmime = require_libmime();
     var { resolveCharset } = require_charsets2();
@@ -54626,10 +54992,116 @@ var require_tools2 = __commonJS({
     var { JPDecoder } = require_jp_decoder();
     var iconv = require_lib();
     var FLAG_COLORS = ["red", "orange", "yellow", "green", "blue", "purple", "grey"];
+    var EXPANDED_RANGE_LIMIT = 16777216;
+    var IMAP4REV2_FOLDED_CAPABILITIES = /* @__PURE__ */ new Set([
+      "ENABLE",
+      "ESEARCH",
+      "IDLE",
+      "LIST-EXTENDED",
+      "LIST-STATUS",
+      "LITERAL-",
+      "MOVE",
+      "NAMESPACE",
+      "SASL-IR",
+      "SEARCHRES",
+      "SPECIAL-USE",
+      "STATUS=SIZE",
+      "UIDPLUS",
+      "UNSELECT"
+    ]);
     var AuthenticationFailure = class extends Error {
       authenticationFailed = true;
     };
     var tools = {
+      /**
+       * Detaches a background timer from the event loop, so it cannot keep the process alive on its
+       * own. Applied to every background timer (auto-IDLE, IDLE restart, fallback polling, throttle
+       * back-off, held-lock diagnostics); connection and greeting deadlines are deliberately left
+       * attached, because a caller is waiting for connect() to settle.
+       *
+       * @param {Object} timer - Timer handle returned by setTimeout
+       * @returns {Object} The same timer handle
+       */
+      unrefTimer(timer) {
+        if (timer && typeof timer.unref === "function") {
+          timer.unref();
+        }
+        return timer;
+      },
+      /**
+       * Checks whether IMAP4rev2 semantics are active for the connection: either the
+       * client enabled IMAP4rev2 explicitly, or the server is rev2-only (advertises
+       * IMAP4rev2 without IMAP4rev1), in which case rev2 is the base protocol without
+       * any ENABLE (RFC 9051 Appendix A). UTF-8 mailbox names apply in both cases.
+       *
+       * @param {Object} connection - IMAP connection instance
+       * @returns {Boolean} True if IMAP4rev2 semantics apply to this session
+       */
+      isRev2Active(connection) {
+        return connection.enabled.has("IMAP4REV2") || connection.capabilities.has("IMAP4rev2") && !connection.capabilities.has("IMAP4rev1");
+      },
+      /**
+       * Checks a capability, accounting for extensions that RFC 9051 folds into base
+       * IMAP4rev2. Falls back to the plain capability lookup on IMAP4rev1 sessions,
+       * so behavior against rev1 servers is unchanged.
+       *
+       * @param {Object} connection - IMAP connection instance
+       * @param {String} capability - Capability name, e.g. 'UIDPLUS'
+       * @returns {Boolean} True if the capability (or its rev2-folded equivalent) is available
+       */
+      hasCapability(connection, capability) {
+        if (connection.capabilities.has(capability)) {
+          return true;
+        }
+        return IMAP4REV2_FOLDED_CAPABILITIES.has(capability) && tools.isRev2Active(connection);
+      },
+      /**
+       * Builds the attribute list for a STATUS request - the standalone STATUS command
+       * or the LIST-STATUS return option - from a status query object. Items the current
+       * session cannot request (RECENT under IMAP4rev2, HIGHESTMODSEQ without CONDSTORE)
+       * are silently dropped.
+       *
+       * @param {Object} connection - IMAP connection instance
+       * @param {Object} statusQuery - Status data items to request, e.g. {messages: true}
+       * @returns {Object[]} Attribute token list for the command compiler
+       */
+      buildStatusQueryAttributes(connection, statusQuery) {
+        let attributes = [];
+        Object.keys(statusQuery || {}).forEach((key) => {
+          if (!statusQuery[key]) {
+            return;
+          }
+          switch (key.toUpperCase()) {
+            case "MESSAGES":
+            case "UIDNEXT":
+            case "UIDVALIDITY":
+            case "UNSEEN":
+              attributes.push({ type: "ATOM", value: key.toUpperCase() });
+              break;
+            case "RECENT":
+              if (!tools.isRev2Active(connection)) {
+                attributes.push({ type: "ATOM", value: key.toUpperCase() });
+              }
+              break;
+            case "HIGHESTMODSEQ":
+              if (connection.capabilities.has("CONDSTORE")) {
+                attributes.push({ type: "ATOM", value: key.toUpperCase() });
+              }
+              break;
+            case "SIZE":
+              if (tools.hasCapability(connection, "STATUS=SIZE")) {
+                attributes.push({ type: "ATOM", value: key.toUpperCase() });
+              }
+              break;
+            case "DELETED":
+              if (tools.isRev2Active(connection) || connection.capabilities.has("QUOTA=RES-MESSAGE")) {
+                attributes.push({ type: "ATOM", value: key.toUpperCase() });
+              }
+              break;
+          }
+        });
+        return attributes;
+      },
       /**
        * Encodes a mailbox path to modified UTF-7 if the server does not support UTF8=ACCEPT.
        *
@@ -54639,7 +55111,7 @@ var require_tools2 = __commonJS({
        */
       encodePath(connection, path) {
         path = (path || "").toString();
-        if (!connection.enabled.has("UTF8=ACCEPT") && /[&\x00-\x08\x0b-\x0c\x0e-\x1f\u0080-\uffff]/.test(path)) {
+        if (!connection.enabled.has("UTF8=ACCEPT") && !tools.isRev2Active(connection) && /[&\x00-\x08\x0b-\x0c\x0e-\x1f\u0080-\uffff]/.test(path)) {
           try {
             path = iconv.encode(path, "utf-7-imap").toString();
           } catch {
@@ -54656,7 +55128,7 @@ var require_tools2 = __commonJS({
        */
       decodePath(connection, path) {
         path = (path || "").toString();
-        if (!connection.enabled.has("UTF8=ACCEPT") && /[&]/.test(path)) {
+        if (!connection.enabled.has("UTF8=ACCEPT") && !tools.isRev2Active(connection) && /[&]/.test(path)) {
           try {
             path = iconv.decode(Buffer.from(path), "utf-7-imap").toString();
           } catch {
@@ -54715,6 +55187,10 @@ var require_tools2 = __commonJS({
             let capability = val.value.toUpperCase().trim();
             if (capability === "IMAP4REV1") {
               map.set("IMAP4rev1", true);
+              return;
+            }
+            if (capability === "IMAP4REV2") {
+              map.set("IMAP4rev2", true);
               return;
             }
             if (capability.startsWith("APPENDLIMIT=")) {
@@ -54798,7 +55274,7 @@ var require_tools2 = __commonJS({
             existing.path = folder.path;
             existing.subscribed = !!folder.subscribed;
             existing.listed = !!folder.listed;
-            existing.status = !!folder.status;
+            existing.status = folder.status;
             if (folder.specialUse) {
               existing.specialUse = folder.specialUse;
             }
@@ -54815,7 +55291,7 @@ var require_tools2 = __commonJS({
               path: folder.path,
               subscribed: !!folder.subscribed,
               listed: !!folder.listed,
-              status: !!folder.status
+              status: folder.status
             };
             if (folder.delimiter) {
               data.delimiter = folder.delimiter;
@@ -54993,6 +55469,12 @@ var require_tools2 = __commonJS({
                   map.bodyParts = /* @__PURE__ */ new Map();
                 }
                 map.bodyParts.set(partKey, value);
+                if (match[1].toLowerCase() === "binary") {
+                  if (!map.binaryParts) {
+                    map.binaryParts = /* @__PURE__ */ new Set();
+                  }
+                  map.binaryParts.add(partKey);
+                }
                 break;
               }
               break;
@@ -55364,7 +55846,25 @@ var require_tools2 = __commonJS({
         return !mailbox || !mailbox.permanentFlags || mailbox.permanentFlags.has("\\*") || mailbox.permanentFlags.has(flag);
       },
       /**
+       * Checks that a value is a valid IMAP sequence number or UID: a non-zero
+       * 32-bit unsigned integer (nz-number in the RFC 9051 grammar). Guards range
+       * expansion against untrusted server input such as 'Infinity' or '0:*'.
+       *
+       * @param {Number} value - Value to check
+       * @returns {Boolean} True if the value is a valid sequence number/UID
+       */
+      isValidSequenceValue(value) {
+        return Number.isSafeInteger(value) && value > 0 && value <= 4294967295;
+      },
+      /**
        * Expands an IMAP sequence range string (e.g. "1:3,5,7:9") into an array of numbers.
+       *
+       * Entries with endpoints that are not valid nz-numbers are skipped - the input
+       * may come from an untrusted server, and 'Infinity' or similar garbage would
+       * otherwise loop without bound. A single range is expanded to at most
+       * EXPANDED_RANGE_LIMIT entries: legitimate responses never reach the limit
+       * (the mailbox would need that many messages), while a hostile range like
+       * 1:4294967295 is cut off instead of exhausting memory.
        *
        * @param {String} range - IMAP sequence range string
        * @returns {Number[]} Array of expanded sequence numbers
@@ -55374,20 +55874,26 @@ var require_tools2 = __commonJS({
           entry = entry.trim();
           let colon = entry.indexOf(":");
           if (colon < 0) {
-            return Number(entry) || 0;
+            let value = Number(entry);
+            return tools.isValidSequenceValue(value) ? value : [];
           }
-          let first = Number(entry.substr(0, colon)) || 0;
-          let second = Number(entry.substr(colon + 1)) || 0;
+          let first = Number(entry.substr(0, colon));
+          let second = Number(entry.substr(colon + 1));
+          if (!tools.isValidSequenceValue(first) || !tools.isValidSequenceValue(second)) {
+            return [];
+          }
           if (first === second) {
             return first;
           }
           let list = [];
           if (first < second) {
-            for (let i = first; i <= second; i++) {
+            let last = Math.min(second, first + EXPANDED_RANGE_LIMIT - 1);
+            for (let i = first; i <= last; i++) {
               list.push(i);
             }
           } else {
-            for (let i = first; i >= second; i--) {
+            let last = Math.max(second, first - EXPANDED_RANGE_LIMIT + 1);
+            for (let i = first; i >= last; i--) {
               list.push(i);
             }
           }
@@ -55445,9 +55951,9 @@ var require_tools2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/id.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/id.js
 var require_id2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/id.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/id.js"(exports, module) {
     "use strict";
     var { formatDateTime } = require_tools2();
     module.exports = async (connection, clientInfo) => {
@@ -55497,9 +56003,9 @@ var require_id2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/capability.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/capability.js
 var require_capability = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.capabilities.size && !connection.expectCapabilityUpdate) {
@@ -55518,15 +56024,16 @@ var require_capability = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/namespace.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/namespace.js
 var require_namespace = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
     "use strict";
+    var { hasCapability } = require_tools2();
     module.exports = async (connection) => {
       if (![connection.states.AUTHENTICATED, connection.states.SELECTED].includes(connection.state)) {
         return;
       }
-      if (!connection.capabilities.has("NAMESPACE")) {
+      if (!hasCapability(connection, "NAMESPACE")) {
         let { prefix, delimiter } = await getListPrefix(connection);
         if (delimiter && prefix && prefix.charAt(prefix.length - 1) !== delimiter) {
           prefix += delimiter;
@@ -55625,9 +56132,9 @@ var require_namespace = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/login.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/login.js
 var require_login = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/login.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/login.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     module.exports = async (connection, username, password) => {
@@ -55656,9 +56163,9 @@ var require_login = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/logout.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/logout.js
 var require_logout = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state === connection.states.LOGOUT) {
@@ -55690,9 +56197,9 @@ var require_logout = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/starttls.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/starttls.js
 var require_starttls = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("STARTTLS") || connection.secureConnection) {
@@ -55712,351 +56219,926 @@ var require_starttls = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/special-use.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/special-use.js
 var require_special_use = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/special-use.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/special-use.js"(exports, module) {
     "use strict";
+    var GENERIC_TOKENS = new Set(
+      [
+        // English. "e" is here because TOKEN_SPLIT breaks on the hyphen, so the
+        // "e-mail" / "e-posta" / "e-kirjad" family arrives as a bare "e" token.
+        "e",
+        "mail",
+        "mails",
+        "email",
+        "emails",
+        "message",
+        "messages",
+        "item",
+        "items",
+        "folder",
+        "my",
+        // German, Dutch, Nordic
+        "objekt",
+        "objekte",
+        "objekten",
+        "objekter",
+        "elemente",
+        "elementen",
+        "elementer",
+        "nachrichten",
+        "berichten",
+        "post",
+        "poster",
+        "viestit",
+        "kirjad",
+        "meldinger",
+        "beskeder",
+        // Romance
+        "correo",
+        "posta",
+        "courrier",
+        "elementos",
+        "elementi",
+        "\xE9l\xE9ments",
+        "mensajes",
+        "messaggi",
+        "mensagens",
+        "itens",
+        // Slavic
+        "poczta",
+        "po\u0161ta",
+        "elementy",
+        "wiadomo\u015Bci",
+        "polo\u017Eky",
+        "spr\xE1vy",
+        "\u043F\u0438\u0441\u044C\u043C\u0430",
+        "\u043F\u0438\u0441\u044C\u043C\u043E",
+        "\u044D\u043B\u0435\u043C\u0435\u043D\u0442\u044B",
+        "\u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F",
+        "\u043F\u043E\u0448\u0442\u0430",
+        // Other
+        "\xF6\u011Feler",
+        "mesajlar",
+        "\u03BC\u03B7\u03BD\u03CD\u03BC\u03B1\u03C4\u03B1",
+        "\u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF\u03B1"
+      ].map((token) => token.toLowerCase().normalize("NFKC"))
+    );
+    var TOKEN_SPLIT = /[\s\-_/.,()[\]]+/;
     module.exports = {
       flags: ["\\All", "\\Archive", "\\Drafts", "\\Flagged", "\\Junk", "\\Sent", "\\Trash"],
       names: {
         "\\Sent": [
           "aika",
+          "air a chur",
+          "am post cuirte",
+          "anfonwyd",
+          "bidalia",
           "bidaliak",
           "bidalita",
+          "bidalitakoak",
+          "currieru mandatu",
+          "danfonwyd",
           "dihantar",
           "e rometsweng",
           "e tindami",
-          "elk\xFCld\xF6tt",
-          "elk\xFCld\xF6ttek",
           "elementos enviados",
-          "\xE9l\xE9ments envoy\xE9s",
-          "enviadas",
+          "elk\xFCld\xF6tt",
+          "elk\xFCld\xF6tt elemek",
+          "elk\xFCld\xF6tt \xFCzenetek",
+          "elk\xFCld\xF6ttek",
           "enviadas",
           "enviados",
+          "enviat",
           "enviats",
           "envoy\xE9s",
           "ethunyelweyo",
           "expediate",
           "ezipuru",
+          "ferstjoerd",
+          "gesendet",
           "gesendete",
           "gesendete elemente",
           "gestuur",
+          "g\xF6nderilmi\u015F",
           "g\xF6nderilmi\u015F \xF6\u011Feler",
           "g\xF6nd\u0259ril\u0259nl\u0259r",
+          "hantar",
           "iberilen",
+          "inviata",
+          "inviate",
           "inviati",
+          "i\u0161si\u0173sti",
+          "i\u0161si\u0173sti lai\u0161kai",
           "i\u0161si\u0173stieji",
+          "jo`natilgan xatlar",
+          "jo\u2018natilgan",
+          "kaset",
           "kuthunyelwe",
+          "k\xFCld\xF6ttek",
           "lasa",
           "l\xE4hetetyt",
+          "mesaje trimise",
           "messages envoy\xE9s",
           "naipadala",
           "nalefa",
           "napadala",
+          "nos\u016Bt\u012Bts",
+          "nos\u016Bt\u012Bt\u0101s",
           "nos\u016Bt\u012Bt\u0101s zi\u0146as",
-          "odeslan\xE9",
           "odeslan\xE1 po\u0161ta",
+          "odeslan\xE9",
+          "odoslan\xE1",
+          "odoslan\xE1 po\u0161ta",
+          "odoslan\xE9",
           "padala",
+          "poslana po\u0161ta",
           "poslane",
-          "poslano",
           "poslano",
           "poslan\xE9",
           "poslato",
+          "posta inviata",
+          "p\xF3s\u0142ane",
+          "p\xF3s\u0142any",
           "saadetud",
           "saadetud kirjad",
           "saadetud \xFCksused",
+          "senditujo",
           "sendt",
-          "sendt",
+          "sendt post",
+          "sendte",
+          "sendte beskeder",
           "sent",
           "sent items",
           "sent messages",
+          "seolta",
+          "si\u016Bsti",
+          "skickat",
           "s\xE4nda poster",
           "s\xE4nt",
+          "s\u016Bt\u012Bt",
           "terkirim",
+          "th\u01B0 \u0111\xE3 g\u1EEDi",
           "ti fi ran\u1E63\u1EB9",
+          "titaq",
+          "tramess",
+          "trimis",
+          "trimise",
+          "ttwaznen",
+          "t\xEB d\xEBrguar",
           "t\xEB d\xEBrguara",
+          "unviaos",
+          "unvios fechos",
+          "versch\xE9ckt",
           "verzonden",
+          "verzonden berichten",
           "vilivyotumwa",
           "wys\u0142ane",
+          "\xE9l\xE9ments envoy\xE9s",
           "\u0111\xE3 g\u1EEDi",
+          "\u015Fand\xEE",
+          "\u03B1\u03C0\u03B5\u03C3\u03C4\u03B1\u03BB\u03BC\u03AD\u03BD\u03B1",
           "\u03C3\u03C4\u03B1\u03BB\u03B8\u03AD\u03BD\u03C4\u03B1",
+          "\u0430\u0434\u043F\u0440\u0430\u045E\u043B\u0435\u043D\u0430",
           "\u0436\u0438\u0431\u0435\u0440\u0438\u043B\u0433\u0435\u043D",
+          "\u0436\u0456\u0431\u0435\u0440\u0456\u043B\u0433\u0435\u043D",
+          "\u0436\u0456\u0431\u0435\u0440\u0456\u043B\u0433\u0435\u043D \u0445\u0430\u0442\u0442\u0430\u0440",
           "\u0436\u0456\u0431\u0435\u0440\u0456\u043B\u0433\u0435\u043D\u0434\u0435\u0440",
           "\u0438\u0437\u043F\u0440\u0430\u0442\u0435\u043D\u0438",
+          "\u0438\u0437\u043F\u0440\u0430\u0442\u0435\u043D\u0438 \u043F\u0438\u0441\u043C\u0430",
           "\u0438\u043B\u0433\u044D\u044D\u0441\u044D\u043D",
           "\u0438\u0440\u0441\u043E\u043B \u0448\u0443\u0434",
+          "\u0438\u0441\u043F\u0440\u0430\u0442\u0435\u043D\u0438",
           "\u0438\u0441\u043F\u0440\u0430\u0442\u0435\u043D\u043E",
           "\u043D\u0430\u0434\u0456\u0441\u043B\u0430\u043D\u0456",
           "\u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043D\u044B\u0435",
           "\u043F\u0430\u0441\u043B\u0430\u043D\u044B\u044F",
+          "\u043F\u043E\u0441\u043B\u0430\u0442\u0435",
+          "\u043F\u043E\u0441\u043B\u0430\u0442\u043E",
+          "\u043F\u0440\u0430\u0442\u0435\u043D\u0438",
           "\u044E\u0431\u043E\u0440\u0438\u043B\u0433\u0430\u043D",
+          "\u0578\u0582\u0572\u0561\u0580\u056F\u0578\u0582\u0561\u056E",
           "\u0578\u0582\u0572\u0561\u0580\u056F\u057E\u0561\u056E",
+          "\u05E0\u05E9\u05DC\u05D7",
           "\u05E0\u05E9\u05DC\u05D7\u05D5",
           "\u05E4\u05E8\u05D9\u05D8\u05D9\u05DD \u05E9\u05E0\u05E9\u05DC\u05D7\u05D5",
+          "\u0626\u06D5\u06CB\u06D5\u062A\u0649\u0644\u06AF\u06D5\u0646",
+          "\u0627\u0631\u0633\u0627\u0644 \u0634\u062F\u0647",
+          "\u0627\u0631\u0633\u0627\u0644\u06CC",
+          "\u0627\u0644\u0628\u0631\u064A\u062F \u0627\u0644\u0645\u0631\u0633\u0644",
+          "\u0627\u0644\u0645\u0631\u0633\u0644",
           "\u0627\u0644\u0645\u0631\u0633\u0644\u0629",
+          "\u0627\u0644\u0645\u064F\u0631\u0633\u064E\u0644",
+          "\u0628\u06BE\u06CC\u062C\u0627 \u06C1\u0648\u0627 \u0645\u06CC\u0644",
           "\u0628\u06BE\u06CC\u062C\u06D2 \u06AF\u0626\u06D2",
           "\u0633\u0648\u0632\u0645\u0698\u06C1",
+          "\u0644\u06D0\u0696\u0644 \u0634\u0648\u064A \u0644\u064A\u06A9\u0648\u0646\u0647",
           "\u0644\u06D0\u06AB\u0644 \u0634\u0648\u06CC",
           "\u0645\u0648\u0627\u0631\u062F \u0627\u0631\u0633\u0627\u0644 \u0634\u062F\u0647",
+          "\u0645\u064F\u0631\u0633\u064E\u0644",
+          "\u0646\u06CE\u0631\u062F\u0631\u0627\u0648",
+          "\u092A\u0920\u0908\u090F\u0915\u093E \u092E\u0947\u0932\u0939\u0930\u0941",
+          "\u092A\u093E\u0920\u0935\u0932\u0947\u0932\u0947",
           "\u092A\u093E\u0920\u0935\u093F\u0932\u0947",
           "\u092A\u093E\u0920\u0935\u093F\u0932\u0947\u0932\u0947",
           "\u092A\u094D\u0930\u0947\u0937\u093F\u0924",
           "\u092D\u0947\u091C\u093E \u0917\u092F\u093E",
+          "\u092D\u0947\u091C\u0947 \u0917\u090F",
+          "\u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09B9\u09AF\u09BC\u09C7\u099B\u09C7",
           "\u09AA\u09CD\u09B0\u09C7\u09B0\u09BF\u09A4",
-          "\u09AA\u09CD\u09B0\u09C7\u09B0\u09BF\u09A4",
+          "\u09AA\u09CD\u09B0\u09C7\u09B0\u09BF\u09A4(\u09AA\u09BE\u09A0\u09BE\u09A8\u09CB \u09AE\u09C7\u0987\u09B2)",
           "\u09AA\u09CD\u09F0\u09C7\u09F0\u09BF\u09A4",
           "\u0A2D\u0A47\u0A1C\u0A47",
           "\u0AAE\u0ACB\u0A95\u0AB2\u0AC7\u0AB2\u0ABE",
+          "\u0AAE\u0ACB\u0A95\u0AB2\u0AC7\u0AB2\u0ACD\u0AAF\u0ABE",
           "\u0B2A\u0B20\u0B3E\u0B17\u0B32\u0B3E",
+          "\u0B85\u0BA9\u0BC1\u0BAA\u0BCD\u0BAA\u0BBF\u0BAF \u0B85\u0B9E\u0BCD\u0B9A\u0BB2\u0BCD",
           "\u0B85\u0BA9\u0BC1\u0BAA\u0BCD\u0BAA\u0BBF\u0BAF\u0BB5\u0BC8",
           "\u0C2A\u0C02\u0C2A\u0C3F\u0C02\u0C1A\u0C2C\u0C21\u0C3F\u0C02\u0C26\u0C3F",
           "\u0C95\u0CB3\u0CC1\u0CB9\u0CBF\u0CB8\u0CB2\u0CBE\u0CA6",
+          "\u0D05\u0D2F\u0D1A\u0D4D\u0D1A\u0D35",
           "\u0D05\u0D2F\u0D1A\u0D4D\u0D1A\u0D41",
           "\u0DBA\u0DD0\u0DC0\u0DD4 \u0DB4\u0DAB\u0DD2\u0DC0\u0DD4\u0DA9",
+          "\u0DBA\u0DD0\u0DC0\u0DD6",
+          "\u0E17\u0E35\u0E48\u0E2A\u0E48\u0E07\u0E41\u0E25\u0E49\u0E27",
+          "\u0E2A\u0E48\u0E07",
           "\u0E2A\u0E48\u0E07\u0E41\u0E25\u0E49\u0E27",
           "\u10D2\u10D0\u10D2\u10D6\u10D0\u10D5\u10DC\u10D8\u10DA\u10D8",
+          "\u12DD\u1270\u1208\u12A3\u12B8",
           "\u12E8\u1270\u120B\u12A9",
           "\u1794\u17B6\u1793\u200B\u1795\u17D2\u1789\u17BE",
-          "\u5BC4\u4EF6\u5099\u4EFD",
+          "\u179F\u17C6\u1794\u17BB\u178F\u17D2\u179A\u178A\u17C2\u179B\u1794\u17B6\u1793\u1794\u1789\u17D2\u1787\u17BC\u1793",
           "\u5BC4\u4EF6\u5099\u4EFD",
           "\u5DF2\u53D1\u4FE1\u606F",
-          "\u9001\u4FE1\u6E08\u307F\uFF92\uFF70\uFF99",
+          "\u5DF2\u53D1\u9001",
+          "\u5DF2\u53D1\u9001\u6D88\u606F",
+          "\u5DF2\u53D1\u9001\u90AE\u4EF6",
+          "\u9001\u4FE1\u6E08\u307F",
+          "\u9001\u4FE1\u6E08\u307F\u30A2\u30A4\u30C6\u30E0",
+          "\u9001\u4FE1\u6E08\u307F\u30C8\u30EC\u30A4",
+          "\u9001\u4FE1\u6E08\u307F\u30E1\u30FC\u30EB",
           "\uBC1C\uC2E0 \uBA54\uC2DC\uC9C0",
-          "\uBCF4\uB0B8 \uD3B8\uC9C0\uD568"
+          "\uBCF4\uB0B8 \uD3B8\uC9C0\uD568",
+          "\uBCF4\uB0C4"
         ],
         "\\Trash": [
+          "an sgudal",
           "articole \u0219terse",
+          "atkritne",
           "bin",
+          "borttaget",
           "borttagna objekt",
+          "bosca bruscair",
+          "bruscar",
+          "cestino",
+          "chanaster da palpiri",
+          "chiqitdon",
+          "corbe a papiro",
+          "corbeille",
+          "co\u0219 de gunoi",
+          "curbella",
           "deleted",
           "deleted items",
           "deleted messages",
+          "dz\u0113stie vienumi",
           "elementi eliminati",
           "elementos borrados",
           "elementos eliminados",
-          "gel\xF6schte objekte",
+          "elements suprimits",
+          "eliminata",
+          "gel\xF6scht",
           "gel\xF6schte elemente",
+          "gel\xF6schte objekte",
+          "gunoi",
+          "hedhurina",
           "item dipadam",
           "itens apagados",
+          "itens eliminados",
           "itens exclu\xEDdos",
+          "i\u0161trinti",
+          "i\u1E0Duman",
+          "jiskefet",
+          "j\xEAbirdank",
+          "kanta",
+          "kest",
+          "kosz",
+          "ko\u0161",
+          "kuka",
+          "kustutatud",
           "kustutatud \xFCksused",
+          "k\xF4\u0161",
+          "lixeira",
+          "lixo",
+          "lomt\xE1r",
+          "molwuj",
           "m\u1EE5c \u0111\xE3 x\xF3a",
-          "odstran\u011Bn\xE9 polo\u017Eky",
+          "obrisane stavke",
+          "odpadkov\xFD k\xF4\u0161",
           "odstran\u011Bn\xE1 po\u0161ta",
+          "odstran\u011Bn\xE9 polo\u017Eky",
+          "papeleira",
+          "papelera",
+          "paperera",
+          "papierkorb",
+          "papirkorg",
+          "papirkurv",
+          "papjernik",
+          "papperskorg",
+          "papperskorgen",
+          "pap\u012Brgrozs",
+          "pap\u012Brkurvis",
           "pesan terhapus",
+          "pod-lastez",
           "poistetut",
+          "poubelle",
           "praht",
+          "prullenbak",
           "pr\xFCgikast",
+          "reciclagem",
+          "roskakori",
+          "rubujo",
+          "rusl",
+          "savat",
+          "sbwriel",
+          "sgudal",
           "silinmi\u015F \xF6\u011Feler",
+          "skrell",
+          "sletta",
           "slettede beskeder",
           "slettede elementer",
+          "slettet",
+          "smeti",
+          "sme\u0107e",
+          "snippermandjie",
+          "surat terhapus",
+          "s\u0259b\u0259t",
+          "th\xF9ng r\xE1c",
+          "tong sampah",
           "trash",
-          "t\xF6r\xF6lt elemek",
           "t\xF6r\xF6lt",
+          "t\xF6r\xF6lt elemek",
+          "usuni\u0119te",
           "usuni\u0119te wiadomo\u015Bci",
           "verwijderde items",
           "vymazan\xE9 spr\xE1vy",
+          "zakarrontzia",
+          "\xE7\xF6p",
+          "\xE7\xF6p kutusu",
           "\xE9l\xE9ments supprim\xE9s",
+          "\u0161iuk\u0161liad\u0117\u017E\u0117",
+          "\u0161iuk\u0161lin\u0117",
+          "\u0161iuk\u0161li\u0173 d\u0117\u017E\u0117",
+          "\u0219terse",
+          "\u03B1\u03C0\u03BF\u03C1\u03C1\u03AF\u03BC\u03BC\u03B1\u03C4\u03B1",
+          "\u03B4\u03B9\u03B1\u03B3\u03C1\u03B1\u03BC\u03BC\u03AD\u03BD\u03B1",
+          "\u03BA\u03AC\u03B4\u03BF\u03C2 \u03B1\u03C0\u03BF\u03C1\u03C1\u03B9\u03BC\u03AC\u03C4\u03C9\u03BD",
+          "\u03BA\u03AC\u03B4\u03BF\u03C2 \u03B1\u03C0\u03BF\u03C1\u03C1\u03B9\u03BC\u03BC\u03AC\u03C4\u03C9\u03BD",
           "\u0432\u0438\u0434\u0430\u043B\u0435\u043D\u0456",
+          "\u0432\u044B\u0434\u0430\u043B\u0435\u043D\u044B\u044F",
           "\u0436\u043E\u0439\u044B\u043B\u0493\u0430\u043D\u0434\u0430\u0440",
+          "\u0438\u0437\u0431\u0440\u0438\u0448\u0430\u043D\u0438",
+          "\u0438\u0437\u0442\u0440\u0438\u0442\u0438",
+          "\u043A\u0430\u043D\u0442\u0430",
+          "\u043A\u043E\u0440\u0437\u0438\u043D\u0430",
+          "\u043A\u043E\u0440\u043F\u0430",
+          "\u043A\u043E\u0448\u0438\u043A",
+          "\u043A\u043E\u0448\u0447\u0435",
+          "\u043E\u0431\u0440\u0438\u0441\u0430\u043D\u0435 \u0441\u0442\u0430\u0432\u043A\u0435",
+          "\u0441\u0435\u0431\u0435\u0442",
+          "\u0441\u043C\u0435\u0442\u043D\u0456\u0446\u0430",
+          "\u0441\u043C\u0435\u045B\u0435",
+          "\u0441\u043C\u0456\u0442\u043D\u0438\u043A",
           "\u0443\u0434\u0430\u043B\u0435\u043D\u043D\u044B\u0435",
+          "\u0443\u0434\u0430\u043B\u0451\u043D\u043D\u044B\u0435",
+          "\u0445\u043E\u0433\u0438\u0439\u043D \u0441\u0430\u0432",
+          "\u049B\u043E\u049B\u044B\u0441 \u0448\u0435\u043B\u0435\u0433\u0456",
+          "\u0561\u0572\u0562\u0561\u0580\u056F\u0572",
+          "\u05D0\u05E9\u05E4\u05D4",
           "\u05E4\u05E8\u05D9\u05D8\u05D9\u05DD \u05E9\u05E0\u05DE\u05D7\u05E7\u05D5",
+          "\u0627\u0634\u063A\u0627\u0644 \u062F\u0627\u0646\u06CC",
           "\u0627\u0644\u0639\u0646\u0627\u0635\u0631 \u0627\u0644\u0645\u062D\u0630\u0648\u0641\u0629",
+          "\u0627\u0644\u0645\u0647\u0645\u0644\u0627\u062A",
+          "\u0631\u062F\u06CC \u06A9\u06CC \u0679\u0648\u06A9\u0631\u06CC",
+          "\u0632\u0628\u0627\u0644\u0647\u200C\u062F\u0627\u0646",
+          "\u0632\u0628\u06B5\u062F\u0627\u0646",
           "\u0645\u0648\u0627\u0631\u062F \u062D\u0630\u0641 \u0634\u062F\u0647",
+          "\u0645\u064F\u0647\u0645\u0644\u0627\u062A",
+          "\u06A9\u062B\u0627\u0641\u062A \u062F\u0627\u0646\u06CD",
+          "\u0915\u091A\u0930\u093E",
+          "\u0915\u091A\u0930\u093E \u092A\u0947\u091F\u0940",
+          "\u0930\u0926\u094D\u0926\u0940",
+          "\u0930\u0926\u094D\u0926\u0940 \u091F\u094B\u0915\u0930\u0940",
+          "\u099D\u09C1\u09A1\u09BC\u09BF",
+          "\u09A1\u09BE\u09B8\u09CD\u099F\u09AC\u09BF\u09A8",
+          "\u0A95\u0A9A\u0AB0\u0ACB",
+          "\u0B95\u0BC1\u0BAA\u0BCD\u0BAA\u0BC8",
+          "\u0D1A\u0D35\u0D31\u0D4D\u0D31\u0D41\u0D15\u0D41\u0D1F\u0D4D\u0D1F",
+          "\u0D89\u0DC0\u0DAD\u0DBD\u0DB1 \u0DB6\u0DB3\u0DD4\u0DB1",
+          "\u0E16\u0E31\u0E07\u0E02\u0E22\u0E30",
           "\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E25\u0E1A",
+          "\u10DC\u10D0\u10D2\u10D0\u10D5\u10D8",
+          "\u10E3\u10E0\u10DC\u10D0",
+          "\u10EC\u10D0\u10E8\u10DA\u10D8\u10DA\u10D8",
+          "\u12A5\u1295\u12F3\u1309\u1213\u134D",
+          "\u1792\u17BB\u1784\u179F\u17C6\u179A\u17B6\u1798",
+          "\u3054\u307F\u7BB1",
+          "\u30B4\u30DF\u7BB1",
+          "\u524A\u9664\u6E08\u307F\u30A2\u30A4\u30C6\u30E0",
+          "\u56DE\u6536\u7AD9",
+          "\u5783\u573E\u6876",
           "\u5DF2\u5220\u9664\u90AE\u4EF6",
           "\u5DF2\u522A\u9664\u9805\u76EE",
-          "\u5DF2\u522A\u9664\u9805\u76EE"
+          "\u5E9F\u4EF6\u7BB1",
+          "\uC9C0\uC6B4 \uD3B8\uC9C0\uD568",
+          "\uD734\uC9C0\uD1B5"
         ],
         "\\Junk": [
+          "aspam",
+          "basura",
+          "brukalas",
           "bulk mail",
+          "cajk",
+          "correo basura",
+          "correo lixo",
           "correo no deseado",
+          "correu brossa",
+          "corr\xE9u puxarra",
           "courrier ind\xE9sirable",
+          "dramha\xEDl",
+          "dramhphost",
+          "gemors",
+          "gemorspos",
+          "gereksiz",
+          "indesiderata",
+          "indesirate",
+          "ind\xE9sirables",
           "istenmeyen",
           "istenmeyen e-posta",
+          "i\u0307stenmeyen",
           "junk",
           "junk e-mail",
           "junk email",
+          "junk mail",
           "junk-e-mail",
+          "k\xE9retlen",
+          "lastez",
           "lev\xE9lszem\xE9t",
+          "lixo electr\xF3nico",
+          "lixo eletr\xF3nico",
+          "lixo eletr\xF4nico",
+          "mel remeh",
+          "mesaje nedorite",
+          "m\xF8sn",
+          "m\u0113stule",
+          "m\u0113stules",
+          "nepo\u017Eeljne",
+          "nesolicitate",
+          "net-winske",
           "nevy\u017Eiadan\xE1 po\u0161ta",
+          "nevy\u017E\xE1dan\xE1",
           "nevy\u017E\xE1dan\xE1 po\u0161ta",
+          "nev\u0113lams",
+          "neza\u017Eeleno",
+          "ne\u017Eelena po\u0161ta",
+          "ne\u017Eelena sporo\u010Dila",
+          "ne\u017Eeljena po\u0161ta",
+          "niechciane",
           "no deseado",
+          "nungiavisch\xE0",
+          "ongewenst",
+          "ongewenste e-mail",
           "posta indesiderata",
+          "posta indesirate",
           "pourriel",
+          "pourriels",
+          "puxarra",
+          "roskaa",
           "roskaposti",
+          "roskapostit",
+          "ruslp\xF3stur",
+          "r\xE4mps",
           "r\xE4mpspost",
+          "sbam",
+          "seq'",
+          "skr\xE4p",
           "skr\xE4ppost",
-          "spam",
+          "sothach",
           "spam",
           "spamowanie",
+          "spamujo",
+          "strobo\xF9",
+          "szem\xE9t",
           "s\xF8ppelpost",
           "th\u01B0 r\xE1c",
+          "truilleis",
+          "t\xEB pavlera",
+          "t\xEB pavler\xEB",
+          "u\xF8nsket",
+          "u\xF8nsket e-mail",
+          "u\xF8nsket e-post",
+          "u\xF8nsket post",
+          "u\xF8nskt",
           "wiadomo\u015Bci-\u015Bmieci",
+          "zabor-posta",
+          "zaborra",
+          "\xF6nemsiz",
+          "\u010Dapor",
+          "\u0161iuk\u0161l\u0117s",
+          "\u0161lam\u0161tas",
+          "\u03B1\u03BD\u03B5\u03C0\u03B9\u03B8\u03CD\u03BC\u03B7\u03C4\u03B1",
+          "\u03B1\u03BD\u03B5\u03C0\u03B9\u03B8\u03CD\u03BC\u03B7\u03C4\u03B7 \u03B1\u03BB\u03BB\u03B7\u03BB\u03BF\u03B3\u03C1\u03B1\u03C6\u03AF\u03B1",
+          "\u043D\u0435\u0431\u0430\u0436\u0430\u043D\u0430 \u043F\u043E\u0448\u0442\u0430",
+          "\u043D\u0435\u0436\u0435\u043B\u0430\u043D\u0430 \u043F\u043E\u0449\u0430",
+          "\u043D\u0435\u0436\u0435\u043B\u0430\u0442\u0435\u043B\u044C\u043D\u0430\u044F \u043F\u043E\u0447\u0442\u0430",
+          "\u043D\u0435\u043F\u0430\u0436\u0430\u0434\u0430\u043D\u0430\u044F \u043F\u043E\u0448\u0442\u0430",
+          "\u043D\u0435\u043F\u043E\u0436\u0435\u0459\u043D\u0430 \u043F\u043E\u0448\u0442\u0430",
+          "\u043D\u0435\u043F\u043E\u0436\u0435\u0459\u043D\u0435",
+          "\u043D\u0435\u043F\u043E\u0436\u0435\u0459\u043D\u043E",
+          "\u043D\u0435\u043F\u043E\u0441\u0430\u043A\u0443\u0432\u0430\u043D\u0430 \u043F\u043E\u0448\u0442\u0430",
           "\u0441\u043F\u0430\u043C",
+          "\u049B\u0430\u043B\u0430\u0443\u0441\u044B\u0437 \u043F\u043E\u0448\u0442\u0430",
+          "\u0561\u0576\u057A\u056B\u057F\u0561\u0576",
+          "\u0569\u0561\u0583\u0578\u0576",
+          "\u057D\u057A\u0561\u0574",
           "\u05D3\u05D5\u05D0\u05E8 \u05D6\u05D1\u05DC",
+          "\u05D6\u05D1\u05DC",
           "\u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0627\u0644\u0639\u0634\u0648\u0627\u0626\u064A\u0629",
+          "\u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u063A\u064A\u0631 \u0627\u0644\u0645\u0631\u063A\u0648\u0628 \u0641\u064A\u0647\u0627",
+          "\u0628\u0646\u062C\u0644",
+          "\u0628\u06CC\u06A9\u0627\u0631\u0647",
+          "\u0628\u06CE\u06A9\u0647\u200C\u06B5\u06A9",
+          "\u062C\u0646\u06A9",
+          "\u062C\u0646\u06A9 \u0645\u06CC\u0644",
+          "\u0633\u064F\u062E\u0627\u0645",
+          "\u063A\u064A\u0631 \u0627\u0644\u0645\u0631\u063A\u0648\u0628",
           "\u0647\u0631\u0632\u0646\u0627\u0645\u0647",
+          "\u0928\u0915\u094B \u0905\u0938\u0932\u0947\u0932\u0947 \u0915\u091A\u0930\u093E \u0938\u0902\u0926\u0947\u0936",
+          "\u0938\u094D\u092A\u093E\u092E",
+          "\u0938\u094D\u092A\u0948\u092E",
+          "\u0986\u099C\u09C7\u09AC\u09BE\u099C\u09C7 \u09AE\u09C7\u0987\u09B2",
+          "\u0B8E\u0BB0\u0BBF\u0BA4\u0BAE\u0BCD",
+          "\u0D06\u0D35\u0D36\u0D4D\u0D2F\u0D2E\u0D3F\u0D32\u0D4D\u0D32\u0D3E\u0D24\u0D4D\u0D24\u0D35",
+          "\u0DC3\u0DD4\u0DB1\u0DCA\u0DB6\u0DD4\u0DB1\u0DCA",
+          "\u0E01\u0E25\u0E48\u0E2D\u0E07\u0E08\u0E14\u0E2B\u0E21\u0E32\u0E22\u0E02\u0E22\u0E30",
+          "\u0E02\u0E22\u0E30",
           "\u0E2A\u0E41\u0E1B\u0E21",
-          "\u5783\u573E\u90F5\u4EF6",
+          "\u0E2D\u0E35\u0E40\u0E21\u0E25\u0E02\u0E22\u0E30",
+          "\u10E1\u10DE\u10D0\u10DB\u10D8",
+          "\u10EF\u10D0\u10E0\u10D7\u10D8",
+          "\u12A5\u1295\u12F3\u1245\u1295\u1320\u1218\u1295\u1322",
+          "\u179F\u17C6\u1794\u17BB\u178F\u17D2\u179A\u1798\u17B7\u1793\u179B\u17D2\u17A2",
+          "\u17A5\u178F\u200B\u1794\u17B6\u1793\u200B\u1780\u17B6\u179A",
+          "\u5783\u573E",
+          "\u5783\u573E\u4FE1\u4EF6",
           "\u5783\u573E\u90AE\u4EF6",
-          "\u5783\u573E\u96FB\u90F5"
+          "\u5783\u573E\u90F5\u4EF6",
+          "\u5783\u573E\u96FB\u90F5",
+          "\u8FF7\u60D1\u30E1\u30FC\u30EB",
+          "\uC2A4\uD338",
+          "\uC2A4\uD338 \uD3B8\uC9C0\uD568",
+          "\uC815\uD06C",
+          "\uC815\uD06C \uBA54\uC77C"
         ],
         "\\Drafts": [
+          "arewway",
           "ba brouillon",
-          "borrador",
           "borrador",
           "borradores",
           "bozze",
+          "brouilhedo\xF9",
+          "brouillonen",
           "brouillons",
+          "bruttacopie",
           "b\u1EA3n th\u1EA3o",
           "ciorne",
           "concepten",
           "draf",
+          "drafftiau",
           "draft",
           "drafts",
+          "dreachdan",
+          "dr\xE9achta\xED",
           "dr\xF6g",
           "entw\xFCrfe",
           "esborranys",
+          "esbossos",
           "garalamalar",
           "ihe edeturu",
           "iidrafti",
           "izinhlaka",
           "juodra\u0161\u010Diai",
+          "jusamaj",
           "kladd",
+          "kladdar",
           "kladder",
-          "koncepty",
           "koncepty",
           "konsep",
           "konsepte",
+          "konsepten",
           "kopie robocze",
           "layih\u0259l\u0259r",
           "luonnokset",
+          "malnetujo",
           "melnraksti",
           "meralo",
+          "mesaje nefinalizate",
           "mesazhe t\xEB pad\xEBrguara",
           "mga draft",
           "mustandid",
+          "nacerjenja",
           "nacrti",
-          "nacrti",
+          "na\u0107iski",
+          "nedovr\u0161ene",
+          "nedovr\u0161eno",
+          "onvoltooid",
           "osnutki",
           "piszkozatok",
+          "qaralamalar",
+          "qoralama xatlar",
+          "qoralamalar",
           "rascunhos",
           "rasimu",
+          "re\u015Fniv\xEEs",
+          "rozepsan\xE9",
+          "sbozs",
+          "skica",
           "skice",
+          "skitsur",
+          "szkice",
+          "taslak",
           "taslaklar",
+          "th\u01B0 nh\xE1p",
           "tsararrun sa\u0199onni",
           "utkast",
+          "uzmetumi",
           "vakiraoka",
+          "versiones provisori",
           "v\xE1zlatok",
+          "wersje robocze",
           "zirriborroak",
           "\xE0w\u1ECDn \xE0k\u1ECDpam\u1ECD\u0301",
+          "\u03C0\u03C1\u03BF\u03C3\u03C7\u03AD\u03B4\u03B9\u03B1",
           "\u03C0\u03C1\u03CC\u03C7\u03B5\u03B9\u03C1\u03B1",
+          "\u0434\u0440\u0430\u0444\u0442\u043E\u0432\u0438",
+          "\u0436\u043E\u0431\u0430 \u0436\u0430\u0437\u0431\u0430\u043B\u0430\u0440",
           "\u0436\u043E\u0431\u0430\u043B\u0430\u0440",
           "\u043D\u0430\u0446\u0440\u0442\u0438",
+          "\u043D\u0435\u0434\u043E\u0432\u0440\u0448\u0435\u043D\u0435",
+          "\u043D\u0435\u0434\u043E\u0432\u0440\u0448\u0435\u043D\u043E",
+          "\u043D\u0435\u043F\u0440\u0430\u0442\u0435\u043D\u0438",
           "\u043D\u043E\u043E\u0440\u0433\u0443\u0443\u0434",
+          "\u043D\u043E\u043E\u0440\u043E\u0433",
           "\u0441\u0438\u0451\u04B3\u043D\u0430\u0432\u0438\u0441",
+          "\u0441\u043A\u0438\u0446\u0438",
           "\u0445\u043E\u043C\u0430\u043A\u0438 \u0445\u0430\u0442\u043B\u0430\u0440",
           "\u0447\u0430\u0440\u043D\u0430\u0432\u0456\u043A\u0456",
           "\u0447\u0435\u0440\u043D\u0435\u0442\u043A\u0438",
           "\u0447\u0435\u0440\u043D\u043E\u0432\u0438",
           "\u0447\u0435\u0440\u043D\u043E\u0432\u0438\u043A\u0438",
           "\u0447\u0435\u0440\u043D\u043E\u0432\u0438\u043A\u0442\u0435\u0440",
-          "\u057D\u0587\u0561\u0563\u0580\u0565\u0580",
+          "\u0448\u0438\u043C\u0430\u0439 \u049B\u0430\u0493\u0430\u0437",
+          "\u057D\u0565\u0582\u0561\u0563\u0580\u0565\u0580",
           "\u05D8\u05D9\u05D5\u05D8\u05D5\u05EA",
+          "\u0627\u0644\u0645\u0633\u0648\u062F\u0627\u062A",
+          "\u0628\u0627\u0631\u0644\u064A\u06A9",
+          "\u0642\u0648\u0644\u064A\u0627\u0632\u0645\u0649\u0644\u0627\u0631",
           "\u0645\u0633\u0648\u062F\u0627\u062A",
-          "\u0645\u0633\u0648\u062F\u0627\u062A",
+          "\u0645\u0633\u0648\u0651\u062F\u0627\u062A",
           "\u0645\u0648\u0633\u0648\u062F\u06D0",
+          "\u0646\u0627\u0645\u0647 \u0647\u0627\u06CC \u0646\u0627\u062A\u06A9\u0645\u06CC\u0644",
           "\u067E\u06CC\u0634 \u0646\u0648\u06CC\u0633\u0647\u0627",
+          "\u067E\u06CC\u0634\u200C\u0646\u0648\u06CC\u0633\u200C\u0647\u0627",
+          "\u0688\u0631\u0627\u0641\u0679",
           "\u0688\u0631\u0627\u0641\u0679/",
-          "\u0921\u094D\u0930\u093E\u095E\u094D\u091F",
+          "\u0695\u0647\u200C\u0634\u0646\u0648\u0648\u0633\u06D5\u06A9\u0627\u0646",
+          "\u0921\u094D\u0930\u093E\u092B\u093C\u091F",
+          "\u0921\u094D\u0930\u093E\u092B\u093C\u094D\u091F",
+          "\u0921\u094D\u0930\u093E\u092B\u094D\u091F",
+          "\u0921\u094D\u0930\u093E\u092B\u094D\u091F\u0939\u0930\u0942",
           "\u092A\u094D\u0930\u093E\u0930\u0942\u092A",
-          "\u0996\u09B8\u09DC\u09BE",
-          "\u0996\u09B8\u09DC\u09BE",
+          "\u092E\u0938\u0941\u0926\u093E",
+          "\u0996\u09B8\u09A1\u09BC\u09BE",
           "\u09A1\u09CD\u09F0\u09BE\u09AB\u09CD\u099F",
           "\u0A21\u0A4D\u0A30\u0A3E\u0A2B\u0A1F",
+          "\u0AA1\u0ACD\u0AB0\u0ABE\u0AAB\u0ACD\u0A9F",
           "\u0AA1\u0ACD\u0AB0\u0ABE\u0AAB\u0ACD\u0A9F\u0AB8",
           "\u0B21\u0B4D\u0B30\u0B3E\u0B2B\u0B4D\u0B1F",
           "\u0BB5\u0BB0\u0BC8\u0BB5\u0BC1\u0B95\u0BB3\u0BCD",
           "\u0C1A\u0C3F\u0C24\u0C4D\u0C24\u0C41 \u0C2A\u0C4D\u0C30\u0C24\u0C41\u0C32\u0C41",
           "\u0C95\u0CB0\u0CA1\u0CC1\u0C97\u0CB3\u0CC1",
           "\u0D15\u0D30\u0D1F\u0D41\u0D15\u0D33\u0D4D\u200D",
+          "\u0D21\u0D4D\u0D30\u0D3E\u0D2B\u0D4D\u0D31\u0D4D\u0D31\u0D41\u0D15\u0D7E",
+          "\u0D2A\u0D42\u0D30\u0D4D\u200D\u0D24\u0D4D\u0D24\u0D3F\u0D2F\u0D3E\u0D15\u0D3E\u0D24\u0D4D\u0D24\u0D35",
+          "\u0D9A\u0DA7\u0DD4 \u0DC3\u0DA7\u0DC4\u0DB1\u0DCA",
           "\u0D9A\u0DD9\u0DA7\u0DD4\u0DB8\u0DCA \u0DB4\u0DAD\u0DCA",
+          "\u0E01\u0E25\u0E48\u0E2D\u0E07\u0E08\u0E14\u0E2B\u0E21\u0E32\u0E22\u0E23\u0E48\u0E32\u0E07",
           "\u0E09\u0E1A\u0E31\u0E1A\u0E23\u0E48\u0E32\u0E07",
+          "\u0E23\u0E48\u0E32\u0E07",
+          "\u101C\u102D\u1000\u103A\u1021\u1015\u103C\u1031\u102C\u1036",
+          "\u10D3\u10E0\u10DD\u10D4\u10D1\u10D8\u10D7\u10D8",
           "\u10DB\u10DD\u10DC\u10D0\u10EE\u10D0\u10D6\u10D4\u10D1\u10D8",
+          "\u10EC\u10D8\u10DC\u10D0\u10E1\u10EC\u10D0\u10E0\u10D8",
           "\u1228\u1242\u1246\u127D",
+          "\u12C8\u1321\u1295 \u133D\u1211\u134D",
           "\u179F\u17B6\u179A\u1796\u17D2\u179A\u17B6\u1784",
+          "\u179F\u17C1\u1785\u1780\u17D2\u178A\u17B8\u200B\u1796\u17D2\u179A\u17B6\u1784\u200B",
+          "\u179F\u17C6\u1794\u17BB\u178F\u17D2\u179A\u1796\u1784\u17D2\u179A\u17C0\u1784",
           "\u4E0B\u66F8\u304D",
           "\u8349\u7A3F",
-          "\u8349\u7A3F",
-          "\u8349\u7A3F",
-          "\uC784\uC2DC \uBCF4\uAD00\uD568"
+          "\u8349\u7A3F\u5323",
+          "\u8349\u7A3F\u7BB1",
+          "\uC784\uC2DC \uBCF4\uAD00\uD568",
+          "\uCD08\uC548"
         ],
-        "\\Archive": ["archive"]
-      },
-      specialUse(hasSpecialUseExtension, folder) {
-        if (hasSpecialUseExtension) {
-          const flag2 = module.exports.flags.find((flag3) => folder.flags.has(flag3));
-          if (flag2) {
-            return { flag: flag2, source: "extension" };
-          }
-        }
-        let name = folder.name.toLowerCase().replace(/\u200e/g, "").trim();
-        const flag = Object.keys(module.exports.names).find((flag2) => module.exports.names[flag2].includes(name));
-        if (flag) {
-          return { flag, source: "name" };
-        }
-        return { flag: null };
+        "\\Archive": [
+          "an chartlann",
+          "archief",
+          "archieven",
+          "archif",
+          "archifau",
+          "archiv",
+          "archivados",
+          "archivar",
+          "archive",
+          "archives",
+          "archivi",
+          "archivio",
+          "archivo",
+          "archivos",
+          "archivova\u0165",
+          "archivs",
+          "archivu",
+          "archiv\xE1l\xE1s",
+          "archiwum",
+          "archiwy",
+          "archyvas",
+          "archyvuoti",
+          "arch\xEDv",
+          "arch\xEDvum",
+          "arch\xEDvy",
+          "argief",
+          "argiven",
+          "argyf",
+          "arhiiv",
+          "arhiv",
+          "arhiva",
+          "arhive",
+          "arhivi",
+          "arhiv\u0103",
+          "arh\u012Bvi",
+          "arh\u012Bvs",
+          "arkib",
+          "arkisto",
+          "arkiv",
+          "arkiva",
+          "arkiver",
+          "arkivo",
+          "arkivoje",
+          "arquivamento",
+          "arquivo",
+          "arquivo morto",
+          "arquivos",
+          "arsip",
+          "artxibatu",
+          "artxiboa",
+          "artxiboak",
+          "arxiu",
+          "arxiv",
+          "arxivlar",
+          "ar\u015Fiv",
+          "ar\u015Fivler",
+          "a\u1E25raz",
+          "cartlanna",
+          "diell",
+          "diello\xF9",
+          "er\u015F\xEEv",
+          "geymsla",
+          "goym \xED skjalasavni",
+          "i\u0263baren",
+          "l\u01B0u tr\u1EEF",
+          "skjalageymsla",
+          "taq yakb'\xE4l",
+          "tasg-lannan",
+          "\u03B1\u03C1\u03C7\u03B5\u03B9\u03BF\u03B8\u03AD\u03C4\u03B7\u03C3\u03B7",
+          "\u03B1\u03C1\u03C7\u03B5\u03B9\u03BF\u03B8\u03AE\u03BA\u03B7",
+          "\u0430\u0440\u0445\u0438\u0432",
+          "\u0430\u0440\u0445\u0438\u0432\u0430",
+          "\u0430\u0440\u0445\u0438\u0432\u0435",
+          "\u0430\u0440\u0445\u0438\u0432\u0438",
+          "\u0430\u0440\u0445\u0438\u0432\u0438\u0440\u0430\u0439",
+          "\u0430\u0440\u0445\u0438\u0432\u0442\u0435\u0440",
+          "\u0430\u0440\u0445\u0438\u0432\u044B",
+          "\u0430\u0440\u0445\u0456\u0432",
+          "\u0430\u0440\u0445\u0456\u0432\u0438",
+          "\u0430\u0440\u0445\u0456\u0432\u044B",
+          "\u0430\u0440\u0445\u0456\u045E",
+          "\u043C\u04B1\u0440\u0430\u0493\u0430\u0442",
+          "\u0561\u0580\u056D\u056B\u057E",
+          "\u0561\u0580\u056D\u056B\u0582\u0576\u0565\u0580",
+          "\u05D0\u05E8\u05DB\u05D9\u05D5\u05DF",
+          "\u0623\u0631\u0634\u0641\u0629",
+          "\u0623\u0631\u0634\u064A\u0641",
+          "\u0626\u0627\u0631\u062E\u0649\u067E",
+          "\u0626\u06D5\u0631\u0634\u06CC\u0641",
+          "\u0627\u0631\u0634\u06CC\u0648",
+          "\u0627\u0644\u0623\u0631\u0634\u064A\u0641",
+          "\u0628\u0627\u06CC\u06AF\u0627\u0646\u06CC",
+          "\u091C\u0924\u0928 \u0915\u0947\u0932\u0947\u0932\u093E",
+          "\u0938\u0902\u0917\u094D\u0930\u0939",
+          "\u0D36\u0D47\u0D16\u0D30\u0D02",
+          "\u0DC3\u0D82\u0DBB\u0D9A\u0DCA\u200D\u0DC2\u0DAB\u0DBA",
+          "\u0E01\u0E32\u0E23\u0E40\u0E01\u0E47\u0E1A\u0E16\u0E32\u0E27\u0E23",
+          "\u0E17\u0E35\u0E48\u0E40\u0E01\u0E47\u0E1A\u0E16\u0E32\u0E27\u0E23",
+          "\u10D0\u10E0\u10E5\u10D8\u10D5\u10D4\u10D1\u10D8",
+          "\u10D0\u10E0\u10E5\u10D8\u10D5\u10D8",
+          "\u1794\u17D0\u178E\u17D2\u178E\u179F\u17B6\u179A",
+          "\u1794\u17D0\u178E\u17D2\u178E\u179F\u17B6\u179A\u200B",
+          "\u30A2\u30FC\u30AB\u30A4\u30D6",
+          "\u5099\u5B58",
+          "\u5B58\u6863",
+          "\u5B58\u6A94",
+          "\u5C01\u5B58",
+          "\u5F52\u6863",
+          "\uBCF4\uAD00 \uD3B8\uC9C0\uD568",
+          "\uBCF4\uAD00\uD568",
+          "\uC800\uC7A5 \uD3B8\uC9C0\uD568"
+        ]
       }
+    };
+    var NAME_INDEX = /* @__PURE__ */ new Map();
+    for (let flag of Object.keys(module.exports.names)) {
+      for (let entry of module.exports.names[flag]) {
+        NAME_INDEX.set(entry, flag);
+      }
+    }
+    function normalizeName(name) {
+      return name.toLowerCase().replace(/\u200e/g, "").trim().normalize("NFKC");
+    }
+    module.exports.specialUse = (hasSpecialUseExtension, folder) => {
+      if (hasSpecialUseExtension) {
+        const flag2 = module.exports.flags.find((flag3) => folder.flags.has(flag3));
+        if (flag2) {
+          return { flag: flag2, source: "extension" };
+        }
+      }
+      let name = normalizeName(folder.name);
+      let flag = NAME_INDEX.get(name);
+      if (flag) {
+        return { flag, source: "name" };
+      }
+      let core = name.split(TOKEN_SPLIT).filter((token) => token && !GENERIC_TOKENS.has(token));
+      if (core.length === 1 && core[0] !== name) {
+        flag = NAME_INDEX.get(core[0]);
+        if (flag) {
+          return { flag, source: "name-guess" };
+        }
+      }
+      return { flag: null };
     };
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/list.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/list.js
 var require_list = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/list.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/list.js"(exports, module) {
     "use strict";
-    var { decodePath, encodePath, normalizePath } = require_tools2();
+    var { decodePath, encodePath, normalizePath, enhanceCommandError, hasCapability, isRev2Active, buildStatusQueryAttributes } = require_tools2();
     var { specialUse } = require_special_use();
     module.exports = async (connection, reference, mailbox, options) => {
       options = options || {};
       const FLAG_SORT_ORDER = ["\\Inbox", "\\Flagged", "\\Sent", "\\Drafts", "\\All", "\\Archive", "\\Junk", "\\Trash"];
-      const SOURCE_SORT_ORDER = ["user", "extension", "name"];
-      let listCommand = connection.capabilities.has("XLIST") && !connection.capabilities.has("SPECIAL-USE") ? "XLIST" : "LIST";
-      let response;
+      const SOURCE_SORT_ORDER = ["user", "extension", "name", "name-guess"];
+      const PUBLIC_SOURCE = { "name-guess": "name" };
+      const isNameSource = (source) => source === "name" || source === "name-guess";
+      let listCommand = connection.capabilities.has("XLIST") && !hasCapability(connection, "SPECIAL-USE") ? "XLIST" : "LIST";
       try {
-        let entries = [];
-        let statusMap = /* @__PURE__ */ new Map();
-        let returnArgs = [];
-        let statusQueryAttributes = [];
-        if (options.statusQuery) {
-          Object.keys(options.statusQuery).forEach((key) => {
-            if (!options.statusQuery[key]) {
-              return;
-            }
-            switch (key.toUpperCase()) {
-              case "MESSAGES":
-              case "RECENT":
-              case "UIDNEXT":
-              case "UIDVALIDITY":
-              case "UNSEEN":
-                statusQueryAttributes.push({ type: "ATOM", value: key.toUpperCase() });
-                break;
-              case "HIGHESTMODSEQ":
-                if (connection.capabilities.has("CONDSTORE")) {
-                  statusQueryAttributes.push({ type: "ATOM", value: key.toUpperCase() });
-                }
-                break;
-            }
-          });
-        }
-        if (listCommand === "LIST" && connection.capabilities.has("LIST-STATUS") && statusQueryAttributes.length) {
-          returnArgs.push({ type: "ATOM", value: "STATUS" }, statusQueryAttributes);
-          if (connection.capabilities.has("SPECIAL-USE")) {
-            returnArgs.push({ type: "ATOM", value: "SPECIAL-USE" });
+        let entries;
+        let statusMap;
+        let specialUseMatches;
+        let statusQueryAttributes = buildStatusQueryAttributes(connection, options.statusQuery);
+        let supportsExtendedList = connection.capabilities.has("LIST-EXTENDED") || connection.capabilities.has("IMAP4rev2");
+        let canRequestStatus = listCommand === "LIST" && !connection.skipListStatusArgs && hasCapability(connection, "LIST-STATUS") && !!statusQueryAttributes.length;
+        let canRequestSubscribed = listCommand === "LIST" && !options.listOnly && !connection.skipListSubscribedArg && supportsExtendedList;
+        let auxArgsAvailable = hasCapability(connection, "SPECIAL-USE") || connection.capabilities.has("CHILDREN") || supportsExtendedList;
+        let stageHasAuxArgs = (stage) => (stage.status || stage.subscribed) && stage.aux !== false && !connection.skipListAuxArgs && auxArgsAvailable;
+        let buildListArgs = (stage) => {
+          let args = [];
+          if (stage.status) {
+            args.push({ type: "ATOM", value: "STATUS" }, statusQueryAttributes);
           }
-        }
-        let specialUseMatches = {};
+          if (stageHasAuxArgs(stage)) {
+            if (hasCapability(connection, "SPECIAL-USE")) {
+              args.push({ type: "ATOM", value: "SPECIAL-USE" });
+            }
+            if (connection.capabilities.has("CHILDREN") || supportsExtendedList) {
+              args.push({ type: "ATOM", value: "CHILDREN" });
+            }
+          }
+          if (stage.subscribed) {
+            args.push({ type: "ATOM", value: "SUBSCRIBED" });
+          }
+          return args;
+        };
         let addSpecialUseMatch = (entry, type, source) => {
           if (!specialUseMatches[type]) {
             specialUseMatches[type] = [];
@@ -56067,6 +57149,10 @@ var require_list = __commonJS({
           if (entry.flags.has("\\NonExistent")) {
             entry.flags.add("\\Noselect");
           }
+          if (entry.flags.has("\\Subscribed")) {
+            entry.flags.delete("\\Subscribed");
+            entry.subscribed = true;
+          }
         };
         let specialUseHints = {};
         if (options.specialUseHints && typeof options.specialUseHints === "object") {
@@ -56076,12 +57162,12 @@ var require_list = __commonJS({
             }
           }
         }
-        let runList = async (reference2, mailbox2) => {
+        let runList = async (reference2, mailbox2, returnArgs) => {
           const cmdArgs = [encodePath(connection, reference2), encodePath(connection, mailbox2)];
           if (returnArgs.length) {
             cmdArgs.push({ type: "ATOM", value: "RETURN" }, returnArgs);
           }
-          response = await connection.exec(listCommand, cmdArgs, {
+          let response = await connection.exec(listCommand, cmdArgs, {
             untagged: {
               // Each untagged LIST response: * LIST (<flags>) "<delimiter>" "<mailbox name>"
               // attributes[0] = flags array, attributes[1] = delimiter, attributes[2] = mailbox name
@@ -56107,7 +57193,7 @@ var require_list = __commonJS({
                     addSpecialUseMatch(entry, "\\Inbox", "extension");
                   }
                 }
-                if (entry.path.toUpperCase() === "INBOX") {
+                if (entry.path.toUpperCase() === "INBOX" && !entry.flags.has("\\NonExistent")) {
                   addSpecialUseMatch(entry, "\\Inbox", "name");
                 }
                 if (entry.delimiter && entry.path.charAt(0) === entry.delimiter) {
@@ -56117,10 +57203,10 @@ var require_list = __commonJS({
                 entry.parent = entry.delimiter ? entry.path.split(entry.delimiter) : [entry.path];
                 entry.name = entry.parent.pop();
                 let { flag: specialUseFlag, source: flagSource } = specialUse(
-                  connection.capabilities.has("XLIST") || connection.capabilities.has("SPECIAL-USE"),
+                  connection.capabilities.has("XLIST") || hasCapability(connection, "SPECIAL-USE"),
                   entry
                 );
-                if (specialUseFlag) {
+                if (specialUseFlag && (!isNameSource(flagSource) || !entry.flags.has("\\NonExistent"))) {
                   addSpecialUseMatch(entry, specialUseFlag, flagSource);
                 }
                 entries.push(entry);
@@ -56139,7 +57225,10 @@ var require_list = __commonJS({
                   UIDNEXT: { key: "uidNext", parser: Number },
                   UIDVALIDITY: { key: "uidValidity", parser: BigInt },
                   UNSEEN: { key: "unseen", parser: Number },
-                  HIGHESTMODSEQ: { key: "highestModseq", parser: BigInt }
+                  HIGHESTMODSEQ: { key: "highestModseq", parser: BigInt },
+                  // IMAP4rev2 additions (RFC 9051): mailbox size and \Deleted count
+                  SIZE: { key: "size", parser: Number },
+                  DELETED: { key: "deleted", parser: Number }
                 };
                 let key;
                 let map = { path: statusPath };
@@ -56168,18 +57257,94 @@ var require_list = __commonJS({
           response.next();
         };
         let normalizedReference = normalizePath(connection, reference || "");
-        await runList(normalizedReference, normalizePath(connection, mailbox || "", true));
+        let normalizedMailbox = normalizePath(connection, mailbox || "", true);
+        let stages = [];
+        if (canRequestStatus && canRequestSubscribed) {
+          stages.push({ status: true, subscribed: true });
+        }
+        if (canRequestStatus) {
+          stages.push({ status: true, subscribed: false });
+        } else if (canRequestSubscribed) {
+          stages.push({ status: false, subscribed: true });
+        }
+        stages.push({ status: false, subscribed: false });
+        let isRejectedCommand = (err) => err.responseStatus === "BAD" && err.code !== "ETHROTTLE";
+        let successStage = null;
+        let subscriptionStateKnown = false;
+        let anyEntrySubscribed = () => entries.some((entry) => entry.subscribed);
+        let lastRejectedStage = null;
+        let auxRetryInserted = false;
+        for (let i = 0; i < stages.length; i++) {
+          let stage = stages[i];
+          let stageArgs = buildListArgs(stage);
+          entries = [];
+          statusMap = /* @__PURE__ */ new Map();
+          specialUseMatches = {};
+          try {
+            await runList(normalizedReference, normalizedMailbox, stageArgs);
+            if (lastRejectedStage) {
+              if (lastRejectedStage.subscribed && !stage.subscribed) {
+                connection.skipListSubscribedArg = true;
+              }
+              if (lastRejectedStage.status && !stage.status) {
+                connection.skipListStatusArgs = true;
+              }
+              if (stageHasAuxArgs(lastRejectedStage) && stage.aux === false && lastRejectedStage.status === stage.status && lastRejectedStage.subscribed === stage.subscribed) {
+                connection.skipListAuxArgs = true;
+              }
+            }
+            successStage = stage;
+            subscriptionStateKnown = !!stage.subscribed;
+            break;
+          } catch (err) {
+            if (i === stages.length - 1 || !isRejectedCommand(err)) {
+              throw err;
+            }
+            lastRejectedStage = stage;
+            if (!auxRetryInserted && stageHasAuxArgs(stage)) {
+              stages.splice(i + 1, 0, { ...stage, aux: false });
+              auxRetryInserted = true;
+            }
+            connection.log.warn({ msg: "LIST RETURN options rejected, retrying with reduced options", err, cid: connection.id });
+          }
+        }
         if (options.listOnly) {
           return entries;
         }
         if (normalizedReference && !specialUseMatches["\\Inbox"]) {
-          await runList("", "INBOX");
+          let returnArgs = buildListArgs(successStage);
+          let entryCountBefore = entries.length;
+          let specialUseCountsBefore = {};
+          for (let type of Object.keys(specialUseMatches)) {
+            specialUseCountsBefore[type] = specialUseMatches[type].length;
+          }
+          try {
+            await runList("", "INBOX", returnArgs);
+          } catch (err) {
+            if (!returnArgs.length || !isRejectedCommand(err)) {
+              throw err;
+            }
+            entries.length = entryCountBefore;
+            for (let type of Object.keys(specialUseMatches)) {
+              if (!(type in specialUseCountsBefore)) {
+                delete specialUseMatches[type];
+              } else {
+                specialUseMatches[type].length = specialUseCountsBefore[type];
+              }
+            }
+            connection.log.warn({ msg: "INBOX LIST with RETURN options failed, retrying plain", err, cid: connection.id });
+            await runList("", "INBOX", []);
+          }
         }
         if (options.statusQuery) {
+          let syntheticRecent = options.statusQuery.recent && isRev2Active(connection);
           for (let entry of entries) {
             if (!entry.flags.has("\\Noselect") && !entry.flags.has("\\NonExistent")) {
               if (statusMap.has(entry.path)) {
                 entry.status = statusMap.get(entry.path);
+                if (syntheticRecent) {
+                  entry.status.recent = 0;
+                }
               } else if (!statusMap.size) {
                 try {
                   entry.status = await connection.run("STATUS", entry.path, options.statusQuery);
@@ -56190,10 +57355,8 @@ var require_list = __commonJS({
             }
           }
         }
-        response = await connection.exec(
-          "LSUB",
-          [encodePath(connection, normalizePath(connection, reference || "")), encodePath(connection, normalizePath(connection, mailbox || "", true))],
-          {
+        let runLsub = async () => {
+          let response = await connection.exec("LSUB", [encodePath(connection, normalizedReference), encodePath(connection, normalizedMailbox)], {
             untagged: {
               LSUB: async (untagged) => {
                 if (!untagged.attributes || !untagged.attributes.length) {
@@ -56223,9 +57386,26 @@ var require_list = __commonJS({
                 }
               }
             }
+          });
+          response.next();
+        };
+        let needsLsub = !isRev2Active(connection) && (!successStage.subscribed || !anyEntrySubscribed());
+        if (needsLsub) {
+          subscriptionStateKnown = false;
+        }
+        if (needsLsub && !connection.skipLsub) {
+          try {
+            await runLsub();
+            subscriptionStateKnown = true;
+          } catch (err) {
+            if (isRejectedCommand(err)) {
+              connection.skipLsub = true;
+            } else if (err.responseStatus !== "NO" || err.code === "ETHROTTLE") {
+              throw err;
+            }
+            connection.log.warn({ msg: "Failed to request subscription info", err, cid: connection.id });
           }
-        );
-        response.next();
+        }
         for (let type of Object.keys(specialUseMatches)) {
           let sortedEntries = specialUseMatches[type].sort((a, b) => {
             let aSource = SOURCE_SORT_ORDER.indexOf(a.source);
@@ -56236,8 +57416,16 @@ var require_list = __commonJS({
             return aSource - bSource;
           });
           if (!sortedEntries[0].entry.specialUse) {
+            let source = sortedEntries[0].source;
             sortedEntries[0].entry.specialUse = type;
-            sortedEntries[0].entry.specialUseSource = sortedEntries[0].source;
+            sortedEntries[0].entry.specialUseSource = PUBLIC_SOURCE[source] || source;
+          }
+        }
+        if (!subscriptionStateKnown && !anyEntrySubscribed()) {
+          for (let entry of entries) {
+            if (!entry.flags.has("\\NonExistent")) {
+              entry.subscribed = true;
+            }
           }
         }
         let inboxEntry = entries.find((entry) => entry.specialUse === "\\Inbox");
@@ -56266,6 +57454,7 @@ var require_list = __commonJS({
           return a.path.localeCompare(b.path);
         });
       } catch (err) {
+        await enhanceCommandError(err);
         connection.log.warn({ msg: "Failed to list folders", err, cid: connection.id });
         throw err;
       }
@@ -56273,15 +57462,17 @@ var require_list = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/enable.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/enable.js
 var require_enable = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
     "use strict";
+    var { hasCapability } = require_tools2();
     module.exports = async (connection, extensionList) => {
-      if (!connection.capabilities.has("ENABLE") || connection.state !== connection.states.AUTHENTICATED) {
+      if (!hasCapability(connection, "ENABLE") || connection.state !== connection.states.AUTHENTICATED) {
         return;
       }
-      extensionList = extensionList.filter((extension) => connection.capabilities.has(extension.toUpperCase()));
+      let advertised = new Set([...connection.capabilities.keys()].map((capability) => capability.toUpperCase()));
+      extensionList = extensionList.filter((extension) => advertised.has(extension.toUpperCase()));
       if (!extensionList.length) {
         return;
       }
@@ -56309,9 +57500,9 @@ var require_enable = __commonJS({
             }
           }
         );
-        connection.enabled = enabled;
+        connection.enabled = /* @__PURE__ */ new Set([...connection.enabled, ...enabled]);
         response.next();
-        return enabled;
+        return connection.enabled;
       } catch (err) {
         connection.log.warn({ err, cid: connection.id });
         return false;
@@ -56320,9 +57511,9 @@ var require_enable = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/select.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/select.js
 var require_select = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/select.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/select.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path, options) => {
@@ -56514,18 +57705,19 @@ var require_select = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/fetch.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/fetch.js
 var require_fetch2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
     "use strict";
-    var { formatMessageResponse } = require_tools2();
+    var { formatMessageResponse, isRev2Active } = require_tools2();
     module.exports = async (connection, range, query, options) => {
       if (connection.state !== connection.states.SELECTED || !range) {
         return;
       }
       options = options || {};
       let mailbox = connection.mailbox;
-      const commandKey = connection.capabilities.has("BINARY") && options.binary && !connection.disableBinary ? "BINARY" : "BODY";
+      const canUseBinary = connection.capabilities.has("BINARY") || isRev2Active(connection);
+      const commandKey = canUseBinary && options.binary && !connection.disableBinary ? "BINARY" : "BODY";
       let retryCount = 0;
       const maxRetries = 4;
       const baseDelay = 1e3;
@@ -56539,19 +57731,14 @@ var require_fetch2 = __commonJS({
           let attributes = [{ type: "SEQUENCE", value: (range || "*").toString() }];
           let queryStructure = [];
           let setBodyPeek = (attributes2, partial2) => {
+            let section = [].concat(attributes2 || []);
+            let binaryAddressable = !section.length || section.length === 1 && typeof section[0].value === "string" && /^\d+(\.\d+)*$/.test(section[0].value);
             let bodyPeek = {
               type: "ATOM",
-              value: `${commandKey}.PEEK`,
-              section: [],
+              value: `${binaryAddressable ? commandKey : "BODY"}.PEEK`,
+              section,
               partial: partial2
             };
-            if (Array.isArray(attributes2)) {
-              attributes2.forEach((attribute) => {
-                bodyPeek.section.push(attribute);
-              });
-            } else if (attributes2) {
-              bodyPeek.section.push(attributes2);
-            }
             queryStructure.push(bodyPeek);
           };
           ["all", "fast", "full", "uid", "flags", "bodyStructure", "envelope", "internalDate"].forEach((key) => {
@@ -56570,7 +57757,7 @@ var require_fetch2 = __commonJS({
                 partial2.push(Number(query.source.maxLength));
               }
             }
-            queryStructure.push({ type: "ATOM", value: `${commandKey}.PEEK`, section: [], partial: partial2 });
+            setBodyPeek(null, partial2);
           }
           if (connection.capabilities.has("OBJECTID")) {
             queryStructure.push({ type: "ATOM", value: "EMAILID" });
@@ -56702,9 +57889,9 @@ var require_fetch2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/create.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/create.js
 var require_create = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/create.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/create.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, getStatusCode, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -56761,9 +57948,9 @@ var require_create = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/delete.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/delete.js
 var require_delete = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -56791,9 +57978,9 @@ var require_delete = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/rename.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/rename.js
 var require_rename = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path, newPath) => {
@@ -56826,9 +58013,9 @@ var require_rename = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/close.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/close.js
 var require_close = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/close.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/close.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state !== connection.states.SELECTED) {
@@ -56854,9 +58041,9 @@ var require_close = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/subscribe.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/subscribe.js
 var require_subscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -56878,9 +58065,9 @@ var require_subscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/unsubscribe.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/unsubscribe.js
 var require_unsubscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -56902,9 +58089,9 @@ var require_unsubscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/store.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/store.js
 var require_store = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/store.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/store.js"(exports, module) {
     "use strict";
     var { formatFlag, canUseFlag, enhanceCommandError } = require_tools2();
     module.exports = async (connection, range, flags, options) => {
@@ -56966,11 +58153,11 @@ var require_store = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/search-compiler.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/search-compiler.js
 var require_search_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
     "use strict";
-    var { formatDate, formatFlag, canUseFlag, isDate } = require_tools2();
+    var { formatDate, formatFlag, canUseFlag, isDate, isRev2Active } = require_tools2();
     var setBoolOpt = (attributes, term, value) => {
       if (!value) {
         if (/^un/i.test(term)) {
@@ -57050,10 +58237,19 @@ var require_search_compiler = __commonJS({
               break;
             // Simple boolean flags without UN- support
             case "ALL":
+              if (params[term]) {
+                setBoolOpt(attributes, term, true);
+              }
+              break;
             case "NEW":
             case "OLD":
             case "RECENT":
               if (params[term]) {
+                if (isRev2Active(connection)) {
+                  let error2 = new Error(`The "${term.toLowerCase()}" search key does not exist in IMAP4rev2`);
+                  error2.code = "MissingServerExtension";
+                  throw error2;
+                }
                 setBoolOpt(attributes, term, true);
               }
               break;
@@ -57283,12 +58479,18 @@ var require_search_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/search.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/search.js
 var require_search = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/search.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/search.js"(exports, module) {
     "use strict";
-    var { enhanceCommandError } = require_tools2();
+    var { enhanceCommandError, hasCapability, isValidSequenceValue } = require_tools2();
     var { searchCompiler } = require_search_compiler();
+    var stripEsearchPrefix = (attrs) => {
+      let start = 0;
+      if (attrs[start] && Array.isArray(attrs[start])) start++;
+      if (attrs[start] && typeof attrs[start].value === "string" && attrs[start].value.toUpperCase() === "UID") start++;
+      return attrs.slice(start);
+    };
     function parseEsearchResponse(attrs) {
       const result = {};
       let i = 0;
@@ -57328,7 +58530,7 @@ var require_search = __commonJS({
           }
           case "PARTIAL": {
             const listToken = attrs[++i];
-            const items = Array.isArray(listToken) ? listToken : listToken && Array.isArray(listToken.attributes) ? listToken.attributes : null;
+            const items = Array.isArray(listToken) ? listToken : null;
             if (!items || items.length < 2) break;
             result.partial = {
               range: items[0].value,
@@ -57357,7 +58559,7 @@ var require_search = __commonJS({
       } else {
         return false;
       }
-      const useEsearch = options.returnOptions && options.returnOptions.length > 0 && connection.capabilities.has("ESEARCH");
+      const useEsearch = options.returnOptions && options.returnOptions.length > 0 && hasCapability(connection, "ESEARCH");
       if (useEsearch) {
         const returnItems = [];
         for (const opt of options.returnOptions) {
@@ -57377,11 +58579,7 @@ var require_search = __commonJS({
               untagged: {
                 ESEARCH: async (untagged) => {
                   if (!untagged || !untagged.attributes) return;
-                  let attrs = untagged.attributes;
-                  let start = 0;
-                  if (attrs[start] && (Array.isArray(attrs[start]) || attrs[start].type === "LIST")) start++;
-                  if (attrs[start] && typeof attrs[start].value === "string" && attrs[start].value.toUpperCase() === "UID") start++;
-                  esearchResult = parseEsearchResponse(attrs.slice(start));
+                  esearchResult = parseEsearchResponse(stripEsearchPrefix(untagged.attributes));
                 }
               }
             });
@@ -57407,6 +58605,60 @@ var require_search = __commonJS({
                   }
                 });
               }
+            },
+            // IMAP4rev2 servers answer even a plain SEARCH with an untagged
+            // ESEARCH response (RFC 9051 deprecated the SEARCH response), so
+            // both forms are collected into the same result set
+            ESEARCH: async (untagged) => {
+              if (!untagged || !untagged.attributes) {
+                return;
+              }
+              let parsed = parseEsearchResponse(stripEsearchPrefix(untagged.attributes));
+              if (parsed.all) {
+                let existsCount = () => connection.mailbox && connection.mailbox.exists || 0;
+                let overBudget = () => results.size >= existsCount();
+                let resolveId = (part) => part === "*" ? options.uid ? 0 : existsCount() : Number(part);
+                let truncated = false;
+                let discarded = false;
+                sequenceSetLoop: for (let part of parsed.all.split(",")) {
+                  part = part.trim();
+                  let colon = part.indexOf(":");
+                  if (colon < 0) {
+                    let value = resolveId(part);
+                    if (!isValidSequenceValue(value)) {
+                      discarded = true;
+                      continue;
+                    }
+                    if (overBudget()) {
+                      truncated = true;
+                      break;
+                    }
+                    results.add(value);
+                    continue;
+                  }
+                  let first = resolveId(part.substr(0, colon));
+                  let second = resolveId(part.substr(colon + 1));
+                  if (!isValidSequenceValue(first) || !isValidSequenceValue(second)) {
+                    discarded = true;
+                    continue;
+                  }
+                  for (let id = Math.min(first, second); id <= Math.max(first, second); id++) {
+                    if (overBudget()) {
+                      truncated = true;
+                      break sequenceSetLoop;
+                    }
+                    results.add(id);
+                  }
+                }
+                if (truncated || discarded) {
+                  connection.log.warn({
+                    msg: "Invalid entries in the ESEARCH ALL result",
+                    truncated,
+                    discarded,
+                    cid: connection.id
+                  });
+                }
+              }
             }
           }
         });
@@ -57422,9 +58674,9 @@ var require_search = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/noop.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/noop.js
 var require_noop = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       try {
@@ -57439,18 +58691,18 @@ var require_noop = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/expunge.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/expunge.js
 var require_expunge = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
     "use strict";
-    var { enhanceCommandError } = require_tools2();
+    var { enhanceCommandError, hasCapability } = require_tools2();
     module.exports = async (connection, range, options) => {
       if (connection.state !== connection.states.SELECTED || !range) {
         return;
       }
       options = options || {};
       await connection.messageFlagsAdd(range, ["\\Deleted"], options);
-      let byUid = options.uid && connection.capabilities.has("UIDPLUS");
+      let byUid = options.uid && hasCapability(connection, "UIDPLUS");
       let command = byUid ? "UID EXPUNGE" : "EXPUNGE";
       let attributes = byUid ? [{ type: "SEQUENCE", value: range }] : false;
       let response;
@@ -57475,9 +58727,9 @@ var require_expunge = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/append.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/append.js
 var require_append = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/append.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/append.js"(exports, module) {
     "use strict";
     var { formatFlag, canUseFlag, formatDateTime, normalizePath, encodePath, comparePaths, enhanceCommandError } = require_tools2();
     module.exports = async (connection, destination, content, flags, idate) => {
@@ -57577,11 +58829,11 @@ var require_append = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/status.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/status.js
 var require_status = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/status.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/status.js"(exports, module) {
     "use strict";
-    var { encodePath, normalizePath } = require_tools2();
+    var { encodePath, normalizePath, buildStatusQueryAttributes, isRev2Active } = require_tools2();
     module.exports = async (connection, path, query) => {
       if (![connection.states.AUTHENTICATED, connection.states.SELECTED].includes(connection.state) || !path) {
         return false;
@@ -57589,28 +58841,10 @@ var require_status = __commonJS({
       path = normalizePath(connection, path);
       let encodedPath = encodePath(connection, path);
       let attributes = [{ type: encodedPath.indexOf("&") >= 0 ? "STRING" : "ATOM", value: encodedPath }];
-      let queryAttributes = [];
-      Object.keys(query || {}).forEach((key) => {
-        if (!query[key]) {
-          return;
-        }
-        switch (key.toUpperCase()) {
-          case "MESSAGES":
-          case "RECENT":
-          case "UIDNEXT":
-          case "UIDVALIDITY":
-          case "UNSEEN":
-            queryAttributes.push({ type: "ATOM", value: key.toUpperCase() });
-            break;
-          case "HIGHESTMODSEQ":
-            if (connection.capabilities.has("CONDSTORE")) {
-              queryAttributes.push({ type: "ATOM", value: key.toUpperCase() });
-            }
-            break;
-        }
-      });
+      let queryAttributes = buildStatusQueryAttributes(connection, query);
+      let syntheticRecent = query && query.recent && isRev2Active(connection);
       if (!queryAttributes.length) {
-        return false;
+        return syntheticRecent ? { path, recent: 0 } : false;
       }
       attributes.push(queryAttributes);
       let response;
@@ -57654,7 +58888,12 @@ var require_status = __commonJS({
                   updateMailbox: (val, conn) => {
                     conn.mailbox.highestModseq = val;
                   }
-                }
+                },
+                // IMAP4rev2 additions (RFC 9051): total mailbox size in octets
+                // (number64, exact as a JS number up to 2^53-1) and count of
+                // messages with the \Deleted flag
+                SIZE: { key: "size", parser: Number },
+                DELETED: { key: "deleted", parser: Number }
               };
               let key;
               list.forEach((entry, i) => {
@@ -57682,6 +58921,9 @@ var require_status = __commonJS({
           }
         });
         response.next();
+        if (syntheticRecent) {
+          map.recent = 0;
+        }
         return map;
       } catch (err) {
         if (err.responseStatus === "NO") {
@@ -57700,9 +58942,9 @@ var require_status = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/copyuid-parser.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/copyuid-parser.js
 var require_copyuid_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
     "use strict";
     var { expandRange } = require_tools2();
     function parseCopyUid(response, map) {
@@ -57725,9 +58967,9 @@ var require_copyuid_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/copy.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/copy.js
 var require_copy = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -57757,11 +58999,11 @@ var require_copy = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/move.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/move.js
 var require_move = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/move.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/move.js"(exports, module) {
     "use strict";
-    var { normalizePath, encodePath, enhanceCommandError } = require_tools2();
+    var { normalizePath, encodePath, enhanceCommandError, hasCapability } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
     module.exports = async (connection, range, destination, options) => {
       if (connection.state !== connection.states.SELECTED || !range || !destination) {
@@ -57774,7 +59016,7 @@ var require_move = __commonJS({
         { type: "ATOM", value: encodePath(connection, destination) }
       ];
       let map = { path: connection.mailbox.path, destination };
-      if (!connection.capabilities.has("MOVE")) {
+      if (!hasCapability(connection, "MOVE")) {
         let result = await connection.messageCopy(range, destination, options);
         await connection.messageDelete(range, Object.assign({ silent: true }, options));
         return result;
@@ -57800,9 +59042,9 @@ var require_move = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/compress.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/compress.js
 var require_compress = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("COMPRESS=DEFLATE") || connection._inflate) {
@@ -57821,9 +59063,9 @@ var require_compress = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/quota.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/quota.js
 var require_quota = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -57897,6 +59139,7 @@ var require_quota = __commonJS({
               }
             }
           });
+          response.next();
         }
         return map;
       } catch (err) {
@@ -57908,16 +59151,29 @@ var require_quota = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/idle.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/idle.js
 var require_idle = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
     "use strict";
+    var { hasCapability, unrefTimer } = require_tools2();
     var NOOP_INTERVAL = 2 * 60 * 1e3;
+    function claimIdling(connection) {
+      let token = {};
+      connection._idleSession = token;
+      connection.idling = true;
+      return () => {
+        if (connection._idleSession === token) {
+          connection._idleSession = null;
+          connection.idling = false;
+        }
+      };
+    }
     async function runIdle(connection) {
       let response;
       let preCheckWaitQueue = [];
+      let ownPreCheck = null;
+      let releaseIdling = claimIdling(connection);
       try {
-        connection.idling = true;
         let doneRequested = false;
         let doneSent = false;
         let canEnd = false;
@@ -57933,8 +59189,10 @@ var require_idle = __commonJS({
             });
             connection.write("DONE");
             doneSent = true;
-            connection.idling = false;
-            connection.preCheck = false;
+            releaseIdling();
+            if (connection.preCheck === ownPreCheck) {
+              connection.preCheck = false;
+            }
             while (preCheckWaitQueue.length) {
               let { resolve: resolve2 } = preCheckWaitQueue.shift();
               resolve2();
@@ -57957,6 +59215,7 @@ var require_idle = __commonJS({
           preCheck().catch((err) => connection.log.warn({ err, cid: connection.id }));
           return handler;
         };
+        ownPreCheck = connectionPreCheck;
         connection.preCheck = connectionPreCheck;
         response = await connection.exec("IDLE", false, {
           // Server responds with "+" continuation to acknowledge IDLE mode.
@@ -57976,45 +59235,126 @@ var require_idle = __commonJS({
           onSend: () => {
           }
         });
-        if (typeof connection.preCheck === "function" && connection.preCheck === connectionPreCheck) {
-          connection.log.trace({
-            msg: "Clearing pre-check function",
-            lockId: connection.currentLock?.lockId,
-            path: connection.mailbox && connection.mailbox.path,
-            queued: preCheckWaitQueue.length,
-            doneRequested,
-            canEnd,
-            doneSent
-          });
-          connection.preCheck = false;
-          while (preCheckWaitQueue.length) {
-            let { resolve: resolve2 } = preCheckWaitQueue.shift();
-            resolve2();
-          }
-        }
         response.next();
         return;
       } catch (err) {
-        connection.preCheck = false;
-        connection.idling = false;
         connection.log.warn({ err, cid: connection.id });
         while (preCheckWaitQueue.length) {
           let { reject } = preCheckWaitQueue.shift();
           reject(err);
         }
         return false;
+      } finally {
+        releaseIdling();
+        if (connection.preCheck === ownPreCheck) {
+          connection.preCheck = false;
+        }
+        while (preCheckWaitQueue.length) {
+          let { resolve: resolve2 } = preCheckWaitQueue.shift();
+          resolve2();
+        }
+      }
+    }
+    async function pollOnce(connection, session) {
+      let path = connection.mailbox && connection.mailbox.path;
+      switch (connection.missingIdleCommand) {
+        case "SELECT":
+          connection.log.debug({ src: "c", msg: `Running SELECT to detect changes in folder`, cid: connection.id });
+          await connection.runInternal("SELECT", path, { readOnly: session.selectCommand.command === "EXAMINE" });
+          break;
+        case "STATUS": {
+          connection.log.debug({ src: "c", msg: `Running STATUS to detect changes in folder`, cid: connection.id });
+          let status = await connection.runInternal("STATUS", path, {
+            messages: true,
+            uidNext: true,
+            uidValidity: true,
+            unseen: true,
+            highestModseq: true
+          });
+          if (!status) {
+            let err = new Error("STATUS poll failed");
+            err.code = "PollFailed";
+            throw err;
+          }
+          break;
+        }
+        case "NOOP":
+        default: {
+          let response = await connection.exec("NOOP", false, { comment: "IDLE not supported" });
+          response.next();
+          break;
+        }
+      }
+    }
+    async function runPollingFallback(connection, maxIdleTime) {
+      if (!connection.currentSelectCommand) {
+        return;
+      }
+      let session = {
+        cancelled: false,
+        timer: null,
+        preCheck: null,
+        selectCommand: connection.currentSelectCommand
+      };
+      let interval = maxIdleTime ? Math.min(NOOP_INTERVAL, maxIdleTime) : NOOP_INTERVAL;
+      let releaseIdling = claimIdling(connection);
+      try {
+        await new Promise((resolve2) => {
+          const cancel = () => {
+            if (session.cancelled) {
+              return;
+            }
+            session.cancelled = true;
+            clearTimeout(session.timer);
+            session.timer = null;
+            resolve2();
+          };
+          session.preCheck = async () => {
+            connection.log.debug({ src: "c", msg: `breaking NOOP loop`, cid: connection.id });
+            cancel();
+          };
+          connection.preCheck = session.preCheck;
+          const runPoll = () => {
+            if (session.cancelled) {
+              return;
+            }
+            if (!connection.socket || connection.socket.destroyed || connection.state !== connection.states.SELECTED || !connection.mailbox) {
+              return cancel();
+            }
+            pollOnce(connection, session).then(() => {
+              if (session.cancelled) {
+                return;
+              }
+              session.timer = setTimeout(runPoll, interval);
+              unrefTimer(session.timer);
+            }).catch((err) => {
+              connection.log.warn({ err, cid: connection.id });
+              cancel();
+            });
+          };
+          connection.log.debug({ src: "c", msg: `initiated NOOP loop`, cid: connection.id });
+          runPoll();
+        });
+      } finally {
+        session.cancelled = true;
+        clearTimeout(session.timer);
+        session.timer = null;
+        releaseIdling();
+        if (connection.preCheck === session.preCheck) {
+          connection.preCheck = false;
+        }
       }
     }
     module.exports = async (connection, maxIdleTime) => {
       if (connection.state !== connection.states.SELECTED) {
         return;
       }
-      if (connection.capabilities.has("IDLE")) {
-        let idleTimer2;
+      if (hasCapability(connection, "IDLE")) {
+        let idleTimer;
         let stillIdling = false;
-        let runIdleLoop = async () => {
+        for (; ; ) {
           if (maxIdleTime) {
-            idleTimer2 = setTimeout(() => {
+            idleTimer = setTimeout(() => {
               if (connection.idling) {
                 if (typeof connection.preCheck === "function") {
                   stillIdling = true;
@@ -58023,77 +59363,24 @@ var require_idle = __commonJS({
                 }
               }
             }, maxIdleTime);
+            unrefTimer(idleTimer);
           }
           let resp = await runIdle(connection);
-          clearTimeout(idleTimer2);
-          if (stillIdling) {
-            stillIdling = false;
-            return runIdleLoop();
-          }
-          return resp;
-        };
-        return runIdleLoop();
-      }
-      let idleTimer;
-      return new Promise((resolve2) => {
-        if (!connection.currentSelectCommand) {
-          return resolve2();
-        }
-        connection.preCheck = async () => {
-          connection.preCheck = false;
           clearTimeout(idleTimer);
-          connection.log.debug({ src: "c", msg: `breaking NOOP loop` });
-          connection.idling = false;
-          resolve2();
-        };
-        let selectCommand = connection.currentSelectCommand;
-        let idleCheck = async () => {
-          let response;
-          switch (connection.missingIdleCommand) {
-            case "SELECT":
-              connection.log.debug({ src: "c", msg: `Running SELECT to detect changes in folder` });
-              response = await connection.exec(selectCommand.command, selectCommand.arguments);
-              break;
-            case "STATUS":
-              {
-                let statusArgs = [
-                  selectCommand.arguments[0],
-                  ["MESSAGES", "UIDNEXT", "UIDVALIDITY", "UNSEEN"].map((key) => ({ type: "ATOM", value: key }))
-                ];
-                connection.log.debug({ src: "c", msg: `Running STATUS to detect changes in folder` });
-                response = await connection.exec("STATUS", statusArgs);
-              }
-              break;
-            case "NOOP":
-            default:
-              response = await connection.exec("NOOP", false, { comment: "IDLE not supported" });
-              break;
+          if (!stillIdling) {
+            return resp;
           }
-          response.next();
-        };
-        let noopInterval = maxIdleTime ? Math.min(NOOP_INTERVAL, maxIdleTime) : NOOP_INTERVAL;
-        let runLoop = () => {
-          idleCheck().then(() => {
-            clearTimeout(idleTimer);
-            idleTimer = setTimeout(runLoop, noopInterval);
-          }).catch((err) => {
-            clearTimeout(idleTimer);
-            connection.preCheck = false;
-            connection.log.warn({ err, cid: connection.id });
-            resolve2();
-          });
-        };
-        connection.log.debug({ src: "c", msg: `initiated NOOP loop` });
-        connection.idling = true;
-        runLoop();
-      });
+          stillIdling = false;
+        }
+      }
+      return runPollingFallback(connection, maxIdleTime);
     };
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/authenticate.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/authenticate.js
 var require_authenticate = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     async function handleAuthError(err, errorResponse2) {
@@ -58113,9 +59400,14 @@ var require_authenticate = __commonJS({
       let command;
       let breaker;
       if (connection.capabilities.has("AUTH=OAUTHBEARER")) {
-        oauthbearer = [`n,a=${username},`, `host=${connection.servername || connection.host}`, `port=${connection.port}`, `auth=Bearer ${accessToken}`, "", ""].join(
-          ""
-        );
+        oauthbearer = [
+          `n,a=${username},`,
+          `host=${connection.servername || connection.host}`,
+          `port=${connection.port}`,
+          `auth=Bearer ${accessToken}`,
+          "",
+          ""
+        ].join("");
         command = "OAUTHBEARER";
         breaker = "AQ==";
       } else if (connection.capabilities.has("AUTH=XOAUTH") || connection.capabilities.has("AUTH=XOAUTH2")) {
@@ -58222,9 +59514,9 @@ var require_authenticate = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/imap-commands.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/imap-commands.js
 var require_imap_commands = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
     "use strict";
     module.exports = /* @__PURE__ */ new Map([
       ["ID", require_id2()],
@@ -58259,9 +59551,9 @@ var require_imap_commands = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/imap-flow.js
+// node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/imap-flow.js
 var require_imap_flow = __commonJS({
-  "node_modules/.pnpm/imapflow@1.4.8/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.3/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
     "use strict";
     var tls = __require("tls");
     var net = __require("net");
@@ -58280,6 +59572,7 @@ var require_imap_flow = __commonJS({
     var FlowedDecoder = require_flowed_decoder();
     var { PassThrough } = __require("stream");
     var { proxyConnection, detachEarlyErrorHandler } = require_proxy_connection();
+    var { ConnectionDeadline } = require_connection_deadline();
     var {
       comparePaths,
       updateCapabilities,
@@ -58290,12 +59583,13 @@ var require_imap_flow = __commonJS({
       normalizePath,
       expandRange,
       AuthenticationFailure,
-      getColorFlags
+      getColorFlags,
+      hasCapability,
+      unrefTimer
     } = require_tools2();
     var imapCommands = require_imap_commands();
     var noop = () => {
     };
-    var CONNECT_TIMEOUT = 90 * 1e3;
     var GREETING_TIMEOUT = 16 * 1e3;
     var UPGRADE_TIMEOUT = 10 * 1e3;
     var SOCKET_TIMEOUT = 5 * 60 * 1e3;
@@ -58397,7 +59691,21 @@ var require_imap_flow = __commonJS({
        *     If `true`, disconnects after successful authentication without performing other actions.
        *
        * @property {String} [proxy]
-       *     Proxy URL. Supports HTTP CONNECT (`http://`, `https://`) and SOCKS (`socks://`, `socks4://`, `socks5://`).
+       *     Proxy URL. Supports HTTP CONNECT (`http://`, `https://`) and SOCKS (`socks://`, `socks4://`, `socks4a://`, `socks5://`).
+       *     IPv6 proxy endpoints use the URL form, e.g. `socks5://[2001:db8::1]:1080`.
+       *
+       *     DNS behaviour depends on the proxy protocol:
+       *       - `http`/`https`: the destination hostname is sent to the proxy unresolved.
+       *       - `socks4`: destination hostnames are resolved locally to IPv4, because SOCKS4 carries
+       *         only IPv4 destination addresses and a hostname would silently become a SOCKS4a
+       *         request. IPv6 destinations are rejected.
+       *       - `socks4a`: destination hostnames are sent to the proxy for remote DNS. IPv6
+       *         destinations are rejected.
+       *       - `socks`/`socks5`: destination hostnames are sent to the proxy for remote DNS, and
+       *         IPv4/IPv6 literals are passed through unchanged.
+       *
+       *     The proxy endpoint itself is never resolved by ImapFlow - a hostname endpoint is handed
+       *     to Node as-is, keeping its normal lookup and connection behaviour.
        *
        * @property {Boolean} [qresync=false]
        *     If `true`, enables QRESYNC support so that EXPUNGE notifications include `uid` instead of `seq`.
@@ -58414,8 +59722,15 @@ var require_imap_flow = __commonJS({
        * @property {Boolean} [disableAutoEnable=false]
        *     If `true`, do not automatically enable supported IMAP extensions.
        *
+       * @property {Boolean} [disableIMAP4rev2=false]
+       *     If `true`, do not enable IMAP4rev2 mode even if the server supports it.
+       *     Use as a targeted opt-out for servers with broken IMAP4rev2 implementations
+       *     without losing the other auto-enabled extensions.
+       *
        * @property {Number} [connectionTimeout=90000]
-       *     Maximum time (in milliseconds) to wait for the connection to establish. Defaults to 90 seconds.
+       *     Maximum time (in milliseconds) to wait for a usable transport. Covers DNS resolution,
+       *     proxy negotiation and the TCP/TLS handshake as a single budget, so an expiry in any of
+       *     those phases rejects with error code `CONNECT_TIMEOUT`. Defaults to 90 seconds.
        *
        * @property {Number} [greetingTimeout=16000]
        *     Maximum time (in milliseconds) to wait for the server greeting after a connection is established. Defaults to 16 seconds.
@@ -58450,6 +59765,7 @@ var require_imap_flow = __commonJS({
         if (typeof this.options.secure === "undefined" && this.port === 993) {
           this.secureConnection = true;
         }
+        this.socketTimeout = Number(this.options.socketTimeout) || SOCKET_TIMEOUT;
         this.logRaw = this.options.logRaw;
         this.streamer = new ImapStream({
           logger: this.log,
@@ -58473,6 +59789,8 @@ var require_imap_flow = __commonJS({
         this.requestTagMap = /* @__PURE__ */ new Map();
         this.requestQueue = [];
         this.currentRequest = false;
+        this._unknownTagCount = 0;
+        this._nextUnknownTagWarn = 1;
         this.writeBytesCounter = 0;
         this.commandParts = [];
         this.capabilities = /* @__PURE__ */ new Map();
@@ -58498,6 +59816,10 @@ var require_imap_flow = __commonJS({
         this.maxIdleTime = this.options.maxIdleTime || false;
         this.missingIdleCommand = (this.options.missingIdleCommand || "").toString().toUpperCase().trim() || "NOOP";
         this.disableBinary = !!this.options.disableBinary;
+        this.skipListSubscribedArg = false;
+        this.skipListStatusArgs = false;
+        this.skipListAuxArgs = false;
+        this.skipLsub = false;
         this._streamerErrorHandler = (err) => {
           if (["Z_BUF_ERROR", "ECONNRESET", "EPIPE", "ETIMEDOUT", "EHOSTUNREACH"].includes(err.code)) {
             this.closeAfter();
@@ -58515,13 +59837,14 @@ var require_imap_flow = __commonJS({
         }
         err._connId = err._connId || this.id;
         if (this.upgrading) {
+          let reject = this._upgradeReject;
+          this._upgradeReject = null;
+          if (typeof reject === "function") {
+            reject(err);
+            return;
+          }
           this.upgrading = false;
           this.closeAfter();
-          if (typeof this._upgradeReject === "function") {
-            let reject = this._upgradeReject;
-            this._upgradeReject = null;
-            reject(err);
-          }
           return;
         }
         if (typeof this.initialReject === "function") {
@@ -58628,7 +59951,8 @@ var require_imap_flow = __commonJS({
         }
         let compiled = await compiler(data, {
           asArray: true,
-          literalMinus: this.capabilities.has("LITERAL-") || this.capabilities.has("LITERAL+")
+          // LITERAL- is part of base IMAP4rev2
+          literalMinus: hasCapability(this, "LITERAL-") || this.capabilities.has("LITERAL+")
         });
         this.commandParts = compiled;
         let logCompiled = await compiler(data, {
@@ -58637,6 +59961,9 @@ var require_imap_flow = __commonJS({
         let options = data.options || {};
         this.log.debug({ src: "c", msg: logCompiled.toString(), cid: this.id, comment: options.comment });
         this.write(this.commandParts.shift());
+        if (this.currentRequest && this.currentRequest.tag === data.tag) {
+          this.currentRequest.sent = true;
+        }
         if (typeof options.onSend === "function") {
           options.onSend();
         }
@@ -58709,157 +60036,267 @@ var require_imap_flow = __commonJS({
           return this.sectionHandlers[key];
         }
       }
+      // Releases a readable stream item exactly once. The item's `next` callback is the parser's
+      // backpressure token: until it is called, ImapStream stops feeding the connection. Every
+      // path out of response handling - success, handled error, or unexpected throw - has to go
+      // through here, otherwise the parser stalls permanently.
+      releaseStreamData(data) {
+        if (!data || data.released) {
+          return;
+        }
+        data.released = true;
+        if (typeof data.next === "function") {
+          data.next();
+        }
+      }
+      // Records a tagged response whose tag was never issued by this connection. ImapFlow talks
+      // to a wide range of non-conforming servers, so this is tolerated rather than terminal, but
+      // it must not pass silently. Warnings are emitted for the first occurrence and then at
+      // powers of two so a server spraying stray tagged lines cannot flood the log, while the
+      // counter itself stays exact and is reported when the connection closes.
+      countUnknownTag(tag) {
+        if (this.isClosed) {
+          return;
+        }
+        this._unknownTagCount++;
+        if (this._unknownTagCount === this._nextUnknownTagWarn) {
+          this._nextUnknownTagWarn *= 2;
+          this.log.warn({
+            msg: "Tagged response for an unknown tag",
+            tag,
+            unknownTagCount: this._unknownTagCount,
+            cid: this.id
+          });
+        }
+      }
+      // Terminally fails the connection on a protocol violation: stop parsing, then report. Both
+      // steps are explicit here rather than destroying the parser *with* the error and relying on
+      // its error listener to report, so the reporting path does not depend on teardown ordering or
+      // on the streamer error handler's suppression list.
+      failProtocol(err) {
+        if (this.streamer && !this.streamer.destroyed) {
+          this.streamer.destroy();
+        }
+        this.emitError(err);
+      }
+      // Rejects the in-flight request, if any, exactly once. Used when response handling fails in
+      // a way that leaves the command's outcome unknown.
+      rejectCurrentRequest(err) {
+        if (!this.currentRequest) {
+          return;
+        }
+        let tag = this.currentRequest.tag;
+        this.currentRequest = false;
+        let request = this.requestTagMap.get(tag);
+        if (request) {
+          this.requestTagMap.delete(tag);
+          request.reject(err);
+        }
+      }
       async reader() {
         let data;
         let processedCount = 0;
         while ((data = this.streamer.read()) !== null) {
-          let parsed;
+          let keepReading;
           try {
-            parsed = await parser(data.payload, { literals: data.literals });
-            if (parsed.tag && !["*", "+"].includes(parsed.tag) && parsed.command) {
-              let payload = { response: parsed.command };
-              if (parsed.attributes && parsed.attributes[0] && parsed.attributes[0].section && parsed.attributes[0].section[0] && parsed.attributes[0].section[0].type === "ATOM") {
-                payload.code = parsed.attributes[0].section[0].value;
-              }
-              this.emit("response", payload);
-            }
+            keepReading = await this.handleResponse(data);
           } catch (err) {
-            this.log.error({ src: "s", msg: data.payload.toString(), err, cid: this.id });
-            data.next();
-            continue;
+            keepReading = false;
+            let error2 = new Error("Failed to process server response");
+            error2.code = "ResponseProcessingFailed";
+            error2._err = err;
+            this.log.error({ msg: "Failed to process server response", err, cid: this.id });
+            this.rejectCurrentRequest(error2);
+            this.failProtocol(error2);
+          } finally {
+            this.releaseStreamData(data);
           }
-          let logCompiled = await compiler(parsed, {
-            isLogging: true
-          });
-          if (/^\d+$/.test(parsed.command) && parsed.attributes && parsed.attributes[0] && parsed.attributes[0].value === "FETCH") {
-            this.log.trace({ src: "s", msg: logCompiled.toString(), cid: this.id, nullBytesRemoved: parsed.nullBytesRemoved });
-          } else {
-            this.log.debug({ src: "s", msg: logCompiled.toString(), cid: this.id, nullBytesRemoved: parsed.nullBytesRemoved });
+          if (!keepReading) {
+            return;
           }
-          if (parsed.tag === "+" && this.currentRequest && this.currentRequest.options && typeof this.currentRequest.options.onPlusTag === "function") {
-            try {
-              await this.currentRequest.options.onPlusTag(parsed);
-            } catch (err) {
-              this.log.warn({ err, cid: this.id });
-            }
-            data.next();
-            continue;
-          }
-          if (parsed.tag === "+" && this.commandParts.length) {
-            let content = this.commandParts.shift();
-            try {
-              this.write(content);
-              this.log.debug({ src: "c", msg: `(* ${content.length}B continuation *)`, cid: this.id });
-            } catch (err) {
-              this.log.warn({ err, cid: this.id });
-            }
-            data.next();
-            continue;
-          }
-          let section = parsed.attributes && parsed.attributes.length && parsed.attributes[0] && !parsed.attributes[0].value && parsed.attributes[0].section;
-          if (section && section.length && section[0].type === "ATOM" && typeof section[0].value === "string") {
-            let sectionHandler = this.getSectionHandler(section[0].value.toUpperCase().trim());
-            if (sectionHandler) {
-              try {
-                await sectionHandler(section.slice(1));
-              } catch (err) {
-                this.log.warn({ err, cid: this.id });
-              }
-            }
-          }
-          if (parsed.tag === "*" && parsed.command) {
-            let untaggedHandler = this.getUntaggedHandler(parsed.command, parsed.attributes);
-            if (untaggedHandler) {
-              try {
-                await untaggedHandler(parsed);
-              } catch (err) {
-                this.log.warn({ err, cid: this.id });
-                data.next();
-                continue;
-              }
-            }
-          }
-          if (this.requestTagMap.has(parsed.tag)) {
-            let request = this.requestTagMap.get(parsed.tag);
-            this.requestTagMap.delete(parsed.tag);
-            if (this.currentRequest && this.currentRequest.tag === parsed.tag) {
-              this.currentRequest = false;
-              try {
-                await this.trySend();
-              } catch (err) {
-                this.log.warn({ err, cid: this.id });
-              }
-            }
-            switch (parsed.command.toUpperCase()) {
-              case "OK":
-              case "BYE":
-                await new Promise((resolve2) => request.resolve({ response: parsed, next: resolve2, hasTrailingData: !!data.trailingAfterLine }));
-                break;
-              case "NO":
-              case "BAD": {
-                let txt = parsed.attributes && parsed.attributes.filter((val) => val.type === "TEXT").map((val) => val.value.trim()).join(" ");
-                let err = new Error("Command failed");
-                err.response = parsed;
-                err.responseStatus = parsed.command.toUpperCase();
-                try {
-                  err.executedCommand = parsed.tag + (await compiler(request, {
-                    isLogging: true
-                  })).toString();
-                } catch {
-                }
-                if (txt) {
-                  err.responseText = txt;
-                  if (err.responseStatus === "NO" && txt.includes("Some of the requested messages no longer exist")) {
-                    this.log.warn({ msg: "Partial FETCH response", cid: this.id, err });
-                    await new Promise((resolve2) => request.resolve({ response: parsed, next: resolve2 }));
-                    break;
-                  }
-                  let throttleDelay = false;
-                  if (/Request is throttled/i.test(txt) && /Backoff Time/i.test(txt)) {
-                    let throttlingMatch = txt.match(/Backoff Time[:=\s]+(\d+)/i);
-                    if (throttlingMatch && throttlingMatch[1] && !isNaN(throttlingMatch[1])) {
-                      throttleDelay = Number(throttlingMatch[1]);
-                    }
-                  }
-                  if (throttleDelay) {
-                    err.code = "ETHROTTLE";
-                    err.throttleReset = throttleDelay;
-                    let delayResponse = throttleDelay;
-                    if (delayResponse > 5 * 60 * 1e3) {
-                      delayResponse = 5 * 60 * 1e3;
-                    }
-                    this.log.warn({ msg: "Throttling detected", cid: this.id, throttleDelay, delayResponse, err });
-                    let aborted2 = await new Promise((resolve2) => {
-                      this._throttleAbort = resolve2;
-                      this._throttleTimer = setTimeout(() => resolve2(false), delayResponse);
-                      if (typeof this._throttleTimer.unref === "function") {
-                        this._throttleTimer.unref();
-                      }
-                    });
-                    this._throttleTimer = null;
-                    this._throttleAbort = null;
-                    if (aborted2) {
-                      request.reject(this.createNoConnectionError(this.byeReason));
-                      break;
-                    }
-                  }
-                }
-                request.reject(err);
-                break;
-              }
-              default: {
-                let err = new Error("Invalid server response");
-                err.code = "InvalidResponse";
-                err.response = parsed;
-                request.reject(err);
-                break;
-              }
-            }
-          }
-          data.next();
           processedCount++;
           if (processedCount % 10 === 0) {
             await new Promise((resolve2) => setImmediate(resolve2));
+          }
+        }
+      }
+      /**
+       * Handles a single parsed server response: telemetry, continuation requests, response-code
+       * section handlers, untagged handlers and tagged command completion.
+       *
+       * @param {Object} data - Readable item from the parser stream.
+       * @returns {Promise<Boolean>} `true` to keep reading, `false` to stop (connection is failing).
+       */
+      async handleResponse(data) {
+        let parsed;
+        try {
+          parsed = await parser(data.payload, { literals: data.literals });
+          if (parsed.tag && !["*", "+"].includes(parsed.tag) && parsed.command) {
+            let payload = { response: parsed.command };
+            if (parsed.attributes && parsed.attributes[0] && parsed.attributes[0].section && parsed.attributes[0].section[0] && parsed.attributes[0].section[0].type === "ATOM") {
+              payload.code = parsed.attributes[0].section[0].value;
+            }
+            this.emit("response", payload);
+          }
+        } catch (err) {
+          this.log.error({ src: "s", msg: data.payload.toString(), err, cid: this.id });
+          return true;
+        }
+        let logCompiled = await compiler(parsed, {
+          isLogging: true
+        });
+        if (/^\d+$/.test(parsed.command) && parsed.attributes && parsed.attributes[0] && parsed.attributes[0].value === "FETCH") {
+          this.log.trace({ src: "s", msg: logCompiled.toString(), cid: this.id, nullBytesRemoved: parsed.nullBytesRemoved });
+        } else {
+          this.log.debug({ src: "s", msg: logCompiled.toString(), cid: this.id, nullBytesRemoved: parsed.nullBytesRemoved });
+        }
+        if (parsed.tag === "+" && this.currentRequest && this.currentRequest.options && typeof this.currentRequest.options.onPlusTag === "function") {
+          try {
+            await this.currentRequest.options.onPlusTag(parsed);
+          } catch (err) {
+            this.log.warn({ err, cid: this.id });
+          }
+          return true;
+        }
+        if (parsed.tag === "+" && this.commandParts.length) {
+          let content = this.commandParts.shift();
+          try {
+            this.write(content);
+            this.log.debug({ src: "c", msg: `(* ${content.length}B continuation *)`, cid: this.id });
+          } catch (err) {
+            this.log.warn({ err, cid: this.id });
+          }
+          return true;
+        }
+        let section = parsed.attributes && parsed.attributes.length && parsed.attributes[0] && !parsed.attributes[0].value && parsed.attributes[0].section;
+        if (section && section.length && section[0].type === "ATOM" && typeof section[0].value === "string") {
+          let sectionHandler = this.getSectionHandler(section[0].value.toUpperCase().trim());
+          if (sectionHandler) {
+            try {
+              await sectionHandler(section.slice(1));
+            } catch (err) {
+              this.log.warn({ err, cid: this.id });
+            }
+          }
+        }
+        if (parsed.tag === "*" && parsed.command) {
+          let untaggedHandler = this.getUntaggedHandler(parsed.command, parsed.attributes);
+          if (untaggedHandler) {
+            try {
+              await untaggedHandler(parsed);
+            } catch (err) {
+              this.log.warn({ err, cid: this.id });
+              return true;
+            }
+          }
+        }
+        if (parsed.tag && !["*", "+"].includes(parsed.tag)) {
+          if (this.currentRequest && this.currentRequest.tag === parsed.tag && this.currentRequest.sent) {
+            let request = this.requestTagMap.get(parsed.tag);
+            this.requestTagMap.delete(parsed.tag);
+            this.currentRequest = false;
+            if (request) {
+              await this.settleRequest(request, parsed, !!data.trailingAfterLine);
+            }
+            try {
+              await this.trySend();
+            } catch (err) {
+              this.log.warn({ err, cid: this.id });
+            }
+          } else if (this.requestTagMap.has(parsed.tag)) {
+            let request = this.requestTagMap.get(parsed.tag);
+            this.requestTagMap.delete(parsed.tag);
+            let err = new Error("Server sent a tagged response for a command that was not in flight");
+            err.code = "UnexpectedTag";
+            err.details = {
+              received: parsed.tag,
+              expected: this.currentRequest ? this.currentRequest.tag : null
+            };
+            this.log.error({ msg: "Protocol desynchronization", err, cid: this.id });
+            request.reject(err);
+            this.failProtocol(err);
+            return false;
+          } else {
+            this.countUnknownTag(parsed.tag);
+          }
+        }
+        return true;
+      }
+      /**
+       * Settles a request with its tagged completion response.
+       *
+       * On success the returned promise stays pending until the command handler calls `next()` on
+       * the response, which is what orders state application before the next queued command is
+       * dispatched. A command handler must therefore always release its own response before
+       * awaiting another command on the same connection.
+       *
+       * @param {Object} request - Pending request entry (resolve/reject and the compiled command).
+       * @param {Object} parsed - Parsed tagged response.
+       * @param {Boolean} hasTrailingData - Whether more input was already buffered after this line.
+       * @returns {Promise<void>}
+       */
+      async settleRequest(request, parsed, hasTrailingData) {
+        switch ((parsed.command || "").toUpperCase()) {
+          case "OK":
+          case "BYE":
+            await new Promise((resolve2) => request.resolve({ response: parsed, next: resolve2, hasTrailingData }));
+            break;
+          case "NO":
+          case "BAD": {
+            let txt = parsed.attributes && parsed.attributes.filter((val) => val.type === "TEXT").map((val) => val.value.trim()).join(" ");
+            let err = new Error("Command failed");
+            err.response = parsed;
+            err.responseStatus = parsed.command.toUpperCase();
+            try {
+              err.executedCommand = parsed.tag + (await compiler(request, {
+                isLogging: true
+              })).toString();
+            } catch {
+            }
+            if (txt) {
+              err.responseText = txt;
+              if (err.responseStatus === "NO" && txt.includes("Some of the requested messages no longer exist")) {
+                this.log.warn({ msg: "Partial FETCH response", cid: this.id, err });
+                await new Promise((resolve2) => request.resolve({ response: parsed, next: resolve2 }));
+                break;
+              }
+              let throttleDelay = false;
+              if (/Request is throttled/i.test(txt) && /Backoff Time/i.test(txt)) {
+                let throttlingMatch = txt.match(/Backoff Time[:=\s]+(\d+)/i);
+                if (throttlingMatch && throttlingMatch[1] && !isNaN(throttlingMatch[1])) {
+                  throttleDelay = Number(throttlingMatch[1]);
+                }
+              }
+              if (throttleDelay) {
+                err.code = "ETHROTTLE";
+                err.throttleReset = throttleDelay;
+                let delayResponse = throttleDelay;
+                if (delayResponse > 5 * 60 * 1e3) {
+                  delayResponse = 5 * 60 * 1e3;
+                }
+                this.log.warn({ msg: "Throttling detected", cid: this.id, throttleDelay, delayResponse, err });
+                let aborted2 = await new Promise((resolve2) => {
+                  this._throttleAbort = resolve2;
+                  this._throttleTimer = setTimeout(() => resolve2(false), delayResponse);
+                  unrefTimer(this._throttleTimer);
+                });
+                this._throttleTimer = null;
+                this._throttleAbort = null;
+                if (aborted2) {
+                  request.reject(this.createNoConnectionError(this.byeReason));
+                  break;
+                }
+              }
+            }
+            request.reject(err);
+            break;
+          }
+          default: {
+            let err = new Error("Invalid server response");
+            err.code = "InvalidResponse";
+            err.response = parsed;
+            request.reject(err);
+            break;
           }
         }
       }
@@ -58873,6 +60310,25 @@ var require_imap_flow = __commonJS({
           }
         };
         this.streamer.on("readable", this.socketReadable);
+      }
+      /**
+       * Applies the transport options every established application socket needs: TCP keepalive and
+       * the inactivity watchdog. Called for direct TLS, cleartext, proxied and STARTTLS-upgraded
+       * sockets, so the watchdog cannot silently differ between transports (a STARTTLS session used
+       * to end up with no armed timer at all).
+       *
+       * @param {Object} socket - The socket that now carries the IMAP session.
+       */
+      configureSocket(socket) {
+        if (!socket) {
+          return;
+        }
+        if (typeof socket.setKeepAlive === "function") {
+          socket.setKeepAlive(true, 5 * 1e3);
+        }
+        if (typeof socket.setTimeout === "function") {
+          socket.setTimeout(this.socketTimeout);
+        }
       }
       setSocketHandlers() {
         this.clearSocketHandlers();
@@ -58962,9 +60418,22 @@ var require_imap_flow = __commonJS({
           await this.compress();
         }
         if (!this.options.disableAutoEnable) {
-          await this.run("ENABLE", ["CONDSTORE", "UTF8=ACCEPT"].concat(this.options.qresync ? "QRESYNC" : []));
+          await this.autoEnable();
         }
         this.usable = true;
+      }
+      // Enable extensions if possible. IMAP4rev2 must be enabled explicitly on
+      // servers that advertise both rev1 and rev2 (RFC 9051 Appendix A); a single
+      // ENABLE call is used so the enabled set is built in one round trip.
+      async autoEnable() {
+        let enableList = ["CONDSTORE", "UTF8=ACCEPT"].concat(this.options.qresync ? "QRESYNC" : []).concat(this.options.disableIMAP4rev2 ? [] : "IMAP4rev2");
+        let enableResult = await this.run("ENABLE", enableList);
+        if (enableResult === false && enableList.includes("IMAP4rev2")) {
+          await this.run(
+            "ENABLE",
+            enableList.filter((extension) => extension !== "IMAP4rev2")
+          );
+        }
       }
       async compress() {
         if (!await this.run("COMPRESS")) {
@@ -59007,9 +60476,6 @@ var require_imap_flow = __commonJS({
             throw err;
           }
         };
-        Object.defineProperty(this.writeSocket, "destroyed", {
-          get: () => !this.socket || this.socket.destroyed
-        });
         let reading = false;
         let processedChunks = 0;
         let readNext = async () => {
@@ -59101,7 +60567,6 @@ var require_imap_flow = __commonJS({
           throw failSTARTTLSInjection();
         }
         let upgraded = await new Promise((resolve2, reject) => {
-          this._upgradeReject = reject;
           let socketPlain = this.socket;
           let opts = Object.assign(
             {
@@ -59112,49 +60577,44 @@ var require_imap_flow = __commonJS({
             this.options.tls || {}
           );
           this.clearSocketHandlers();
-          const socketPlainErrorHandler = (err) => {
-            clearTimeout(this.connectTimeout);
-            clearTimeout(this.upgradeTimeout);
-            if (!this.upgrading) {
+          let settled = false;
+          const settle2 = (err, result) => {
+            if (settled) {
               return;
             }
-            this.closeAfter();
+            settled = true;
+            clearTimeout(this.upgradeTimeout);
+            this.upgradeTimeout = null;
             this.upgrading = false;
-            err.tlsFailed = true;
-            reject(err);
+            this._upgradeReject = null;
+            socketPlain.removeListener("error", settle2);
+            if (this.socket && this.socket !== socketPlain) {
+              this.socket.removeListener("error", settle2);
+            }
+            if (err) {
+              clearTimeout(this.connectTimeout);
+              err.tlsFailed = true;
+              this.closeAfter();
+              return reject(err);
+            }
+            resolve2(result);
           };
-          socketPlain.once("error", socketPlainErrorHandler);
+          this._upgradeReject = settle2;
+          socketPlain.once("error", settle2);
           this.upgradeTimeout = setTimeout(() => {
-            if (!this.upgrading) {
-              return;
-            }
-            this.closeAfter();
             let err = new Error("Failed to upgrade connection in required time");
-            err.tlsFailed = true;
             err.code = "UPGRADE_TIMEOUT";
-            reject(err);
+            settle2(err);
           }, UPGRADE_TIMEOUT);
-          const tlsSocketErrorHandler = (err) => {
-            clearTimeout(this.connectTimeout);
-            clearTimeout(this.upgradeTimeout);
-            if (!this.upgrading) {
-              return;
-            }
-            this.upgrading = false;
-            err.tlsFailed = true;
-            this.clearSocketHandlers();
-            this.closeAfter();
-            reject(err);
-          };
           this.upgrading = true;
           this.socket = tls.connect(opts, () => {
             try {
-              clearTimeout(this.upgradeTimeout);
               if (this.isClosed) {
-                return this.close();
+                let err = new Error("Connection closed during TLS upgrade");
+                err.code = "NoConnection";
+                return settle2(err);
               }
               this.secureConnection = true;
-              this.upgrading = false;
               this.streamer.secureConnection = true;
               this.socket.pipe(this.streamer);
               this.tls = typeof this.socket.getCipher === "function" ? this.socket.getCipher() : false;
@@ -59171,16 +60631,17 @@ var require_imap_flow = __commonJS({
                   version: this.tls.version
                 });
               }
-              socketPlain.removeListener("error", socketPlainErrorHandler);
-              this.socket.removeListener("error", tlsSocketErrorHandler);
+              if (typeof socketPlain.setTimeout === "function") {
+                socketPlain.setTimeout(0);
+              }
               this.setSocketHandlers();
-              this._upgradeReject = null;
-              return resolve2(true);
+              this.configureSocket(this.socket);
+              settle2(null, true);
             } catch (ex) {
               this.emitError(ex);
             }
           });
-          this.socket.once("error", tlsSocketErrorHandler);
+          this.socket.once("error", settle2);
           this.writeSocket = this.socket;
         });
         if (upgraded && this.expectCapabilityUpdate) {
@@ -59277,6 +60738,7 @@ var require_imap_flow = __commonJS({
           return;
         }
         this.state = this.states.AUTHENTICATED;
+        this.authenticated = true;
         this.beginSession((err) => {
           this.log.error({ err, cid: this.id });
           this.closeAfter();
@@ -59455,6 +60917,11 @@ var require_imap_flow = __commonJS({
         }
         return range;
       }
+      // Timer process-liveness policy: connection establishment and greeting deadlines keep the
+      // process alive, because a caller is waiting on connect() to settle. Background timers
+      // (auto-IDLE, IDLE restart, fallback polling, throttle back-off, the held-lock diagnostic) are
+      // unref'd, so an otherwise idle process is not held open by them. Every timer is still cleared
+      // explicitly on close().
       autoidle() {
         clearTimeout(this.idleStartTimer);
         if (this.options.disableAutoIdle || this.state !== this.states.SELECTED) {
@@ -59463,6 +60930,7 @@ var require_imap_flow = __commonJS({
         this.idleStartTimer = setTimeout(() => {
           this.idle().catch((err) => this.log.warn({ err, cid: this.id }));
         }, 15 * 1e3);
+        unrefTimer(this.idleStartTimer);
       }
       // PUBLIC API METHODS
       /**
@@ -59479,6 +60947,7 @@ var require_imap_flow = __commonJS({
           throw new Error("Can not re-use ImapFlow instance");
         }
         this._connectCalled = true;
+        let deadline = new ConnectionDeadline(this.options.connectionTimeout);
         let connector = this.secureConnection ? tls : net;
         let opts = Object.assign(
           {
@@ -59500,11 +60969,15 @@ var require_imap_flow = __commonJS({
         let socket = false;
         if (this.options.proxy) {
           try {
-            socket = await proxyConnection(this.log, this.options.proxy, this.host, this.port);
+            socket = await proxyConnection(this.log, this.options.proxy, this.host, this.port, { deadline });
             if (!socket) {
               throw new Error("Failed to setup proxy connection");
             }
           } catch (err) {
+            if (err.code === "CONNECT_TIMEOUT") {
+              this.log.error({ err, cid: this.id });
+              throw err;
+            }
             let error2 = new Error("Failed to setup proxy connection");
             error2.code = err.code || "ProxyError";
             error2._err = err;
@@ -59514,23 +60987,16 @@ var require_imap_flow = __commonJS({
         }
         let connectPromise = new Promise((resolve2, reject) => {
           this.connectTimeout = setTimeout(() => {
-            let err = new Error("Failed to establish connection in required time");
-            err.code = "CONNECT_TIMEOUT";
-            err.details = {
-              /* c8 ignore next */
-              // firing the timeout with the default (large) value would hang the suite, so only the explicit-option path is tested
-              connectionTimeout: this.options.connectionTimeout || CONNECT_TIMEOUT
-            };
+            let err = deadline.error();
             this.log.error({ err, cid: this.id });
             this.closeAfter();
             reject(err);
-          }, this.options.connectionTimeout || CONNECT_TIMEOUT);
+          }, deadline.remaining());
           let onConnect = () => {
             try {
               clearTimeout(this.connectTimeout);
               detachEarlyErrorHandler(socket);
-              this.socket.setKeepAlive(true, 5 * 1e3);
-              this.socket.setTimeout(this.options.socketTimeout || SOCKET_TIMEOUT);
+              this.configureSocket(this.socket);
               this.greetingTimeout = setTimeout(() => {
                 let err = new Error(
                   /* c8 ignore next */
@@ -59652,7 +61118,15 @@ var require_imap_flow = __commonJS({
             this._throttleAbort = null;
           }
           this.usable = false;
+          this._idleSession = null;
           this.idling = false;
+          if (typeof this._upgradeReject === "function") {
+            let reject = this._upgradeReject;
+            this._upgradeReject = null;
+            let err = new Error("Connection closed during TLS upgrade");
+            err.code = "NoConnection";
+            reject(err);
+          }
           if (typeof this.initialReject === "function" && !this.options.verifyOnly) {
             clearTimeout(this.greetingTimeout);
             let reject = this.initialReject;
@@ -59667,6 +61141,16 @@ var require_imap_flow = __commonJS({
           }
           if (typeof this.preCheck === "function") {
             this.preCheck().catch((err) => this.log.warn({ err, cid: this.id }));
+          }
+          let closedMailbox = false;
+          if (!this.isClosed) {
+            closedMailbox = this.mailbox;
+            this.mailbox = false;
+            this.currentSelectCommand = false;
+            if (!this.options.verifyOnly) {
+              this.authenticated = false;
+            }
+            this.preCheck = false;
           }
           let pendingRequests = [];
           if (this.currentRequest && this.requestTagMap.has(this.currentRequest.tag)) {
@@ -59750,22 +61234,15 @@ var require_imap_flow = __commonJS({
           if (this.isClosed) {
             return;
           }
-          if (this.socket && !this.socket.destroyed && this.writeSocket !== this.socket) {
-            try {
-              this.socket.destroy();
-            } catch (err) {
-              this.log.error({ err, cid: this.id });
-            }
-          }
           this.isClosed = true;
-          if (this.writeSocket && !this.writeSocket.destroyed) {
+          if (this.writeSocket && this.writeSocket !== this.socket && !this.writeSocket.destroyed) {
             try {
               this.writeSocket.destroy();
             } catch (err) {
               this.log.error({ err, cid: this.id });
             }
           }
-          if (this.socket && !this.socket.destroyed && this.writeSocket !== this.socket) {
+          if (this.socket && !this.socket.destroyed) {
             try {
               this.socket.destroy();
             } catch (err) {
@@ -59782,7 +61259,14 @@ var require_imap_flow = __commonJS({
           this._socketClose = null;
           this._socketEnd = null;
           this._socketTimeout = null;
-          this.log.trace({ msg: "Connection closed", cid: this.id });
+          this.log.trace({
+            msg: "Connection closed",
+            cid: this.id,
+            ...this._unknownTagCount ? { unknownTagCount: this._unknownTagCount } : {}
+          });
+          if (closedMailbox) {
+            this.emit("mailboxClose", closedMailbox);
+          }
           this.emit("close");
         } catch (ex) {
           this.log.error(ex);
@@ -59824,8 +61308,9 @@ var require_imap_flow = __commonJS({
        * @property {String} parentPath Same as `parent`, but as a complete string path (unicode string)
        * @property {Set<string>} flags a set of flags for this mailbox
        * @property {String} specialUse one of special-use flags (if applicable): "\All", "\Archive", "\Drafts", "\Flagged", "\Junk", "\Sent", "\Trash". Additionally INBOX has non-standard "\Inbox" flag set
+       * @property {String} [specialUseSource] how `specialUse` was determined: `"user"` (from `specialUseHints`), `"extension"` (SPECIAL-USE or XLIST flag reported by the server) or `"name"` (matched against known localized folder names)
        * @property {Boolean} listed `true` if mailbox was found from the output of LIST command
-       * @property {Boolean} subscribed `true` if mailbox was found from the output of LSUB command
+       * @property {Boolean} subscribed `true` if the mailbox is subscribed - reported by LSUB or by LIST RETURN (SUBSCRIBED) on LIST-EXTENDED/IMAP4rev2 servers. Servers that answer neither report no subscription state at all, and every mailbox is then assumed to be subscribed
        * @property {StatusObject} [status] If `statusQuery` was used, then this value includes the status response
        */
       /**
@@ -59838,11 +61323,14 @@ var require_imap_flow = __commonJS({
        * @property {Boolean} [statusQuery.uidValidity] if `true` request mailbox `UIDVALIDITY` value
        * @property {Boolean} [statusQuery.unseen] if `true` request count of unseen messages
        * @property {Boolean} [statusQuery.highestModseq] if `true` request last known modseq value
+       * @property {Boolean} [statusQuery.size] if `true` request total mailbox size in octets (requires STATUS=SIZE or IMAP4rev2)
+       * @property {Boolean} [statusQuery.deleted] if `true` request count of messages with \\Deleted flag (requires IMAP4rev2)
        * @property {Object} [specialUseHints] set specific paths as special use folders, this would override special use flags provided from the server
        * @property {String} [specialUseHints.sent] Path to "Sent Mail" folder
        * @property {String} [specialUseHints.trash] Path to "Trash" folder
        * @property {String} [specialUseHints.junk] Path to "Junk Mail" folder
        * @property {String} [specialUseHints.drafts] Path to "Drafts" folder
+       * @property {String} [specialUseHints.archive] Path to "Archive" folder
        */
       /**
        * Lists available mailboxes as an Array
@@ -59870,9 +61358,10 @@ var require_imap_flow = __commonJS({
        * @property {Set<string>} flags list of flags for this mailbox
        * @property {String} specialUse one of special-use flags (if applicable): "\All", "\Archive", "\Drafts", "\Flagged", "\Junk", "\Sent", "\Trash". Additionally INBOX has non-standard "\Inbox" flag set
        * @property {Boolean} listed `true` if mailbox was found from the output of LIST command
-       * @property {Boolean} subscribed `true` if mailbox was found from the output of LSUB command
+       * @property {Boolean} subscribed `true` if the mailbox is subscribed - reported by LSUB or by LIST RETURN (SUBSCRIBED) on LIST-EXTENDED/IMAP4rev2 servers. Servers that answer neither report no subscription state at all, and every mailbox is then assumed to be subscribed
        * @property {Boolean} disabled If `true` then this mailbox can not be selected in the UI
        * @property {ListTreeResponse[]} folders An array of subfolders
+       * @property {StatusObject} [status] If `statusQuery` was used, then this value includes the status response
        */
       /**
        * Lists available mailboxes as a tree structured object
@@ -60026,6 +61515,8 @@ var require_imap_flow = __commonJS({
        * @property {BigInt} [uidValidity] Mailbox `UIDVALIDITY` value
        * @property {Number} [unseen] Count of unseen messages
        * @property {BigInt} [highestModseq] Last known modseq value (if CONDSTORE extension is enabled)
+       * @property {Number} [size] Total size of the mailbox in octets (only if requested and the server supports STATUS=SIZE or IMAP4rev2)
+       * @property {Number} [deleted] Count of messages with \\Deleted flag (only if requested and IMAP4rev2 is active)
        */
       /**
        * Requests the status of the indicated mailbox. Only requested status values will be returned.
@@ -60038,6 +61529,8 @@ var require_imap_flow = __commonJS({
        * @param {Boolean} query.uidValidity if `true` request mailbox `UIDVALIDITY` value
        * @param {Boolean} query.unseen if `true` request count of unseen messages
        * @param {Boolean} query.highestModseq if `true` request last known modseq value
+       * @param {Boolean} query.size if `true` request total mailbox size in octets (requires STATUS=SIZE or IMAP4rev2)
+       * @param {Boolean} query.deleted if `true` request count of messages with \\Deleted flag (requires IMAP4rev2)
        * @returns {Promise<StatusObject>} status of the indicated mailbox
        *
        * @example
@@ -60485,6 +61978,7 @@ var require_imap_flow = __commonJS({
        * @property {MessageStructureObject} [bodyStructure] message body structure
        * @property {Date} [internalDate] message internal date
        * @property {Map<string, Buffer>} [bodyParts] a Map of message body parts where key is requested part identifier and value is a Buffer
+       * @property {Set<string>} [binaryParts] part identifiers from `bodyParts` that arrived via FETCH BINARY, i.e. with the content-transfer-encoding already decoded by the server
        * @property {Buffer} [headers] Requested header lines as Buffer
        */
       /**
@@ -60826,7 +62320,8 @@ var require_imap_flow = __commonJS({
         let stream;
         let output;
         let fetchAborted = false;
-        switch (meta.encoding) {
+        let clientEncoding = response.binaryParts && response.binaryParts.has(part) ? false : meta.encoding;
+        switch (clientEncoding) {
           case "base64":
             output = stream = new libbase64.Decoder();
             break;
@@ -61055,7 +62550,8 @@ var require_imap_flow = __commonJS({
         }
         for (let part of Object.keys(data)) {
           let meta = data[part].meta;
-          switch (meta.encoding) {
+          let clientEncoding = response.binaryParts && response.binaryParts.has(part) ? false : meta.encoding;
+          switch (clientEncoding) {
             case "base64":
               data[part].content = data[part].content ? libbase64.decode(data[part].content.toString()) : null;
               break;
@@ -61073,20 +62569,41 @@ var require_imap_flow = __commonJS({
           return false;
         }
         if (!this.socket || this.socket.destroyed) {
-          const error2 = new Error("Connection not available");
-          error2.code = "NoConnection";
-          throw error2;
+          throw this.createNoConnectionError();
         }
         clearTimeout(this.idleStartTimer);
         if (typeof this.preCheck === "function") {
           await this.preCheck();
         }
-        let handler = this.commands.get(command);
-        let result = await handler(this, ...args);
+        let result = await this.runInternal(command, ...args);
         if (command !== "IDLE") {
           this.autoidle();
         }
         return result;
+      }
+      /**
+       * Dispatches a command without the IDLE handshake that `run()` performs.
+       *
+       * Used by callers that already own the connection's idle state - fallback polling issues its
+       * commands through here, because `run()` would await `preCheck()`, and the preCheck it would
+       * await belongs to the very polling session making the call, so the session would cancel
+       * itself. Auto-IDLE is not restarted either, for the same reason: the caller is the idle loop.
+       *
+       * @param {String} command Command name, as registered in the command registry.
+       * @param {...*} args Arguments forwarded to the command implementation.
+       * @returns {Promise<*>} Whatever the command implementation returns, or `false` for an
+       *   unknown command.
+       */
+      async runInternal(command, ...args) {
+        command = command.toUpperCase();
+        if (!this.commands.has(command)) {
+          return false;
+        }
+        if (!this.socket || this.socket.destroyed) {
+          throw this.createNoConnectionError();
+        }
+        let handler = this.commands.get(command);
+        return await handler(this, ...args);
       }
       // Mailbox lock queue processor. Implements a mutex pattern: only one lock
       // is active at a time. When the active lock is released, the next queued
@@ -61143,6 +62660,7 @@ var require_imap_flow = __commonJS({
                   cid: this.id
                 });
               }, threshold);
+              unrefTimer(lock.heldWarnTimer);
             };
             const release = () => {
               if (this.currentLock === lock) {
@@ -69250,7 +70768,7 @@ function object(shape, params) {
   return new ZodMiniObject(def);
 }
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
 function isZ4Schema(s) {
   const schema = s;
   return !!schema._zod;
@@ -69334,16 +70852,32 @@ function normalizeObjectSchema(schema) {
   }
   return void 0;
 }
+function getDotPath(path) {
+  if (path.length === 0) {
+    return "object root";
+  }
+  return path.reduce((acc, seg, index) => {
+    if (index === 0) {
+      return String(seg);
+    }
+    if (typeof seg === "number") {
+      return `${acc}[${seg}]`;
+    }
+    return `${acc}.${seg}`;
+  }, "");
+}
 function getParseErrorMessage(error2) {
   if (error2 && typeof error2 === "object") {
+    if ("issues" in error2 && Array.isArray(error2.issues) && error2.issues.length > 0) {
+      return error2.issues.map((i) => {
+        if (!i.path?.length) {
+          return i.message;
+        }
+        return `${i.message} at ${getDotPath(i.path)}`;
+      }).join("\n");
+    }
     if ("message" in error2 && typeof error2.message === "string") {
       return error2.message;
-    }
-    if ("issues" in error2 && Array.isArray(error2.issues) && error2.issues.length > 0) {
-      const firstIssue = error2.issues[0];
-      if (firstIssue && typeof firstIssue === "object" && "message" in firstIssue) {
-        return String(firstIssue.message);
-      }
     }
     try {
       return JSON.stringify(error2);
@@ -70089,7 +71623,7 @@ function preprocess(fn, schema) {
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v4/classic/external.js
 config(en_default2());
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js
 var LATEST_PROTOCOL_VERSION = "2025-11-25";
 var SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
 var RELATED_TASK_META_KEY = "io.modelcontextprotocol/related-task";
@@ -71620,7 +73154,7 @@ var UrlElicitationRequiredError = class extends McpError {
   }
 };
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
 function isTerminal(status) {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
@@ -72909,7 +74443,7 @@ var zodToJsonSchema = (schema, options) => {
   return combined;
 };
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js
 function mapMiniTarget(t) {
   if (!t)
     return "draft-7";
@@ -72951,7 +74485,7 @@ function parseWithCompat(schema, data) {
   return result.data;
 }
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js
 var DEFAULT_REQUEST_TIMEOUT_MSEC = 6e4;
 var Protocol = class {
   constructor(_options) {
@@ -73905,7 +75439,7 @@ function mergeCapabilities(base, additional) {
   return result;
 }
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js
 var import_ajv = __toESM(require_ajv(), 1);
 var import_ajv_formats = __toESM(require_dist(), 1);
 function createDefaultAjvInstance() {
@@ -73973,7 +75507,7 @@ var AjvJsonSchemaValidator = class {
   }
 };
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js
 var ExperimentalServerTasks = class {
   constructor(_server) {
     this._server = _server;
@@ -74186,7 +75720,7 @@ var ExperimentalServerTasks = class {
   }
 };
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.js
 function assertToolsCallTaskCapability(requests, method, entityName) {
   if (!requests) {
     throw new Error(`${entityName} does not support task creation (required for ${method})`);
@@ -74221,7 +75755,7 @@ function assertClientRequestTaskCapability(requests, method, entityName) {
   }
 }
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js
 var Server = class extends Protocol {
   /**
    * Initializes this server with the given name and version information.
@@ -74287,16 +75821,7 @@ var Server = class extends Protocol {
     if (!methodSchema) {
       throw new Error("Schema is missing a method literal");
     }
-    let methodValue;
-    if (isZ4Schema(methodSchema)) {
-      const v4Schema = methodSchema;
-      const v4Def = v4Schema._zod?.def;
-      methodValue = v4Def?.value ?? v4Schema.value;
-    } else {
-      const v3Schema = methodSchema;
-      const legacyDef = v3Schema._def;
-      methodValue = legacyDef?.value ?? v3Schema.value;
-    }
+    const methodValue = getLiteralValue(methodSchema);
     if (typeof methodValue !== "string") {
       throw new Error("Schema method literal must be a string");
     }
@@ -74601,7 +76126,7 @@ var Server = class extends Protocol {
   }
 };
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/completable.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/completable.js
 var COMPLETABLE_SYMBOL = /* @__PURE__ */ Symbol.for("mcp.completable");
 function isCompletable(schema) {
   return !!schema && typeof schema === "object" && COMPLETABLE_SYMBOL in schema;
@@ -74615,7 +76140,7 @@ var McpZodTypeKind;
   McpZodTypeKind2["Completable"] = "McpCompletable";
 })(McpZodTypeKind || (McpZodTypeKind = {}));
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/uriTemplate.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/uriTemplate.js
 var MAX_TEMPLATE_LENGTH = 1e6;
 var MAX_VARIABLE_LENGTH = 1e6;
 var MAX_TEMPLATE_EXPRESSIONS = 1e4;
@@ -74837,7 +76362,7 @@ var UriTemplate = class _UriTemplate {
   }
 };
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/toolNameValidation.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/toolNameValidation.js
 var TOOL_NAME_REGEX = /^[A-Za-z0-9._-]{1,128}$/;
 function validateToolName(name) {
   const warnings = [];
@@ -74895,7 +76420,7 @@ function validateAndWarnToolName(name) {
   return result.isValid;
 }
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/mcp-server.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/mcp-server.js
 var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
@@ -74910,7 +76435,7 @@ var ExperimentalMcpServerTasks = class {
   }
 };
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js
 var McpServer = class {
   constructor(serverInfo, options) {
     this._registeredResources = {};
@@ -75726,12 +77251,21 @@ var EMPTY_COMPLETION_RESULT = {
   }
 };
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
 import process2 from "node:process";
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
+var STDIO_DEFAULT_MAX_BUFFER_SIZE = 10 * 1024 * 1024;
 var ReadBuffer = class {
+  constructor(options) {
+    this._maxBufferSize = options?.maxBufferSize ?? STDIO_DEFAULT_MAX_BUFFER_SIZE;
+  }
   append(chunk) {
+    const newSize = (this._buffer?.length ?? 0) + chunk.length;
+    if (newSize > this._maxBufferSize) {
+      this.clear();
+      throw new Error(`ReadBuffer exceeded maximum size of ${this._maxBufferSize} bytes`);
+    }
     this._buffer = this._buffer ? Buffer.concat([this._buffer, chunk]) : chunk;
   }
   readMessage() {
@@ -75757,20 +77291,26 @@ function serializeMessage(message) {
   return JSON.stringify(message) + "\n";
 }
 
-// node_modules/.pnpm/@modelcontextprotocol+sdk@1.29.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
+// node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
 var StdioServerTransport = class {
-  constructor(_stdin = process2.stdin, _stdout = process2.stdout) {
+  constructor(_stdin = process2.stdin, _stdout = process2.stdout, options) {
     this._stdin = _stdin;
     this._stdout = _stdout;
-    this._readBuffer = new ReadBuffer();
     this._started = false;
     this._ondata = (chunk) => {
-      this._readBuffer.append(chunk);
-      this.processReadBuffer();
+      try {
+        this._readBuffer.append(chunk);
+        this.processReadBuffer();
+      } catch (error2) {
+        this.onerror?.(error2);
+        this.close().catch(() => {
+        });
+      }
     };
     this._onerror = (error2) => {
       this.onerror?.(error2);
     };
+    this._readBuffer = new ReadBuffer({ maxBufferSize: options?.maxBufferSize });
   }
   /**
    * Starts listening for messages on stdin.
