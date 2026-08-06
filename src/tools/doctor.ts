@@ -76,9 +76,13 @@ export async function runDoctor(mailManager: AppleMailManager): Promise<DoctorRe
       checks.push({
         name: `IMAP: ${label}`,
         status: h.ok ? "ok" : "fail",
+        // `h.error` is optional on the health-check result, so interpolating it
+        // bare printed the literal string "connection failed: undefined" for
+        // any failure that carried no message (issue #138). Never render that:
+        // an unexplained failure is still worth naming, but as words.
         detail: h.ok
           ? `connected to ${h.host}`
-          : `connection failed: ${h.error}. Check the Keychain password and host/port.`,
+          : `connection failed: ${h.error ?? "the health check reported no detail"}. Check the Keychain password and host/port.`,
       });
     }
   }

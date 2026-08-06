@@ -30,6 +30,7 @@ import {
   imapBatchMove,
   imapThread,
   listImapAccountLabels,
+  imapHealthCheck,
   __setPoolConnect,
   __resetPool,
   dropAllPools,
@@ -242,6 +243,125 @@ describe("multi-account IMAP (C2)", () => {
       [IMAP_ENV.accounts]: "{not json",
     };
     expect(listImapAccountLabels(env)).toEqual(["a@b.com"]);
+  });
+});
+
+describe("account identity dedupe — same (host, port, user), different label", () => {
+  // Regression: the dedupe compared LABELS only, so declaring one mailbox twice
+  // (legacy singular keys + an ACCOUNTS entry under a different nickname)
+  // produced two specs. Every merge-across-accounts counter then visited that
+  // mailbox twice and double-counted it.
+  const dupEnv: NodeJS.ProcessEnv = {
+    [IMAP_ENV.user]: "rob@example.com",
+    [IMAP_ENV.password]: "pw",
+    [IMAP_ENV.host]: "imap.gmail.com",
+    [IMAP_ENV.accounts]: JSON.stringify([
+      { account: "Personal Gmail", user: "rob@example.com", host: "imap.gmail.com" },
+    ]),
+  };
+
+  it("keeps exactly one spec when two labels resolve to the same mailbox", () => {
+    expect(listImapAccountLabels(dupEnv)).toEqual(["rob@example.com"]);
+  });
+
+  it("the collapsed nickname still ADDRESSES the mailbox (no routing regression)", () => {
+    // Deduping must not make a previously-working selector unresolvable: the
+    // mailbox stops being counted twice, but both names keep working.
+    expect(isImapAccount("Personal Gmail", dupEnv)).toBe(true);
+    expect(isImapAccount("rob@example.com", dupEnv)).toBe(true);
+    expect(resolveImapConfig(dupEnv, "Personal Gmail").user).toBe("rob@example.com");
+    // …and it resolves to the SAME single account, under its canonical label.
+    expect(resolveImapConfig(dupEnv, "Personal Gmail").accountLabel).toBe("rob@example.com");
+    expect(isImapAccount("Not A Real Nickname", dupEnv)).toBe(false);
+  });
+
+  it("drops the duplicate from a mixed list and keeps the genuinely distinct ones", () => {
+    const env: NodeJS.ProcessEnv = {
+      [IMAP_ENV.user]: "rob@example.com",
+      [IMAP_ENV.password]: "pw",
+      [IMAP_ENV.accounts]: JSON.stringify([
+        { account: "Work", user: "rob@work.example", host: "imap.gmail.com" },
+        { account: "iCloud", user: "rob@icloud.example", host: "imap.mail.me.com" },
+        // Same mailbox as the legacy account above, under a different nickname.
+        { account: "Personal Gmail", user: "rob@example.com", host: "imap.gmail.com" },
+      ]),
+    };
+    expect(listImapAccountLabels(env)).toEqual(["rob@example.com", "Work", "iCloud"]);
+  });
+
+  it("folds host case (DNS is case-insensitive)", () => {
+    const env: NodeJS.ProcessEnv = {
+      [IMAP_ENV.user]: "rob@example.com",
+      [IMAP_ENV.password]: "pw",
+      [IMAP_ENV.host]: "imap.gmail.com",
+      [IMAP_ENV.accounts]: JSON.stringify([
+        { account: "Shouty", user: "rob@example.com", host: "IMAP.GMAIL.COM" },
+      ]),
+    };
+    expect(listImapAccountLabels(env)).toEqual(["rob@example.com"]);
+  });
+
+  it("does NOT fold the user local part — a different login stays a real account", () => {
+    // RFC 5321 leaves the local part case-sensitive and only the receiving
+    // server may fold it; dropping an account is worse than double-counting.
+    const env: NodeJS.ProcessEnv = {
+      [IMAP_ENV.user]: "Rob@example.com",
+      [IMAP_ENV.password]: "pw",
+      [IMAP_ENV.host]: "imap.gmail.com",
+      [IMAP_ENV.accounts]: JSON.stringify([
+        { account: "lowercase", user: "rob@example.com", host: "imap.gmail.com" },
+      ]),
+    };
+    expect(listImapAccountLabels(env)).toEqual(["Rob@example.com", "lowercase"]);
+  });
+
+  it("still rejects two distinct mailboxes sharing one label", () => {
+    const env: NodeJS.ProcessEnv = {
+      [IMAP_ENV.user]: "rob@example.com",
+      [IMAP_ENV.password]: "pw",
+      [IMAP_ENV.account]: "Personal",
+      [IMAP_ENV.accounts]: JSON.stringify([
+        { account: "Personal", user: "someone.else@example.com", host: "imap.gmail.com" },
+      ]),
+    };
+    expect(listImapAccountLabels(env)).toEqual(["Personal"]);
+  });
+
+  it("treats a different port as a different mailbox", () => {
+    const env: NodeJS.ProcessEnv = {
+      [IMAP_ENV.user]: "rob@example.com",
+      [IMAP_ENV.password]: "pw",
+      [IMAP_ENV.host]: "imap.example.com",
+      [IMAP_ENV.accounts]: JSON.stringify([
+        { account: "Plain", user: "rob@example.com", host: "imap.example.com", port: 143 },
+      ]),
+    };
+    expect(listImapAccountLabels(env)).toEqual(["rob@example.com", "Plain"]);
+  });
+});
+
+describe("imapHealthCheck configured-gate (#138)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("reports NOT configured only when no account is configured at all", async () => {
+    vi.stubEnv(IMAP_ENV.user, "");
+    vi.stubEnv(IMAP_ENV.accounts, "");
+    expect(await imapHealthCheck()).toEqual({ configured: false, ok: false });
+  });
+
+  it("sees an ACCOUNTS-only config as configured and returns a real error", async () => {
+    // Regression for #138: the gate used to test the legacy singular
+    // APPLE_MAIL_MCP_IMAP_USER only, so an ACCOUNTS-only setup short-circuited
+    // to {configured:false, ok:false} with NO error — which doctor rendered as
+    // "connection failed: undefined". No password/Keychain here, so the config
+    // fails to resolve and we get a real message without touching the network.
+    vi.stubEnv(IMAP_ENV.user, "");
+    vi.stubEnv(IMAP_ENV.accounts, JSON.stringify([{ account: "Work", user: "me@co.com" }]));
+    const h = await imapHealthCheck({ account: "Work" });
+    expect(h.configured).toBe(true);
+    expect(h.ok).toBe(false);
+    expect(h.error).toBeDefined();
+    expect(h.error).toMatch(/No IMAP password for account "Work"/);
   });
 });
 

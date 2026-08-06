@@ -12,13 +12,16 @@
  *              read path emits (see encodeImapId/decodeImapId below).
  * Everything is opt-in and additive; un-configured accounts use AppleScript.
  *
- * Opt-in via env (mirrors the SMTP transport pattern):
- *   APPLE_MAIL_MCP_IMAP_USER      (required — enables IMAP; the login address)
+ * Opt-in via env (mirrors the SMTP transport pattern). EITHER form enables
+ * IMAP — the legacy singular keys below, or APPLE_MAIL_MCP_IMAP_ACCOUNTS alone:
+ *   APPLE_MAIL_MCP_IMAP_USER      (the legacy single account's login address)
  *   APPLE_MAIL_MCP_IMAP_ACCOUNT   (Mail account name to match for routing; default = USER)
  *   APPLE_MAIL_MCP_IMAP_HOST      (default imap.gmail.com)
  *   APPLE_MAIL_MCP_IMAP_PORT      (default 993, implicit TLS)
  *   APPLE_MAIL_MCP_IMAP_PASSWORD  (else Keychain via the two vars below)
  *   APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE / _KEYCHAIN_ACCOUNT
+ *   APPLE_MAIL_MCP_IMAP_ACCOUNTS  (JSON array; the multi-account form — see
+ *                                  listImapAccountSpecs. Sufficient on its own)
  *
  * @module services/imapClient
  */
@@ -196,10 +199,8 @@ function sameImapAccount(left: string, right: string, deps: ImapDeps): boolean {
   // that same account by its login address. Resolve both selectors against the
   // same config list before deciding that the id belongs to another account.
   const specs = listImapAccountSpecs();
-  const matches = (selector: string, spec: ImapAccountSpec) =>
-    spec.accountLabel === selector || spec.user === selector;
-  const leftSpec = specs.find((spec) => matches(left, spec));
-  const rightSpec = specs.find((spec) => matches(right, spec));
+  const leftSpec = specs.find((spec) => specMatchesSelector(spec, left));
+  const rightSpec = specs.find((spec) => specMatchesSelector(spec, right));
   return leftSpec !== undefined && leftSpec === rightSpec;
 }
 
@@ -220,6 +221,13 @@ function depsForMessageRef(ref: ImapMessageRef, deps: ImapDeps): ImapDeps {
  */
 interface ImapAccountSpec {
   accountLabel: string;
+  /**
+   * Other labels that address this same mailbox — the nicknames of duplicate
+   * declarations that were collapsed into this spec. Kept so that deduping
+   * cannot break a caller who already addresses the mailbox by the dropped
+   * name: it stops being counted twice, but both names still resolve.
+   */
+  aliases?: string[];
   user: string;
   host: string;
   port: number;
@@ -228,20 +236,66 @@ interface ImapAccountSpec {
   keychainAccount?: string;
 }
 
+/**
+ * True when `selector` names this account. Callers may select by the account
+ * label, by any alias folded in during dedupe, or by the login address.
+ * Single definition so the routing gate, the config resolver and the
+ * composite-id ownership check can't disagree about what a selector means.
+ */
+function specMatchesSelector(spec: ImapAccountSpec, selector: string): boolean {
+  return (
+    spec.accountLabel === selector ||
+    spec.user === selector ||
+    (spec.aliases?.includes(selector) ?? false)
+  );
+}
+
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
 /**
+ * The WIRE IDENTITY of an IMAP mailbox: its resolved `(host, port, user)`
+ * triple. That triple — not the account label — is what actually distinguishes
+ * one mailbox from another. `accountLabel` is a human nickname, and the same
+ * mailbox can carry two different nicknames in one config (see
+ * `listImapAccountSpecs`).
+ *
+ * Host is folded case-insensitively (DNS is). `user` is compared byte-exactly
+ * after trimming: RFC 5321 leaves the local part case-sensitive and only the
+ * receiving server may fold it, so folding it here could silently DROP a real
+ * account — a worse failure than the double-count this guards against.
+ *
+ * Shared by the connection pool (`poolKey`) and by the account-enumeration
+ * dedupe so the two notions of "the same account" cannot drift apart.
+ */
+function imapIdentityKey(spec: { host: string; port: number; user: string }): string {
+  return `${spec.host.trim().toLowerCase()}:${spec.port}:${spec.user.trim()}`;
+}
+
+/**
  * Enumerate all configured IMAP accounts (C2): the legacy single-account env
  * vars plus any in the `APPLE_MAIL_MCP_IMAP_ACCOUNTS` JSON array. Does not
- * resolve passwords. The legacy account takes precedence on label collisions.
+ * resolve passwords. The legacy account takes precedence on collisions.
+ *
+ * Dedupe is on the RESOLVED `(host, port, user)` identity, not the label. A
+ * config that declares one mailbox twice — once via the legacy singular keys
+ * and once as an `APPLE_MAIL_MCP_IMAP_ACCOUNTS` entry under a different
+ * nickname — used to yield two specs, because the old guard only compared
+ * labels and a different nickname walked straight past it. Every caller that
+ * fans out over the spec list then visited that mailbox twice, so the
+ * merge-across-accounts counters double-counted it: measured on a real
+ * four-identity config where two identities are one Gmail mailbox,
+ * `get-unread-count` reported 23 against a true 15, and `get-mail-stats`
+ * inflated its message and unread totals the same way. The label check is kept
+ * as a secondary guard so two distinct mailboxes can't share one nickname.
  */
 function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccountSpec[] {
   const specs: ImapAccountSpec[] = [];
+  const seen = new Set<string>();
   const user = env[IMAP_ENV.user]?.trim();
   if (user) {
-    specs.push({
+    const legacy: ImapAccountSpec = {
       accountLabel: env[IMAP_ENV.account]?.trim() || user,
       user,
       host: env[IMAP_ENV.host]?.trim() || "imap.gmail.com",
@@ -249,7 +303,9 @@ function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccount
       password: env[IMAP_ENV.password],
       keychainService: env[IMAP_ENV.keychainService]?.trim(),
       keychainAccount: env[IMAP_ENV.keychainAccount]?.trim(),
-    });
+    };
+    specs.push(legacy);
+    seen.add(imapIdentityKey(legacy));
   }
   const json = env[IMAP_ENV.accounts]?.trim();
   if (json) {
@@ -261,12 +317,25 @@ function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccount
           const u = str(a.user);
           if (!u) continue;
           const label = str(a.account) || str(a.accountLabel) || u;
-          if (specs.some((s) => s.accountLabel === label)) continue; // legacy wins
+          const host = str(a.host) || "imap.gmail.com";
           const port = a.port ? Number(a.port) : 993;
+          const key = imapIdentityKey({ host, port, user: u });
+          if (seen.has(key)) {
+            // Same mailbox already listed — legacy/first wins. Keep this
+            // entry's nickname as an alias so collapsing the duplicate can't
+            // break a caller that already addresses the mailbox by that name.
+            const owner = specs.find((s) => imapIdentityKey(s) === key);
+            if (owner && owner.accountLabel !== label && !owner.aliases?.includes(label)) {
+              (owner.aliases ??= []).push(label);
+            }
+            continue;
+          }
+          if (specs.some((s) => s.accountLabel === label)) continue; // label collision
+          seen.add(key);
           specs.push({
             accountLabel: label,
             user: u,
-            host: str(a.host) || "imap.gmail.com",
+            host,
             port,
             password: str(a.password),
             keychainService: str(a.keychainService),
@@ -311,7 +380,7 @@ export function isImapAccount(
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
   if (!account) return false;
-  return listImapAccountSpecs(env).some((s) => s.accountLabel === account || s.user === account);
+  return listImapAccountSpecs(env).some((s) => specMatchesSelector(s, account));
 }
 
 /**
@@ -370,12 +439,12 @@ export function resolveImapConfig(
   const specs = listImapAccountSpecs(env);
   if (specs.length === 0) {
     throw new Error(
-      `IMAP not configured. Set ${IMAP_ENV.user} (login address) to enable it. ${SETUP_HINT}`
+      `IMAP not configured. Set ${IMAP_ENV.user} (login address), or ${IMAP_ENV.accounts} for multiple accounts, to enable it. ${SETUP_HINT}`
     );
   }
   let spec: ImapAccountSpec | undefined;
   if (account) {
-    spec = specs.find((s) => s.accountLabel === account || s.user === account);
+    spec = specs.find((s) => specMatchesSelector(s, account));
     if (!spec) {
       throw new Error(
         `No IMAP account matching "${account}". Configured: ${specs.map((s) => s.accountLabel).join(", ")}.`
@@ -718,7 +787,10 @@ interface PoolEntry {
 const pools = new Map<string, PoolEntry>();
 
 function poolKey(cfg: ImapConfig): string {
-  return `${cfg.host}:${cfg.port}:${cfg.user}`;
+  // Delegates to imapIdentityKey so the pool's notion of "the same account" and
+  // listImapAccountSpecs' dedupe are literally the same function and cannot
+  // drift apart.
+  return imapIdentityKey(cfg);
 }
 
 function imapIdleMs(): number {
@@ -808,7 +880,14 @@ async function acquirePooled(cfg: ImapConfig): Promise<ImapClientLike> {
 export async function imapHealthCheck(
   deps: ImapDeps = {}
 ): Promise<{ configured: boolean; ok: boolean; account?: string; host?: string; error?: string }> {
-  if (!deps.config && !process.env[IMAP_ENV.user]?.trim()) {
+  // "Is IMAP configured?" must ask the same enumerator every other caller asks.
+  // This used to test only the LEGACY singular APPLE_MAIL_MCP_IMAP_USER, so a
+  // setup that declares its accounts solely through APPLE_MAIL_MCP_IMAP_ACCOUNTS
+  // — the documented multi-account form — returned `{configured:false, ok:false}`
+  // with NO error field for every account. doctor then rendered that as the
+  // literal "connection failed: undefined" for each one, never actually
+  // attempting a connection (issue #138).
+  if (!deps.config && listImapAccountSpecs().length === 0) {
     return { configured: false, ok: false };
   }
   let cfg: ImapConfig;

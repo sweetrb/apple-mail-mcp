@@ -199,6 +199,20 @@ Each array entry accepts: `account`, `user`, `host`, `port`, `password`
 (discouraged — prefer Keychain), `keychainService`, `keychainAccount`. Each
 account keeps its own pooled IMAP connection.
 
+**The array alone is enough.** You do not need the legacy single-account vars:
+listing every account in `APPLE_MAIL_MCP_IMAP_ACCOUNTS` and setting none of
+`APPLE_MAIL_MCP_IMAP_USER` / `_ACCOUNT` / `_HOST` is fully supported, and the
+first array entry becomes the default account. (Before 2.10.7 that shape worked
+for every tool but made `doctor` report `connection failed: undefined` for each
+account — see #138.)
+
+**Don't declare the same mailbox twice.** If the legacy vars already describe a
+mailbox, do not also give it an array entry — even under a different `account`
+nickname. An account's identity is its resolved `(host, port, user)`, not its
+label, so the duplicate is recognised and collapsed rather than counted twice
+(the extra nickname still works as an alias). Before 2.10.7 it was counted
+twice, inflating `get-unread-count` and `get-mail-stats`.
+
 ---
 
 ## Step 4 (optional) — SMTP sending
@@ -333,14 +347,14 @@ GUI is ignoring.
 | Variable | Purpose |
 |----------|---------|
 | `APPLE_MAIL_MCP_DEFAULT_ACCOUNT` | Account used when a tool omits `account` (name or email). |
-| `APPLE_MAIL_MCP_IMAP_USER` | Primary IMAP login; setting it enables IMAP. |
+| `APPLE_MAIL_MCP_IMAP_USER` | Primary IMAP login. Setting it enables IMAP — but so does `APPLE_MAIL_MCP_IMAP_ACCOUNTS` on its own; either is sufficient. |
 | `APPLE_MAIL_MCP_IMAP_ACCOUNT` | Mail.app account name to match for routing (default = USER). |
 | `APPLE_MAIL_MCP_IMAP_HOST` | IMAP host (default `imap.gmail.com`). |
 | `APPLE_MAIL_MCP_IMAP_PORT` | IMAP port (default `993`, implicit TLS). |
 | `APPLE_MAIL_MCP_IMAP_PASSWORD` | Password (discouraged; prefer Keychain). |
 | `APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE` | Keychain item service/server name. |
 | `APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT` | Keychain item account (default = USER). |
-| `APPLE_MAIL_MCP_IMAP_ACCOUNTS` | JSON array of additional accounts (multi-account). |
+| `APPLE_MAIL_MCP_IMAP_ACCOUNTS` | JSON array of accounts (multi-account). Sufficient on its own; also enables IMAP. |
 | `APPLE_MAIL_MCP_IMAP_IDLE` | `1` to enable IMAP IDLE new-mail push. |
 | `APPLE_MAIL_MCP_IMAP_IDLE_MS` | Pooled-connection idle timeout in ms (default `30000`; `0` = never close). |
 | `APPLE_MAIL_MCP_STATS_BUDGET_MS` | Per-account wall-clock budget for `get-mail-stats` in ms (default `25000`, minimum `1000`). |
