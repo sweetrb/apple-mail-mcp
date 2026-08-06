@@ -306,6 +306,13 @@ Changes appear the next time Mail is launched — these tools do **not** quit or
 2. get-mail-stats → see total/unread counts and recently received counts
 ```
 
+**`get-mail-stats` costs one IMAP `STATUS` per mailbox** (and Gmail lists every label as
+a mailbox), so it is the most expensive read tool — prefer `get-unread-count` when a single
+number will do. Accounts are counted concurrently under a per-account budget
+(`APPLE_MAIL_MCP_STATS_BUDGET_MS`, default 25s). If the merged result carries
+`partial: true`, **the totals are floors, not answers** — `failedAccounts` names what is
+missing; say so rather than reporting the total as complete.
+
 ## Known Issue (Resolved): Reply / Forward Empty Body from Background Processes
 
 ### The Problem

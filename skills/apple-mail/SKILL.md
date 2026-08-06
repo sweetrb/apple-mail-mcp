@@ -125,7 +125,7 @@ for reliable results. These tools never quit or restart Mail themselves.
 |------|---------|
 | `health-check` | Verify Mail.app connectivity |
 | `doctor` | Diagnose setup problems (permissions, accounts, IMAP/SMTP) with remediation steps |
-| `get-mail-stats` | Get message and unread statistics |
+| `get-mail-stats` | Get message and unread statistics (one IMAP `STATUS` per mailbox — the priciest read; a `partial: true` result means the totals are floors, see `failedAccounts`) |
 | `get-sync-status` | Check whether Mail.app is running and syncing |
 
 ## Usage Patterns
