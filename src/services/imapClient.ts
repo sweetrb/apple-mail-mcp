@@ -284,10 +284,11 @@ function imapIdentityKey(spec: { host: string; port: number; user: string }): st
  * nickname — used to yield two specs, because the old guard only compared
  * labels and a different nickname walked straight past it. Every caller that
  * fans out over the spec list then visited that mailbox twice, so the
- * merge-across-accounts counters double-counted it: on the maintainer's own
- * config `get-mail-stats` reported 135511 messages against a true 74173 and
- * `get-unread-count` reported 15 against a true 11. The label check is kept as
- * a secondary guard so two distinct mailboxes can't share one nickname either.
+ * merge-across-accounts counters double-counted it: measured on a real
+ * four-identity config where two identities are one Gmail mailbox,
+ * `get-unread-count` reported 23 against a true 15, and `get-mail-stats`
+ * inflated its message and unread totals the same way. The label check is kept
+ * as a secondary guard so two distinct mailboxes can't share one nickname.
  */
 function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccountSpec[] {
   const specs: ImapAccountSpec[] = [];
