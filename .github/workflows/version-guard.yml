@@ -16,13 +16,9 @@ name: version-guard
 # makes the bump mandatory; dependabot-rebuild.yml auto-bumps bot PRs whose
 # rebuilt bundle changed, so Dependabot automation keeps flowing.
 # The guard file itself lives in .github/ (doesn't ship), so it needs no bump.
-# A bump must also be DOCUMENTED. Three CHANGELOG rules enforce that: (1) when
-# the version changes, CHANGELOG.md has to carry a matching "## [X.Y.Z]"
-# heading, so release notes can't be stranded under "## [Unreleased]" and
-# silently orphaned once the release ships; (2) no "## [X.Y.Z]" heading present
-# on the base may disappear — renaming one satisfies rule 1 while erasing a
-# published release (apple-numbers-mcp #54); and (3) on a bump, "## [Unreleased]"
-# must be empty, because the release drains it and nothing renames it later.
+# A bump must also be DOCUMENTED: when the version changes, CHANGELOG.md has to
+# carry a matching "## [X.Y.Z]" heading, so release notes can't be stranded
+# under "## [Unreleased]" and silently orphaned once the release ships.
 #
 # TypeScript under src/ is a FIRST-CAUSE DETECTOR, not a shipped file: it
 # reaches users only after esbuild inlines it into build/index.js. So it only
