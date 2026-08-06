@@ -81653,9 +81653,8 @@ function sameImapAccount(left, right, deps) {
     if (aliases.has(left) && aliases.has(right)) return true;
   }
   const specs = listImapAccountSpecs();
-  const matches = (selector, spec) => spec.accountLabel === selector || spec.user === selector;
-  const leftSpec = specs.find((spec) => matches(left, spec));
-  const rightSpec = specs.find((spec) => matches(right, spec));
+  const leftSpec = specs.find((spec) => specMatchesSelector(spec, left));
+  const rightSpec = specs.find((spec) => specMatchesSelector(spec, right));
   return leftSpec !== void 0 && leftSpec === rightSpec;
 }
 function depsForAccount(account, deps) {
@@ -81667,14 +81666,21 @@ function depsForAccount(account, deps) {
 function depsForMessageRef(ref, deps) {
   return depsForAccount(ref.account, deps);
 }
+function specMatchesSelector(spec, selector) {
+  return spec.accountLabel === selector || spec.user === selector || (spec.aliases?.includes(selector) ?? false);
+}
 function str(v) {
   return typeof v === "string" && v.trim() ? v.trim() : void 0;
 }
+function imapIdentityKey(spec) {
+  return `${spec.host.trim().toLowerCase()}:${spec.port}:${spec.user.trim()}`;
+}
 function listImapAccountSpecs(env = process.env) {
   const specs = [];
+  const seen = /* @__PURE__ */ new Set();
   const user = env[IMAP_ENV.user]?.trim();
   if (user) {
-    specs.push({
+    const legacy = {
       accountLabel: env[IMAP_ENV.account]?.trim() || user,
       user,
       host: env[IMAP_ENV.host]?.trim() || "imap.gmail.com",
@@ -81682,7 +81688,9 @@ function listImapAccountSpecs(env = process.env) {
       password: env[IMAP_ENV.password],
       keychainService: env[IMAP_ENV.keychainService]?.trim(),
       keychainAccount: env[IMAP_ENV.keychainAccount]?.trim()
-    });
+    };
+    specs.push(legacy);
+    seen.add(imapIdentityKey(legacy));
   }
   const json = env[IMAP_ENV.accounts]?.trim();
   if (json) {
@@ -81694,12 +81702,22 @@ function listImapAccountSpecs(env = process.env) {
           const u = str(a.user);
           if (!u) continue;
           const label = str(a.account) || str(a.accountLabel) || u;
-          if (specs.some((s) => s.accountLabel === label)) continue;
+          const host = str(a.host) || "imap.gmail.com";
           const port = a.port ? Number(a.port) : 993;
+          const key = imapIdentityKey({ host, port, user: u });
+          if (seen.has(key)) {
+            const owner = specs.find((s) => imapIdentityKey(s) === key);
+            if (owner && owner.accountLabel !== label && !owner.aliases?.includes(label)) {
+              (owner.aliases ??= []).push(label);
+            }
+            continue;
+          }
+          if (specs.some((s) => s.accountLabel === label)) continue;
+          seen.add(key);
           specs.push({
             accountLabel: label,
             user: u,
-            host: str(a.host) || "imap.gmail.com",
+            host,
             port,
             password: str(a.password),
             keychainService: str(a.keychainService),
@@ -81737,7 +81755,7 @@ function specToConfig(spec) {
 }
 function isImapAccount(account, env = process.env) {
   if (!account) return false;
-  return listImapAccountSpecs(env).some((s) => s.accountLabel === account || s.user === account);
+  return listImapAccountSpecs(env).some((s) => specMatchesSelector(s, account));
 }
 function shouldUseImap(account, env = process.env) {
   return listImapAccountSpecs(env).length > 0 && (account === void 0 || isImapAccount(account, env));
@@ -81760,12 +81778,12 @@ function resolveImapConfig(env = process.env, account) {
   const specs = listImapAccountSpecs(env);
   if (specs.length === 0) {
     throw new Error(
-      `IMAP not configured. Set ${IMAP_ENV.user} (login address) to enable it. ${SETUP_HINT}`
+      `IMAP not configured. Set ${IMAP_ENV.user} (login address), or ${IMAP_ENV.accounts} for multiple accounts, to enable it. ${SETUP_HINT}`
     );
   }
   let spec;
   if (account) {
-    spec = specs.find((s) => s.accountLabel === account || s.user === account);
+    spec = specs.find((s) => specMatchesSelector(s, account));
     if (!spec) {
       throw new Error(
         `No IMAP account matching "${account}". Configured: ${specs.map((s) => s.accountLabel).join(", ")}.`
@@ -81977,7 +81995,7 @@ function errText(e) {
 var poolConnect = defaultConnect;
 var pools = /* @__PURE__ */ new Map();
 function poolKey(cfg) {
-  return `${cfg.host}:${cfg.port}:${cfg.user}`;
+  return imapIdentityKey(cfg);
 }
 function imapIdleMs() {
   const raw = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
@@ -82035,7 +82053,7 @@ async function acquirePooled(cfg) {
   }
 }
 async function imapHealthCheck(deps = {}) {
-  if (!deps.config && !process.env[IMAP_ENV.user]?.trim()) {
+  if (!deps.config && listImapAccountSpecs().length === 0) {
     return { configured: false, ok: false };
   }
   let cfg;
@@ -82773,7 +82791,11 @@ async function runDoctor(mailManager2) {
       checks.push({
         name: `IMAP: ${label}`,
         status: h.ok ? "ok" : "fail",
-        detail: h.ok ? `connected to ${h.host}` : `connection failed: ${h.error}. Check the Keychain password and host/port.`
+        // `h.error` is optional on the health-check result, so interpolating it
+        // bare printed the literal string "connection failed: undefined" for
+        // any failure that carried no message (issue #138). Never render that:
+        // an unexplained failure is still worth naming, but as words.
+        detail: h.ok ? `connected to ${h.host}` : `connection failed: ${h.error ?? "the health check reported no detail"}. Check the Keychain password and host/port.`
       });
     }
   }
