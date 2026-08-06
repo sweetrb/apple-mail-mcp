@@ -485,6 +485,7 @@ for an explicitly-named IMAP account, never on an omitted account.
 | `APPLE_MAIL_MCP_IMAP_ACCOUNTS` | No | — | JSON array of **additional** IMAP accounts for multi-account setups (see below) |
 | `APPLE_MAIL_MCP_IMAP_IDLE` | No | `0` | Set `1` to enable IMAP IDLE push notifications (new-mail alerts) for every configured account |
 | `APPLE_MAIL_MCP_IMAP_IDLE_MS` | No | `30000` | Idle timeout (ms) before a pooled IMAP connection is closed (`0` = never close) |
+| `APPLE_MAIL_MCP_STATS_BUDGET_MS` | No | `25000` | Per-account wall-clock budget for `get-mail-stats` (minimum `1000`). Raise it for very large accounts |
 
 **Multiple IMAP accounts (C2):** set `APPLE_MAIL_MCP_IMAP_ACCOUNTS` to a JSON array, e.g.
 `[{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]`.
@@ -1146,7 +1147,15 @@ Get mail statistics.
 |-----------|------|----------|-------------|
 | `account` | string | No | Limit to one account (uses fast IMAP `STATUS` when that account is IMAP-configured). Omit to merge across all accounts. |
 
-**Returns:** Total and per-account message/unread counts, plus recently received stats (24h, 7d, 30d).
+**Returns:** Total and per-account message/unread counts, plus recently received stats (24h, 7d, 30d). The scoped IMAP path also returns a `perMailbox` breakdown.
+
+Gathering stats costs one IMAP `STATUS` per mailbox, and Gmail lists every label
+as a mailbox, so a large account is not instant. Accounts are counted
+**concurrently**, and each is bounded by `APPLE_MAIL_MCP_STATS_BUDGET_MS`
+(default `25000`). In the merged all-accounts path an account that fails or
+overruns is reported via `partial: true` + `failedAccounts` rather than being
+folded in as a silent zero; a scoped call to a single account returns an error
+naming the budget instead. Raise the budget if you have a very large account.
 
 ---
 

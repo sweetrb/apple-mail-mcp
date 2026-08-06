@@ -21,7 +21,12 @@
  */
 
 import { createRequire } from "module";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  McpServer,
+  type RegisteredTool,
+  type ToolCallback,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AppleMailManager, resolveAttachmentSaveTarget } from "@/services/appleMailManager.js";
@@ -349,6 +354,47 @@ const server = new McpServer(
 );
 
 /**
+ * Register a tool, advertising its `outputSchema` as PERMISSIVE.
+ *
+ * The MCP **client** validates a result's `structuredContent` against the JSON
+ * Schema the server advertised — not against the server's own zod object. A
+ * bare zod raw shape renders as `additionalProperties: false`, so a payload
+ * carrying any field the schema didn't enumerate is rejected client-side with
+ * `-32602 … data must NOT have additional properties`, discarding a result the
+ * handler produced correctly (#135: `get-mail-stats`'s IMAP branch emits
+ * `perMailbox`). The server never sees it, because zod's own parse silently
+ * *strips* unknown keys rather than failing — which is why the v2.3.0 migration
+ * believed "all fields optional, no `.strict()`" already meant permissive. It
+ * covered optionality; it did not cover undeclared keys.
+ *
+ * `.passthrough()` advertises `additionalProperties: true`, which is the
+ * contract that migration intended: a declared field documents the shape,
+ * an undeclared one is carried through instead of nuking the whole result.
+ * Enforced for every tool by `test/output-schema.test.ts`.
+ */
+function registerTool<
+  OutputArgs extends z.ZodRawShape,
+  InputArgs extends undefined | z.ZodRawShape = undefined,
+>(
+  name: string,
+  config: {
+    title?: string;
+    description?: string;
+    inputSchema?: InputArgs;
+    outputSchema?: OutputArgs;
+    annotations?: ToolAnnotations;
+  },
+  cb: ToolCallback<InputArgs>
+): RegisteredTool {
+  const { outputSchema, ...rest } = config;
+  return server.registerTool(
+    name,
+    outputSchema ? { ...rest, outputSchema: z.object(outputSchema).passthrough() } : rest,
+    cb
+  );
+}
+
+/**
  * Singleton instance of the Apple Mail manager.
  * Handles all AppleScript execution and mail operations.
  */
@@ -397,7 +443,7 @@ async function hybridBatchCounts(
 
 // --- search-messages ---
 
-server.registerTool(
+registerTool(
   "search-messages",
   {
     description:
@@ -540,7 +586,7 @@ server.registerTool(
 
 // --- get-message ---
 
-server.registerTool(
+registerTool(
   "get-message",
   {
     description:
@@ -624,7 +670,7 @@ server.registerTool(
 
 // --- get-thread ---
 
-server.registerTool(
+registerTool(
   "get-thread",
   {
     description:
@@ -769,7 +815,7 @@ server.registerTool(
 
 // --- list-messages ---
 
-server.registerTool(
+registerTool(
   "list-messages",
   {
     description:
@@ -868,7 +914,7 @@ server.registerTool(
 
 // --- send-email ---
 
-server.registerTool(
+registerTool(
   "send-email",
   {
     description:
@@ -943,7 +989,7 @@ server.registerTool(
 
 // --- send-serial-email ---
 
-server.registerTool(
+registerTool(
   "send-serial-email",
   {
     description:
@@ -1030,7 +1076,7 @@ server.registerTool(
 
 // --- create-draft ---
 
-server.registerTool(
+registerTool(
   "create-draft",
   {
     description:
@@ -1152,7 +1198,7 @@ async function sendForwardViaSmtp(
 
 // --- reply-to-message ---
 
-server.registerTool(
+registerTool(
   "reply-to-message",
   {
     description:
@@ -1203,7 +1249,7 @@ server.registerTool(
 
 // --- forward-message ---
 
-server.registerTool(
+registerTool(
   "forward-message",
   {
     description:
@@ -1257,7 +1303,7 @@ server.registerTool(
 
 // --- mark-as-read ---
 
-server.registerTool(
+registerTool(
   "mark-as-read",
   {
     description:
@@ -1285,7 +1331,7 @@ server.registerTool(
 
 // --- mark-as-unread ---
 
-server.registerTool(
+registerTool(
   "mark-as-unread",
   {
     description:
@@ -1313,7 +1359,7 @@ server.registerTool(
 
 // --- flag-message ---
 
-server.registerTool(
+registerTool(
   "flag-message",
   {
     description:
@@ -1352,7 +1398,7 @@ server.registerTool(
 
 // --- unflag-message ---
 
-server.registerTool(
+registerTool(
   "unflag-message",
   {
     description:
@@ -1380,7 +1426,7 @@ server.registerTool(
 
 // --- delete-message ---
 
-server.registerTool(
+registerTool(
   "delete-message",
   {
     description:
@@ -1410,7 +1456,7 @@ server.registerTool(
 
 // --- move-message ---
 
-server.registerTool(
+registerTool(
   "move-message",
   {
     description:
@@ -1446,7 +1492,7 @@ server.registerTool(
 
 // --- batch-delete-messages ---
 
-server.registerTool(
+registerTool(
   "batch-delete-messages",
   {
     description:
@@ -1476,7 +1522,7 @@ server.registerTool(
 
 // --- batch-move-messages ---
 
-server.registerTool(
+registerTool(
   "batch-move-messages",
   {
     description:
@@ -1514,7 +1560,7 @@ server.registerTool(
 
 // --- batch-mark-as-read ---
 
-server.registerTool(
+registerTool(
   "batch-mark-as-read",
   {
     description:
@@ -1547,7 +1593,7 @@ server.registerTool(
 
 // --- batch-mark-as-unread ---
 
-server.registerTool(
+registerTool(
   "batch-mark-as-unread",
   {
     description:
@@ -1583,7 +1629,7 @@ server.registerTool(
 
 // --- batch-flag-messages ---
 
-server.registerTool(
+registerTool(
   "batch-flag-messages",
   {
     description:
@@ -1615,7 +1661,7 @@ server.registerTool(
 
 // --- batch-unflag-messages ---
 
-server.registerTool(
+registerTool(
   "batch-unflag-messages",
   {
     description:
@@ -1648,7 +1694,7 @@ server.registerTool(
 
 // --- resolve-message-id ---
 
-server.registerTool(
+registerTool(
   "resolve-message-id",
   {
     description:
@@ -1695,7 +1741,7 @@ server.registerTool(
 
 // --- list-attachments ---
 
-server.registerTool(
+registerTool(
   "list-attachments",
   {
     description:
@@ -1740,7 +1786,7 @@ server.registerTool(
 
 // --- save-attachment ---
 
-server.registerTool(
+registerTool(
   "save-attachment",
   {
     description:
@@ -1798,7 +1844,7 @@ server.registerTool(
 
 // --- fetch-attachment ---
 
-server.registerTool(
+registerTool(
   "fetch-attachment",
   {
     description:
@@ -1845,7 +1891,7 @@ server.registerTool(
 
 // --- list-mailboxes ---
 
-server.registerTool(
+registerTool(
   "list-mailboxes",
   {
     description:
@@ -1934,7 +1980,7 @@ server.registerTool(
 
 // --- get-unread-count ---
 
-server.registerTool(
+registerTool(
   "get-unread-count",
   {
     description:
@@ -2022,7 +2068,7 @@ server.registerTool(
 
 // --- create-mailbox ---
 
-server.registerTool(
+registerTool(
   "create-mailbox",
   {
     description:
@@ -2057,7 +2103,7 @@ server.registerTool(
 
 // --- delete-mailbox ---
 
-server.registerTool(
+registerTool(
   "delete-mailbox",
   {
     description:
@@ -2090,7 +2136,7 @@ server.registerTool(
 
 // --- rename-mailbox ---
 
-server.registerTool(
+registerTool(
   "rename-mailbox",
   {
     description:
@@ -2135,7 +2181,7 @@ server.registerTool(
 
 // --- list-smart-mailboxes (intelligente Postfächer) ---
 
-server.registerTool(
+registerTool(
   "list-smart-mailboxes",
   {
     description:
@@ -2175,7 +2221,7 @@ server.registerTool(
 
 // --- create-smart-mailbox ---
 
-server.registerTool(
+registerTool(
   "create-smart-mailbox",
   {
     description:
@@ -2222,7 +2268,7 @@ server.registerTool(
 
 // --- delete-smart-mailbox ---
 
-server.registerTool(
+registerTool(
   "delete-smart-mailbox",
   {
     description:
@@ -2249,7 +2295,7 @@ server.registerTool(
 
 // --- create-newsletter-smart-mailboxes (the main use-case: from Inbox) ---
 
-server.registerTool(
+registerTool(
   "create-newsletter-smart-mailboxes",
   {
     description:
@@ -2294,7 +2340,7 @@ server.registerTool(
 
 // --- list-accounts ---
 
-server.registerTool(
+registerTool(
   "list-accounts",
   {
     description:
@@ -2338,7 +2384,7 @@ server.registerTool(
 
 // --- list-rules ---
 
-server.registerTool(
+registerTool(
   "list-rules",
   {
     description:
@@ -2370,7 +2416,7 @@ server.registerTool(
 
 // --- enable-rule ---
 
-server.registerTool(
+registerTool(
   "enable-rule",
   {
     description:
@@ -2397,7 +2443,7 @@ server.registerTool(
 
 // --- disable-rule ---
 
-server.registerTool(
+registerTool(
   "disable-rule",
   {
     description:
@@ -2424,7 +2470,7 @@ server.registerTool(
 
 // --- create-rule ---
 
-server.registerTool(
+registerTool(
   "create-rule",
   {
     description:
@@ -2476,7 +2522,7 @@ server.registerTool(
 
 // --- delete-rule ---
 
-server.registerTool(
+registerTool(
   "delete-rule",
   {
     description:
@@ -2504,7 +2550,7 @@ server.registerTool(
 
 // --- search-contacts ---
 
-server.registerTool(
+registerTool(
   "search-contacts",
   {
     description:
@@ -2549,7 +2595,7 @@ server.registerTool(
 
 // --- save-template ---
 
-server.registerTool(
+registerTool(
   "save-template",
   {
     description:
@@ -2581,7 +2627,7 @@ server.registerTool(
 
 // --- list-templates ---
 
-server.registerTool(
+registerTool(
   "list-templates",
   {
     description:
@@ -2613,7 +2659,7 @@ server.registerTool(
 
 // --- get-template ---
 
-server.registerTool(
+registerTool(
   "get-template",
   {
     description:
@@ -2660,7 +2706,7 @@ server.registerTool(
 
 // --- delete-template ---
 
-server.registerTool(
+registerTool(
   "delete-template",
   {
     description:
@@ -2686,7 +2732,7 @@ server.registerTool(
 
 // --- use-template ---
 
-server.registerTool(
+registerTool(
   "use-template",
   {
     description:
@@ -2720,7 +2766,7 @@ server.registerTool(
 
 // --- health-check ---
 
-server.registerTool(
+registerTool(
   "health-check",
   {
     description:
@@ -2750,7 +2796,7 @@ server.registerTool(
 
 // --- doctor ---
 
-server.registerTool(
+registerTool(
   "doctor",
   {
     description:
@@ -2771,7 +2817,7 @@ server.registerTool(
 
 // --- get-mail-stats ---
 
-server.registerTool(
+registerTool(
   "get-mail-stats",
   {
     description:
@@ -2789,6 +2835,12 @@ server.registerTool(
       accounts: z.array(z.object({}).passthrough()).optional(),
       recentlyReceived: z.object({}).passthrough().optional(),
       recent: z.object({}).passthrough().optional(),
+      // The scoped IMAP path spreads an ImapStats, which carries per-mailbox
+      // STATUS rows. Declared so the shape is documented rather than merely
+      // tolerated by the permissive advertisement (#135).
+      perMailbox: z.array(z.object({}).passthrough()).optional(),
+      partial: z.boolean().optional(),
+      failedAccounts: z.array(z.string()).optional(),
     },
   },
   withErrorHandling(async ({ account }) => {
@@ -2799,8 +2851,42 @@ server.registerTool(
     //   - no account + IMAP configured → MERGE: sum IMAP STATUS over every
     //     configured account + AppleScript per-account stats for the accounts
     //     IMAP does NOT cover (partitioned so no account is double-counted).
+    // #135: gathering stats is one STATUS per mailbox, and Gmail lists every
+    // label — so a slow or large account can outlast the client's request
+    // timeout and die as a bare -32001 with nothing to act on. Every IMAP read
+    // below is bounded; what happens on expiry differs by path (see each).
+    const budgetMs = Math.max(1000, Number(process.env.APPLE_MAIL_MCP_STATS_BUDGET_MS ?? 25_000));
+    const withBudget = async <T>(work: Promise<T>, label: string): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          work,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`${label} timed out after ${budgetMs}ms`)),
+              budgetMs
+            );
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
     if (account !== undefined && isImapAccount(account)) {
-      const s = await imapMailStats({ account });
+      // Scoped: the caller named ONE account, so a partial result would be no
+      // result. Fail loudly with the remedy instead of stalling until -32001.
+      let s;
+      try {
+        s = await withBudget(imapMailStats({ account }), `IMAP mail-stats for "${account}"`);
+      } catch (e) {
+        return errorResponse(
+          `Could not read mail statistics for "${account}": ${String(e)}. Gathering stats ` +
+            `costs one IMAP STATUS per mailbox, so a very large account can exceed the ` +
+            `${budgetMs}ms budget — raise APPLE_MAIL_MCP_STATS_BUDGET_MS, or run the ` +
+            `"doctor" tool if the connection itself is the problem.`
+        );
+      }
       const lines = [
         `📊 Mail Statistics — ${account} (IMAP)`,
         `══════════════════`,
@@ -2833,40 +2919,71 @@ server.registerTool(
       // is INBOX-wide (not per-account), so it's omitted for AppleScript sources;
       // IMAP's per-account recent IS included.
       const sources = planCountSources(mailManager.listAccounts(), resolveImapConfigs());
-      for (const src of sources) {
-        if (src.kind === "imap") {
-          try {
-            const s = await imapMailStats({ config: src.config });
-            totalMessages += s.totalMessages;
-            totalUnread += s.totalUnread;
-            recent.last24h += s.recent.last24h;
-            recent.last7d += s.recent.last7d;
-            recent.last30d += s.recent.last30d;
-            perAccount.push({
-              name: src.label,
-              totalMessages: s.totalMessages,
-              unreadMessages: s.totalUnread,
-              backend: "imap",
-            });
-          } catch (e) {
-            console.error(`IMAP mail-stats failed for "${src.label}": ${String(e)}`);
-          }
-        } else {
-          let m = 0;
-          let u = 0;
-          for (const mb of mailManager.listMailboxes(src.account.name)) {
-            m += mb.messageCount;
-            u += mb.unreadCount;
-          }
-          totalMessages += m;
-          totalUnread += u;
-          perAccount.push({
-            name: src.label,
-            totalMessages: m,
-            unreadMessages: u,
-            backend: "applescript",
-          });
+      // Accounts whose stats could not be read. A failed or too-slow source must
+      // never be folded in as a silent 0 — that understates the totals and reads
+      // as a real answer (#130, same class as get-unread-count).
+      const failedAccounts: string[] = [];
+
+      // #135: run SEQUENTIALLY this was the sum of every account's cost, which
+      // overran the client's request timeout on a four-account all-IMAP setup
+      // and killed the whole call with -32001, returning nothing at all. The
+      // pool is per-account, so accounts don't contend: fan them out
+      // CONCURRENTLY (wall clock becomes the slowest account, not the sum) and
+      // let a wedged account degrade to a partial result rather than taking the
+      // other three down with it.
+      const settled = await Promise.all(
+        sources
+          .filter((s) => s.kind === "imap")
+          .map(async (src) => {
+            try {
+              const stats = await withBudget(
+                imapMailStats({ config: src.config }),
+                `IMAP mail-stats for "${src.label}"`
+              );
+              return { label: src.label, stats };
+            } catch (e) {
+              console.error(`IMAP mail-stats failed for "${src.label}": ${String(e)}`);
+              return { label: src.label, stats: undefined };
+            }
+          })
+      );
+      for (const r of settled) {
+        if (!r.stats) {
+          failedAccounts.push(r.label);
+          continue;
         }
+        const s = r.stats;
+        totalMessages += s.totalMessages;
+        totalUnread += s.totalUnread;
+        recent.last24h += s.recent.last24h;
+        recent.last7d += s.recent.last7d;
+        recent.last30d += s.recent.last30d;
+        perAccount.push({
+          name: r.label,
+          totalMessages: s.totalMessages,
+          unreadMessages: s.totalUnread,
+          backend: "imap",
+        });
+      }
+
+      // AppleScript sources are synchronous (they block the event loop), so they
+      // run after the IMAP fan-out has settled rather than racing it.
+      for (const src of sources) {
+        if (src.kind === "imap") continue;
+        let m = 0;
+        let u = 0;
+        for (const mb of mailManager.listMailboxes(src.account.name)) {
+          m += mb.messageCount;
+          u += mb.unreadCount;
+        }
+        totalMessages += m;
+        totalUnread += u;
+        perAccount.push({
+          name: src.label,
+          totalMessages: m,
+          unreadMessages: u,
+          backend: "applescript",
+        });
       }
       const lines = [
         `📊 Mail Statistics (merged: IMAP + AppleScript)`,
@@ -2885,11 +3002,22 @@ server.registerTool(
             `  ${a.name}: ${a.totalMessages} messages (${a.unreadMessages} unread) [${a.backend}]`
         ),
       ];
+      if (failedAccounts.length > 0) {
+        lines.push(
+          ``,
+          `⚠️  PARTIAL: ${failedAccounts.length} account(s) could not be read ` +
+            `(${failedAccounts.join(", ")}), so the real totals are higher. They either ` +
+            `failed or exceeded the ${budgetMs}ms budget — raise ` +
+            `APPLE_MAIL_MCP_STATS_BUDGET_MS if an account is simply large, or run the ` +
+            `"doctor" tool to check the connection.`
+        );
+      }
       return successResponse(lines.join("\n"), {
         totalMessages,
         totalUnread,
         accounts: perAccount,
         recent,
+        ...(failedAccounts.length > 0 ? { partial: true, failedAccounts } : {}),
       });
     }
 
@@ -2925,7 +3053,7 @@ server.registerTool(
 
 // --- get-sync-status ---
 
-server.registerTool(
+registerTool(
   "get-sync-status",
   {
     description:

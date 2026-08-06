@@ -83202,6 +83202,14 @@ var server = new McpServer(
   // logging capability lets the IMAP IDLE watcher push new-mail notifications (B5).
   { capabilities: { logging: {} } }
 );
+function registerTool(name, config2, cb) {
+  const { outputSchema, ...rest } = config2;
+  return server.registerTool(
+    name,
+    outputSchema ? { ...rest, outputSchema: external_exports.object(outputSchema).passthrough() } : rest,
+    cb
+  );
+}
 var mailManager = new AppleMailManager();
 registerResourcesAndPrompts(server, mailManager);
 async function hybridBatchCounts(ids, appleFn, imapFn) {
@@ -83224,7 +83232,7 @@ async function hybridBatchCounts(ids, appleFn, imapFn) {
   }
   return { success, fail, errors };
 }
-server.registerTool(
+registerTool(
   "search-messages",
   {
     description: "Use when: finding messages by query/sender/subject/date/read/flag filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, and read state (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.",
@@ -83336,7 +83344,7 @@ ${messageList}${coverageBlock}`,
     "Error searching messages"
   )
 );
-server.registerTool(
+registerTool(
   "get-message",
   {
     description: `Use when: reading the full body of one message whose id you already have (numeric or imap:\u2026); set preferHtml to get the HTML body instead of plain text.
@@ -83404,7 +83412,7 @@ ${body}`, {
     "Error retrieving message"
   )
 );
-server.registerTool(
+registerTool(
   "get-thread",
   {
     description: "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject.\nReturns: the thread's normalized subject and its messages (id, date, subject, sender, read state).\nDo not use when: you only need the single message (use get-message) or are searching by arbitrary criteria (use search-messages).",
@@ -83523,7 +83531,7 @@ ${list}${coverageBlock}`,
     );
   }, "Error retrieving thread")
 );
-server.registerTool(
+registerTool(
   "list-messages",
   {
     description: "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, and sender (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags (use search-messages) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.",
@@ -83588,7 +83596,7 @@ ${messageList}${coverageBlock}`,
     );
   }, "Error listing messages")
 );
-server.registerTool(
+registerTool(
   "send-email",
   {
     description: "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count.\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent \u2014 require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
@@ -83639,7 +83647,7 @@ server.registerTool(
     });
   }, "Error sending email")
 );
-server.registerTool(
+registerTool(
   "send-serial-email",
   {
     description: "Use when: the user has confirmed a mail-merge \u2014 sending individually personalized copies to many recipients (max 100), with {{Key}} placeholders in subject/body replaced per-recipient from each recipient's variables. Recipients do not see each other.\nReturns: a per-recipient sent/failed report with counts.\nDo not use when: sending one message to a shared recipient list (use send-email) or saving for review (use create-draft).\nSafety: this SENDS many real emails immediately and they cannot be unsent \u2014 require explicit user confirmation of the recipient list, the subject/body template, and the placeholder substitutions before calling.",
@@ -83695,7 +83703,7 @@ ${details}`,
     }
   }, "Error sending serial emails")
 );
-server.registerTool(
+registerTool(
   "create-draft",
   {
     description: "Use when: composing an email the user should review in Mail.app before sending \u2014 the safe default for any new message (to/cc/bcc are arrays, optional attachments).\nReturns: a confirmation that the draft was created, with recipients and attachment count.\nDo not use when: the user has already confirmed they want it sent now (use send-email).\nSafety: low risk \u2014 creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
@@ -83775,7 +83783,7 @@ async function sendForwardViaSmtp(id, to, body) {
   if (result.success) return { sent: true };
   return { sent: false, fallback: false, error: result.error ?? "unknown SMTP error" };
 }
-server.registerTool(
+registerTool(
   "reply-to-message",
   {
     description: "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
@@ -83812,7 +83820,7 @@ server.registerTool(
     });
   }, "Error replying to message")
 );
-server.registerTool(
+registerTool(
   "forward-message",
   {
     description: "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
@@ -83854,7 +83862,7 @@ server.registerTool(
     );
   }, "Error forwarding message")
 );
-server.registerTool(
+registerTool(
   "mark-as-read",
   {
     description: "Use when: marking a single message (by id) as read.\nReturns: a confirmation that the message was marked read.\nDo not use when: marking several at once (use batch-mark-as-read) or marking unread (use mark-as-unread). Get the id from search-messages or list-messages first.",
@@ -83874,7 +83882,7 @@ server.registerTool(
     "Error marking message as read"
   )
 );
-server.registerTool(
+registerTool(
   "mark-as-unread",
   {
     description: "Use when: marking a single message (by id) as unread.\nReturns: a confirmation that the message was marked unread.\nDo not use when: marking several at once (use batch-mark-as-unread) or marking read (use mark-as-read). Get the id from search-messages or list-messages first.",
@@ -83894,7 +83902,7 @@ server.registerTool(
     "Error marking message as unread"
   )
 );
-server.registerTool(
+registerTool(
   "flag-message",
   {
     description: "Use when: flagging a single message (by id), optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: a confirmation that the message was flagged (and the color, when applied).\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.\nNote: the color is applied on both routes \u2014 AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads.",
@@ -83926,7 +83934,7 @@ server.registerTool(
     });
   }, "Error flagging message")
 );
-server.registerTool(
+registerTool(
   "unflag-message",
   {
     description: "Use when: removing the flag from a single message (by id).\nReturns: a confirmation that the message was unflagged.\nDo not use when: unflagging several at once (use batch-unflag-messages) or adding a flag (use flag-message). Get the id from search-messages or list-messages first.",
@@ -83946,7 +83954,7 @@ server.registerTool(
     "Error unflagging message"
   )
 );
-server.registerTool(
+registerTool(
   "delete-message",
   {
     description: "Use when: deleting a single message by id (moves it to Trash).\nReturns: a confirmation that the message was deleted.\nDo not use when: deleting several at once (use batch-delete-messages) or just filing it away (use move-message).\nSafety: destructive \u2014 require explicit user confirmation, and search-messages/list-messages first to confirm you have the right id before deleting.",
@@ -83969,7 +83977,7 @@ server.registerTool(
     "Error deleting message"
   )
 );
-server.registerTool(
+registerTool(
   "move-message",
   {
     description: "Use when: moving a single message (by id) into another mailbox/folder, e.g. archiving or filing.\nReturns: a confirmation naming the destination mailbox.\nDo not use when: moving several at once (use batch-move-messages) or deleting (use delete-message). Use list-mailboxes to confirm the destination name exists.\nSafety: moves a real message between folders \u2014 confirm the destination mailbox, and search-messages/list-messages first to confirm the id.",
@@ -83998,7 +84006,7 @@ server.registerTool(
     "Error moving message"
   )
 );
-server.registerTool(
+registerTool(
   "batch-delete-messages",
   {
     description: "Use when: deleting multiple messages in one call (1\u2013100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once \u2014 require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting.",
@@ -84023,7 +84031,7 @@ server.registerTool(
     }
   }, "Error batch deleting messages")
 );
-server.registerTool(
+registerTool(
   "batch-move-messages",
   {
     description: "Use when: moving multiple messages (1\u2013100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once \u2014 confirm the destination mailbox, and search-messages/list-messages first to confirm the ids.",
@@ -84056,7 +84064,7 @@ server.registerTool(
     }
   }, "Error batch moving messages")
 );
-server.registerTool(
+registerTool(
   "batch-mark-as-read",
   {
     description: "Use when: marking multiple messages (1\u2013100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first.",
@@ -84084,7 +84092,7 @@ server.registerTool(
     }
   }, "Error batch marking messages as read")
 );
-server.registerTool(
+registerTool(
   "batch-mark-as-unread",
   {
     description: "Use when: marking multiple messages (1\u2013100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first.",
@@ -84115,7 +84123,7 @@ server.registerTool(
     }
   }, "Error batch marking messages as unread")
 );
-server.registerTool(
+registerTool(
   "batch-flag-messages",
   {
     description: "Use when: flagging multiple messages (1\u2013100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: the color is applied on both routes \u2014 AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads \u2014 so a mixed batch of numeric and `imap:` ids all end up colored.",
@@ -84142,7 +84150,7 @@ server.registerTool(
     }
   }, "Error batch flagging messages")
 );
-server.registerTool(
+registerTool(
   "batch-unflag-messages",
   {
     description: "Use when: removing flags from multiple messages (1\u2013100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first.",
@@ -84170,7 +84178,7 @@ server.registerTool(
     }
   }, "Error batch unflagging messages")
 );
-server.registerTool(
+registerTool(
   "resolve-message-id",
   {
     description: "Use when: you have `imap:` message id(s) and genuinely need the numeric Mail.app id(s) \u2014 e.g. for reply-to-message/forward-message, which are numeric-id only. NOTE: as of 2.10.0 you no longer need this to apply a flag COLOR \u2014 flag-message/batch-flag-messages write the color over IMAP directly via Mail.app's $MailFlagBit0/1/2 keywords, so a smart mailbox keyed on flag color matches an IMAP-flagged message. Each imap: id is resolved via its RFC822 Message-ID.\nReturns: for each input id, its `numericId` (the AppleScript id) or null when it can't be resolved, plus the `messageId` used; and a `resolvedCount`.\nDo not use when: your ids are already numeric (they pass straight through), or you don't need a color \u2014 flag/move/mark tools operate on `imap:` ids directly.",
@@ -84208,7 +84216,7 @@ server.registerTool(
     );
   }, "Error resolving message ids")
 );
-server.registerTool(
+registerTool(
   "list-attachments",
   {
     description: "Use when: enumerating a message's attachments (by id) to discover their names, MIME types, and sizes \u2014 typically before saving or fetching one.\nReturns: each attachment's name, MIME type, and size, plus a count.\nDo not use when: you want the bytes (use fetch-attachment for inline base64, or save-attachment to write to disk). Get the message id from search-messages or list-messages first.",
@@ -84241,7 +84249,7 @@ ${attachmentList}`,
     );
   }, "Error listing attachments")
 );
-server.registerTool(
+registerTool(
   "save-attachment",
   {
     description: "Use when: writing one of a message's attachments to disk, by message id and attachmentName, into the savePath directory (saved as savePath/attachmentName).\nReturns: a confirmation of the saved file path.\nDo not use when: you don't know the attachment name (use list-attachments first) or want the bytes inline rather than on disk (use fetch-attachment).\nSafety: writes a file to disk \u2014 savePath must be a directory inside the configured allowed roots, and attachmentName may not contain path separators or '..'; calls outside those constraints are rejected.",
@@ -84289,7 +84297,7 @@ server.registerTool(
     });
   }, "Error saving attachment")
 );
-server.registerTool(
+registerTool(
   "fetch-attachment",
   {
     description: "Use when: retrieving an attachment's raw bytes inline as base64 (by message id and attachmentName), e.g. to process its contents without touching disk.\nReturns: the attachment's bytes base64-encoded, with its size and (for IMAP) MIME type.\nDo not use when: you don't know the attachment name (use list-attachments first) or you just want it saved to disk (use save-attachment).",
@@ -84329,7 +84337,7 @@ ${r.base64}`,
     );
   }, "Error fetching attachment")
 );
-server.registerTool(
+registerTool(
   "list-mailboxes",
   {
     description: "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).",
@@ -84402,7 +84410,7 @@ ${list}`, structured2);
 ${mailboxList}`, structured);
   }, "Error listing mailboxes")
 );
-server.registerTool(
+registerTool(
   "get-unread-count",
   {
     description: "Use when: you only need the number of unread messages \u2014 INBOX by default, or scoped to one mailbox and/or account \u2014 without listing the messages themselves.\nReturns: the unread count for the requested scope (INBOX when no mailbox is given). If a source cannot be read the result carries `partial: true` + `failedAccounts`, and a total AppleScript failure returns an ERROR \u2014 a plain count is never a disguised transport failure.\nDo not use when: you need the actual unread messages and their ids (use list-messages with unreadOnly, or search-messages with isRead=false) or broader totals across every mailbox (use get-mail-stats).",
@@ -84466,7 +84474,7 @@ server.registerTool(
     });
   }, "Error getting unread count")
 );
-server.registerTool(
+registerTool(
   "create-mailbox",
   {
     description: "Use when: creating a new mailbox/folder in an account.\nReturns: a confirmation that the mailbox was created.\nDo not use when: renaming an existing one (use rename-mailbox) or deleting one (use delete-mailbox). Use list-mailboxes to see what already exists.\nSafety: creates a real folder in the mail account \u2014 confirm the name and target account first.",
@@ -84492,7 +84500,7 @@ server.registerTool(
     return successResponse(`Mailbox "${name}" created`, { ok: true, name });
   }, "Error creating mailbox")
 );
-server.registerTool(
+registerTool(
   "delete-mailbox",
   {
     description: "Use when: deleting a mailbox/folder from an account.\nReturns: a confirmation that the mailbox was deleted.\nDo not use when: renaming it (use rename-mailbox) or deleting messages within it (use delete-message / batch-delete-messages).\nSafety: destructive \u2014 deleting a mailbox removes the folder and any messages it contains. Require explicit user confirmation and use list-mailboxes first to confirm the exact name.",
@@ -84518,7 +84526,7 @@ server.registerTool(
     return successResponse(`Mailbox "${name}" deleted`, { ok: true, name });
   }, "Error deleting mailbox")
 );
-server.registerTool(
+registerTool(
   "rename-mailbox",
   {
     description: "Use when: renaming an existing mailbox/folder from oldName to newName within an account.\nReturns: a confirmation naming the old and new mailbox names.\nDo not use when: creating a new folder (use create-mailbox) or deleting one (use delete-mailbox). Use list-mailboxes to confirm the current name.\nSafety: renames a real folder in the mail account \u2014 confirm oldName matches exactly (case-sensitive) before calling.",
@@ -84556,7 +84564,7 @@ server.registerTool(
     });
   }, "Error renaming mailbox")
 );
-server.registerTool(
+registerTool(
   "list-smart-mailboxes",
   {
     description: "Use when: listing Apple Mail smart mailboxes (criteria-based virtual views), including on German-localized macOS where AppleScript's smart-mailbox terms do not compile.\nReturns: each smart mailbox's name and a short criteria summary.\nDo not use when: listing real folders/mailboxes (use list-mailboxes).",
@@ -84589,7 +84597,7 @@ ${lines}`, {
     });
   }, "Error listing smart mailboxes")
 );
-server.registerTool(
+registerTool(
   "create-smart-mailbox",
   {
     description: "Use when: creating an Apple Mail smart mailbox (a criteria-based virtual view) that matches a sender, subject, or body substring \u2014 works on German-localized macOS where AppleScript's smart-mailbox terms fail.\nReturns: confirmation of creation, or a note that a smart mailbox with that name already existed.\nDo not use when: creating a real folder (use create-mailbox).\nSafety: edits Apple Mail's SyncedSmartMailboxes.plist directly. It backs the file up (.bak) and writes atomically, and never rewrites your existing smart mailboxes. It does not quit Mail \u2014 quit Mail first for reliable results, since a running Mail may not show the new smart mailbox until relaunched and can overwrite plist edits it did not make.",
@@ -84632,7 +84640,7 @@ server.registerTool(
     });
   }, "Error creating smart mailbox")
 );
-server.registerTool(
+registerTool(
   "delete-smart-mailbox",
   {
     description: "Use when: deleting an Apple Mail smart mailbox (virtual view) by name.\nReturns: confirmation of deletion.\nDo not use when: deleting a real folder (use delete-mailbox) or messages (use delete-message / batch-delete-messages).\nSafety: destructive \u2014 removes the smart mailbox from Apple Mail's SyncedSmartMailboxes.plist. It backs the file up (.bak) and writes atomically, preserving every other smart mailbox, but the removal is not undoable in-app. Confirm the exact name with list-smart-mailboxes first, and quit Mail first for reliable results.",
@@ -84655,7 +84663,7 @@ server.registerTool(
     });
   }, "Error deleting smart mailbox")
 );
-server.registerTool(
+registerTool(
   "create-newsletter-smart-mailboxes",
   {
     description: `Use when: auto-discovering newsletter/bulk senders in your INBOX(es) and (optionally) creating a dedicated smart mailbox per sender (named "NL: <sender>"). Defaults to a safe dry run that only proposes.
@@ -84685,7 +84693,7 @@ ${lines || "  (none met the threshold)"}`,
     );
   }, "Error creating newsletter smart mailboxes")
 );
-server.registerTool(
+registerTool(
   "list-accounts",
   {
     description: "Use when: discovering the configured Mail accounts (e.g. iCloud, Gmail) so you can pass an exact account name to other tools.\nReturns: the account names and a count. If the AppleScript transport fails (timeout / wedged Mail / missing Automation grant) this returns an ERROR rather than an empty list \u2014 an empty list always means Mail really has no accounts.\nDo not use when: you want the folders within an account (use list-mailboxes) or messages (use list-messages / search-messages).",
@@ -84713,7 +84721,7 @@ server.registerTool(
 ${accountList}`, structured);
   }, "Error listing accounts")
 );
-server.registerTool(
+registerTool(
   "list-rules",
   {
     description: "Use when: discovering the Mail rules that exist and whether each is enabled or disabled, e.g. before enabling/disabling/deleting one.\nReturns: each rule's name and enabled/disabled state.\nDo not use when: you want to change a rule (use enable-rule / disable-rule / create-rule / delete-rule).",
@@ -84737,7 +84745,7 @@ server.registerTool(
 ${ruleList}`, structured);
   }, "Error listing rules")
 );
-server.registerTool(
+registerTool(
   "enable-rule",
   {
     description: "Use when: turning on an existing Mail rule by name.\nReturns: a confirmation that the rule was enabled.\nDo not use when: turning a rule off (use disable-rule), creating one (use create-rule), or deleting one (use delete-rule). Use list-rules to confirm the exact rule name.",
@@ -84758,7 +84766,7 @@ server.registerTool(
     return successResponse(`Rule "${name}" enabled`, { ok: true, name, enabled: true });
   }, "Error enabling rule")
 );
-server.registerTool(
+registerTool(
   "disable-rule",
   {
     description: "Use when: turning off an existing Mail rule by name (without deleting it).\nReturns: a confirmation that the rule was disabled.\nDo not use when: turning a rule on (use enable-rule), creating one (use create-rule), or removing it permanently (use delete-rule). Use list-rules to confirm the exact rule name.",
@@ -84779,7 +84787,7 @@ server.registerTool(
     return successResponse(`Rule "${name}" disabled`, { ok: true, name, enabled: false });
   }, "Error disabling rule")
 );
-server.registerTool(
+registerTool(
   "create-rule",
   {
     description: "Use when: creating a new Mail rule with one or more conditions (field/operator/value) and at least one action (markRead, markFlagged, delete, or moveTo). Set matchAll to require all conditions vs. any.\nReturns: a confirmation naming the rule and its condition count.\nDo not use when: toggling an existing rule (use enable-rule / disable-rule) or removing one (use delete-rule). Use list-rules to avoid duplicating an existing rule.\nSafety: creates a rule that automatically acts on real mail (including delete/move actions) on an ongoing basis \u2014 confirm the conditions and actions with the user before calling.",
@@ -84821,7 +84829,7 @@ server.registerTool(
     );
   }, "Error creating rule")
 );
-server.registerTool(
+registerTool(
   "delete-rule",
   {
     description: "Use when: permanently removing a Mail rule by name.\nReturns: a confirmation that the rule was deleted.\nDo not use when: you only want to pause it (use disable-rule) or create one (use create-rule).\nSafety: destructive \u2014 the rule is removed permanently. Require explicit user confirmation and use list-rules first to confirm the exact name.",
@@ -84841,7 +84849,7 @@ server.registerTool(
     return successResponse(`Rule "${name}" deleted`, { name, deleted: true });
   }, "Error deleting rule")
 );
-server.registerTool(
+registerTool(
   "search-contacts",
   {
     description: "Use when: looking up a person in Contacts by name, organization, nickname, or email to find their email address(es)/phone(s) before composing or sending mail. Reads the macOS Contacts database directly (needs Full Disk Access; does NOT require Contacts.app to be running or an Automation / Apple-Events grant).\nReturns: matching contacts with their names, email addresses, and phone numbers.\nDo not use when: searching email messages (use search-messages) \u2014 this queries Contacts, not the mailbox.",
@@ -84871,7 +84879,7 @@ server.registerTool(
 ${contactList}`, structured);
   }, "Error searching contacts")
 );
-server.registerTool(
+registerTool(
   "save-template",
   {
     description: "Use when: creating a reusable email template (name, subject, body, optional default to/cc), or updating one by passing its existing id. Subject/body may contain placeholders for later use.\nReturns: the saved template's name and id (reuse the id with use-template / get-template / delete-template).\nDo not use when: composing a one-off message (use create-draft / send-email) or filling in a template to send (use use-template).\nSafety: writes the template to the on-disk templates store (APPLE_MAIL_MCP_TEMPLATES_FILE) and persists across restarts; passing an existing id overwrites that template.",
@@ -84898,7 +84906,7 @@ server.registerTool(
     });
   }, "Error saving template")
 );
-server.registerTool(
+registerTool(
   "list-templates",
   {
     description: "Use when: discovering the saved email templates and their ids, e.g. before using or editing one.\nReturns: each template's id, name, and subject.\nDo not use when: you want a single template's full body (use get-template) or want to apply one (use use-template).",
@@ -84922,7 +84930,7 @@ server.registerTool(
 ${templateList}`, structured);
   }, "Error listing templates")
 );
-server.registerTool(
+registerTool(
   "get-template",
   {
     description: "Use when: reading the full contents of one saved template by id \u2014 its name, subject, default to/cc, and body.\nReturns: the template's name, subject, default recipients, and body text.\nDo not use when: you don't have the id (use list-templates first) or want to apply the template into a draft (use use-template).",
@@ -84961,7 +84969,7 @@ ${template.body}`
     });
   }, "Error getting template")
 );
-server.registerTool(
+registerTool(
   "delete-template",
   {
     description: "Use when: permanently removing a saved email template by id.\nReturns: a confirmation that the template was deleted.\nDo not use when: you only want to view it (use get-template) or update it (use save-template with the existing id).\nSafety: destructive \u2014 removes the template from the on-disk store permanently. Require explicit user confirmation and use list-templates first to confirm the id.",
@@ -84981,7 +84989,7 @@ server.registerTool(
     return successResponse(`Template "${id}" deleted`, { ok: true, id });
   }, "Error deleting template")
 );
-server.registerTool(
+registerTool(
   "use-template",
   {
     description: "Use when: composing a new draft from a saved template (by id), optionally overriding the recipients, subject, or body. Creates a draft in Mail.app for the user to review and send.\nReturns: a confirmation that a draft was created from the template.\nDo not use when: you want to inspect the template without composing (use get-template) or send immediately without a draft (use send-email).",
@@ -85005,7 +85013,7 @@ server.registerTool(
     return successResponse(`Draft created from template "${id}"`, { ok: true, id });
   }, "Error using template")
 );
-server.registerTool(
+registerTool(
   "health-check",
   {
     description: "Use when: doing a quick check that Mail.app is reachable and the server's basic checks pass.\nReturns: an overall healthy/unhealthy status with a pass/fail line per check.\nDo not use when: you need detailed permission/account/IMAP/SMTP diagnostics with remediation steps (use doctor).",
@@ -85028,7 +85036,7 @@ server.registerTool(
 ${checkLines}`, { ...result });
   }, "Error running health check")
 );
-server.registerTool(
+registerTool(
   "doctor",
   {
     description: "Use when: troubleshooting setup problems \u2014 diagnoses Mail.app automation permissions, account state, and the IMAP/SMTP backends with actionable remediation messages.\nReturns: a detailed diagnostic report (formatted text plus structured checks).\nDo not use when: you just want a quick up/down status (use health-check) or message counts (use get-mail-stats).",
@@ -85043,7 +85051,7 @@ server.registerTool(
     return successResponse(formatDoctorReport(report), { ...report });
   }, "Error running doctor")
 );
-server.registerTool(
+registerTool(
   "get-mail-stats",
   {
     description: "Use when: you want aggregate mailbox statistics \u2014 total and unread message counts, recently-received counts (last 24h/7d/30d), and (for the all-accounts path) a per-account breakdown.\nReturns: totals, unread counts, recent-activity counts, and per-account figures.\nDo not use when: you only need a single unread number (use get-unread-count) or want to list the messages themselves (use list-messages / search-messages).",
@@ -85056,12 +85064,42 @@ server.registerTool(
       totalUnread: external_exports.number().optional(),
       accounts: external_exports.array(external_exports.object({}).passthrough()).optional(),
       recentlyReceived: external_exports.object({}).passthrough().optional(),
-      recent: external_exports.object({}).passthrough().optional()
+      recent: external_exports.object({}).passthrough().optional(),
+      // The scoped IMAP path spreads an ImapStats, which carries per-mailbox
+      // STATUS rows. Declared so the shape is documented rather than merely
+      // tolerated by the permissive advertisement (#135).
+      perMailbox: external_exports.array(external_exports.object({}).passthrough()).optional(),
+      partial: external_exports.boolean().optional(),
+      failedAccounts: external_exports.array(external_exports.string()).optional()
     }
   },
   withErrorHandling(async ({ account }) => {
+    const budgetMs = Math.max(1e3, Number(process.env.APPLE_MAIL_MCP_STATS_BUDGET_MS ?? 25e3));
+    const withBudget = async (work, label) => {
+      let timer;
+      try {
+        return await Promise.race([
+          work,
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`${label} timed out after ${budgetMs}ms`)),
+              budgetMs
+            );
+          })
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
     if (account !== void 0 && isImapAccount(account)) {
-      const s = await imapMailStats({ account });
+      let s;
+      try {
+        s = await withBudget(imapMailStats({ account }), `IMAP mail-stats for "${account}"`);
+      } catch (e) {
+        return errorResponse(
+          `Could not read mail statistics for "${account}": ${String(e)}. Gathering stats costs one IMAP STATUS per mailbox, so a very large account can exceed the ${budgetMs}ms budget \u2014 raise APPLE_MAIL_MCP_STATS_BUDGET_MS, or run the "doctor" tool if the connection itself is the problem.`
+        );
+      }
       const lines2 = [
         `\u{1F4CA} Mail Statistics \u2014 ${account} (IMAP)`,
         `\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`,
@@ -85081,40 +85119,55 @@ server.registerTool(
       const recent = { last24h: 0, last7d: 0, last30d: 0 };
       const perAccount = [];
       const sources = planCountSources(mailManager.listAccounts(), resolveImapConfigs());
-      for (const src of sources) {
-        if (src.kind === "imap") {
+      const failedAccounts = [];
+      const settled = await Promise.all(
+        sources.filter((s) => s.kind === "imap").map(async (src) => {
           try {
-            const s = await imapMailStats({ config: src.config });
-            totalMessages += s.totalMessages;
-            totalUnread += s.totalUnread;
-            recent.last24h += s.recent.last24h;
-            recent.last7d += s.recent.last7d;
-            recent.last30d += s.recent.last30d;
-            perAccount.push({
-              name: src.label,
-              totalMessages: s.totalMessages,
-              unreadMessages: s.totalUnread,
-              backend: "imap"
-            });
+            const stats2 = await withBudget(
+              imapMailStats({ config: src.config }),
+              `IMAP mail-stats for "${src.label}"`
+            );
+            return { label: src.label, stats: stats2 };
           } catch (e) {
             console.error(`IMAP mail-stats failed for "${src.label}": ${String(e)}`);
+            return { label: src.label, stats: void 0 };
           }
-        } else {
-          let m = 0;
-          let u = 0;
-          for (const mb of mailManager.listMailboxes(src.account.name)) {
-            m += mb.messageCount;
-            u += mb.unreadCount;
-          }
-          totalMessages += m;
-          totalUnread += u;
-          perAccount.push({
-            name: src.label,
-            totalMessages: m,
-            unreadMessages: u,
-            backend: "applescript"
-          });
+        })
+      );
+      for (const r of settled) {
+        if (!r.stats) {
+          failedAccounts.push(r.label);
+          continue;
         }
+        const s = r.stats;
+        totalMessages += s.totalMessages;
+        totalUnread += s.totalUnread;
+        recent.last24h += s.recent.last24h;
+        recent.last7d += s.recent.last7d;
+        recent.last30d += s.recent.last30d;
+        perAccount.push({
+          name: r.label,
+          totalMessages: s.totalMessages,
+          unreadMessages: s.totalUnread,
+          backend: "imap"
+        });
+      }
+      for (const src of sources) {
+        if (src.kind === "imap") continue;
+        let m = 0;
+        let u = 0;
+        for (const mb of mailManager.listMailboxes(src.account.name)) {
+          m += mb.messageCount;
+          u += mb.unreadCount;
+        }
+        totalMessages += m;
+        totalUnread += u;
+        perAccount.push({
+          name: src.label,
+          totalMessages: m,
+          unreadMessages: u,
+          backend: "applescript"
+        });
       }
       const lines2 = [
         `\u{1F4CA} Mail Statistics (merged: IMAP + AppleScript)`,
@@ -85132,11 +85185,18 @@ server.registerTool(
           (a) => `  ${a.name}: ${a.totalMessages} messages (${a.unreadMessages} unread) [${a.backend}]`
         )
       ];
+      if (failedAccounts.length > 0) {
+        lines2.push(
+          ``,
+          `\u26A0\uFE0F  PARTIAL: ${failedAccounts.length} account(s) could not be read (${failedAccounts.join(", ")}), so the real totals are higher. They either failed or exceeded the ${budgetMs}ms budget \u2014 raise APPLE_MAIL_MCP_STATS_BUDGET_MS if an account is simply large, or run the "doctor" tool to check the connection.`
+        );
+      }
       return successResponse(lines2.join("\n"), {
         totalMessages,
         totalUnread,
         accounts: perAccount,
-        recent
+        recent,
+        ...failedAccounts.length > 0 ? { partial: true, failedAccounts } : {}
       });
     }
     const stats = mailManager.getMailStats();
@@ -85164,7 +85224,7 @@ server.registerTool(
     return successResponse(lines.join("\n"), { ...stats });
   }, "Error getting mail statistics")
 );
-server.registerTool(
+registerTool(
   "get-sync-status",
   {
     description: "Use when: checking whether Mail.app is running and actively syncing, e.g. to explain why new mail hasn't appeared yet.\nReturns: whether Mail.app is running and whether sync activity was detected.\nDo not use when: you need message counts (use get-mail-stats) or a full setup diagnosis (use doctor).",
