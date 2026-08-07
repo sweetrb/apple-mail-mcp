@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Security
+
+- **Floored `js-yaml` to `^4.3.1`, clearing GHSA-5p4m-2wfm-xmqj (high).** Quadratic CPU consumption while resolving `!!omap` keys — a malicious YAML document can be made to burn CPU superlinearly in the number of map entries. The advisory notes the CVE-2026-59870 fix was never backported to the 3.x line, so 4.3.1 is the first complete release. `js-yaml` reaches the tree as `eslint` -> `js-yaml`, which is **development scope**, and it does not appear in the committed `build/index.js` — verified, 0 references — so no published artifact ever carried it and this owes no version bump. The override entry already existed here as `js-yaml: ^4.2.0`, a floor written for an earlier advisory: **an out-of-date floor is not something a caret range protects against**, because a caret only stops the tree moving backwards, never forwards onto a newer fix. The sibling repos carried no `js-yaml` entry at all and were floored for the first time.
+- **Raised the `postcss` floor from `^8.5.15` to `^8.5.23`,** the patched release for GHSA-fxqj-rqcc-2cmp (moderate). Same defect as above in a second entry: the floor sat below the fix it was meant to enforce. The tree resolved a safe 8.5.25 anyway, because `vite`'s own range pulls it forward — so nothing was exposed, but the override was not doing the job it documented. Now matches apple-notes-mcp and apple-photos-mcp.
+
 ## [2.10.8] - 2026-08-07
 
 ### Fixed
