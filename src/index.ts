@@ -2856,16 +2856,30 @@ registerTool(
     // timeout and die as a bare -32001 with nothing to act on. Every IMAP read
     // below is bounded; what happens on expiry differs by path (see each).
     const budgetMs = Math.max(1000, Number(process.env.APPLE_MAIL_MCP_STATS_BUDGET_MS ?? 25_000));
+    // #135 (follow-up): bounding each step separately still lets the call die.
+    // The per-account IMAP budget above never covered the AppleScript account
+    // enumeration that precedes the fan-out, and that read is its own blocking
+    // 30s. Worst case was therefore their SUM — 30s enumerate + 25s fan-out —
+    // which already exceeds a typical 60s client request timeout, so the call
+    // came back as a bare -32001 with no partial and no failedAccounts to act
+    // on: exactly the symptom the fix was supposed to remove. Every step now
+    // draws from ONE wall-clock deadline, so the whole tool is bounded rather
+    // than each of its parts.
+    const deadlineMs = Math.max(
+      2000,
+      Number(process.env.APPLE_MAIL_MCP_STATS_DEADLINE_MS ?? 50_000)
+    );
+    const startedAt = Date.now();
+    const remainingMs = () => Math.max(0, deadlineMs - (Date.now() - startedAt));
     const withBudget = async <T>(work: Promise<T>, label: string): Promise<T> => {
+      // Never outlive the overall deadline, however generous the per-account budget.
+      const ms = Math.min(budgetMs, remainingMs());
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         return await Promise.race([
           work,
           new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`${label} timed out after ${budgetMs}ms`)),
-              budgetMs
-            );
+            timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
           }),
         ]);
       } finally {
@@ -2918,11 +2932,34 @@ registerTool(
       // would re-count the IMAP-covered ones. Recently-received from AppleScript
       // is INBOX-wide (not per-account), so it's omitted for AppleScript sources;
       // IMAP's per-account recent IS included.
-      const sources = planCountSources(mailManager.listAccounts(), resolveImapConfigs());
       // Accounts whose stats could not be read. A failed or too-slow source must
       // never be folded in as a silent 0 — that understates the totals and reads
       // as a real answer (#130, same class as get-unread-count).
       const failedAccounts: string[] = [];
+
+      // Enumerating Mail.app's accounts is a blocking AppleScript read, and on a
+      // cold cache it was the single largest unbounded cost on this path (#135
+      // follow-up). It gets a slice of the deadline, not the blanket 30s, and
+      // failing it degrades rather than kills: every IMAP account is known from
+      // config alone, so we can still answer for those and say what is missing.
+      // The slice is capped so a wedged Mail.app cannot eat the whole deadline
+      // and leave nothing for the IMAP fan-out that does the actual work.
+      const imapConfigs = resolveImapConfigs();
+      const enumerateMs = Math.max(1000, Math.min(10_000, Math.floor(remainingMs() * 0.3)));
+      const enumerated = mailManager.listAccountsChecked({ timeoutMs: enumerateMs });
+      const sources = enumerated.failed
+        ? imapConfigs.map((config) => ({
+            kind: "imap" as const,
+            config,
+            label: config.accountLabel,
+          }))
+        : planCountSources(enumerated.accounts, imapConfigs);
+      if (enumerated.failed) {
+        console.error(
+          `Mail.app account enumeration failed for get-mail-stats: ${enumerated.error}`
+        );
+        failedAccounts.push("Mail.app accounts (AppleScript enumeration)");
+      }
 
       // #135: run SEQUENTIALLY this was the sum of every account's cost, which
       // overran the client's request timeout on a four-account all-IMAP setup
@@ -2967,12 +3004,28 @@ registerTool(
       }
 
       // AppleScript sources are synchronous (they block the event loop), so they
-      // run after the IMAP fan-out has settled rather than racing it.
+      // run after the IMAP fan-out has settled rather than racing it. Each one
+      // is charged against what is left of the deadline: the default here is 60s
+      // per account, so on a multi-account setup this loop alone used to be able
+      // to overrun any client's request timeout (#135 follow-up). Out of time,
+      // or a failed read, means the account is named in failedAccounts — never
+      // folded in as a silent 0.
       for (const src of sources) {
         if (src.kind === "imap") continue;
+        const left = remainingMs();
+        if (left < 1000) {
+          failedAccounts.push(src.label);
+          continue;
+        }
+        const read = mailManager.listMailboxesChecked(src.account.name, { timeoutMs: left });
+        if (read.failed) {
+          console.error(`AppleScript mail-stats failed for "${src.label}": ${read.error}`);
+          failedAccounts.push(src.label);
+          continue;
+        }
         let m = 0;
         let u = 0;
-        for (const mb of mailManager.listMailboxes(src.account.name)) {
+        for (const mb of read.mailboxes) {
           m += mb.messageCount;
           u += mb.unreadCount;
         }
@@ -3007,8 +3060,9 @@ registerTool(
           ``,
           `⚠️  PARTIAL: ${failedAccounts.length} account(s) could not be read ` +
             `(${failedAccounts.join(", ")}), so the real totals are higher. They either ` +
-            `failed or exceeded the ${budgetMs}ms budget — raise ` +
-            `APPLE_MAIL_MCP_STATS_BUDGET_MS if an account is simply large, or run the ` +
+            `failed, exceeded the ${budgetMs}ms per-account budget, or ran out of the ` +
+            `${deadlineMs}ms overall deadline — raise APPLE_MAIL_MCP_STATS_BUDGET_MS and/or ` +
+            `APPLE_MAIL_MCP_STATS_DEADLINE_MS if an account is simply large, or run the ` +
             `"doctor" tool to check the connection.`
         );
       }

@@ -78389,6 +78389,12 @@ var AppleMailManager = class {
    */
   lastAccountsError = null;
   /**
+   * Same, for the mailbox listing — read via `listMailboxesChecked()`. Kept
+   * separate from `lastAccountsError` so a failed mailbox read on one account
+   * can't be misread as the account enumeration having failed. (#135)
+   */
+  lastMailboxesError = null;
+  /**
    * Remembers where each message id was last seen: id → {account, mailbox}.
    *
    * Mail.app numeric message ids are unique *per mailbox*, and by-id fetches
@@ -78417,12 +78423,12 @@ var AppleMailManager = class {
   /**
    * Returns cached accounts or fetches fresh data if cache is expired/empty.
    */
-  getCachedAccounts() {
+  getCachedAccounts(options = {}) {
     const now = Date.now();
     if (this.cache.accounts && now < this.cache.accounts.expiry) {
       return this.cache.accounts.data;
     }
-    const accounts = this.fetchAccounts();
+    const accounts = this.fetchAccounts(options);
     if (accounts === null) {
       return this.cache.accounts?.data ?? [];
     }
@@ -80187,7 +80193,7 @@ var AppleMailManager = class {
   /**
    * List all mailboxes for an account.
    */
-  listMailboxes(account) {
+  listMailboxes(account, options = {}) {
     const targetAccount = this.resolveAccount(account);
     const listCommand = `
       set mailboxList to {}
@@ -80201,9 +80207,10 @@ var AppleMailManager = class {
       return mailboxList as text
     `;
     const script = buildAccountScopedScript(targetAccount, listCommand);
-    const result = executeAppleScript(script, { timeoutMs: 6e4 });
+    const result = executeAppleScript(script, { timeoutMs: options.timeoutMs ?? 6e4 });
     if (!result.success) {
       console.error(`Failed to list mailboxes: ${result.error}`);
+      this.lastMailboxesError = result.error ?? "AppleScript transport failed";
       return [];
     }
     if (!result.output.trim()) return [];
@@ -80220,6 +80227,20 @@ var AppleMailManager = class {
       });
     }
     return mailboxes;
+  }
+  /**
+   * listMailboxes() plus whether the underlying AppleScript read actually worked.
+   *
+   * An empty list is ambiguous on its own — Mail with no mailboxes and a timed-out
+   * transport both produce `[]`, and folding the second into a total as 0 is the
+   * silent-zero class #130 fixed elsewhere. A caller summing counts across
+   * accounts needs to tell them apart. (#135)
+   */
+  listMailboxesChecked(account, options = {}) {
+    this.lastMailboxesError = null;
+    const mailboxes = this.listMailboxes(account, options);
+    const error2 = this.lastMailboxesError;
+    return error2 ? { mailboxes, failed: true, error: error2 } : { mailboxes, failed: false };
   }
   /**
    * Get unread count for a mailbox.
@@ -80756,18 +80777,22 @@ end tell`;
   /**
    * List all mail accounts (uses cache).
    */
-  listAccounts() {
-    return this.getCachedAccounts();
+  listAccounts(options = {}) {
+    return this.getCachedAccounts(options);
   }
   /**
    * listAccounts() plus whether the underlying AppleScript read actually worked.
    *
    * `failed: true` means the list is a fallback (stale cache or empty) because the
    * transport errored — NOT that Mail has no accounts. (#130)
+   *
+   * `timeoutMs` bounds the AppleScript read when the cache is cold, so a caller
+   * working to an overall deadline can spend a known slice here instead of the
+   * blanket 30s. A cache hit costs nothing and ignores it. (#135)
    */
-  listAccountsChecked() {
+  listAccountsChecked(options = {}) {
     this.lastAccountsError = null;
-    const accounts = this.getCachedAccounts();
+    const accounts = this.getCachedAccounts(options);
     const error2 = this.lastAccountsError;
     return error2 ? { accounts, failed: true, error: error2 } : { accounts, failed: false };
   }
@@ -80792,7 +80817,7 @@ end tell`;
    * "Mail answered, and there genuinely are no accounts" — collapsing the two is
    * what let a wedged transport report a confident "No Mail accounts found". (#130)
    */
-  fetchAccounts() {
+  fetchAccounts(options = {}) {
     const script = buildAppLevelScript(`
       set accountList to {}
       repeat with acct in accounts
@@ -80808,7 +80833,10 @@ end tell`;
       set AppleScript's text item delimiters to "${RECORD_SEP}"
       return accountList as text
     `);
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(
+      script,
+      options.timeoutMs !== void 0 ? { timeoutMs: options.timeoutMs } : {}
+    );
     if (!result.success) {
       console.error(`Failed to list accounts: ${result.error}`);
       this.lastAccountsError = result.error ?? "AppleScript transport failed";
@@ -82113,13 +82141,26 @@ async function useClient(deps, fn, retryOnDrop = false) {
 function withClient(deps, fn) {
   return useClient(deps, fn);
 }
-async function findMailboxPath(client, name) {
+async function resolveMailbox(client, name) {
   const wanted = name.trim().toLowerCase();
   const boxes = await client.list();
   const byPath = boxes.find((b) => b.path.toLowerCase() === wanted);
-  if (byPath) return byPath.path;
-  const byName = boxes.find((b) => b.name.toLowerCase() === wanted);
-  return byName ? byName.path : null;
+  if (byPath) return { kind: "found", path: byPath.path };
+  const byName = boxes.filter((b) => b.name.toLowerCase() === wanted);
+  if (byName.length === 1) return { kind: "found", path: byName[0].path };
+  if (byName.length > 1) {
+    return { kind: "ambiguous", candidates: byName.map((b) => b.path).sort() };
+  }
+  return { kind: "none" };
+}
+function ambiguousMailboxError(name, candidates, accountLabel) {
+  const where = accountLabel ? ` on IMAP account ${accountLabel}` : "";
+  return `Mailbox "${name}" is ambiguous${where} \u2014 it matches ${candidates.map((c) => `"${c}"`).join(" and ")}. Pass the full path.`;
+}
+async function findMailboxPathOrThrow(client, name) {
+  const res = await resolveMailbox(client, name);
+  if (res.kind === "ambiguous") throw new Error(ambiguousMailboxError(name, res.candidates));
+  return res.kind === "found" ? res.path : null;
 }
 function imapCreateMailbox(name, deps = {}) {
   return withClient(deps, async (client) => {
@@ -82133,13 +82174,20 @@ function imapCreateMailbox(name, deps = {}) {
 }
 function imapDeleteMailbox(name, deps = {}) {
   return withClient(deps, async (client, cfg) => {
-    const path = await findMailboxPath(client, name);
-    if (!path) {
+    const res = await resolveMailbox(client, name);
+    if (res.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(name, res.candidates, cfg.accountLabel)
+      };
+    }
+    if (res.kind === "none") {
       return {
         success: false,
         error: `Mailbox "${name}" not found on IMAP account ${cfg.accountLabel}.`
       };
     }
+    const path = res.path;
     try {
       await client.mailboxDelete(path);
       return {
@@ -82153,13 +82201,20 @@ function imapDeleteMailbox(name, deps = {}) {
 }
 function imapRenameMailbox(oldName, newName, deps = {}) {
   return withClient(deps, async (client, cfg) => {
-    const path = await findMailboxPath(client, oldName);
-    if (!path) {
+    const found = await resolveMailbox(client, oldName);
+    if (found.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(oldName, found.candidates, cfg.accountLabel)
+      };
+    }
+    if (found.kind === "none") {
       return {
         success: false,
         error: `Mailbox "${oldName}" not found on IMAP account ${cfg.accountLabel}.`
       };
     }
+    const path = found.path;
     try {
       const res = await client.mailboxRename(path, newName);
       return { success: true, info: `Renamed "${res.path}" to "${res.newPath}" via IMAP.` };
@@ -82292,8 +82347,15 @@ function imapUnflagMessage(id, deps = {}) {
 async function imapMoveMessageById(id, destMailbox, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withClient(depsForMessageRef(ref, deps), async (client) => {
-    const destPath = await findMailboxPath(client, destMailbox) ?? resolveMailboxPath(destMailbox, "list");
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    const dest = await resolveMailbox(client, destMailbox);
+    if (dest.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(destMailbox, dest.candidates, cfg.accountLabel)
+      };
+    }
+    const destPath = dest.kind === "found" ? dest.path : resolveMailboxPath(destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
       await client.messageMove([ref.uid], destPath, { uid: true });
@@ -82468,7 +82530,7 @@ var imapBatchDelete = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids, p
 });
 function imapBatchMove(ids, destMailbox, deps = {}) {
   return imapBatch(ids, deps, async (c, uids) => {
-    const dest = await findMailboxPath(c, destMailbox) ?? resolveMailboxPath(destMailbox, "list");
+    const dest = await findMailboxPathOrThrow(c, destMailbox) ?? resolveMailboxPath(destMailbox, "list");
     await c.messageMove(uids, dest, { uid: true });
   });
 }
@@ -85097,16 +85159,20 @@ registerTool(
   },
   withErrorHandling(async ({ account }) => {
     const budgetMs = Math.max(1e3, Number(process.env.APPLE_MAIL_MCP_STATS_BUDGET_MS ?? 25e3));
+    const deadlineMs = Math.max(
+      2e3,
+      Number(process.env.APPLE_MAIL_MCP_STATS_DEADLINE_MS ?? 5e4)
+    );
+    const startedAt = Date.now();
+    const remainingMs = () => Math.max(0, deadlineMs - (Date.now() - startedAt));
     const withBudget = async (work, label) => {
+      const ms = Math.min(budgetMs, remainingMs());
       let timer;
       try {
         return await Promise.race([
           work,
           new Promise((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`${label} timed out after ${budgetMs}ms`)),
-              budgetMs
-            );
+            timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
           })
         ]);
       } finally {
@@ -85140,8 +85206,21 @@ registerTool(
       let totalUnread = 0;
       const recent = { last24h: 0, last7d: 0, last30d: 0 };
       const perAccount = [];
-      const sources = planCountSources(mailManager.listAccounts(), resolveImapConfigs());
       const failedAccounts = [];
+      const imapConfigs = resolveImapConfigs();
+      const enumerateMs = Math.max(1e3, Math.min(1e4, Math.floor(remainingMs() * 0.3)));
+      const enumerated = mailManager.listAccountsChecked({ timeoutMs: enumerateMs });
+      const sources = enumerated.failed ? imapConfigs.map((config2) => ({
+        kind: "imap",
+        config: config2,
+        label: config2.accountLabel
+      })) : planCountSources(enumerated.accounts, imapConfigs);
+      if (enumerated.failed) {
+        console.error(
+          `Mail.app account enumeration failed for get-mail-stats: ${enumerated.error}`
+        );
+        failedAccounts.push("Mail.app accounts (AppleScript enumeration)");
+      }
       const settled = await Promise.all(
         sources.filter((s) => s.kind === "imap").map(async (src) => {
           try {
@@ -85176,9 +85255,20 @@ registerTool(
       }
       for (const src of sources) {
         if (src.kind === "imap") continue;
+        const left = remainingMs();
+        if (left < 1e3) {
+          failedAccounts.push(src.label);
+          continue;
+        }
+        const read = mailManager.listMailboxesChecked(src.account.name, { timeoutMs: left });
+        if (read.failed) {
+          console.error(`AppleScript mail-stats failed for "${src.label}": ${read.error}`);
+          failedAccounts.push(src.label);
+          continue;
+        }
         let m = 0;
         let u = 0;
-        for (const mb of mailManager.listMailboxes(src.account.name)) {
+        for (const mb of read.mailboxes) {
           m += mb.messageCount;
           u += mb.unreadCount;
         }
@@ -85210,7 +85300,7 @@ registerTool(
       if (failedAccounts.length > 0) {
         lines2.push(
           ``,
-          `\u26A0\uFE0F  PARTIAL: ${failedAccounts.length} account(s) could not be read (${failedAccounts.join(", ")}), so the real totals are higher. They either failed or exceeded the ${budgetMs}ms budget \u2014 raise APPLE_MAIL_MCP_STATS_BUDGET_MS if an account is simply large, or run the "doctor" tool to check the connection.`
+          `\u26A0\uFE0F  PARTIAL: ${failedAccounts.length} account(s) could not be read (${failedAccounts.join(", ")}), so the real totals are higher. They either failed, exceeded the ${budgetMs}ms per-account budget, or ran out of the ${deadlineMs}ms overall deadline \u2014 raise APPLE_MAIL_MCP_STATS_BUDGET_MS and/or APPLE_MAIL_MCP_STATS_DEADLINE_MS if an account is simply large, or run the "doctor" tool to check the connection.`
         );
       }
       return successResponse(lines2.join("\n"), {

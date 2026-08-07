@@ -309,9 +309,22 @@ Changes appear the next time Mail is launched — these tools do **not** quit or
 **`get-mail-stats` costs one IMAP `STATUS` per mailbox** (and Gmail lists every label as
 a mailbox), so it is the most expensive read tool — prefer `get-unread-count` when a single
 number will do. Accounts are counted concurrently under a per-account budget
-(`APPLE_MAIL_MCP_STATS_BUDGET_MS`, default 25s). If the merged result carries
+(`APPLE_MAIL_MCP_STATS_BUDGET_MS`, default 25s), and the whole call is bounded by one
+overall deadline (`APPLE_MAIL_MCP_STATS_DEADLINE_MS`, default 50s) that also covers the
+Mail.app account enumeration. If the merged result carries
 `partial: true`, **the totals are floors, not answers** — `failedAccounts` names what is
-missing; say so rather than reporting the total as complete.
+missing; say so rather than reporting the total as complete. `failedAccounts` may name
+`Mail.app accounts (AppleScript enumeration)` rather than an account: that means the
+AppleScript-only accounts could not be enumerated, so any account not covered by an IMAP
+config is missing entirely from the totals.
+
+### Moving mail: name the destination unambiguously
+
+`move-message`, `batch-move-messages`, `delete-mailbox` and `rename-mailbox` resolve a
+destination as a **full path** first, then as a leaf name. A leaf name matching more than
+one mailbox (`Archive` under both `Work` and `Thornlands`) is **refused** with an error
+naming every candidate — retry with the full path from `list-mailboxes` rather than
+guessing, and don't fall back to a different name.
 
 ## Known Issue (Resolved): Reply / Forward Empty Body from Background Processes
 

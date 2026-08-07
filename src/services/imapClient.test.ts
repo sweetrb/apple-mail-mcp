@@ -505,6 +505,100 @@ describe("imapDeleteMailbox", () => {
   });
 });
 
+// #137: the leaf-name fallback used `.find()`, so a name matching two mailboxes
+// under different parents silently resolved to whichever the server listed
+// first — and a *move* then reported success for the wrong destination.
+describe("ambiguous mailbox resolution (#137)", () => {
+  const TWO_ARCHIVES = [
+    { path: "Work/Archive", name: "Archive" },
+    { path: "Thornlands/Archive", name: "Archive" },
+  ];
+
+  it("an exact path match still wins over a same-named leaf", async () => {
+    const rec: FolderRec = {};
+    const r = await imapDeleteMailbox("Archive", {
+      config: cfg,
+      connect: async () =>
+        makeFolderClient([{ path: "Archive", name: "Archive" }, ...TWO_ARCHIVES], rec),
+    });
+    expect(r.success).toBe(true);
+    expect(rec.deleted).toBe("Archive");
+  });
+
+  it("a single leaf match still resolves (stored pre-full-path names keep working)", async () => {
+    const rec: FolderRec = {};
+    const r = await imapDeleteMailbox("Home Reno", {
+      config: cfg,
+      connect: async () =>
+        makeFolderClient([{ path: "Thornlands/Home Reno", name: "Home Reno" }], rec),
+    });
+    expect(r.success).toBe(true);
+    expect(rec.deleted).toBe("Thornlands/Home Reno");
+  });
+
+  it("two leaf matches error, name both candidates, and delete nothing", async () => {
+    const rec: FolderRec = {};
+    const r = await imapDeleteMailbox("Archive", {
+      config: cfg,
+      connect: async () => makeFolderClient(TWO_ARCHIVES, rec),
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/ambiguous/i);
+    expect(r.error).toContain("Thornlands/Archive");
+    expect(r.error).toContain("Work/Archive");
+    expect(r.error).toMatch(/full path/i);
+    expect(rec.deleted).toBeUndefined();
+  });
+
+  it("rename refuses an ambiguous source rather than renaming the wrong mailbox", async () => {
+    const rec: FolderRec = {};
+    const r = await imapRenameMailbox("Archive", "Archived", {
+      config: cfg,
+      connect: async () => makeFolderClient(TWO_ARCHIVES, rec),
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/ambiguous/i);
+    expect(rec.renamed).toBeUndefined();
+  });
+
+  // The one that motivated the issue: a silent wrong move is worse than a refusal,
+  // because the call reports success and nothing surfaces the mistake.
+  it("move refuses an ambiguous destination instead of picking the first", async () => {
+    const rec: MsgRec = {};
+    const r = await imapMoveMessageById(MID, "Archive", {
+      config: cfg,
+      connect: async () => ({ ...makeMsgClient(rec), list: async () => TWO_ARCHIVES }),
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/ambiguous/i);
+    expect(r.error).toContain("Thornlands/Archive");
+    expect(r.error).toContain("Work/Archive");
+    expect(rec.moved).toBeUndefined();
+  });
+
+  it("batch move reports the ambiguity as a failure rather than moving the batch", async () => {
+    const rec: MsgRec = {};
+    const r = await imapBatchMove([MID], "Archive", {
+      config: cfg,
+      connect: async () => ({ ...makeMsgClient(rec), list: async () => TWO_ARCHIVES }),
+    });
+    expect(r.success).toBe(0);
+    expect(r.failed).toBe(1);
+    expect(r.errors.join(" ")).toMatch(/ambiguous/i);
+    expect(rec.moved).toBeUndefined();
+  });
+
+  it("an unmatched destination still falls back to the literal path (unchanged)", async () => {
+    const rec: MsgRec = {};
+    const r = await imapMoveMessageById(MID, "Archive", {
+      config: cfg,
+      connect: async () => ({ ...makeMsgClient(rec), list: async () => [] }),
+    });
+    expect(r.success).toBe(true);
+    expect(rec.moved).toEqual([[1], "Archive"]);
+  });
+});
+
 describe("imapRenameMailbox", () => {
   it("renames an existing mailbox to the new path", async () => {
     const rec: FolderRec = {};
