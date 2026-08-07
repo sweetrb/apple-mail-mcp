@@ -144,3 +144,86 @@ describe("#130 — transport failure is not a real answer", () => {
     expect(r.accounts.map((a) => a.name)).toEqual(["iCloud", "Gmail"]);
   });
 });
+
+/**
+ * #135 follow-up — a caller working to an overall deadline has to be able to
+ * bound these blocking reads, and to tell a failed one from an empty one.
+ *
+ * `execSync` blocks the event loop, so a Promise race cannot bound them from
+ * outside: the timeout has to reach `executeAppleScript`'s own option, which is
+ * what these assert.
+ */
+describe("#135 — AppleScript reads are boundable by the caller's deadline", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.result = { success: true, output: "" };
+  });
+
+  it("passes the caller's timeout down to the account-enumeration call", async () => {
+    const { executeAppleScript } = await import("@/utils/applescript.js");
+    const mgr = new AppleMailManager();
+
+    mgr.listAccountsChecked({ timeoutMs: 4000 });
+
+    expect(vi.mocked(executeAppleScript).mock.calls[0][1]).toEqual({ timeoutMs: 4000 });
+  });
+
+  it("leaves the enumeration default alone when no timeout is given", async () => {
+    const { executeAppleScript } = await import("@/utils/applescript.js");
+    const mgr = new AppleMailManager();
+
+    mgr.listAccountsChecked();
+
+    // `{}` — not `{timeoutMs: undefined}` — so executeAppleScript's own default applies.
+    expect(vi.mocked(executeAppleScript).mock.calls[0][1]).toEqual({});
+  });
+
+  it("passes the caller's timeout down to the mailbox listing (default 60s otherwise)", async () => {
+    const { executeAppleScript } = await import("@/utils/applescript.js");
+    const mgr = new AppleMailManager();
+
+    mgr.listMailboxesChecked("iCloud", { timeoutMs: 7000 });
+    expect(vi.mocked(executeAppleScript).mock.lastCall?.[1]).toEqual({ timeoutMs: 7000 });
+
+    mgr.listMailboxesChecked("iCloud");
+    expect(vi.mocked(executeAppleScript).mock.lastCall?.[1]).toEqual({ timeoutMs: 60000 });
+  });
+
+  it("listMailboxesChecked reports failed=true when the read times out", () => {
+    const mgr = new AppleMailManager();
+    h.result = { success: false, output: "", error: "Operation timed out after 7 seconds" };
+
+    const r = mgr.listMailboxesChecked("iCloud", { timeoutMs: 7000 });
+
+    // An empty list alone is indistinguishable from "this account has no
+    // mailboxes", which is how a timed-out account got summed in as 0.
+    expect(r.failed).toBe(true);
+    expect(r.error).toMatch(/timed out/i);
+    expect(r.mailboxes).toEqual([]);
+  });
+
+  it("listMailboxesChecked reports failed=false for a genuinely empty account", () => {
+    const mgr = new AppleMailManager();
+    h.result = { success: true, output: "" };
+
+    const r = mgr.listMailboxesChecked("iCloud");
+
+    expect(r.failed).toBe(false);
+    expect(r.mailboxes).toEqual([]);
+  });
+
+  it("a failed mailbox read does not leak into the account-enumeration verdict", () => {
+    const mgr = new AppleMailManager();
+
+    h.result = { success: false, output: "", error: "Operation timed out" };
+    expect(mgr.listMailboxesChecked("iCloud").failed).toBe(true);
+
+    h.result = {
+      success: true,
+      output: ["iCloud", "rob@example.com", "true"].join(FIELD),
+    };
+    // Separate error fields: the mailbox failure above must not make the
+    // account enumeration look broken too.
+    expect(mgr.listAccountsChecked().failed).toBe(false);
+  });
+});

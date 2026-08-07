@@ -974,17 +974,62 @@ function withClient<T>(
 }
 
 /**
+ * Outcome of resolving a user-supplied mailbox name against the server's list.
+ *
+ * `ambiguous` exists because the leaf-name fallback below can match more than
+ * one mailbox, and picking one of them is a silent wrong answer (#137).
+ */
+type MailboxResolution =
+  { kind: "found"; path: string } | { kind: "none" } | { kind: "ambiguous"; candidates: string[] };
+
+/**
  * Resolve a user-supplied mailbox name to an actual server path by listing the
  * mailboxes and matching on full path, then leaf name (case-insensitive).
- * Returns null when no such mailbox exists.
+ *
+ * The leaf-name fallback is what keeps names stored before `list-mailboxes`
+ * started reporting full paths (`Thornlands/Home Reno` rather than `Home Reno`)
+ * working, so it stays. What does not stay is resolving it with `.find()`:
+ * with two mailboxes sharing a leaf name under different parents, that returned
+ * whichever the server happened to list first, and `move-message` then reported
+ * success for putting mail somewhere the caller never named (#137). All leaf
+ * matches are collected instead, and more than one is reported as ambiguous.
+ *
+ * An exact path match still wins outright, so a caller passing a full path is
+ * unaffected, and a single leaf match still resolves.
  */
-async function findMailboxPath(client: ImapClientLike, name: string): Promise<string | null> {
+async function resolveMailbox(client: ImapClientLike, name: string): Promise<MailboxResolution> {
   const wanted = name.trim().toLowerCase();
   const boxes = await client.list();
   const byPath = boxes.find((b) => b.path.toLowerCase() === wanted);
-  if (byPath) return byPath.path;
-  const byName = boxes.find((b) => b.name.toLowerCase() === wanted);
-  return byName ? byName.path : null;
+  if (byPath) return { kind: "found", path: byPath.path };
+  const byName = boxes.filter((b) => b.name.toLowerCase() === wanted);
+  if (byName.length === 1) return { kind: "found", path: byName[0].path };
+  if (byName.length > 1) {
+    return { kind: "ambiguous", candidates: byName.map((b) => b.path).sort() };
+  }
+  return { kind: "none" };
+}
+
+/** The error text for an ambiguous destination — names every candidate. */
+function ambiguousMailboxError(name: string, candidates: string[], accountLabel?: string): string {
+  const where = accountLabel ? ` on IMAP account ${accountLabel}` : "";
+  return `Mailbox "${name}" is ambiguous${where} — it matches ${candidates
+    .map((c) => `"${c}"`)
+    .join(" and ")}. Pass the full path.`;
+}
+
+/**
+ * `resolveMailbox` for callers that only need the path, throwing on ambiguity.
+ * Used where the call site has no error channel of its own but its caller does
+ * (the batch runner collects thrown errors per group).
+ */
+async function findMailboxPathOrThrow(
+  client: ImapClientLike,
+  name: string
+): Promise<string | null> {
+  const res = await resolveMailbox(client, name);
+  if (res.kind === "ambiguous") throw new Error(ambiguousMailboxError(name, res.candidates));
+  return res.kind === "found" ? res.path : null;
 }
 
 export function imapCreateMailbox(name: string, deps: ImapDeps = {}): Promise<ImapOpResult> {
@@ -1002,13 +1047,20 @@ export function imapCreateMailbox(name: string, deps: ImapDeps = {}): Promise<Im
 
 export function imapDeleteMailbox(name: string, deps: ImapDeps = {}): Promise<ImapOpResult> {
   return withClient(deps, async (client, cfg) => {
-    const path = await findMailboxPath(client, name);
-    if (!path) {
+    const res = await resolveMailbox(client, name);
+    if (res.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(name, res.candidates, cfg.accountLabel),
+      };
+    }
+    if (res.kind === "none") {
       return {
         success: false,
         error: `Mailbox "${name}" not found on IMAP account ${cfg.accountLabel}.`,
       };
     }
+    const path = res.path;
     try {
       await client.mailboxDelete(path);
       return {
@@ -1027,13 +1079,20 @@ export function imapRenameMailbox(
   deps: ImapDeps = {}
 ): Promise<ImapOpResult> {
   return withClient(deps, async (client, cfg) => {
-    const path = await findMailboxPath(client, oldName);
-    if (!path) {
+    const found = await resolveMailbox(client, oldName);
+    if (found.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(oldName, found.candidates, cfg.accountLabel),
+      };
+    }
+    if (found.kind === "none") {
       return {
         success: false,
         error: `Mailbox "${oldName}" not found on IMAP account ${cfg.accountLabel}.`,
       };
     }
+    const path = found.path;
     try {
       const res = await client.mailboxRename(path, newName);
       return { success: true, info: `Renamed "${res.path}" to "${res.newPath}" via IMAP.` };
@@ -1246,9 +1305,17 @@ export async function imapMoveMessageById(
 ): Promise<ImapOpResult> {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withClient(depsForMessageRef(ref, deps), async (client) => {
-    const destPath =
-      (await findMailboxPath(client, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    // #137: refuse an ambiguous destination rather than moving the message to
+    // whichever same-leaf mailbox the server listed first and reporting success.
+    const dest = await resolveMailbox(client, destMailbox);
+    if (dest.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(destMailbox, dest.candidates, cfg.accountLabel),
+      };
+    }
+    const destPath = dest.kind === "found" ? dest.path : resolveMailboxPath(destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
       await client.messageMove([ref.uid], destPath, { uid: true });
@@ -1532,7 +1599,10 @@ export function imapBatchMove(
   deps: ImapDeps = {}
 ): Promise<ImapBatchResult> {
   return imapBatch(ids, deps, async (c, uids) => {
-    const dest = (await findMailboxPath(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
+    // #137: throws on an ambiguous destination; imapBatch records it per group
+    // as a failure rather than moving the batch somewhere the caller didn't name.
+    const dest =
+      (await findMailboxPathOrThrow(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
     await c.messageMove(uids, dest, { uid: true });
   });
 }

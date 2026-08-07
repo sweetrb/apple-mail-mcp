@@ -733,6 +733,13 @@ export class AppleMailManager {
   private lastAccountsError: string | null = null;
 
   /**
+   * Same, for the mailbox listing — read via `listMailboxesChecked()`. Kept
+   * separate from `lastAccountsError` so a failed mailbox read on one account
+   * can't be misread as the account enumeration having failed. (#135)
+   */
+  private lastMailboxesError: string | null = null;
+
+  /**
    * Remembers where each message id was last seen: id → {account, mailbox}.
    *
    * Mail.app numeric message ids are unique *per mailbox*, and by-id fetches
@@ -765,12 +772,12 @@ export class AppleMailManager {
   /**
    * Returns cached accounts or fetches fresh data if cache is expired/empty.
    */
-  private getCachedAccounts(): Account[] {
+  private getCachedAccounts(options: { timeoutMs?: number } = {}): Account[] {
     const now = Date.now();
     if (this.cache.accounts && now < this.cache.accounts.expiry) {
       return this.cache.accounts.data;
     }
-    const accounts = this.fetchAccounts();
+    const accounts = this.fetchAccounts(options);
     if (accounts === null) {
       // Transport failure. Do NOT cache it — caching an empty list here poisoned
       // every subsequent call for the whole TTL, so one timeout made Mail look
@@ -2923,7 +2930,7 @@ export class AppleMailManager {
   /**
    * List all mailboxes for an account.
    */
-  listMailboxes(account?: string): Mailbox[] {
+  listMailboxes(account?: string, options: { timeoutMs?: number } = {}): Mailbox[] {
     const targetAccount = this.resolveAccount(account);
 
     const listCommand = `
@@ -2941,11 +2948,14 @@ export class AppleMailManager {
     const script = buildAccountScopedScript(targetAccount, listCommand);
     // Counts every mailbox's message total, so it needs more than the default
     // 30s on accounts with many/large mailboxes; a timeout here silently
-    // returned an empty list (audit finding #8).
-    const result = executeAppleScript(script, { timeoutMs: 60000 });
+    // returned an empty list (audit finding #8). A caller working to an overall
+    // deadline can lower it — 60s alone overruns most clients' request
+    // timeouts, so "the default is generous" is not a safe assumption (#135).
+    const result = executeAppleScript(script, { timeoutMs: options.timeoutMs ?? 60000 });
 
     if (!result.success) {
       console.error(`Failed to list mailboxes: ${result.error}`);
+      this.lastMailboxesError = result.error ?? "AppleScript transport failed";
       return [];
     }
 
@@ -2967,6 +2977,24 @@ export class AppleMailManager {
     }
 
     return mailboxes;
+  }
+
+  /**
+   * listMailboxes() plus whether the underlying AppleScript read actually worked.
+   *
+   * An empty list is ambiguous on its own — Mail with no mailboxes and a timed-out
+   * transport both produce `[]`, and folding the second into a total as 0 is the
+   * silent-zero class #130 fixed elsewhere. A caller summing counts across
+   * accounts needs to tell them apart. (#135)
+   */
+  listMailboxesChecked(
+    account?: string,
+    options: { timeoutMs?: number } = {}
+  ): { mailboxes: Mailbox[]; failed: boolean; error?: string } {
+    this.lastMailboxesError = null;
+    const mailboxes = this.listMailboxes(account, options);
+    const error = this.lastMailboxesError;
+    return error ? { mailboxes, failed: true, error } : { mailboxes, failed: false };
   }
 
   /**
@@ -3666,8 +3694,8 @@ end tell`;
   /**
    * List all mail accounts (uses cache).
    */
-  listAccounts(): Account[] {
-    return this.getCachedAccounts();
+  listAccounts(options: { timeoutMs?: number } = {}): Account[] {
+    return this.getCachedAccounts(options);
   }
 
   /**
@@ -3675,10 +3703,18 @@ end tell`;
    *
    * `failed: true` means the list is a fallback (stale cache or empty) because the
    * transport errored — NOT that Mail has no accounts. (#130)
+   *
+   * `timeoutMs` bounds the AppleScript read when the cache is cold, so a caller
+   * working to an overall deadline can spend a known slice here instead of the
+   * blanket 30s. A cache hit costs nothing and ignores it. (#135)
    */
-  listAccountsChecked(): { accounts: Account[]; failed: boolean; error?: string } {
+  listAccountsChecked(options: { timeoutMs?: number } = {}): {
+    accounts: Account[];
+    failed: boolean;
+    error?: string;
+  } {
     this.lastAccountsError = null;
-    const accounts = this.getCachedAccounts();
+    const accounts = this.getCachedAccounts(options);
     const error = this.lastAccountsError;
     return error ? { accounts, failed: true, error } : { accounts, failed: false };
   }
@@ -3708,7 +3744,7 @@ end tell`;
    * "Mail answered, and there genuinely are no accounts" — collapsing the two is
    * what let a wedged transport report a confident "No Mail accounts found". (#130)
    */
-  private fetchAccounts(): Account[] | null {
+  private fetchAccounts(options: { timeoutMs?: number } = {}): Account[] | null {
     const script = buildAppLevelScript(`
       set accountList to {}
       repeat with acct in accounts
@@ -3725,7 +3761,14 @@ end tell`;
       return accountList as text
     `);
 
-    const result = executeAppleScript(script);
+    // `execSync` blocks the event loop, so a caller cannot bound this with a
+    // Promise race — the timer would not get to fire. A caller working to a
+    // deadline has to pass its remaining time down here, where it becomes
+    // execSync's own (SIGKILL-backed) timeout. (#135)
+    const result = executeAppleScript(
+      script,
+      options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}
+    );
 
     if (!result.success) {
       console.error(`Failed to list accounts: ${result.error}`);

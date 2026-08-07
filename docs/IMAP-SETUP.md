@@ -358,6 +358,7 @@ GUI is ignoring.
 | `APPLE_MAIL_MCP_IMAP_IDLE` | `1` to enable IMAP IDLE new-mail push. |
 | `APPLE_MAIL_MCP_IMAP_IDLE_MS` | Pooled-connection idle timeout in ms (default `30000`; `0` = never close). |
 | `APPLE_MAIL_MCP_STATS_BUDGET_MS` | Per-account wall-clock budget for `get-mail-stats` in ms (default `25000`, minimum `1000`). |
+| `APPLE_MAIL_MCP_STATS_DEADLINE_MS` | Overall wall-clock deadline for one `get-mail-stats` call in ms (default `50000`, minimum `2000`) — covers the Mail.app account enumeration as well as every per-account read. Keep it below your MCP client's request timeout. |
 | `APPLE_MAIL_MCP_SMTP_HOST` | SMTP host; setting it enables `transport:"smtp"`. |
 | `APPLE_MAIL_MCP_SMTP_PORT` | SMTP port (`465` if secure, else `587`). |
 | `APPLE_MAIL_MCP_SMTP_SECURE` | `true` for implicit TLS (465); else STARTTLS. |

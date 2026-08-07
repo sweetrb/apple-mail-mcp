@@ -486,6 +486,7 @@ for an explicitly-named IMAP account, never on an omitted account.
 | `APPLE_MAIL_MCP_IMAP_IDLE` | No | `0` | Set `1` to enable IMAP IDLE push notifications (new-mail alerts) for every configured account |
 | `APPLE_MAIL_MCP_IMAP_IDLE_MS` | No | `30000` | Idle timeout (ms) before a pooled IMAP connection is closed (`0` = never close) |
 | `APPLE_MAIL_MCP_STATS_BUDGET_MS` | No | `25000` | Per-account wall-clock budget for `get-mail-stats` (minimum `1000`). Raise it for very large accounts |
+| `APPLE_MAIL_MCP_STATS_DEADLINE_MS` | No | `50000` | Overall wall-clock deadline for one `get-mail-stats` call (minimum `2000`), covering account enumeration **and** every per-account read. Keep it below your client's request timeout |
 
 **Multiple IMAP accounts (C2):** set `APPLE_MAIL_MCP_IMAP_ACCOUNTS` to a JSON array, e.g.
 `[{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]`.
@@ -775,8 +776,14 @@ Move a message to a different mailbox.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Message ID |
-| `mailbox` | string | Yes | Destination mailbox |
+| `mailbox` | string | Yes | Destination mailbox — full path (`Work/Archive`) or a leaf name that is unique on the account |
 | `account` | string | No | Account containing mailbox |
+
+A destination is matched first as a full path, then as a leaf name. If a leaf
+name matches **more than one** mailbox (e.g. `Archive` under both `Work` and
+`Thornlands`), the move is refused with an error naming every candidate — pass
+the full path. The same applies to `batch-move-messages`, `delete-mailbox` and
+`rename-mailbox`.
 
 ---
 
@@ -1156,6 +1163,15 @@ as a mailbox, so a large account is not instant. Accounts are counted
 overruns is reported via `partial: true` + `failedAccounts` rather than being
 folded in as a silent zero; a scoped call to a single account returns an error
 naming the budget instead. Raise the budget if you have a very large account.
+
+The whole call is additionally bounded by one wall-clock deadline,
+`APPLE_MAIL_MCP_STATS_DEADLINE_MS` (default `50000`), which covers the Mail.app
+account enumeration as well as every per-account read. Per-step budgets alone
+were not enough: their worst cases **add up**, and the sum could exceed a
+client's request timeout, so the call died with nothing returned instead of
+degrading. Keep the deadline below your MCP client's request timeout — whatever
+cannot be read inside it is named in `failedAccounts`, so you always get a
+partial answer rather than a dead call.
 
 ---
 
