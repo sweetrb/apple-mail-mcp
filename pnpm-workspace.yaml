@@ -45,5 +45,18 @@ overrides:
   # minimumReleaseAgeExclude carve-out was ever added; the soak is the point.
   # It matured at 2026-08-04T02:36:40Z and is floored here now.
   hono: ^4.12.34
-  js-yaml: ^4.2.0
-  postcss: ^8.5.15
+  # GHSA-5p4m-2wfm-xmqj (high): quadratic CPU consumption resolving !!omap,
+  # fixed in 4.3.1 — the CVE-2026-59870 fix was never backported to the 3.x line.
+  # This entry already existed as `^4.2.0`, a floor for an earlier advisory, and
+  # 4.2.0 is BELOW this fix: an out-of-date floor is not a failure mode a caret
+  # protects against, because the caret only stops the tree going *backwards*.
+  # Dev scope (js-yaml reaches the tree via eslint) and absent from the shipped
+  # bundle, so nothing vulnerable was published.
+  js-yaml: ^4.3.1
+  # GHSA-fxqj-rqcc-2cmp (moderate): incomplete fix of GHSA-6g55-p6wh-862q — an
+  # attacker-controlled sourceMappingURL can read arbitrary .map files when `from`
+  # is unset. Patched in 8.5.23. This floor read `^8.5.15` — below the fix — so it
+  # was not actually enforcing it; the tree only resolved a safe 8.5.25 because
+  # vite's own range happened to pull it forward. Matches apple-notes/apple-photos.
+  # Development scope only (vitest -> vite -> postcss), not in the shipped bundle.
+  postcss: ^8.5.23
