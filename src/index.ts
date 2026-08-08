@@ -83,6 +83,7 @@ import {
   errorResponse,
   partialCoverageBlock,
   withErrorHandling,
+  currentCallTiming,
   messageSummary,
 } from "@/tools/respond.js";
 import {
@@ -2841,6 +2842,10 @@ registerTool(
       perMailbox: z.array(z.object({}).passthrough()).optional(),
       partial: z.boolean().optional(),
       failedAccounts: z.array(z.string()).optional(),
+      // Present only when this call waited behind other tool calls. Without it,
+      // queue wait is invisible from the outside and a caller timing the call
+      // sees a duration no per-account budget explains (#135).
+      queueWaitMs: z.number().optional(),
     },
   },
   withErrorHandling(async ({ account }) => {
@@ -2869,8 +2874,34 @@ registerTool(
       2000,
       Number(process.env.APPLE_MAIL_MCP_STATS_DEADLINE_MS ?? 50_000)
     );
-    const startedAt = Date.now();
+    // #135 (second follow-up): the deadline has to run from when the REQUEST
+    // arrived, not from this handler's first line. Every tool call is serialized
+    // through the AppleScript gate (#11), so a call can sit queued for as long as
+    // all the calls ahead of it take — and a handler-anchored clock cannot see any
+    // of that. Measured on 3 accounts: three concurrent calls returned at
+    // 5.5s/10.3s/15.6s and the last one reported `partial: false` with the
+    // deadline set to 6s, having spent ~10s queued. The client's request timeout
+    // does not care where the time went, so neither can the deadline.
+    const timing = currentCallTiming();
+    const queueWaitMs = timing?.queueWaitMs ?? 0;
+    const startedAt = timing?.arrivedAt ?? Date.now();
     const remainingMs = () => Math.max(0, deadlineMs - (Date.now() - startedAt));
+    // Nothing useful is achievable in the last sliver, and spending it anyway is
+    // strictly worse than saying so: the caller has already waited the whole
+    // deadline, so more work only pushes the answer past the request timeout that
+    // is about to fire. Fail fast, and name the queue — the one cause a caller
+    // cannot see from the outside, and cannot fix by raising a budget.
+    if (queueWaitMs > 0 && remainingMs() < 1000) {
+      return errorResponse(
+        `Could not read mail statistics: the ${deadlineMs}ms overall deadline was spent ` +
+          `waiting ${queueWaitMs}ms in the tool-call queue before this call could start. ` +
+          `Tool calls are serialized so they cannot race into Mail.app, so concurrent ` +
+          `get-mail-stats calls each wait for the ones ahead of them — and it is the most ` +
+          `expensive read tool (one IMAP STATUS per mailbox, and Gmail lists every label). ` +
+          `Issue one at a time, prefer "get-unread-count" when a single number will do, or ` +
+          `raise APPLE_MAIL_MCP_STATS_DEADLINE_MS.`
+      );
+    }
     const withBudget = async <T>(work: Promise<T>, label: string): Promise<T> => {
       // Never outlive the overall deadline, however generous the per-account budget.
       const ms = Math.min(budgetMs, remainingMs());
@@ -2898,7 +2929,14 @@ registerTool(
           `Could not read mail statistics for "${account}": ${String(e)}. Gathering stats ` +
             `costs one IMAP STATUS per mailbox, so a very large account can exceed the ` +
             `${budgetMs}ms budget — raise APPLE_MAIL_MCP_STATS_BUDGET_MS, or run the ` +
-            `"doctor" tool if the connection itself is the problem.`
+            `"doctor" tool if the connection itself is the problem.` +
+            // Don't send someone tuning a budget when the queue is what ran the
+            // clock down: the remaining deadline caps the budget (#135).
+            (queueWaitMs >= 1000
+              ? ` Note: this call waited ${queueWaitMs}ms behind other tool calls before ` +
+                `starting, which counts against the ${deadlineMs}ms overall deadline and so ` +
+                `caps the effective budget — issue get-mail-stats calls one at a time.`
+              : ``)
         );
       }
       const lines = [
@@ -2912,7 +2950,19 @@ registerTool(
         `  Last 7 days: ${s.recent.last7d}`,
         `  Last 30 days: ${s.recent.last30d}`,
       ];
-      return successResponse(lines.join("\n"), { account, ...s });
+      if (queueWaitMs >= 1000) {
+        lines.push(
+          ``,
+          `⏳ Waited ${(queueWaitMs / 1000).toFixed(1)}s in the tool-call queue before this ` +
+            `call started (calls are serialized so they cannot race into Mail.app), so the ` +
+            `time you measured is queue wait plus work.`
+        );
+      }
+      return successResponse(lines.join("\n"), {
+        account,
+        ...s,
+        ...(queueWaitMs >= 1000 ? { queueWaitMs } : {}),
+      });
     }
 
     if (account === undefined && shouldUseImap(account)) {
@@ -3063,7 +3113,22 @@ registerTool(
             `failed, exceeded the ${budgetMs}ms per-account budget, or ran out of the ` +
             `${deadlineMs}ms overall deadline — raise APPLE_MAIL_MCP_STATS_BUDGET_MS and/or ` +
             `APPLE_MAIL_MCP_STATS_DEADLINE_MS if an account is simply large, or run the ` +
-            `"doctor" tool to check the connection.`
+            `"doctor" tool to check the connection.` +
+            // Attribute the shortfall to the queue when the queue is what ate the
+            // deadline, instead of leaving it to look like a slow account (#135).
+            (queueWaitMs >= 1000
+              ? ` Note: ${queueWaitMs}ms of that deadline was spent queued behind other ` +
+                `tool calls, not reading mail — issuing get-mail-stats calls one at a time ` +
+                `will recover it.`
+              : ``)
+        );
+      }
+      if (queueWaitMs >= 1000) {
+        lines.push(
+          ``,
+          `⏳ Waited ${(queueWaitMs / 1000).toFixed(1)}s in the tool-call queue before this ` +
+            `call started (calls are serialized so they cannot race into Mail.app), so the ` +
+            `time you measured is queue wait plus work.`
         );
       }
       return successResponse(lines.join("\n"), {
@@ -3072,6 +3137,7 @@ registerTool(
         accounts: perAccount,
         recent,
         ...(failedAccounts.length > 0 ? { partial: true, failedAccounts } : {}),
+        ...(queueWaitMs >= 1000 ? { queueWaitMs } : {}),
       });
     }
 

@@ -5,6 +5,7 @@
  *
  * @module tools/respond
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createSerialGate } from "@/utils/serialize.js";
 import type { SearchDiagnostics, Message } from "@/types.js";
 
@@ -93,22 +94,65 @@ export function partialCoverageBlock(diagnostics: SearchDiagnostics): string {
 export const serializeAppleScript = createSerialGate();
 
 /**
+ * Per-call timing, established when the request ARRIVES rather than when its
+ * handler starts running (#135, second follow-up).
+ *
+ * The gate above means concurrent tool calls run strictly one at a time, so a
+ * call can sit queued for the length of every call ahead of it. A handler that
+ * bounds itself with `Date.now()` at its own first line therefore cannot see any
+ * of that wait: it measures only its own execution, while the caller has been
+ * waiting since it sent the request. Measured on a 3-account setup, three
+ * concurrent `get-mail-stats` calls returned at 5.5s / 10.3s / 15.6s — a clean
+ * 1x/2x/3x staircase — and the 15.6s call reported `partial: false` even with the
+ * deadline set to 6s, because ~10s of it was queue wait the deadline never saw.
+ *
+ * This is the same failure shape #140 fixed one level down (bounding each step
+ * doesn't bound the call); anchoring at arrival is what makes a deadline bound
+ * the call as the CLIENT experiences it, which is the only latency that can trip
+ * the client's own request timeout.
+ */
+export interface CallTiming {
+  /** `Date.now()` when the request arrived, before it entered the serial gate. */
+  arrivedAt: number;
+  /** ms the call spent queued behind other calls before its handler ran. */
+  queueWaitMs: number;
+}
+
+const callTiming = new AsyncLocalStorage<CallTiming>();
+
+/**
+ * Timing for the tool call running on this async stack, or `undefined` outside a
+ * `withErrorHandling` handler (direct unit calls, module init).
+ */
+export function currentCallTiming(): CallTiming | undefined {
+  return callTiming.getStore();
+}
+
+/**
  * Wraps a tool handler with consistent error handling, serialized through the
  * AppleScript gate so concurrent MCP tool calls don't race into Mail.app (#11).
  * Handlers may be sync or async; the result is awaited inside the gate.
+ *
+ * Arrival is stamped BEFORE the gate and exposed via `currentCallTiming()`, so a
+ * handler working to a wall-clock deadline charges its queue wait against that
+ * deadline instead of silently overrunning the client (#135).
  */
 export function withErrorHandling<T extends Record<string, unknown>>(
   handler: (params: T) => ToolResponse | Promise<ToolResponse>,
   errorPrefix: string
 ) {
   return async (params: T) => {
+    const arrivedAt = Date.now();
     return serializeAppleScript(async () => {
-      try {
-        return await handler(params);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        return errorResponse(`${errorPrefix}: ${message}`);
-      }
+      const timing: CallTiming = { arrivedAt, queueWaitMs: Date.now() - arrivedAt };
+      return callTiming.run(timing, async () => {
+        try {
+          return await handler(params);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown error";
+          return errorResponse(`${errorPrefix}: ${message}`);
+        }
+      });
     });
   };
 }

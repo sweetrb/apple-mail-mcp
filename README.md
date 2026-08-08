@@ -486,7 +486,7 @@ for an explicitly-named IMAP account, never on an omitted account.
 | `APPLE_MAIL_MCP_IMAP_IDLE` | No | `0` | Set `1` to enable IMAP IDLE push notifications (new-mail alerts) for every configured account |
 | `APPLE_MAIL_MCP_IMAP_IDLE_MS` | No | `30000` | Idle timeout (ms) before a pooled IMAP connection is closed (`0` = never close) |
 | `APPLE_MAIL_MCP_STATS_BUDGET_MS` | No | `25000` | Per-account wall-clock budget for `get-mail-stats` (minimum `1000`). Raise it for very large accounts |
-| `APPLE_MAIL_MCP_STATS_DEADLINE_MS` | No | `50000` | Overall wall-clock deadline for one `get-mail-stats` call (minimum `2000`), covering account enumeration **and** every per-account read. Keep it below your client's request timeout |
+| `APPLE_MAIL_MCP_STATS_DEADLINE_MS` | No | `50000` | Overall wall-clock deadline for one `get-mail-stats` call (minimum `2000`), measured from when the request arrived and covering time queued behind other tool calls, account enumeration **and** every per-account read. Keep it below your client's request timeout |
 
 **Multiple IMAP accounts (C2):** set `APPLE_MAIL_MCP_IMAP_ACCOUNTS` to a JSON array, e.g.
 `[{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]`.
@@ -1172,6 +1172,19 @@ client's request timeout, so the call died with nothing returned instead of
 degrading. Keep the deadline below your MCP client's request timeout — whatever
 cannot be read inside it is named in `failedAccounts`, so you always get a
 partial answer rather than a dead call.
+
+**Concurrent `get-mail-stats` calls do not run concurrently.** Tool calls are
+serialized so they cannot race into Mail.app's single-threaded AppleScript
+dispatch, so each call waits for the ones ahead of it and per-call latency grows
+with queue depth — N concurrent calls take about N × the single-call cost. Since
+this is the most expensive read tool, that is very visible here: measured on 3
+IMAP accounts, three concurrent calls returned at 5.5s / 10.3s / 15.6s against a
+~5.2s solo cost. The deadline is measured from when the request **arrived**, so
+that wait is spent from the same budget as the work: a call that waited ≥1s
+reports `queueWaitMs`, and one that arrives with its deadline already spent
+returns straight away naming the queue rather than starting work whose answer
+would land after your client has given up. Issue these calls one at a time, and
+prefer `get-unread-count` when a single number will do.
 
 ---
 
