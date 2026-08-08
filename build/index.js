@@ -82606,6 +82606,9 @@ async function imapThread(id, deps = {}, limit = 50) {
   );
 }
 
+// src/tools/respond.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+
 // src/utils/serialize.ts
 function createSerialGate(settleMs = 50) {
   let tail = Promise.resolve();
@@ -82674,15 +82677,23 @@ function partialCoverageBlock(diagnostics) {
 ${notes.map((n) => `  - ${n}`).join("\n")}`;
 }
 var serializeAppleScript = createSerialGate();
+var callTiming = new AsyncLocalStorage();
+function currentCallTiming() {
+  return callTiming.getStore();
+}
 function withErrorHandling(handler, errorPrefix) {
   return async (params) => {
+    const arrivedAt = Date.now();
     return serializeAppleScript(async () => {
-      try {
-        return await handler(params);
-      } catch (error2) {
-        const message = error2 instanceof Error ? error2.message : "Unknown error";
-        return errorResponse(`${errorPrefix}: ${message}`);
-      }
+      const timing = { arrivedAt, queueWaitMs: Date.now() - arrivedAt };
+      return callTiming.run(timing, async () => {
+        try {
+          return await handler(params);
+        } catch (error2) {
+          const message = error2 instanceof Error ? error2.message : "Unknown error";
+          return errorResponse(`${errorPrefix}: ${message}`);
+        }
+      });
     });
   };
 }
@@ -85154,7 +85165,11 @@ registerTool(
       // tolerated by the permissive advertisement (#135).
       perMailbox: external_exports.array(external_exports.object({}).passthrough()).optional(),
       partial: external_exports.boolean().optional(),
-      failedAccounts: external_exports.array(external_exports.string()).optional()
+      failedAccounts: external_exports.array(external_exports.string()).optional(),
+      // Present only when this call waited behind other tool calls. Without it,
+      // queue wait is invisible from the outside and a caller timing the call
+      // sees a duration no per-account budget explains (#135).
+      queueWaitMs: external_exports.number().optional()
     }
   },
   withErrorHandling(async ({ account }) => {
@@ -85163,8 +85178,15 @@ registerTool(
       2e3,
       Number(process.env.APPLE_MAIL_MCP_STATS_DEADLINE_MS ?? 5e4)
     );
-    const startedAt = Date.now();
+    const timing = currentCallTiming();
+    const queueWaitMs = timing?.queueWaitMs ?? 0;
+    const startedAt = timing?.arrivedAt ?? Date.now();
     const remainingMs = () => Math.max(0, deadlineMs - (Date.now() - startedAt));
+    if (queueWaitMs > 0 && remainingMs() < 1e3) {
+      return errorResponse(
+        `Could not read mail statistics: the ${deadlineMs}ms overall deadline was spent waiting ${queueWaitMs}ms in the tool-call queue before this call could start. Tool calls are serialized so they cannot race into Mail.app, so concurrent get-mail-stats calls each wait for the ones ahead of them \u2014 and it is the most expensive read tool (one IMAP STATUS per mailbox, and Gmail lists every label). Issue one at a time, prefer "get-unread-count" when a single number will do, or raise APPLE_MAIL_MCP_STATS_DEADLINE_MS.`
+      );
+    }
     const withBudget = async (work, label) => {
       const ms = Math.min(budgetMs, remainingMs());
       let timer;
@@ -85185,7 +85207,9 @@ registerTool(
         s = await withBudget(imapMailStats({ account }), `IMAP mail-stats for "${account}"`);
       } catch (e) {
         return errorResponse(
-          `Could not read mail statistics for "${account}": ${String(e)}. Gathering stats costs one IMAP STATUS per mailbox, so a very large account can exceed the ${budgetMs}ms budget \u2014 raise APPLE_MAIL_MCP_STATS_BUDGET_MS, or run the "doctor" tool if the connection itself is the problem.`
+          `Could not read mail statistics for "${account}": ${String(e)}. Gathering stats costs one IMAP STATUS per mailbox, so a very large account can exceed the ${budgetMs}ms budget \u2014 raise APPLE_MAIL_MCP_STATS_BUDGET_MS, or run the "doctor" tool if the connection itself is the problem.` + // Don't send someone tuning a budget when the queue is what ran the
+          // clock down: the remaining deadline caps the budget (#135).
+          (queueWaitMs >= 1e3 ? ` Note: this call waited ${queueWaitMs}ms behind other tool calls before starting, which counts against the ${deadlineMs}ms overall deadline and so caps the effective budget \u2014 issue get-mail-stats calls one at a time.` : ``)
         );
       }
       const lines2 = [
@@ -85199,7 +85223,17 @@ registerTool(
         `  Last 7 days: ${s.recent.last7d}`,
         `  Last 30 days: ${s.recent.last30d}`
       ];
-      return successResponse(lines2.join("\n"), { account, ...s });
+      if (queueWaitMs >= 1e3) {
+        lines2.push(
+          ``,
+          `\u23F3 Waited ${(queueWaitMs / 1e3).toFixed(1)}s in the tool-call queue before this call started (calls are serialized so they cannot race into Mail.app), so the time you measured is queue wait plus work.`
+        );
+      }
+      return successResponse(lines2.join("\n"), {
+        account,
+        ...s,
+        ...queueWaitMs >= 1e3 ? { queueWaitMs } : {}
+      });
     }
     if (account === void 0 && shouldUseImap(account)) {
       let totalMessages = 0;
@@ -85300,7 +85334,15 @@ registerTool(
       if (failedAccounts.length > 0) {
         lines2.push(
           ``,
-          `\u26A0\uFE0F  PARTIAL: ${failedAccounts.length} account(s) could not be read (${failedAccounts.join(", ")}), so the real totals are higher. They either failed, exceeded the ${budgetMs}ms per-account budget, or ran out of the ${deadlineMs}ms overall deadline \u2014 raise APPLE_MAIL_MCP_STATS_BUDGET_MS and/or APPLE_MAIL_MCP_STATS_DEADLINE_MS if an account is simply large, or run the "doctor" tool to check the connection.`
+          `\u26A0\uFE0F  PARTIAL: ${failedAccounts.length} account(s) could not be read (${failedAccounts.join(", ")}), so the real totals are higher. They either failed, exceeded the ${budgetMs}ms per-account budget, or ran out of the ${deadlineMs}ms overall deadline \u2014 raise APPLE_MAIL_MCP_STATS_BUDGET_MS and/or APPLE_MAIL_MCP_STATS_DEADLINE_MS if an account is simply large, or run the "doctor" tool to check the connection.` + // Attribute the shortfall to the queue when the queue is what ate the
+          // deadline, instead of leaving it to look like a slow account (#135).
+          (queueWaitMs >= 1e3 ? ` Note: ${queueWaitMs}ms of that deadline was spent queued behind other tool calls, not reading mail \u2014 issuing get-mail-stats calls one at a time will recover it.` : ``)
+        );
+      }
+      if (queueWaitMs >= 1e3) {
+        lines2.push(
+          ``,
+          `\u23F3 Waited ${(queueWaitMs / 1e3).toFixed(1)}s in the tool-call queue before this call started (calls are serialized so they cannot race into Mail.app), so the time you measured is queue wait plus work.`
         );
       }
       return successResponse(lines2.join("\n"), {
@@ -85308,7 +85350,8 @@ registerTool(
         totalUnread,
         accounts: perAccount,
         recent,
-        ...failedAccounts.length > 0 ? { partial: true, failedAccounts } : {}
+        ...failedAccounts.length > 0 ? { partial: true, failedAccounts } : {},
+        ...queueWaitMs >= 1e3 ? { queueWaitMs } : {}
       });
     }
     const stats = mailManager.getMailStats();

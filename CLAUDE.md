@@ -318,6 +318,14 @@ missing; say so rather than reporting the total as complete. `failedAccounts` ma
 AppleScript-only accounts could not be enumerated, so any account not covered by an IMAP
 config is missing entirely from the totals.
 
+**Never issue `get-mail-stats` calls in parallel — they will not overlap.** Tool calls are
+serialized so they cannot race into Mail.app, so N concurrent calls take about N × the
+cost of one, and the deadline (measured from when each request arrived) is spent waiting
+rather than reading. A call that waited reports `queueWaitMs`; one that arrives with its
+deadline already gone returns an error naming the queue. If you need several figures, make
+**one** unscoped call and read the per-account breakdown out of it, or use
+`get-unread-count` where a single number will do.
+
 ### Moving mail: name the destination unambiguously
 
 `move-message`, `batch-move-messages`, `delete-mailbox` and `rename-mailbox` resolve a
