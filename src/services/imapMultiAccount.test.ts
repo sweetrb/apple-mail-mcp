@@ -319,6 +319,45 @@ describe("planCountSources (each account counted exactly once)", () => {
     expect(sources.every((s) => s.kind === "applescript")).toBe(true);
     expect(sources).toHaveLength(3);
   });
+
+  // #143: a Mail account the user has switched OFF has no live connection, so
+  // an AppleScript count against it fails and lands in `failedAccounts` —
+  // turning a deliberately-disabled account into a permanent `partial: true`
+  // that claims the real total is higher when it is not.
+  it("SKIPS a disabled account that has no IMAP config (not a source at all)", () => {
+    const withDisabled: Account[] = [
+      ...accounts,
+      {
+        name: "robert.sweet@parkplacetech.com",
+        email: "robert.sweet@parkplacetech.com",
+        enabled: false,
+      },
+    ];
+    const sources = planCountSources(withDisabled, [cfgA, cfgB]);
+    expect(sources.map((s) => s.label)).not.toContain("robert.sweet@parkplacetech.com");
+    expect(sources).toHaveLength(3);
+  });
+
+  it("still counts a DISABLED account that HAS an IMAP config — IMAP ignores Mail's toggle", () => {
+    // The config is an explicit "read this account over IMAP" instruction, and
+    // IMAP talks to the server directly, so Mail's enabled flag is irrelevant.
+    const disabledButConfigured: Account = {
+      name: "Personal",
+      email: "a@gmail.com",
+      enabled: false,
+    };
+    const sources = planCountSources([disabledButConfigured], [cfgA]);
+    expect(sources).toHaveLength(1);
+    expect(sources[0].kind).toBe("imap");
+    expect(sources[0].label).toBe("Personal");
+  });
+
+  it("treats an account with no `enabled` field as enabled (back-compat)", () => {
+    const noFlag = [{ name: "Legacy", email: "l@x.com" } as Account];
+    const sources = planCountSources(noFlag, []);
+    expect(sources).toHaveLength(1);
+    expect(sources[0].kind).toBe("applescript");
+  });
 });
 
 describe("formatMergedRows", () => {

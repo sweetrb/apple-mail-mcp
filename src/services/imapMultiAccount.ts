@@ -259,6 +259,20 @@ export function planCountSources(accounts: Account[], configs: ImapConfig[]): Co
       usedConfigs.add(match);
       sources.push({ kind: "imap", config: match, label: account.name });
     } else {
+      // An account DISABLED in Mail has no live connection, so an AppleScript
+      // count against it fails server-side (AppleEvent -10000) — the same
+      // condition `guardAccountEnabled` already refuses for mailbox writes.
+      // Emitting it as a source turned a deliberately-off account into a
+      // permanent `partial: true` + `failedAccounts` on every unscoped
+      // get-unread-count / get-mail-stats, which reads as "the real total is
+      // higher" when it is not. A disabled account is not an unreadable
+      // source; it is not a source at all. (#143)
+      //
+      // Note this is deliberately only the no-IMAP-config branch: a disabled
+      // Mail account that DOES have an IMAP config stays counted above, because
+      // IMAP talks to the server directly and doesn't care about Mail's toggle
+      // — that config is an explicit "read this account" instruction.
+      if (account.enabled === false) continue;
       sources.push({ kind: "applescript", account, label: account.name });
     }
   }
