@@ -82788,6 +82788,7 @@ function planCountSources(accounts, configs) {
       usedConfigs.add(match);
       sources.push({ kind: "imap", config: match, label: account.name });
     } else {
+      if (account.enabled === false) continue;
       sources.push({ kind: "applescript", account, label: account.name });
     }
   }

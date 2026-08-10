@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [2.10.10] - 2026-08-10
+
+### Fixed
+
+- **An account switched OFF in Mail.app is no longer counted as an unreadable one, which was making every unscoped `get-unread-count` / `get-mail-stats` permanently `partial`** (#143). `planCountSources` assigned every Mail.app account a source — its matching IMAP config, else AppleScript — without consulting the account's `enabled` flag. A disabled account has no live connection, so an AppleScript count against it fails server-side (AppleEvent -10000); that failure was folded into `failedAccounts` and the result marked `partial: true`, whose text tells the caller "the real total is higher". For a deliberately-disabled account that is simply untrue — nothing is missing and the total is exact. This is the same condition `guardAccountEnabled` already refuses for mailbox writes; the count planner just never applied it. A disabled account with no IMAP config is now **not a source at all** rather than a failing one.
+- Scope is deliberately narrow: a disabled Mail account that **does** have an IMAP config is still counted, over IMAP. IMAP talks to the server directly and does not care about Mail's toggle, and the config is an explicit "read this account" instruction — that is how a mailbox stays readable by this server while staying out of Mail.app's UI. An account whose `enabled` flag is absent is treated as enabled, so backends that don't report it are unaffected.
+
+Found by a scheduled TCC watchdog whose canary read the resulting partial as a possible Apple Events reset. It was not one: a real grant loss fails *every* AppleScript account, not a single named one while the others return counts.
+
 ## [2.10.9] - 2026-08-08
 
 ### Fixed
