@@ -191,6 +191,207 @@ describe("toJsonSchema2020_12", () => {
   });
 });
 
+/**
+ * Position-awareness: a "properties" map's keys are caller-chosen TOOL PARAMETER
+ * NAMES, not schema keywords. Before the fix, convertNode recursed uniformly and
+ * switched on every key it met, so a parameter named "definitions" was renamed to
+ * "$defs", one named "$schema" was silently DELETED (while "required" still named
+ * it — a schema no input can satisfy), and "dependencies"/"additionalItems" were
+ * restructured or dropped. Likewise "enum"/"const"/"default"/"examples" hold
+ * instance DATA, and recursing into them rewrote a caller's literal values.
+ */
+describe("toJsonSchema2020_12 — position awareness", () => {
+  type Obj = Record<string, any>;
+
+  it("keeps a tool parameter NAMED definitions under its own name, and still converts its subschema", () => {
+    const out = toJsonSchema2020_12({
+      type: "object",
+      properties: {
+        definitions: {
+          // nested dialect declaration must still be stripped — proves the VALUE
+          // is still recursed even though the KEY is left alone
+          $schema: DRAFT_07,
+          type: "array",
+          items: [{ type: "string" }],
+        },
+      },
+      required: ["definitions"],
+    }) as Obj;
+
+    expect(Object.keys(out.properties)).toEqual(["definitions"]);
+    expect(out.properties.definitions).toEqual({
+      type: "array",
+      prefixItems: [{ type: "string" }],
+    });
+    // NOT renamed — neither on the properties map nor hoisted to the root
+    expect(out.properties.$defs).toBeUndefined();
+    expect(out.$defs).toBeUndefined();
+    // required still names a property that exists
+    expect(out.required).toEqual(["definitions"]);
+    expect(Object.keys(out.properties)).toContain(out.required[0]);
+  });
+
+  it("PRESERVES a tool parameter NAMED $schema instead of deleting it, keeping required satisfiable", () => {
+    const out = toJsonSchema2020_12({
+      type: "object",
+      properties: {
+        $schema: { type: "string", description: "dialect URI to validate against" },
+        payload: { type: "object" },
+      },
+      required: ["$schema"],
+    }) as Obj;
+
+    expect(out.properties.$schema).toEqual({
+      type: "string",
+      description: "dialect URI to validate against",
+    });
+    expect(out.required).toEqual(["$schema"]);
+    // Every required name resolves to a declared property — the schema is satisfiable.
+    for (const name of out.required) expect(Object.keys(out.properties)).toContain(name);
+    // The ROOT still declares the dialect; the parameter is a separate thing.
+    expect(out.$schema).toBe(JSON_SCHEMA_2020_12);
+  });
+
+  it("keeps tool parameters NAMED dependencies and additionalItems intact, names and values", () => {
+    const out = toJsonSchema2020_12({
+      type: "object",
+      properties: {
+        dependencies: { type: "array", items: { type: "string" } },
+        additionalItems: { type: "boolean", description: "allow extras" },
+      },
+      required: ["dependencies", "additionalItems"],
+    }) as Obj;
+
+    expect(Object.keys(out.properties).sort()).toEqual(["additionalItems", "dependencies"]);
+    expect(out.properties.dependencies).toEqual({ type: "array", items: { type: "string" } });
+    expect(out.properties.additionalItems).toEqual({
+      type: "boolean",
+      description: "allow extras",
+    });
+    // The keyword rewrites must not have fired on the properties map.
+    expect(out.properties.dependentRequired).toBeUndefined();
+    expect(out.properties.dependentSchemas).toBeUndefined();
+    expect(out.properties.items).toBeUndefined();
+    expect(out.required).toEqual(["dependencies", "additionalItems"]);
+  });
+
+  it("still renames a REAL definitions block at a schema position and still rewrites #/definitions/X", () => {
+    const out = toJsonSchema2020_12({
+      type: "object",
+      definitions: {
+        Row: { $schema: DRAFT_07, type: "object", properties: { id: { type: "string" } } },
+        // a definition whose NAME collides with a keyword keeps its name
+        properties: { type: "string" },
+      },
+      properties: { row: { $ref: "#/definitions/Row" } },
+    }) as Obj;
+
+    expect(out.definitions).toBeUndefined();
+    expect(Object.keys(out.$defs).sort()).toEqual(["Row", "properties"]);
+    expect(out.$defs.Row).toEqual({ type: "object", properties: { id: { type: "string" } } });
+    expect(out.$defs.properties).toEqual({ type: "string" });
+    expect(out.properties.row).toEqual({ $ref: "#/$defs/Row" });
+    expect(JSON.stringify(out)).not.toContain("draft-07");
+  });
+
+  it("passes enum, const, default and examples through VERBATIM even when they collide with keywords", () => {
+    const out = toJsonSchema2020_12({
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["definitions", "$schema", "additionalItems"],
+          default: { definitions: 1, $schema: "x" },
+        },
+        pinned: {
+          const: { dependencies: { a: ["b"] }, additionalItems: false, items: [1, 2] },
+        },
+        sampled: {
+          examples: [{ $schema: "not-a-dialect", properties: { minimum: 3 } }],
+        },
+      },
+    }) as Obj;
+
+    expect(out.properties.mode.enum).toEqual(["definitions", "$schema", "additionalItems"]);
+    expect(out.properties.mode.default).toEqual({ definitions: 1, $schema: "x" });
+    expect(out.properties.pinned.const).toEqual({
+      dependencies: { a: ["b"] },
+      additionalItems: false,
+      items: [1, 2],
+    });
+    expect(out.properties.sampled.examples).toEqual([
+      { $schema: "not-a-dialect", properties: { minimum: 3 } },
+    ]);
+    // None of the keyword rewrites leaked into the data.
+    expect(out.properties.mode.default.$defs).toBeUndefined();
+    expect(out.properties.pinned.const.prefixItems).toBeUndefined();
+    expect(out.properties.pinned.const.dependentRequired).toBeUndefined();
+  });
+
+  it("leaves patternProperties and $defs map KEYS untouched while converting their VALUES", () => {
+    const out = toJsonSchema2020_12({
+      type: "object",
+      patternProperties: {
+        "^x-": { $schema: DRAFT_07, type: "string" },
+        "^definitions$": { type: "array", items: [{ type: "string" }] },
+      },
+      $defs: {
+        $schema: { type: "boolean" },
+        definitions: { $schema: DRAFT_07, type: "number" },
+      },
+    }) as Obj;
+
+    expect(Object.keys(out.patternProperties)).toEqual(["^x-", "^definitions$"]);
+    expect(out.patternProperties["^x-"]).toEqual({ type: "string" });
+    expect(out.patternProperties["^definitions$"]).toEqual({
+      type: "array",
+      prefixItems: [{ type: "string" }],
+    });
+
+    expect(Object.keys(out.$defs).sort()).toEqual(["$schema", "definitions"]);
+    expect(out.$defs.$schema).toEqual({ type: "boolean" });
+    expect(out.$defs.definitions).toEqual({ type: "number" });
+
+    // Exactly one $schema *keyword* survives — the root's — even though a $defs
+    // member is NAMED $schema.
+    expect(out.$schema).toBe(JSON_SCHEMA_2020_12);
+    expect(JSON.stringify(out)).not.toContain("draft-07");
+  });
+
+  it("round-trips an apple-notes-mcp get-checklist-state-shaped outputSchema unchanged apart from the root dialect", () => {
+    // Regression guard mirroring the real tool surface: properties.items is an
+    // array-typed subschema, i.e. a parameter NAMED like the "items" keyword.
+    const outputSchema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              text: { type: "string" },
+              checked: { type: "boolean" },
+              index: { type: "number" },
+            },
+            additionalProperties: true,
+          },
+        },
+        total: { type: "number" },
+        checkedCount: { type: "number" },
+      },
+      additionalProperties: true,
+    };
+    const pristine = structuredClone(outputSchema);
+
+    const { $schema, ...rest } = toJsonSchema2020_12(outputSchema) as Obj;
+
+    expect($schema).toBe(JSON_SCHEMA_2020_12);
+    expect(rest).toEqual(pristine);
+    // and the caller's object was not mutated in place
+    expect(outputSchema).toEqual(pristine);
+  });
+});
+
 describe("normalizeOutgoingMessage", () => {
   const toolsListResult = () => ({
     jsonrpc: "2.0" as const,
@@ -223,6 +424,43 @@ describe("normalizeOutgoingMessage", () => {
     expect(out.result.tools[0].inputSchema.$schema).toBe(JSON_SCHEMA_2020_12);
     expect(out.result.tools[0].outputSchema?.$schema).toBe(JSON_SCHEMA_2020_12);
     expect(out.result.tools[1].inputSchema.$schema).toBe(JSON_SCHEMA_2020_12);
+    expect(JSON.stringify(out)).not.toContain("draft-07");
+  });
+
+  it("does not corrupt a tool whose PARAMETER names collide with schema keywords", () => {
+    // The wire path for the position-awareness bug: this tool would previously
+    // have shipped with $schema deleted and definitions renamed, while required
+    // still named both — an inputSchema no call could satisfy.
+    const out = normalizeOutgoingMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        tools: [
+          {
+            name: "validate-doc",
+            inputSchema: {
+              $schema: DRAFT_07,
+              type: "object",
+              properties: {
+                $schema: { type: "string" },
+                definitions: { type: "object" },
+                additionalItems: { type: "boolean" },
+              },
+              required: ["$schema", "definitions", "additionalItems"],
+            },
+          },
+        ],
+      },
+    }) as { result: { tools: { inputSchema: Record<string, any> }[] } };
+
+    const schema = out.result.tools[0].inputSchema;
+    expect(schema.$schema).toBe(JSON_SCHEMA_2020_12);
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "$schema",
+      "additionalItems",
+      "definitions",
+    ]);
+    for (const name of schema.required) expect(Object.keys(schema.properties)).toContain(name);
     expect(JSON.stringify(out)).not.toContain("draft-07");
   });
 

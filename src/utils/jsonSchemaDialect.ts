@@ -23,10 +23,51 @@ export const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema
 
 const DEFINITIONS_REF_PREFIX = "#/definitions/";
 
+/**
+ * Keywords whose value is a map of caller-chosen NAME -> schema.
+ *
+ * Their keys are user data -- a tool's parameter names -- not schema keywords,
+ * so they must never be run through the keyword rewrites below. Without this,
+ * a tool declaring a parameter named "definitions" would have it renamed to
+ * "$defs" on the wire, and one named "$schema" would be silently DELETED, while
+ * "required" still named the original -- yielding a schema no input satisfies.
+ *
+ * "definitions" is deliberately absent: it is a real keyword at a schema
+ * position, and its own case below converts it and renames it to $defs.
+ */
+const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "dependentSchemas",
+]);
+
+/**
+ * Keywords whose value is instance DATA rather than a schema. Recursing into
+ * them would rewrite a caller's literal values as if they were schema keywords
+ * (e.g. a default of { definitions: 1, $schema: "x" }), so they pass verbatim.
+ */
+const DATA_KEYWORDS: ReadonlySet<string> = new Set([
+  "enum",
+  "const",
+  "default",
+  "examples",
+  "required",
+  "dependentRequired",
+]);
+
 type JsonObject = Record<string, unknown>;
 
 function isPlainObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Convert every VALUE of a name -> schema map, leaving the caller's names untouched. */
+function convertSchemaMap(node: unknown): unknown {
+  if (!isPlainObject(node)) return node;
+  const out: JsonObject = {};
+  for (const [name, subschema] of Object.entries(node)) out[name] = convertNode(subschema);
+  return out;
 }
 
 /**
@@ -48,10 +89,16 @@ function convertNode(node: unknown): unknown {
         break;
 
       case "definitions":
-        out.$defs = convertNode(value);
+        out.$defs = convertSchemaMap(value);
         break;
 
       case "$ref":
+        // Known, deliberate limitation: only a $ref with the exact ROOT prefix
+        // "#/definitions/" is rewritten. A pointer THROUGH a nested definitions
+        // block (e.g. "#/properties/x/definitions/Y") is left alone, because
+        // "#/properties/definitions/..." could legitimately address a property
+        // NAMED definitions and the two are indistinguishable without resolving
+        // the pointer. The SDK's converter emits neither construct.
         out.$ref =
           typeof value === "string" && value.startsWith(DEFINITIONS_REF_PREFIX)
             ? "#/$defs/" + value.slice(DEFINITIONS_REF_PREFIX.length)
@@ -104,7 +151,12 @@ function convertNode(node: unknown): unknown {
         break;
 
       default:
-        out[key] = convertNode(value);
+        // Position-aware fallthrough: instance data passes verbatim, a
+        // name -> schema map has only its VALUES converted, and anything else
+        // is a schema position and recurses.
+        if (DATA_KEYWORDS.has(key)) out[key] = value;
+        else if (SCHEMA_MAP_KEYWORDS.has(key)) out[key] = convertSchemaMap(value);
+        else out[key] = convertNode(value);
     }
   }
 
