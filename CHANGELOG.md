@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [2.10.11] - 2026-08-12
+
+### Security
+
+- **Bumped `imapflow` 1.6.3 → 1.6.5, which blocks IMAP command injection.** Upstream's 1.6.4 is described as "block IMAP command injection and harden rev2 protocol handling", and 1.6.5 resolves regressions from that hardening and hardens further. `imapflow` is not a development dependency here — it is the IMAP client behind every direct-IMAP path (search, move, archive, counts, the whole non-AppleScript surface) and it is **inlined into the committed `build/index.js`**, so every published artifact before this one carried the unhardened version. Recorded under Security rather than left as the automated "dependency bump" line, because the shipped bytes changed in a way that matters.
+
+### Changed
+
+- Bumped `nodemailer` 9.0.3 → 9.0.4 (also inlined into the bundle; SMTP send path) and the `typescript-eslint` toolchain 8.65.0 → 8.66.0 plus `globals` 17.8.0 → 17.9.0 (development scope only). Committed bundle rebuilt. (#145)
+
 ## [2.10.10] - 2026-08-10
 
 ### Fixed
