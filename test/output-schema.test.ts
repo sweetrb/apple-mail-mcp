@@ -7,7 +7,10 @@
  *   2. every outputSchema is permissive — no required fields — so the SDK's
  *      structuredContent validation can never reject a valid success result for a
  *      conditionally-absent field
- *   3. the diagnostic tools round-trip without a validation rejection. The SDK's
+ *   3. every advertised schema declares the JSON Schema 2020-12 dialect and
+ *      carries no draft-07-only construct — the SDK emits draft-07 and current
+ *      clients refuse every such tool outright (#147)
+ *   4. the diagnostic tools round-trip without a validation rejection. The SDK's
  *      validateToolOutput (server mcp.js) THROWS McpError when a success result's
  *      structuredContent is missing or fails the schema, which rejects callTool —
  *      so a resolving call proves a real payload validates against its schema.
@@ -22,6 +25,34 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const SERVER = resolve(__dirname, "../build/index.js");
+
+// Walk schema POSITIONS, not every key. The keys of a `properties` map are
+// caller-chosen TOOL PARAMETER NAMES, not keywords, so a tool with a parameter
+// named `definitions` or `$schema` is perfectly legal and must not be reported;
+// and enum/const/default hold instance DATA, whose keys mean nothing here.
+// (Same distinction the normalizer itself makes — see src/utils/jsonSchemaDialect.ts.)
+const SCHEMA_MAP_KEYWORDS = ["properties", "patternProperties", "$defs", "dependentSchemas"];
+const DATA_KEYWORDS = ["enum", "const", "default", "examples", "required", "dependentRequired"];
+
+/** Re-enter only the subschema positions of `obj`, reporting each via `visit`. */
+function walkSubschemas(
+  obj: Record<string, unknown>,
+  path: string,
+  visit: (node: unknown, path: string) => void
+): void {
+  for (const [key, value] of Object.entries(obj)) {
+    if (DATA_KEYWORDS.includes(key)) continue;
+    if (SCHEMA_MAP_KEYWORDS.includes(key)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [name, sub] of Object.entries(value as Record<string, unknown>)) {
+          visit(sub, `${path}.${key}.${name}`);
+        }
+      }
+      continue;
+    }
+    visit(value, `${path}.${key}`);
+  }
+}
 
 describe("outputSchema contract (real server over stdio)", () => {
   let client: Client;
@@ -88,6 +119,98 @@ describe("outputSchema contract (real server over stdio)", () => {
         `additionalProperties:false, so any field they don't enumerate is rejected ` +
         `client-side and the whole result is lost: ${offenders.join(", ")}`
     ).toEqual([]);
+  });
+
+  it("every advertised schema declares JSON Schema 2020-12 (never draft-07)", async () => {
+    // #147: the SDK converts our zod schemas with a draft-07 target and stamps
+    // "$schema": "http://json-schema.org/draft-07/schema#" on every emitted
+    // input/outputSchema. Clients standardized on 2020-12 now reject the tool
+    // outright ("The default validator supports JSON Schema 2020-12 only"), so
+    // EVERY tool disappears. src/utils/jsonSchemaDialect.ts normalizes the
+    // outgoing tools/list payload; this asserts what the wire actually carries.
+    const { tools } = await client.listTools();
+    const offenders: string[] = [];
+    for (const tool of tools) {
+      for (const [kind, schema] of [
+        ["inputSchema", tool.inputSchema],
+        ["outputSchema", tool.outputSchema],
+      ] as const) {
+        if (!schema) continue;
+        const declared = (schema as { $schema?: unknown }).$schema;
+        if (declared !== "https://json-schema.org/draft/2020-12/schema") {
+          offenders.push(`${tool.name}.${kind} declares ${JSON.stringify(declared)}`);
+        }
+        if (JSON.stringify(schema).includes("draft-07")) {
+          offenders.push(`${tool.name}.${kind} mentions draft-07`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      `every advertised schema must declare the 2020-12 dialect: ${offenders.join("; ")}`
+    ).toEqual([]);
+  });
+
+  it("no advertised schema uses a draft-07-only construct", async () => {
+    // The dialect declaration is only honest if the BODY is 2020-12 too:
+    // tuple-form `items`, `additionalItems`, `definitions`, `#/definitions/`
+    // refs, `dependencies`, and boolean `exclusiveMinimum/Maximum` all changed.
+    const { tools } = await client.listTools();
+    const offenders: string[] = [];
+
+    const walk = (node: unknown, path: string): void => {
+      if (Array.isArray(node)) {
+        node.forEach((child, i) => walk(child, `${path}[${i}]`));
+        return;
+      }
+      if (typeof node !== "object" || node === null) return;
+      const obj = node as Record<string, unknown>;
+      if (Array.isArray(obj.items)) offenders.push(`${path}: tuple-form "items"`);
+      if ("additionalItems" in obj) offenders.push(`${path}: "additionalItems"`);
+      if ("definitions" in obj) offenders.push(`${path}: "definitions"`);
+      if ("dependencies" in obj) offenders.push(`${path}: "dependencies"`);
+      if (typeof obj.exclusiveMinimum === "boolean")
+        offenders.push(`${path}: boolean "exclusiveMinimum"`);
+      if (typeof obj.exclusiveMaximum === "boolean")
+        offenders.push(`${path}: boolean "exclusiveMaximum"`);
+      if (typeof obj.$ref === "string" && obj.$ref.startsWith("#/definitions/"))
+        offenders.push(`${path}: "#/definitions/" $ref`);
+      walkSubschemas(obj, path, walk);
+    };
+
+    for (const tool of tools) {
+      if (tool.inputSchema) walk(tool.inputSchema, `${tool.name}.inputSchema`);
+      if (tool.outputSchema) walk(tool.outputSchema, `${tool.name}.outputSchema`);
+    }
+    expect(offenders, `draft-07-only constructs on the wire: ${offenders.join("; ")}`).toEqual([]);
+  });
+
+  it("only the schema ROOT declares a dialect — no nested $schema", async () => {
+    // A subschema carrying its own "$schema" is not portable and is exactly what
+    // the normalizer strips; assert it never reappears.
+    const { tools } = await client.listTools();
+    const offenders: string[] = [];
+    const walkNested = (node: unknown, path: string): void => {
+      if (Array.isArray(node)) {
+        node.forEach((child, i) => walkNested(child, `${path}[${i}]`));
+        return;
+      }
+      if (typeof node !== "object" || node === null) return;
+      const obj = node as Record<string, unknown>;
+      if ("$schema" in obj) offenders.push(`${path}: nested "$schema"`);
+      walkSubschemas(obj, path, walkNested);
+    };
+    for (const tool of tools) {
+      for (const [kind, schema] of [
+        ["inputSchema", tool.inputSchema],
+        ["outputSchema", tool.outputSchema],
+      ] as const) {
+        if (!schema) continue;
+        // Start below the root, whose own $schema is the legitimate declaration.
+        walkSubschemas(schema as Record<string, unknown>, `${tool.name}.${kind}`, walkNested);
+      }
+    }
+    expect(offenders, `nested dialect declarations: ${offenders.join("; ")}`).toEqual([]);
   });
 
   it("diagnostic tools' real output validates against their outputSchema (when reachable)", async () => {

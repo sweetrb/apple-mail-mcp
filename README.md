@@ -1427,6 +1427,11 @@ The `\\\\` in JSON becomes `\\` in the actual string, which represents a single 
 - Verify Mail.app can send emails manually
 - Check if the account is configured correctly in Mail.app
 
+### "invalid outputSchema … unsupported dialect" — every tool is refused
+- Full text: `Tool '<name>' has an invalid outputSchema: JSON Schema declares an unsupported dialect ("$schema": "http://json-schema.org/draft-07/schema#"). The default validator supports JSON Schema 2020-12 only.` The server connects, but **no tool is usable**.
+- **Upgrade to 2.10.12 or later.** Earlier versions advertised their tool schemas in JSON Schema **draft-07** (the MCP SDK's converter default); MCP has since standardized on **2020-12** and clients reject anything else. 2.10.12 normalizes every advertised `inputSchema`/`outputSchema` to 2020-12 on the way out. See [issue #147](https://github.com/sweetrb/apple-mail-mcp/issues/147).
+- Nothing to configure — restart your host app after upgrading so it re-reads the tool list.
+
 ### `apple-mail` server fails to connect when run from a clone
 - The root `.mcp.json` resolves its entrypoint via `${CLAUDE_PROJECT_DIR:-.}/build/index.js`. **Launch `claude` from inside the repo directory** — `CLAUDE_PROJECT_DIR` only resolves to the repo root in that case; the bare `.` fallback uses the launching shell's working directory and will point at the wrong place otherwise.
 - If you've been editing the source, rerun `npm run build` — the server is `build/index.js`, and the committed bundle only reflects your changes after a rebuild.
