@@ -107,6 +107,7 @@ import { extractRfcMessageIdFromSource } from "@/utils/mimeParse.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
 import { loadFileConfig } from "@/services/fileConfig.js";
 import { isOrphaned } from "@/utils/orphan.js";
+import { withJsonSchema2020_12 } from "@/utils/jsonSchemaDialect.js";
 
 // Load file-based config FIRST (2.1.1) — before anything reads APPLE_MAIL_MCP_*.
 // Lets users configure the server when the host app strips the MCP env block.
@@ -3223,7 +3224,11 @@ process.on("unhandledRejection", (reason) => {
   console.error("[unhandledRejection]", reason);
 });
 
-const transport = new StdioServerTransport();
+// The SDK stamps every emitted inputSchema/outputSchema with the draft-07
+// dialect, which current MCP clients reject outright ("The default validator
+// supports JSON Schema 2020-12 only" — #147). Wrapping the transport rewrites
+// the tools/list payload on the way out; see @/utils/jsonSchemaDialect.
+const transport = withJsonSchema2020_12(new StdioServerTransport());
 await server.connect(transport);
 
 // IMAP IDLE push notifications (B5) — opt-in. When enabled, watch every
