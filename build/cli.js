@@ -36,9 +36,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/punycode/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/punycode/index.js
 var require_punycode = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/punycode/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/punycode/index.js"(exports, module) {
     "use strict";
     var maxInt = 2147483647;
     var base = 36;
@@ -278,9 +278,9 @@ var require_punycode = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/shared/url.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/shared/url.js
 var require_url = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/shared/url.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/shared/url.js"(exports, module) {
     "use strict";
     var urllib = __require("url");
     var punycode = require_punycode();
@@ -367,9 +367,9 @@ var require_url = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/fetch/cookies.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/fetch/cookies.js
 var require_cookies = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/fetch/cookies.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/fetch/cookies.js"(exports, module) {
     "use strict";
     var urllib = require_url();
     var SESSION_TIMEOUT = 1800;
@@ -575,12 +575,12 @@ var require_cookies = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/package.json
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/package.json
 var require_package = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/package.json"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/package.json"(exports, module) {
     module.exports = {
       name: "nodemailer",
-      version: "9.0.3",
+      version: "9.0.4",
       description: "Easy as cake e-mail sending from your Node.js applications",
       main: "lib/nodemailer.js",
       scripts: {
@@ -607,19 +607,19 @@ var require_package = __commonJS({
       },
       homepage: "https://nodemailer.com/",
       devDependencies: {
-        "@aws-sdk/client-sesv2": "3.1068.0",
+        "@aws-sdk/client-sesv2": "3.1096.0",
         bunyan: "1.8.15",
-        c8: "11.0.0",
-        eslint: "10.5.0",
+        c8: "12.0.0",
+        eslint: "10.8.0",
         "eslint-config-prettier": "10.1.8",
-        globals: "17.6.0",
+        globals: "17.8.0",
         libbase64: "1.3.0",
-        libmime: "5.3.8",
+        libmime: "5.4.1",
         libqp: "2.1.1",
-        prettier: "3.8.4",
+        prettier: "3.9.6",
         proxy: "1.0.2",
         "proxy-test-server": "1.0.0",
-        "smtp-server": "3.19.0"
+        "smtp-server": "3.19.2"
       },
       engines: {
         node: ">=6.0.0"
@@ -628,9 +628,9 @@ var require_package = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/errors.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/errors.js
 var require_errors = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/errors.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/errors.js"(exports, module) {
     "use strict";
     var ERROR_CODES = {
       // Connection errors
@@ -669,9 +669,9 @@ var require_errors = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/fetch/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/fetch/index.js
 var require_fetch = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/fetch/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/fetch/index.js"(exports, module) {
     "use strict";
     var http = __require("http");
     var https = __require("https");
@@ -921,9 +921,9 @@ var require_fetch = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/shared/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/shared/index.js
 var require_shared = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/shared/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/shared/index.js"(exports, module) {
     "use strict";
     var urllib = require_url();
     var util = __require("util");
@@ -1464,9 +1464,9 @@ var require_shared = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-funcs/mime-types.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-funcs/mime-types.js
 var require_mime_types = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-funcs/mime-types.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-funcs/mime-types.js"(exports, module) {
     "use strict";
     var path = __require("path");
     var defaultMimeType = "application/octet-stream";
@@ -3568,9 +3568,9 @@ var require_mime_types = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/base64/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/base64/index.js
 var require_base64 = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/base64/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/base64/index.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     function encode(buffer) {
@@ -3667,9 +3667,9 @@ var require_base64 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/qp/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/qp/index.js
 var require_qp = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/qp/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/qp/index.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var QP_RANGES = [
@@ -3831,9 +3831,9 @@ var require_qp = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-funcs/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-funcs/index.js
 var require_mime_funcs = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-funcs/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-funcs/index.js"(exports, module) {
     "use strict";
     var base64 = require_base64();
     var qp = require_qp();
@@ -3842,11 +3842,18 @@ var require_mime_funcs = __commonJS({
       /**
        * Checks if a value is plaintext string (uses only printable 7bit chars)
        *
+       * When isParam is set the value is destined for a header parameter, so HT, CR and LF
+       * are not plaintext either: a header parameter has no way to carry them. HT is a valid
+       * fold point, so folding and unfolding a header would rewrite it as a space, and CR/LF
+       * cannot appear in a header value at all. Such values have to go through the rfc2231
+       * parameter continuation encoding instead, the same way a quote already does.
+       *
        * @param {String} value String to be tested
+       * @param {Boolean} [isParam] Set to true if the value is a header parameter value
        * @returns {Boolean} true if it is a plaintext string
        */
       isPlainText(value, isParam) {
-        const re = isParam ? /[\x00-\x08\x0b\x0c\x0e-\x1f"\u0080-\uFFFF]/ : /[\x00-\x08\x0b\x0c\x0e-\x1f\u0080-\uFFFF]/;
+        const re = isParam ? /[\x00-\x1f"\u0080-\uFFFF]/ : /[\x00-\x08\x0b\x0c\x0e-\x1f\u0080-\uFFFF]/;
         return typeof value === "string" && !re.test(value);
       },
       /**
@@ -3902,7 +3909,7 @@ var require_mime_funcs = __commonJS({
             let lpart = "";
             for (let i = 0, len = encodedStr.length; i < len; i++) {
               let chr = encodedStr.charAt(i);
-              if (/[\ud83c\ud83d\ud83e]/.test(chr) && i < len - 1) {
+              if (/[\ud800-\udbff]/.test(chr) && /[\udc00-\udfff]/.test(encodedStr.charAt(i + 1))) {
                 chr += encodedStr.charAt(++i);
               }
               if (Buffer.byteLength(lpart + chr) <= maxLength || i === 0) {
@@ -3999,7 +4006,7 @@ var require_mime_funcs = __commonJS({
       buildHeaderParam(key, data, maxLength) {
         const list = [];
         let encodedStr = typeof data === "string" ? data : (data || "").toString();
-        let chr, ord;
+        let chr;
         let line;
         let startPos = 0;
         let i, len;
@@ -4029,8 +4036,7 @@ var require_mime_funcs = __commonJS({
             const encodedStrArr = [];
             for (i = 0, len = encodedStr.length; i < len; i++) {
               chr = encodedStr.charAt(i);
-              ord = chr.charCodeAt(0);
-              if (ord >= 55296 && ord <= 56319 && i < len - 1) {
+              if (/[\ud800-\udbff]/.test(chr) && /[\udc00-\udfff]/.test(encodedStr.charAt(i + 1))) {
                 chr += encodedStr.charAt(i + 1);
                 encodedStrArr.push(chr);
                 i++;
@@ -4314,7 +4320,7 @@ var require_mime_funcs = __commonJS({
         try {
           str = encodeURIComponent(str);
         } catch (_E) {
-          return str.replace(/[^\x00-\x1F *'()<>@,;:\\"[\]?=\u007F-\uFFFF]+/g, "");
+          str = encodeURIComponent(Buffer.from(str, "utf-8").toString("utf-8"));
         }
         return str.replace(/[\x00-\x1F *'()<>@,;:\\"[\]?=\u007F-\uFFFF]/g, (chr) => this.encodeURICharComponent(chr));
       }
@@ -4322,9 +4328,9 @@ var require_mime_funcs = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/addressparser/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/addressparser/index.js
 var require_addressparser = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/addressparser/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/addressparser/index.js"(exports, module) {
     "use strict";
     function _handleAddress(tokens, depth) {
       let isGroup = false;
@@ -4614,9 +4620,9 @@ var require_addressparser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-node/last-newline.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/last-newline.js
 var require_last_newline = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-node/last-newline.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/last-newline.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LastNewline = class extends Transform {
@@ -4647,9 +4653,9 @@ var require_last_newline = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-node/le-windows.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/le-windows.js
 var require_le_windows = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-node/le-windows.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/le-windows.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LeWindows = class extends Transform {
@@ -4689,9 +4695,9 @@ var require_le_windows = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-node/le-unix.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/le-unix.js
 var require_le_unix = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-node/le-unix.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/le-unix.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LeUnix = class extends Transform {
@@ -4724,9 +4730,9 @@ var require_le_unix = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-node/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/index.js
 var require_mime_node = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mime-node/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/index.js"(exports, module) {
     "use strict";
     var crypto = __require("crypto");
     var fs = __require("fs");
@@ -5103,9 +5109,9 @@ var require_mime_node = __commonJS({
               }
               value = mimeFuncs.buildHeaderValue(structured);
               if (this.filename) {
-                param = this._encodeWords(this.filename);
+                param = /[\x00-\x1f]/.test(this.filename) ? mimeFuncs.encodeWord(this.filename, this._getTextEncoding(this.filename), 52) : this._encodeWords(this.filename);
                 if (param !== this.filename || /[\s'"\\;:/=(),<>@[\]?]|^-/.test(param)) {
-                  param = '"' + param + '"';
+                  param = JSON.stringify(param);
                 }
                 value += "; name=" + param;
               }
@@ -5716,9 +5722,9 @@ var require_mime_node = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mail-composer/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mail-composer/index.js
 var require_mail_composer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mail-composer/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mail-composer/index.js"(exports, module) {
     "use strict";
     var MimeNode = require_mime_node();
     var mimeFuncs = require_mime_funcs();
@@ -6203,9 +6209,9 @@ var require_mail_composer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/dkim/message-parser.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/message-parser.js
 var require_message_parser = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/dkim/message-parser.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/message-parser.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var MessageParser = class extends Transform {
@@ -6332,9 +6338,9 @@ var require_message_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/dkim/relaxed-body.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/relaxed-body.js
 var require_relaxed_body = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/dkim/relaxed-body.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/relaxed-body.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var crypto = __require("crypto");
@@ -6441,9 +6447,9 @@ var require_relaxed_body = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/dkim/sign.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/sign.js
 var require_sign = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/dkim/sign.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/sign.js"(exports, module) {
     "use strict";
     var punycode = require_punycode();
     var mimeFuncs = require_mime_funcs();
@@ -6514,9 +6520,9 @@ var require_sign = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/dkim/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/index.js
 var require_dkim = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/dkim/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/index.js"(exports, module) {
     "use strict";
     var MessageParser = require_message_parser();
     var RelaxedBody = require_relaxed_body();
@@ -6709,9 +6715,9 @@ var require_dkim = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js
 var require_http_proxy_client = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js"(exports, module) {
     "use strict";
     var net = __require("net");
     var tls = __require("tls");
@@ -6825,9 +6831,9 @@ var require_http_proxy_client = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mailer/mail-message.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mailer/mail-message.js
 var require_mail_message = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mailer/mail-message.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mailer/mail-message.js"(exports, module) {
     "use strict";
     var shared = require_shared();
     var MimeNode = require_mime_node();
@@ -7089,9 +7095,9 @@ var require_mail_message = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mailer/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mailer/index.js
 var require_mailer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/mailer/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mailer/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var shared = require_shared();
@@ -7480,9 +7486,9 @@ var require_mailer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-connection/data-stream.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/data-stream.js
 var require_data_stream = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-connection/data-stream.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/data-stream.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var DataStream = class extends Transform {
@@ -7567,9 +7573,9 @@ var require_data_stream = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-connection/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/index.js
 var require_smtp_connection = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-connection/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/index.js"(exports, module) {
     "use strict";
     var packageInfo = require_package();
     var { EventEmitter } = __require("events");
@@ -9068,9 +9074,9 @@ var require_smtp_connection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/xoauth2/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/xoauth2/index.js
 var require_xoauth2 = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/xoauth2/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/xoauth2/index.js"(exports, module) {
     "use strict";
     var { Stream } = __require("stream");
     var nmfetch = require_fetch();
@@ -9428,9 +9434,9 @@ var require_xoauth2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-pool/pool-resource.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-pool/pool-resource.js
 var require_pool_resource = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-pool/pool-resource.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-pool/pool-resource.js"(exports, module) {
     "use strict";
     var SMTPConnection = require_smtp_connection();
     var assign = require_shared().assign;
@@ -9649,9 +9655,9 @@ var require_pool_resource = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/well-known/services.json
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/well-known/services.json
 var require_services = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/well-known/services.json"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/well-known/services.json"(exports, module) {
     module.exports = {
       "1und1": {
         description: "1&1 Mail (German hosting provider)",
@@ -10150,6 +10156,18 @@ var require_services = __commonJS({
         host: "smtp.tipimail.com",
         port: 587
       },
+      TurboSMTP: {
+        description: "TurboSMTP",
+        host: "pro.turbo-smtp.com",
+        port: 465,
+        secure: true
+      },
+      "TurboSMTP-EU": {
+        description: "TurboSMTP (EU region)",
+        host: "pro.eu.turbo-smtp.com",
+        port: 465,
+        secure: true
+      },
       Tutanota: {
         description: "Tutanota (Tuta Mail)",
         domains: ["tutanota.com", "tuta.com", "tutanota.de", "tuta.io"],
@@ -10189,9 +10207,9 @@ var require_services = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/well-known/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/well-known/index.js
 var require_well_known = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/well-known/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/well-known/index.js"(exports, module) {
     "use strict";
     var services = require_services();
     var normalized = {};
@@ -10225,9 +10243,9 @@ var require_well_known = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-pool/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-pool/index.js
 var require_smtp_pool = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-pool/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-pool/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var PoolResource = require_pool_resource();
@@ -10764,9 +10782,9 @@ var require_smtp_pool = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-transport/index.js
 var require_smtp_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/smtp-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-transport/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var SMTPConnection = require_smtp_connection();
@@ -11133,9 +11151,9 @@ var require_smtp_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/sendmail-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/sendmail-transport/index.js
 var require_sendmail_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/sendmail-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/sendmail-transport/index.js"(exports, module) {
     "use strict";
     var { spawn } = __require("child_process");
     var packageData = require_package();
@@ -11309,9 +11327,9 @@ var require_sendmail_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/stream-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/stream-transport/index.js
 var require_stream_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/stream-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/stream-transport/index.js"(exports, module) {
     "use strict";
     var packageData = require_package();
     var shared = require_shared();
@@ -11430,9 +11448,9 @@ var require_stream_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/json-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/json-transport/index.js
 var require_json_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/json-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/json-transport/index.js"(exports, module) {
     "use strict";
     var packageData = require_package();
     var shared = require_shared();
@@ -11499,9 +11517,9 @@ var require_json_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/ses-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/ses-transport/index.js
 var require_ses_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/ses-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/ses-transport/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var packageData = require_package();
@@ -11718,9 +11736,9 @@ var require_ses_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/nodemailer.js
+// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/nodemailer.js
 var require_nodemailer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.3/node_modules/nodemailer/lib/nodemailer.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/nodemailer.js"(exports, module) {
     "use strict";
     var Mailer = require_mailer();
     var shared = require_shared();
