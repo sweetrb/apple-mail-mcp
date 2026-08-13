@@ -133,6 +133,23 @@ const BATCH_IDS_SCHEMA = z
   .min(1, "At least one message ID is required")
   .max(100, "Cannot process more than 100 messages in a single batch");
 
+/** Source scope for a batch of NUMERIC ids: the account+mailbox they were listed
+ *  from. A numeric Mail.app id can match in several mailboxes at once (Gmail
+ *  label aliasing puts one message in INBOX, All Mail and Important), so without
+ *  a scope the server resolves each id and REFUSES any that is ambiguous rather
+ *  than guessing (#152). `imap:` ids already carry their mailbox and ignore this. */
+const BATCH_SOURCE_MAILBOX_SCHEMA = z
+  .string()
+  .optional()
+  .describe(
+    "Mailbox the numeric ids were listed from (e.g. 'INBOX'). Pins each id to that mailbox — strongly recommended, since one numeric id can match in several mailboxes. Ignored for imap: ids."
+  );
+
+const BATCH_SOURCE_ACCOUNT_SCHEMA = z
+  .string()
+  .optional()
+  .describe("Account the numeric ids were listed from. Pair with sourceMailbox.");
+
 /** Apple Mail flag colors → the 0-6 palette index. `grey` is an alias for `gray`.
  *  Works on BOTH routes: AppleScript sets `flag index`, and the IMAP path writes
  *  the same index as the `$MailFlagBit0/1/2` keyword bitfield Mail.app uses on the
@@ -231,6 +248,9 @@ const BATCH_COUNT_OUTPUT_SCHEMA = {
   success: z.number().optional(),
   failed: z.number().optional(),
   mailbox: z.string().optional(),
+  // Declared explicitly: a raw zod shape compiles to additionalProperties:false,
+  // so an undeclared key here is rejected by the CLIENT with -32602.
+  errors: z.array(z.string()).optional(),
 };
 
 /** A health/doctor check item — loose to accept both health-check
@@ -416,7 +436,7 @@ registerResourcesAndPrompts(server, mailManager);
  */
 async function hybridBatchCounts(
   ids: string[],
-  appleFn: (numericIds: string[]) => { success: boolean }[],
+  appleFn: (numericIds: string[]) => { success: boolean; error?: string }[],
   imapFn: (imapIds: string[]) => Promise<ImapBatchResult>
 ): Promise<{ success: number; fail: number; errors: string[] }> {
   const imapIds = ids.filter((i) => i.startsWith("imap:"));
@@ -429,6 +449,9 @@ async function hybridBatchCounts(
     const s = res.filter((r) => r.success).length;
     success += s;
     fail += res.length - s;
+    // Surface WHY an id failed. These were dropped before, so an id the batch
+    // refused as ambiguous (#152) showed up only as an anonymous failure count.
+    errors.push(...res.filter((r) => !r.success && r.error).map((r) => r.error as string));
   }
   if (imapIds.length > 0) {
     const r = await imapFn(imapIds);
@@ -437,6 +460,16 @@ async function hybridBatchCounts(
     errors.push(...r.errors);
   }
   return { success, fail, errors };
+}
+
+/** Append the distinct per-id failure reasons to a batch summary line, capped so
+ *  a 100-id batch can't produce an unreadable wall of text. */
+function formatBatchErrors(errors: string[], max = 5): string {
+  const distinct = [...new Set(errors.filter(Boolean))];
+  if (distinct.length === 0) return "";
+  const shown = distinct.slice(0, max);
+  const more = distinct.length - shown.length;
+  return `: ${shown.join("; ")}${more > 0 ? ` (+${more} more)` : ""}`;
 }
 
 // =============================================================================
@@ -1498,26 +1531,42 @@ registerTool(
   "batch-delete-messages",
   {
     description:
-      "Use when: deleting multiple messages in one call (1–100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once — require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting.",
+      "Use when: deleting multiple messages in one call (1–100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed, plus an error per failed id.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once — require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA,
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
   },
-  withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    const {
+      success: successCount,
+      fail: failCount,
+      errors,
+    } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchDeleteMessages(n),
+      (n) => mailManager.batchDeleteMessages(n, { account: sourceAccount, mailbox: sourceMailbox }),
       (im) => imapBatchDelete(im)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
+    const structured = {
+      ok: failCount === 0,
+      success: successCount,
+      failed: failCount,
+      ...(errors.length > 0 ? { errors } : {}),
+    };
 
     if (failCount === 0) {
       return successResponse(`Successfully deleted ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
-      return errorResponse(`Failed to delete all ${failCount} message(s)`);
+      return errorResponse(
+        `Failed to delete all ${failCount} message(s)${formatBatchErrors(errors)}`
+      );
     } else {
-      return successResponse(`Deleted ${successCount} message(s), ${failCount} failed`, structured);
+      return successResponse(
+        `Deleted ${successCount} message(s), ${failCount} failed${formatBatchErrors(errors)}`,
+        structured
+      );
     }
   }, "Error batch deleting messages")
 );
@@ -1528,21 +1577,37 @@ registerTool(
   "batch-move-messages",
   {
     description:
-      "Use when: moving multiple messages (1–100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once — confirm the destination mailbox, and search-messages/list-messages first to confirm the ids.",
+      "Use when: moving multiple messages (1–100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed, plus an error per failed id.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once — confirm the destination mailbox, and search-messages/list-messages first to confirm the ids. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from — not the destination) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
       mailbox: z.string().min(1, "Destination mailbox is required"),
       account: z.string().optional().describe("Account containing the destination mailbox"),
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA,
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
   },
-  withErrorHandling(async ({ ids, mailbox, account }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, mailbox, account, sourceMailbox, sourceAccount }) => {
+    const {
+      success: successCount,
+      fail: failCount,
+      errors,
+    } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMoveMessages(n, mailbox, account),
+      (n) =>
+        mailManager.batchMoveMessages(n, mailbox, account, {
+          account: sourceAccount,
+          mailbox: sourceMailbox,
+        }),
       (im) => imapBatchMove(im, mailbox, { account })
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount, mailbox };
+    const structured = {
+      ok: failCount === 0,
+      success: successCount,
+      failed: failCount,
+      mailbox,
+      ...(errors.length > 0 ? { errors } : {}),
+    };
 
     if (failCount === 0) {
       return successResponse(
@@ -1550,10 +1615,12 @@ registerTool(
         structured
       );
     } else if (successCount === 0) {
-      return errorResponse(`Failed to move all ${failCount} message(s)`);
+      return errorResponse(
+        `Failed to move all ${failCount} message(s)${formatBatchErrors(errors)}`
+      );
     } else {
       return successResponse(
-        `Moved ${successCount} message(s) to "${mailbox}", ${failCount} failed`,
+        `Moved ${successCount} message(s) to "${mailbox}", ${failCount} failed${formatBatchErrors(errors)}`,
         structured
       );
     }
@@ -1566,27 +1633,40 @@ registerTool(
   "batch-mark-as-read",
   {
     description:
-      "Use when: marking multiple messages (1–100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first.",
+      "Use when: marking multiple messages (1–100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA,
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
   },
-  withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    const {
+      success: successCount,
+      fail: failCount,
+      errors,
+    } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMarkAsRead(n),
+      (n) => mailManager.batchMarkAsRead(n, { account: sourceAccount, mailbox: sourceMailbox }),
       (im) => imapBatchMarkRead(im)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
+    const structured = {
+      ok: failCount === 0,
+      success: successCount,
+      failed: failCount,
+      ...(errors.length > 0 ? { errors } : {}),
+    };
 
     if (failCount === 0) {
       return successResponse(`Successfully marked ${successCount} message(s) as read`, structured);
     } else if (successCount === 0) {
-      return errorResponse(`Failed to mark all ${failCount} message(s) as read`);
+      return errorResponse(
+        `Failed to mark all ${failCount} message(s) as read${formatBatchErrors(errors)}`
+      );
     } else {
       return successResponse(
-        `Marked ${successCount} message(s) as read, ${failCount} failed`,
+        `Marked ${successCount} message(s) as read, ${failCount} failed${formatBatchErrors(errors)}`,
         structured
       );
     }
@@ -1599,19 +1679,30 @@ registerTool(
   "batch-mark-as-unread",
   {
     description:
-      "Use when: marking multiple messages (1–100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first.",
+      "Use when: marking multiple messages (1–100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA,
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
   },
-  withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    const {
+      success: successCount,
+      fail: failCount,
+      errors,
+    } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMarkAsUnread(n),
+      (n) => mailManager.batchMarkAsUnread(n, { account: sourceAccount, mailbox: sourceMailbox }),
       (im) => imapBatchMarkUnread(im)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
+    const structured = {
+      ok: failCount === 0,
+      success: successCount,
+      failed: failCount,
+      ...(errors.length > 0 ? { errors } : {}),
+    };
 
     if (failCount === 0) {
       return successResponse(
@@ -1619,10 +1710,12 @@ registerTool(
         structured
       );
     } else if (successCount === 0) {
-      return errorResponse(`Failed to mark all ${failCount} message(s) as unread`);
+      return errorResponse(
+        `Failed to mark all ${failCount} message(s) as unread${formatBatchErrors(errors)}`
+      );
     } else {
       return successResponse(
-        `Marked ${successCount} message(s) as unread, ${failCount} failed`,
+        `Marked ${successCount} message(s) as unread, ${failCount} failed${formatBatchErrors(errors)}`,
         structured
       );
     }
@@ -1635,28 +1728,48 @@ registerTool(
   "batch-flag-messages",
   {
     description:
-      "Use when: flagging multiple messages (1–100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: the color is applied on both routes — AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads — so a mixed batch of numeric and `imap:` ids all end up colored.",
+      "Use when: flagging multiple messages (1–100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.\nNote: the color is applied on both routes — AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads — so a mixed batch of numeric and `imap:` ids all end up colored.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
       color: FLAG_COLOR_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA,
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
   },
-  withErrorHandling(async ({ ids, color }) => {
+  withErrorHandling(async ({ ids, color, sourceMailbox, sourceAccount }) => {
     const colorIndex = color ? FLAG_COLOR_INDEX[color] : undefined;
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+    const {
+      success: successCount,
+      fail: failCount,
+      errors,
+    } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchFlagMessages(n, colorIndex),
+      (n) =>
+        mailManager.batchFlagMessages(n, colorIndex, {
+          account: sourceAccount,
+          mailbox: sourceMailbox,
+        }),
       (im) => imapBatchFlag(im, colorIndex)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
+    const structured = {
+      ok: failCount === 0,
+      success: successCount,
+      failed: failCount,
+      ...(errors.length > 0 ? { errors } : {}),
+    };
 
     if (failCount === 0) {
       return successResponse(`Successfully flagged ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
-      return errorResponse(`Failed to flag all ${failCount} message(s)`);
+      return errorResponse(
+        `Failed to flag all ${failCount} message(s)${formatBatchErrors(errors)}`
+      );
     } else {
-      return successResponse(`Flagged ${successCount} message(s), ${failCount} failed`, structured);
+      return successResponse(
+        `Flagged ${successCount} message(s), ${failCount} failed${formatBatchErrors(errors)}`,
+        structured
+      );
     }
   }, "Error batch flagging messages")
 );
@@ -1667,27 +1780,40 @@ registerTool(
   "batch-unflag-messages",
   {
     description:
-      "Use when: removing flags from multiple messages (1–100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first.",
+      "Use when: removing flags from multiple messages (1–100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA,
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
   },
-  withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    const {
+      success: successCount,
+      fail: failCount,
+      errors,
+    } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchUnflagMessages(n),
+      (n) => mailManager.batchUnflagMessages(n, { account: sourceAccount, mailbox: sourceMailbox }),
       (im) => imapBatchUnflag(im)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
+    const structured = {
+      ok: failCount === 0,
+      success: successCount,
+      failed: failCount,
+      ...(errors.length > 0 ? { errors } : {}),
+    };
 
     if (failCount === 0) {
       return successResponse(`Successfully unflagged ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
-      return errorResponse(`Failed to unflag all ${failCount} message(s)`);
+      return errorResponse(
+        `Failed to unflag all ${failCount} message(s)${formatBatchErrors(errors)}`
+      );
     } else {
       return successResponse(
-        `Unflagged ${successCount} message(s), ${failCount} failed`,
+        `Unflagged ${successCount} message(s), ${failCount} failed${formatBatchErrors(errors)}`,
         structured
       );
     }

@@ -829,11 +829,35 @@ Save a message attachment to disk.
 
 All batch operations accept an array of message IDs (max 100 per batch) and return per-item success/failure results.
 
+#### Scoping numeric ids
+
+A **numeric** Mail.app message id is not guaranteed to identify one message on
+its own — the same id can match in several mailboxes at once. The common case is
+Gmail over IMAP, where one message is reachable through `INBOX`,
+`[Gmail]/All Mail` and `[Gmail]/Important` simultaneously; deleting the
+`All Mail` copy is not the same operation as deleting the `INBOX` copy.
+
+Batch operations therefore resolve every numeric id inside a **known scope**:
+
+1. `sourceMailbox` + `sourceAccount`, when you pass them — always prefer this.
+2. Otherwise the mailbox the server last saw that id in (recorded automatically
+   by `list-messages` / `search-messages` in the same session).
+3. Otherwise the whole tree is searched, and an id that matches in **more than
+   one** mailbox is **refused** with an error naming the candidates rather than
+   guessing — the same refusal `move-message` already applies to an ambiguous
+   destination name.
+
+An id is reported successful only when the intended message was the one
+operated on. `imap:` ids already encode their account and mailbox, so they are
+unaffected and ignore `sourceMailbox`/`sourceAccount`.
+
 #### `batch-delete-messages`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs to delete (max 100) |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from. Pins each id to that mailbox — see [Scoping numeric ids](#scoping-numeric-ids). Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 **⚠️ Safety:** Destructive. Requires explicit user confirmation; search/list first to confirm the message ids.
 
@@ -844,12 +868,16 @@ All batch operations accept an array of message IDs (max 100 per batch) and retu
 | `ids` | string[] | Yes | Message IDs to move (max 100) |
 | `mailbox` | string | Yes | Destination mailbox |
 | `account` | string | No | Account containing mailbox |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from. The **source**, not the destination. Pins each id to that mailbox — see [Scoping numeric ids](#scoping-numeric-ids). Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 #### `batch-mark-as-read` / `batch-mark-as-unread`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from. Pins each id to that mailbox — see [Scoping numeric ids](#scoping-numeric-ids). Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 #### `batch-flag-messages` / `batch-unflag-messages`
 
@@ -857,6 +885,8 @@ All batch operations accept an array of message IDs (max 100 per batch) and retu
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
 | `color` | string | No | (`batch-flag-messages` only) Flag color — see [`flag-message`](#flag-message--unflag-message). Applied on both routes, so a mixed batch of numeric and `imap:` ids all end up colored. |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from. Pins each id to that mailbox — see [Scoping numeric ids](#scoping-numeric-ids). Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 ---
 

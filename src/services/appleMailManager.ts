@@ -757,6 +757,19 @@ export class AppleMailManager {
   /** Cap on the id→location index so a long-lived process can't grow unbounded. */
   private readonly ID_LOCATION_MAX = 5000;
 
+  /**
+   * Publicly record where a message id lives.
+   *
+   * The index normally fills itself from list/search results, but a caller that
+   * already knows an id's home (it carried the id across a process boundary, or
+   * read it from a stored triage list) can register it here so a later by-id
+   * fetch or batch operation resolves within that scope instead of having to
+   * refuse the id as ambiguous (#152).
+   */
+  noteMessageLocation(id: string, account: string, mailbox: string): void {
+    this.rememberLocation(id, account, mailbox);
+  }
+
   /** Record (or refresh) where a message id lives, evicting oldest when full. */
   private rememberLocation(id: string, account: string, mailbox: string): void {
     if (!id || !account || !mailbox) return;
@@ -2571,17 +2584,56 @@ export class AppleMailManager {
    * Previously each batch method looped and called the per-id method, so a
    * 100-id batch spawned 100 osascript processes — each one re-resolving
    * accounts and walking the whole account→mailbox tree — all serialized
-   * through the gate (issue #31). This walks the tree exactly once: for each
-   * mailbox it probes the still-pending IDs with `whose id is` (indexed, so
-   * effectively free) and applies `operation` to any match, tracking found IDs
-   * so it can stop early once all are accounted for. Per-id outcomes come back
-   * as control-char-delimited `id<FS>status` records (status: `ok`,
-   * `notfound`, or `error:<msg>`), and results are returned in input order.
+   * through the gate (issue #31). This still walks the tree exactly once, using
+   * the indexed `whose id is` probe (effectively free), but it no longer treats
+   * "the first mailbox that matches" as the answer — see below.
+   *
+   * ## Why resolution is scoped (#152)
+   *
+   * A Mail.app numeric id can match in MORE THAN ONE mailbox. The obvious case
+   * is Gmail-over-IMAP label aliasing: one message object is reachable through
+   * `INBOX`, `[Gmail]/All Mail` and `[Gmail]/Important` at once, and the walk
+   * order is Mail's own account/mailbox order, not the caller's. The old code
+   * applied `operation` to `item 1` of the FIRST matching mailbox and then
+   * marked the id done, so a batch could act on the `[Gmail]/All Mail` copy of a
+   * message the caller had listed from `Sales Spam` — which for Gmail is a
+   * different operation entirely (deleting the All Mail copy trashes the mail;
+   * deleting the INBOX copy merely removes the Inbox label). Worse, it recorded
+   * `ok` for ANY match, so the reported success count did not describe what had
+   * actually happened.
+   *
+   * Resolution is therefore scoped, mirroring the by-id read fast paths:
+   *   - **Known scope** — an explicit `scope` from the caller, else the
+   *     `idLocationIndex` entry recorded when the id was listed/searched. Only
+   *     that one account+mailbox is probed; a miss is `notfound`, never a
+   *     wander into some other mailbox.
+   *   - **Unknown scope** — every mailbox is probed but NOTHING is applied
+   *     mid-walk. Matches are collected; afterwards a single candidate is
+   *     operated on, and two or more fail that id as `ambiguous` naming the
+   *     candidates. This is the same refusal-to-guess the move-destination
+   *     resolution already applies to an ambiguous mailbox name.
+   *
+   * `ok` is reported only on the path that actually ran `operation` on the
+   * intended message.
+   *
+   * The candidate `whose id is` result is additionally re-checked against the
+   * id's STRING form before being accepted. AppleScript coerces integer
+   * literals above 2^29 to reals, so a very large Mail id could otherwise be
+   * compared imprecisely and match a neighbouring message.
+   *
+   * Per-id outcomes come back as control-char-delimited `position<FS>status`
+   * records (status: `ok`, `notfound`, `ambiguous:<mailboxes>`, or
+   * `error:<msg>`), and results are returned in input order.
    *
    * `setup` runs once before the walk (used by move to resolve the destination);
    * it may bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
    */
-  private runBatchOperation(ids: string[], operation: string, setup = ""): BatchOperationResult[] {
+  private runBatchOperation(
+    ids: string[],
+    operation: string,
+    setup = "",
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
     // Keep the numeric IDs paired with their original string form and 1-based
     // position. The AppleScript reports outcomes by POSITION, not by id: a Mail
     // id large enough to exceed AppleScript's 2^29 integer range coerces to
@@ -2597,38 +2649,171 @@ export class AppleMailManager {
       return ids.map((id) => ({ id, success: false, error: "Invalid message ID" }));
     }
 
+    // Intended scope per id: an explicit caller scope wins, else whatever the
+    // id→location index remembers from the list/search that produced the id.
+    // `resolveMailbox` normalizes aliases/casing ("Sent" → "Sent Items") so the
+    // name we compare against `name of mb` is the real one.
+    const scopes = valid.map((v) => {
+      const explicit =
+        scope?.account && scope?.mailbox
+          ? { account: scope.account, mailbox: scope.mailbox }
+          : undefined;
+      const loc = explicit ?? this.idLocationIndex.get(v.id);
+      if (!loc) return { account: "", mailbox: "" };
+      return { account: loc.account, mailbox: this.resolveMailbox(loc.mailbox, loc.account) };
+    });
+
+    const asList = (values: string[]) =>
+      "{" + values.map((s) => `"${escapeForAppleScript(s)}"`).join(", ") + "}";
+
     const script = buildAppLevelScript(`
       try
         ${setup}
         set _out to ""
-        set _done to {}
         set _ids to {${valid.map((v) => v.num).join(", ")}}
+        set _idStrs to ${asList(valid.map((v) => v.id))}
+        set _sAcct to ${asList(scopes.map((s) => s.account))}
+        set _sMb to ${asList(scopes.map((s) => s.mailbox))}
         set _total to count of _ids
+        -- Flat lists only: AppleScript copies a list on access, so a nested
+        -- list element cannot be appended to in place.
+        set _state to {}
+        set _cand to {}
+        set _scopedPending to 0
+        set _unscopedPending to 0
+        repeat with _i from 1 to _total
+          set end of _state to "pending"
+          set end of _cand to ""
+          if (item _i of _sAcct) is "" then
+            set _unscopedPending to _unscopedPending + 1
+          else
+            set _scopedPending to _scopedPending + 1
+          end if
+        end repeat
+
         repeat with acct in accounts
-          if (count of _done) is _total then exit repeat
+          -- Only scoped ids can finish mid-walk; unscoped ids must see every
+          -- mailbox before we can know whether they are ambiguous.
+          if _scopedPending is 0 and _unscopedPending is 0 then exit repeat
+          set _an to ""
+          try
+            set _an to name of acct
+          end try
           repeat with mb in (mailboxes of acct)
-            if (count of _done) is _total then exit repeat
+            if _scopedPending is 0 and _unscopedPending is 0 then exit repeat
+            set _mn to ""
+            try
+              set _mn to name of mb
+            end try
             repeat with _idx from 1 to _total
-              if _idx is not in _done then
-                set _theId to item _idx of _ids
-                try
-                  set _m to (messages of mb whose id is _theId)
-                  if (count of _m) > 0 then
-                    set _msg to item 1 of _m
-                    ${operation}
-                    set end of _done to _idx
-                    set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
-                  end if
-                on error _e
-                  set end of _done to _idx
-                  set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
-                end try
+              if (item _idx of _state) is "pending" then
+                set _wantA to item _idx of _sAcct
+                set _isScoped to (_wantA is not "")
+                set _probe to true
+                if _isScoped then
+                  ignoring case
+                    if _an is not _wantA then set _probe to false
+                    if _mn is not (item _idx of _sMb) then set _probe to false
+                  end ignoring
+                end if
+                if _probe then
+                  try
+                    set _m to (messages of mb whose id is (item _idx of _ids))
+                    set _hit to missing value
+                    repeat with _c in _m
+                      if ((id of _c) as string) is (item _idx of _idStrs) then
+                        set _hit to _c
+                        exit repeat
+                      end if
+                    end repeat
+                    if _hit is not missing value then
+                      if _isScoped then
+                        set _msg to _hit
+                        ${operation}
+                        set item _idx of _state to "done"
+                        set _scopedPending to _scopedPending - 1
+                        set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
+                      else
+                        set item _idx of _cand to (item _idx of _cand) & _an & "${FIELD_SEP}" & _mn & "${DIAG_ITEM_SEP}"
+                      end if
+                    end if
+                  on error _e
+                    set item _idx of _state to "done"
+                    if _isScoped then
+                      set _scopedPending to _scopedPending - 1
+                    else
+                      set _unscopedPending to _unscopedPending - 1
+                    end if
+                    set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
+                  end try
+                end if
               end if
             end repeat
           end repeat
         end repeat
+
+        -- Unscoped ids: act only when the walk found exactly one home.
         repeat with _idx from 1 to _total
-          if _idx is not in _done then set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+          if (item _idx of _state) is "pending" and (item _idx of _sAcct) is "" then
+            set AppleScript's text item delimiters to "${DIAG_ITEM_SEP}"
+            set _parts to every text item of (item _idx of _cand)
+            set AppleScript's text item delimiters to ""
+            set _hits to {}
+            repeat with _p in _parts
+              if (_p as string) is not "" then set end of _hits to (_p as string)
+            end repeat
+            if (count of _hits) is 0 then
+              set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+            else if (count of _hits) > 1 then
+              set AppleScript's text item delimiters to "${DIAG_ITEM_SEP}"
+              set _list to _hits as text
+              set AppleScript's text item delimiters to ""
+              set _out to _out & (_idx as string) & "${FIELD_SEP}ambiguous:" & _list & "${RECORD_SEP}"
+            else
+              set AppleScript's text item delimiters to "${FIELD_SEP}"
+              set _one to every text item of (item 1 of _hits)
+              set AppleScript's text item delimiters to ""
+              try
+                set _oa to item 1 of _one
+                set _om to item 2 of _one
+                set _tmb to missing value
+                ignoring case
+                  repeat with mb2 in (mailboxes of (first account whose name is _oa))
+                    if (name of mb2) is _om then
+                      set _tmb to mb2
+                      exit repeat
+                    end if
+                  end repeat
+                end ignoring
+                if _tmb is missing value then
+                  set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+                else
+                  set _m2 to (messages of _tmb whose id is (item _idx of _ids))
+                  set _hit2 to missing value
+                  repeat with _c2 in _m2
+                    if ((id of _c2) as string) is (item _idx of _idStrs) then
+                      set _hit2 to _c2
+                      exit repeat
+                    end if
+                  end repeat
+                  if _hit2 is missing value then
+                    set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+                  else
+                    set _msg to _hit2
+                    ${operation}
+                    set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
+                  end if
+                end if
+              on error _e2
+                set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e2 & "${RECORD_SEP}"
+              end try
+            end if
+            set item _idx of _state to "done"
+          end if
+        end repeat
+
+        repeat with _idx from 1 to _total
+          if (item _idx of _state) is "pending" then set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
         end repeat
         return _out
       on error errMsg
@@ -2665,6 +2850,26 @@ export class AppleMailManager {
         byId.set(id, { id, success: true });
       } else if (status === "notfound") {
         byId.set(id, { id, success: false, error: "Message not found" });
+      } else if (status.startsWith("ambiguous:")) {
+        // The id matched in several mailboxes and the caller never said which
+        // one they meant. Guessing here is what mutated the wrong message in
+        // #152, so name the candidates and let the caller re-issue with scope.
+        const candidates = status
+          .slice("ambiguous:".length)
+          .split(DIAG_ITEM_SEP)
+          .filter(Boolean)
+          .map((entry) => {
+            const [acct, mb] = entry.split(FIELD_SEP);
+            return mb ? `"${mb}" in account "${acct}"` : `"${acct}"`;
+          });
+        byId.set(id, {
+          id,
+          success: false,
+          error:
+            `Message id ${id} matches in ${candidates.length} mailboxes (${candidates.join(", ")}); ` +
+            `refusing to guess which one you meant. Re-run scoped to one mailbox, ` +
+            `or re-fetch the id with list-messages/search-messages for that mailbox.`,
+        });
       } else if (status.startsWith("error:")) {
         byId.set(id, { id, success: false, error: status.slice("error:".length) });
       } else {
@@ -2683,9 +2888,16 @@ export class AppleMailManager {
 
   /**
    * Delete multiple messages at once (single tree walk — see runBatchOperation).
+   *
+   * `scope` names the account+mailbox the ids came from. Supply it whenever the
+   * caller knows it: it pins resolution to that one mailbox instead of relying
+   * on the id→location index, which is empty in a freshly started process.
    */
-  batchDeleteMessages(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "delete _msg");
+  batchDeleteMessages(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "delete _msg", "", scope);
   }
 
   /**
@@ -2694,8 +2906,16 @@ export class AppleMailManager {
    * The destination is resolved once (account-scoped, ambiguity-aware — a name
    * matching more than one mailbox fails the whole batch rather than guessing),
    * then every matched message is moved in the same walk.
+   *
+   * `scope` is the SOURCE account+mailbox the ids came from — distinct from the
+   * `mailbox`/`account` destination arguments.
    */
-  batchMoveMessages(ids: string[], mailbox: string, account?: string): BatchOperationResult[] {
+  batchMoveMessages(
+    ids: string[],
+    mailbox: string,
+    account?: string,
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
     const targetAccount = this.resolveAccount(account);
     const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
     const safeMailbox = escapeForAppleScript(targetMailbox);
@@ -2714,35 +2934,48 @@ export class AppleMailManager {
         if (count of destMatches) > 1 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; move by full path"
         set destMailbox to item 1 of destMatches`;
 
-    return this.runBatchOperation(ids, "move _msg to destMailbox", setup);
+    return this.runBatchOperation(ids, "move _msg to destMailbox", setup, scope);
   }
 
   /**
    * Mark multiple messages as read at once (single tree walk).
    */
-  batchMarkAsRead(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set read status of _msg to true");
+  batchMarkAsRead(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set read status of _msg to true", "", scope);
   }
 
   /**
    * Mark multiple messages as unread at once (single tree walk).
    */
-  batchMarkAsUnread(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set read status of _msg to false");
+  batchMarkAsUnread(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set read status of _msg to false", "", scope);
   }
 
   /**
    * Flag multiple messages at once (single tree walk).
    */
-  batchFlagMessages(ids: string[], colorIndex?: number): BatchOperationResult[] {
-    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex));
+  batchFlagMessages(
+    ids: string[],
+    colorIndex?: number,
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex), "", scope);
   }
 
   /**
    * Unflag multiple messages at once (single tree walk).
    */
-  batchUnflagMessages(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set flagged status of _msg to false");
+  batchUnflagMessages(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set flagged status of _msg to false", "", scope);
   }
 
   /**
