@@ -106,8 +106,9 @@ export function auditSnapshotMax(): number {
  *
  * - `match`   — observed === expected. Nothing to say.
  * - `over`    — MORE messages left the mailbox than the operation acted on.
- *               This is the #155 signature and the data-loss direction. It is
- *               the only status that raises a warning in the tool response.
+ *               This is the #155 signature and the data-loss direction, but it
+ *               is a SIGNAL, not a proof — see `countDeltaWarning`. It is the
+ *               only status that raises a warning in the tool response.
  * - `under`   — FEWER left than expected. This has legitimate causes on real
  *               stores (see `note`), so it is reported but never warned about.
  * - `unknown` — the count could not be read, or the expected delta is not
@@ -239,18 +240,36 @@ export function writeDestructiveAudit(ctx: AuditContext, report: DestructiveOpRe
  * The human-readable warning for one reconciliation, or null when there is
  * nothing honest to warn about.
  *
- * ONLY `over` warns. That asymmetry is the whole design:
+ * ONLY `over` warns, and the asymmetry is the whole design — but it is worth
+ * stating exactly how strong it is, because a warning is only useful for as long
+ * as it is trusted.
  *
- * - `over` cannot be produced by ordinary store behaviour. New mail arriving
- *   mid-operation RAISES the after-count, which pushes a reading toward `under`,
- *   never `over`. So an `over` reading means messages left the mailbox that this
- *   operation did not account for — exactly #155.
- * - `under` is routine on real stores. Apple Mail's `delete` on an account whose
- *   deleted mail is not moved to Trash only sets `\Deleted`, so the message
- *   stays in the mailbox and the count does not drop. A Gmail label mailbox can
- *   behave the same way while the operation genuinely succeeded. Warning there
- *   would fire on ordinary deletes on ordinary accounts — and a warning that
- *   cries wolf is ignored precisely when it matters.
+ * **What `over` establishes.** More messages left the source mailbox across the
+ * window of this operation than the operation accounted for. That is the
+ * data-loss direction, and it is the #155 signature.
+ *
+ * **What `over` does NOT establish.** That *this server* removed them. The count
+ * is a before/after pair around a window, so anything else that removes mail
+ * from that mailbox inside the window produces the same reading:
+ *
+ * - a Mail.app rule firing mid-batch (filing or deleting messages),
+ * - a server-side filter doing the same thing,
+ * - another client — phone, webmail, a second Mail.app — deleting or moving,
+ * - an IMAP expunge landing between the two counts, publishing deletions some
+ *   other session had already flagged.
+ *
+ * Concurrent DEPARTURE is therefore the benign cause a reader should rule out
+ * first, and the warning says so. What the asymmetry argument really shows is
+ * only that concurrent ARRIVAL cannot cause it: a message arriving mid-operation
+ * raises the after-count, which biases a reading toward `under`. So `over` is
+ * the interesting direction and a strong signal — not a proof of a defect.
+ *
+ * `under`, by contrast, is routine and never warns. Apple Mail's `delete` on an
+ * account whose deleted mail is not moved to Trash only sets `\Deleted`, so the
+ * message stays in the mailbox and the count does not drop; a Gmail label
+ * mailbox can behave the same way while the operation genuinely succeeded.
+ * Warning there would fire on ordinary deletes on ordinary accounts — and a
+ * warning that cries wolf is ignored precisely when it matters.
  */
 export function countDeltaWarning(d: CountDelta): string | null {
   if (d.status !== "over") return null;
@@ -259,7 +278,9 @@ export function countDeltaWarning(d: CountDelta): string | null {
   return (
     `⚠️ Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ` +
     `${d.expected} were operated on (count ${d.before} → ${d.after}). ${extra} message(s) are ` +
-    `unaccounted for. This is the signature of ` +
+    `unaccounted for. Anything else removing mail from this mailbox at the same moment — a ` +
+    `Mail rule, a server-side filter, another client, an IMAP expunge — reads the same way, so ` +
+    `rule that out first. If nothing else was touching it, this is the signature of ` +
     `https://github.com/sweetrb/apple-mail-mcp/issues/155 — please report it there, and set ` +
     `${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`
   );

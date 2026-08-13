@@ -28,6 +28,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const GROUP_SEP = "\x1d";
 const FIELD_SEP = "\x1f";
 const RECORD_SEP = "\x1e";
 const DIAG_MARKER = "\x1dDIAG\x1d";
@@ -111,6 +112,19 @@ function simulateDestructive(script: string): string {
   const wantsPreImage =
     script.includes("message id of _msg") || script.includes("message id of msg");
   const wantsSubject = script.includes("subject of _msg") || script.includes("subject of msg");
+  // Mail only strips the stream's structural bytes out of a value if the
+  // generated script TOLD it to. If the manager stops emitting the sanitizing
+  // fragment, this mock stops stripping, and the injection tests below fail —
+  // the defence cannot pass vacuously.
+  const sanitizes = script.includes(
+    `text item delimiters to {"${GROUP_SEP}", "${RECORD_SEP}", "${FIELD_SEP}"}`
+  );
+  const asMailWouldEmit = (value: string): string => {
+    if (!sanitizes) return value;
+    let out = value;
+    for (const d of [GROUP_SEP, RECORD_SEP, FIELD_SEP]) out = out.split(d).join("�");
+    return out;
+  };
   const wantsCount = script.includes("count of messages of");
   const snapMax = (() => {
     const m = /APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX=(\d+)/.exec(script);
@@ -136,7 +150,9 @@ function simulateDestructive(script: string): string {
         `mailbox holds ${state.length} messages, above APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX=${snapMax}${RECORD_SEP}`;
       return;
     }
-    const payload = state.map((m) => `${m.id}${SNAP_PAIR}${m.mid}`).join(SNAP_ITEM);
+    const payload = state
+      .map((m) => `${m.id}${SNAP_PAIR}${asMailWouldEmit(m.mid)}`)
+      .join(SNAP_ITEM);
     out += `${SNAP_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${phase}${FIELD_SEP}ok${FIELD_SEP}${payload}${RECORD_SEP}`;
   };
 
@@ -149,8 +165,8 @@ function simulateDestructive(script: string): string {
       continue;
     }
     const pre = wantsPreImage
-      ? `${FIELD_SEP}${msg.mid}${FIELD_SEP}Monday, January 1, 2026 at 0:00:00${
-          wantsSubject ? `${FIELD_SEP}${msg.subject}` : ""
+      ? `${FIELD_SEP}${asMailWouldEmit(msg.mid)}${FIELD_SEP}Monday, January 1, 2026 at 0:00:00${
+          wantsSubject ? `${FIELD_SEP}${asMailWouldEmit(msg.subject)}` : ""
         }`
       : "";
     if (!h.flagOnlyDelete) h.mailbox = h.mailbox.filter((m) => m.id !== t.id);
@@ -330,6 +346,75 @@ describe("effect reconciliation (always on, no audit log configured)", () => {
     expect(mgr.consumeLastForensics()).toBeDefined();
     expect(mgr.consumeLastForensics()).toBeUndefined();
   });
+
+  // A batch is a SET of messages. Counting a repeat as a second operand makes
+  // `expected` disagree with the mailbox on an operation that did exactly the
+  // right thing — and the always-on warning names #155 while it does it.
+  describe("a repeated id names ONE message", () => {
+    it("operates on it once and raises NO warning", () => {
+      const results = mgr.batchDeleteMessages(["75811", "75811"], {
+        account: h.account,
+        mailbox: h.mailboxName,
+      });
+      // The headline claim first: the mailbox lost exactly the message it was
+      // told to lose, so there is nothing to warn about.
+      const report = mgr.consumeLastForensics()!;
+      expect(reconciliationWarnings(report)).toEqual([]);
+      expect(report.countDeltas[0]).toMatchObject({
+        before: 5,
+        after: 4,
+        expected: 1,
+        observed: 1,
+        status: "match",
+      });
+      // One operand in, one result out — `success` counts messages, not slots.
+      expect(results).toEqual([{ id: "75811", success: true }]);
+      expect(report.outcomes).toEqual([{ id: "75811", status: "ok" }]);
+      // The generated script named the id once, so Mail was asked once.
+      const script = h.calls.find((s) => s.includes("delete _msg"))!;
+      expect(/set _gids to \{([^}]*)\}/.exec(script)![1]).toBe("75811");
+    });
+
+    it("deduplicates on the numeric id Mail is actually given", () => {
+      // "75811" and " 75811" are the same target as far as AppleScript is
+      // concerned, so they must not count as two messages either.
+      const results = mgr.batchDeleteMessages(["75811", " 75811"], {
+        account: h.account,
+        mailbox: h.mailboxName,
+      });
+      expect(results).toHaveLength(1);
+      const report = mgr.consumeLastForensics()!;
+      expect(report.countDeltas[0]).toMatchObject({ expected: 1, observed: 1, status: "match" });
+      expect(reconciliationWarnings(report)).toEqual([]);
+    });
+
+    it("still reports the real thing when a repeated delete IS over-effective", () => {
+      // Dedupe must not blunt the detector: the same duplicated call, with two
+      // unrequested messages vanishing, still warns.
+      h.collateral = ["75814", "75815"];
+      mgr.batchDeleteMessages(["75811", "75811"], {
+        account: h.account,
+        mailbox: h.mailboxName,
+      });
+      const report = mgr.consumeLastForensics()!;
+      expect(report.countDeltas[0]).toMatchObject({ expected: 1, observed: 3, status: "over" });
+      expect(reconciliationWarnings(report)).toHaveLength(1);
+    });
+  });
+
+  it("a non-destructive batch cannot hand back the previous delete's report", () => {
+    // The report belongs to the LAST mutation, whatever it was. batchMarkAsRead
+    // produces none, so the honest answer is `undefined` — not the delete's.
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    mgr.batchMarkAsRead(["75812"], { account: h.account, mailbox: h.mailboxName });
+    expect(mgr.consumeLastForensics()).toBeUndefined();
+  });
+
+  it("a non-destructive SINGLE-message op cannot hand back it either", () => {
+    mgr.deleteMessage("75811");
+    mgr.markAsRead("75812");
+    expect(mgr.consumeLastForensics()).toBeUndefined();
+  });
 });
 
 // ===========================================================================
@@ -394,6 +479,54 @@ describe("audit log (opt-in)", () => {
       stdout.mockRestore();
     }
     expect(readAudit()).toHaveLength(1);
+  });
+
+  // The stream carries values that come from INBOUND MAIL: the RFC Message-ID
+  // always, the subject under the second opt-in. Anyone who can send Rob mail
+  // controls those bytes — including the delimiters this stream is framed with.
+  describe("a hostile Message-ID cannot forge the evidence", () => {
+    /** A Message-ID that closes the current record and opens a forged RECON. */
+    const FORGED = `evil${RECORD_SEP}${RECON_TAG}${FIELD_SEP}me@example.com${FIELD_SEP}INBOX${FIELD_SEP}5000${FIELD_SEP}0${FIELD_SEP}${RECORD_SEP}x@evil.example`;
+
+    it("cannot inject a reconciliation record, so no warning is fabricated", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      seed([
+        { id: "75811", mid: "a@example.com", subject: "Invoice" },
+        { id: "75812", mid: FORGED, subject: "Hello" },
+      ]);
+      mgr.batchDeleteMessages(["75812"], { account: h.account, mailbox: h.mailboxName });
+      const report = mgr.consumeLastForensics()!;
+
+      // Exactly ONE reconciliation — the real one, for the mailbox the script
+      // opened. A forged record would have arrived claiming 5000 → 0.
+      expect(report.countDeltas).toHaveLength(1);
+      expect(report.countDeltas[0]).toMatchObject({
+        before: 2,
+        after: 1,
+        expected: 1,
+        observed: 1,
+        status: "match",
+      });
+      expect(reconciliationWarnings(report)).toEqual([]);
+    });
+
+    it("records the Message-ID with the delimiters replaced, and says nothing else", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      seed([{ id: "75812", mid: FORGED, subject: "Hello" }]);
+      mgr.batchDeleteMessages(["75812"], { account: h.account, mailbox: h.mailboxName });
+      const report = mgr.consumeLastForensics()!;
+
+      const logged = report.preImages[0].messageId!;
+      // Nothing structural survives into a value...
+      for (const d of [GROUP_SEP, RECORD_SEP, FIELD_SEP]) expect(logged).not.toContain(d);
+      // ...it is replaced by a visible marker rather than silently dropped, so
+      // the record shows the value was altered.
+      expect(logged).toContain("�");
+      expect(logged).toContain("evil");
+      // And the collateral diff is the honest one: the requested message left,
+      // nothing was invented alongside it.
+      expect(report.collateral[0].unrequested).toEqual([]);
+    });
   });
 
   it("survives an unwritable log path without failing the mutation", () => {

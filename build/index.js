@@ -78273,7 +78273,7 @@ function countDeltaWarning(d) {
   if (d.status !== "over") return null;
   const extra = (d.observed ?? 0) - d.expected;
   const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
-  return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. This is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
+  return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. Anything else removing mail from this mailbox at the same moment \u2014 a Mail rule, a server-side filter, another client, an IMAP expunge \u2014 reads the same way, so rule that out first. If nothing else was touching it, this is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
 }
 function reconciliationWarnings(report) {
   return report.countDeltas.map(countDeltaWarning).filter((w) => w !== null);
@@ -78290,6 +78290,7 @@ function getMailboxScanThreshold() {
 }
 var SEARCH_ACCOUNT_BUDGET_SECONDS = 30;
 var SEARCH_ACCOUNT_TIMEOUT_MS = 45e3;
+var GROUP_SEP = "";
 var FIELD_SEP = "";
 var RECORD_SEP = "";
 var DIAG_MARKER = "DIAG";
@@ -78303,6 +78304,13 @@ var RECON_TAG = "RECON";
 var SNAP_TAG = "SNAP";
 var SNAP_PAIR = "P";
 var SNAP_ITEM = "I";
+var DELIMITER_REPLACEMENT = "\uFFFD";
+function stripStreamDelimiters(value) {
+  let out = value;
+  for (const d of [GROUP_SEP, RECORD_SEP, FIELD_SEP])
+    out = out.split(d).join(DELIMITER_REPLACEMENT);
+  return out;
+}
 var AMBIGUOUS_ID_PREFIX = "Message id ";
 var AMBIGUOUS_ID_BATCH = "This message id is present in more than one mailbox ";
 function normalizeRfcMessageId(mid) {
@@ -78542,6 +78550,9 @@ function buildAccountScopedScript(account, command) {
 function groupKey(account, mailbox) {
   return `${account}\0${mailbox}`;
 }
+function snapshotKey(entry) {
+  return `${entry.id}\0${entry.messageId}`;
+}
 function buildAppLevelScript(command) {
   return `
     tell application "Mail"
@@ -78693,11 +78704,31 @@ var AppleMailManager = class {
    * Read once, by the tool layer, immediately after the call — every
    * AppleScript path in this class is synchronous (`spawnSync`), so there is no
    * await between the mutation and the read and no other operation can land in
-   * between. Cleared on read, and cleared again at the START of every
-   * destructive op, so a stale report can never be attributed to a later call
-   * that produced none.
+   * between.
+   *
+   * ## Lifetime (one rule, no exceptions)
+   *
+   * The report belongs to the MOST RECENT message mutation, whatever it was.
+   * `beginMutation()` clears it at the start of EVERY message mutation —
+   * destructive or not, instrumented or not — and `consumeLastForensics()`
+   * clears it on read. So the only two answers a caller can get are "the report
+   * for the call I just made" and `undefined`; a mutation that produces no
+   * report can never hand back the previous one's.
+   *
+   * It used to be cleared only by the instrumented paths, which left
+   * `batch-mark-as-read` returning the preceding `batch-delete-messages`'
+   * evidence if nobody had consumed it.
    */
   lastForensics;
+  /**
+   * Start of a message mutation: invalidate whatever the previous one observed.
+   *
+   * Called by every single-message mutation (via `findMessageScript`), by
+   * `moveMessage` (which builds its own script) and by `runBatchOperation`.
+   */
+  beginMutation() {
+    this.lastForensics = void 0;
+  }
   /** Take (and clear) the forensic report for the destructive op just run. */
   consumeLastForensics() {
     const r = this.lastForensics;
@@ -78716,10 +78747,51 @@ var AppleMailManager = class {
           set ${varName} to (count of messages of ${mbVar})
         end try`;
   }
+  /**
+   * AppleScript that strips the stream's structural bytes out of `varName`,
+   * in place, before it is appended to the record stream.
+   *
+   * This is the source-side half of the defence described on
+   * `stripStreamDelimiters`: the values that go into a pre-image or a snapshot
+   * (RFC Message-ID, `date received`, subject, mailbox and account names) are
+   * attacker-influenced — a Message-ID is whatever the sender put in the
+   * header — and a crafted one containing a RECORD_SEP plus a forged `RECON`
+   * tag would otherwise inject a reconciliation record, fabricating an `over`
+   * warning on an operation that did exactly the right thing.
+   *
+   * One pass: AppleScript accepts a LIST of text item delimiters when splitting
+   * and uses the first when joining, so all three characters are replaced in a
+   * single `text items` round trip. Verified with `osascript` directly.
+   *
+   * Deliberately distinct variable names (`_zTid`, `_zParts`) — AppleScript
+   * identifiers are case-insensitive, so `_stid` would be the same variable as
+   * the snapshot fragment's `_sTid`.
+   */
+  sanitizeFragment(varName, indent = "        ") {
+    return `
+${indent}set _zTid to AppleScript's text item delimiters
+${indent}set AppleScript's text item delimiters to {"${GROUP_SEP}", "${RECORD_SEP}", "${FIELD_SEP}"}
+${indent}set _zParts to text items of ${varName}
+${indent}set AppleScript's text item delimiters to "${DELIMITER_REPLACEMENT}"
+${indent}set ${varName} to _zParts as string
+${indent}set AppleScript's text item delimiters to _zTid`;
+  }
   /** AppleScript emitting one RECON record into `_out`. */
   reconEmit(acctExpr, mbExpr, beforeVar, afterVar, posExpr = '""') {
     return `
         set _out to _out & "${RECON_TAG}${FIELD_SEP}" & ${acctExpr} & "${FIELD_SEP}" & ${mbExpr} & "${FIELD_SEP}" & (${beforeVar} as string) & "${FIELD_SEP}" & (${afterVar} as string) & "${FIELD_SEP}" & ${posExpr} & "${RECORD_SEP}"`;
+  }
+  /**
+   * RECON emission for the unlocated paths, where the account and mailbox names
+   * are read from Mail at runtime (`_uacct`, `mailbox of _msg`) instead of being
+   * interpolated as literals from here — so they get the same delimiter
+   * stripping the literal paths get in TypeScript.
+   */
+  reconEmitFromMessage(beforeVar, afterVar, posExpr = '""', indent = "          ") {
+    return `set _umbName to ""
+${indent}try
+${indent}  set _umbName to (name of _umb)
+${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragment("_umbName", indent)}${this.reconEmit("_uacct", "_umbName", beforeVar, afterVar, posExpr)}`;
   }
   /**
    * AppleScript capturing every (numeric id, RFC Message-ID) pair in a mailbox
@@ -78768,7 +78840,8 @@ var AppleMailManager = class {
               repeat with _q from 1 to (count of _sIds)
                 set _sOne to ""
                 try
-                  set _sOne to ((item _q of _sIds) as string) & "${SNAP_PAIR}" & ((item _q of _sMids) as string)
+                  set _zSnapMid to ((item _q of _sMids) as string)${this.sanitizeFragment("_zSnapMid", "                  ")}
+                  set _sOne to ((item _q of _sIds) as string) & "${SNAP_PAIR}" & _zSnapMid
                 on error
                   set _sOne to ((item _q of _sIds) as string) & "${SNAP_PAIR}"
                 end try
@@ -78790,18 +78863,26 @@ var AppleMailManager = class {
    * Empty when the audit log is off — the pre-image is the only per-message cost
    * in this feature, and it must not exist by default. Subjects need the second,
    * separate opt-in; message bodies are never read.
+   *
+   * Every value here is EXTERNALLY CONTROLLED (the Message-ID and the subject
+   * are whatever the sender wrote), so each one is stripped of the stream's
+   * structural bytes before it is appended — see `sanitizeFragment`.
    */
   preImageFragment(msgVar = "_msg") {
     if (!isAuditEnabled()) return "";
+    const ind = "                ";
     const subject = auditSubjectsEnabled() ? `
               if _pre is not "" then
                 try
-                  set _pre to _pre & "${FIELD_SEP}" & ((subject of ${msgVar}) as string)
+                  set _zSub to ((subject of ${msgVar}) as string)${this.sanitizeFragment("_zSub", ind + "  ")}
+                  set _pre to _pre & "${FIELD_SEP}" & _zSub
                 end try
               end if` : "";
     return `
               try
-                set _pre to "${FIELD_SEP}" & ((message id of ${msgVar}) as string) & "${FIELD_SEP}" & ((date received of ${msgVar}) as string)
+                set _zMid to ((message id of ${msgVar}) as string)${this.sanitizeFragment("_zMid", ind)}
+                set _zDate to ((date received of ${msgVar}) as string)${this.sanitizeFragment("_zDate", ind)}
+                set _pre to "${FIELD_SEP}" & _zMid & "${FIELD_SEP}" & _zDate
               end try${subject}`;
   }
   /**
@@ -78814,6 +78895,7 @@ var AppleMailManager = class {
    */
   parseForensicStream(output, valid) {
     const byId = /* @__PURE__ */ new Map();
+    const okPositions = /* @__PURE__ */ new Set();
     const outcomes = [];
     const preImages = /* @__PURE__ */ new Map();
     const recons = [];
@@ -78849,6 +78931,7 @@ var AppleMailManager = class {
       const id = entry.id;
       if (status === "ok") {
         byId.set(id, { id, success: true });
+        okPositions.add(pos);
         outcomes.push({ id, status: "ok" });
         if (f.length >= 4) {
           preImages.set(pos, {
@@ -78870,7 +78953,7 @@ var AppleMailManager = class {
         outcomes.push({ id, status: "error", error: error2 });
       }
     }
-    return { byId, outcomes, preImages, recons, snaps };
+    return { byId, okPositions, outcomes, preImages, recons, snaps };
   }
   /** Parse one SNAP payload into (numeric id → RFC Message-ID) entries. */
   parseSnapshot(payload) {
@@ -78892,7 +78975,7 @@ var AppleMailManager = class {
   buildForensicReport(parsed, valid, expectedFor, locationFor, noteFor, requestedNumericIds) {
     const merged = /* @__PURE__ */ new Map();
     for (const r of parsed.recons) {
-      const key = `${r.account}\0${r.mailbox}`;
+      const key = groupKey(r.account, r.mailbox);
       const expected = expectedFor(r.account, r.mailbox, r.pos);
       const prev = merged.get(key);
       if (prev) {
@@ -78949,7 +79032,7 @@ var AppleMailManager = class {
     const collateral = [];
     const byMailbox = /* @__PURE__ */ new Map();
     for (const s of parsed.snaps) {
-      const key = `${s.account}\0${s.mailbox}`;
+      const key = groupKey(s.account, s.mailbox);
       const g = byMailbox.get(key) ?? { account: s.account, mailbox: s.mailbox };
       if (s.phase === "before") g.before = s;
       else g.after = s;
@@ -78979,10 +79062,10 @@ var AppleMailManager = class {
       }
       const beforeEntries = this.parseSnapshot(b.payload);
       const afterEntries = this.parseSnapshot(a.payload);
-      const afterKeys = new Set(afterEntries.map((e) => `${e.id}\0${e.messageId}`));
-      const beforeKeys = new Set(beforeEntries.map((e) => `${e.id}\0${e.messageId}`));
-      const disappeared = beforeEntries.filter((e) => !afterKeys.has(`${e.id}\0${e.messageId}`));
-      const appeared = afterEntries.filter((e) => !beforeKeys.has(`${e.id}\0${e.messageId}`));
+      const afterKeys = new Set(afterEntries.map((e) => snapshotKey(e)));
+      const beforeKeys = new Set(beforeEntries.map((e) => snapshotKey(e)));
+      const disappeared = beforeEntries.filter((e) => !afterKeys.has(snapshotKey(e)));
+      const appeared = afterEntries.filter((e) => !beforeKeys.has(snapshotKey(e)));
       const unrequested = disappeared.filter((e) => !requestedNumericIds.has(e.id));
       collateral.push({
         account: g.account,
@@ -80218,12 +80301,17 @@ var AppleMailManager = class {
    * deleting the "All Mail" copy are different operations — so scope to the
    * mailbox the id actually came from (`idLocationIndex`, populated by every
    * list/search) and never guess.
+   *
+   * Every single-message mutation in this class builds its script here and runs
+   * it immediately, so this is also where the previous operation's forensic
+   * report is invalidated — see `beginMutation()`.
    */
   findMessageScript(id, operation, instrument = false) {
+    this.beginMutation();
     const loc = this.locationFor(id);
     if (loc) {
-      const acctLit = `"${escapeForAppleScript(loc.account)}"`;
-      const mbLit = `"${escapeForAppleScript(loc.mailbox)}"`;
+      const acctLit = `"${escapeForAppleScript(stripStreamDelimiters(loc.account))}"`;
+      const mbLit = `"${escapeForAppleScript(stripStreamDelimiters(loc.mailbox))}"`;
       return buildAppLevelScript(`
       try
         ${this.resolveMailboxFragment(loc.account, loc.mailbox)}
@@ -80282,7 +80370,7 @@ var AppleMailManager = class {
           try
             set _ca to (count of messages of _umb)
           end try
-          ${this.reconEmit("_uacct", "(name of _umb)", "_cb", "_ca")}
+          ${this.reconEmitFromMessage("_cb", "_ca")}
         end if
         return "1${FIELD_SEP}ok" & _pre & "${RECORD_SEP}" & _out` : `
         ${operation}
@@ -80303,7 +80391,7 @@ var AppleMailManager = class {
   recordSingleForensics(output, id, destination) {
     const valid = [{ id, num: Number(id) }];
     const parsed = this.parseForensicStream(output, valid);
-    const succeeded = parsed.byId.get(id)?.success === true;
+    const succeeded = parsed.okPositions.has(1);
     const sameMailbox = (account, mailbox) => destination !== void 0 && destination.account === account && this.resolveMailbox(destination.mailbox, destination.account) === this.resolveMailbox(mailbox, account);
     const home = parsed.recons[0];
     this.lastForensics = this.buildForensicReport(
@@ -80435,7 +80523,6 @@ var AppleMailManager = class {
    * Delete a message.
    */
   deleteMessage(id) {
-    this.lastForensics = void 0;
     const script = this.findMessageScript(id, "delete msg", true);
     const result = executeAppleScript(script, { timeoutMs: 6e4 });
     if (result.success && !result.output.startsWith("error:")) {
@@ -80497,8 +80584,8 @@ var AppleMailManager = class {
     const safeMailbox = escapeForAppleScript(targetMailbox);
     const safeAccount = escapeForAppleScript(targetAccount);
     const loc = this.locationFor(id);
-    const srcAcctLit = loc ? `"${escapeForAppleScript(loc.account)}"` : '""';
-    const srcMbLit = loc ? `"${escapeForAppleScript(loc.mailbox)}"` : '""';
+    const srcAcctLit = loc ? `"${escapeForAppleScript(stripStreamDelimiters(loc.account))}"` : '""';
+    const srcMbLit = loc ? `"${escapeForAppleScript(stripStreamDelimiters(loc.mailbox))}"` : '""';
     const findAndMove = loc ? `
         ${this.resolveMailboxFragment(loc.account, loc.mailbox)}
         if _tmb is missing value then return "error:Message not found"
@@ -80545,7 +80632,7 @@ var AppleMailManager = class {
           try
             set _ca to (count of messages of _umb)
           end try
-          ${this.reconEmit("_uacct", "(name of _umb)", "_cb", "_ca")}
+          ${this.reconEmitFromMessage("_cb", "_ca")}
         end if
         return "1${FIELD_SEP}ok" & _pre & "${RECORD_SEP}" & _out`;
     const script = buildAppLevelScript(`
@@ -80582,7 +80669,7 @@ var AppleMailManager = class {
     return { success: true };
   }
   moveMessage(id, mailbox, account) {
-    this.lastForensics = void 0;
+    this.beginMutation();
     const res = this.moveMessageInternal(id, mailbox, account);
     if (res.success) return { success: true };
     const error2 = this.classifyMessageMutationError(
@@ -80664,21 +80751,48 @@ var AppleMailManager = class {
    *
    * `setup` runs once up front (used by move to resolve the destination); it may
    * bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
+   *
+   * ## A repeated id names ONE message, and is operated on once
+   *
+   * A batch is a set of messages, not a multiset: two occurrences of id `75811`
+   * are the same message, and Mail can only delete it once. So the id list is
+   * DEDUPED on the numeric value actually sent to AppleScript (`"75811"` and
+   * `" 75811"` are the same target), and the returned array carries one entry
+   * per distinct id, in first-seen order — hence `success` counts distinct
+   * messages rather than list positions.
+   *
+   * This is a correctness requirement for the #155 reconciliation, not a
+   * tidy-up. Counting a repeat as a second operand makes `expected` disagree
+   * with the mailbox — the duplicate can only be reported `notfound` (the
+   * message is already gone) or `ok` twice (on a flag-only store) — and either
+   * way the always-on warning fires on an operation that did exactly the right
+   * thing. A warning users learn to ignore is worse than no warning.
    */
   runBatchOperation(ids, operation, setup = "", scope, forensics) {
     const instrument = forensics !== void 0;
-    if (instrument) this.lastForensics = void 0;
+    this.beginMutation();
     const valid = [];
+    const operands = [];
+    const seenNums = /* @__PURE__ */ new Set();
+    const seenInvalid = /* @__PURE__ */ new Set();
     for (const id of ids) {
       const num = Number(id);
-      if (Number.isFinite(num)) valid.push({ id, num });
+      if (Number.isFinite(num)) {
+        if (seenNums.has(num)) continue;
+        seenNums.add(num);
+        valid.push({ id, num });
+      } else {
+        if (seenInvalid.has(id)) continue;
+        seenInvalid.add(id);
+      }
+      operands.push(id);
     }
     if (valid.length === 0) {
-      return ids.map((id) => ({ id, success: false, error: "Invalid message ID" }));
+      return operands.map((id) => ({ id, success: false, error: "Invalid message ID" }));
     }
     const resolved = this.resolveBatchScope(scope);
     if (resolved.kind === "unresolvable") {
-      return ids.map((id) => ({ id, success: false, error: resolved.error }));
+      return operands.map((id) => ({ id, success: false, error: resolved.error }));
     }
     const callerScope = resolved.kind === "scoped" ? resolved : void 0;
     const groups = /* @__PURE__ */ new Map();
@@ -80697,8 +80811,8 @@ var AppleMailManager = class {
     });
     const asList = (nums) => `{${nums.join(", ")}}`;
     const scopedBlocks = [...groups.values()].map((g) => {
-      const acctLit = `"${escapeForAppleScript(g.account)}"`;
-      const mbLit = `"${escapeForAppleScript(g.mailbox)}"`;
+      const acctLit = `"${escapeForAppleScript(stripStreamDelimiters(g.account))}"`;
+      const mbLit = `"${escapeForAppleScript(stripStreamDelimiters(g.mailbox))}"`;
       const pre = instrument ? this.preImageFragment("_msg") : "";
       return `
         ${this.resolveMailboxFragment(g.account, g.mailbox)}
@@ -80782,7 +80896,7 @@ var AppleMailManager = class {
                 try
                   set _uca to (count of messages of _umb)
                 end try
-                ${this.reconEmit("_uacct", "(name of _umb)", "_ucb", "_uca", "(_idx as string)")}
+                ${this.reconEmitFromMessage("_ucb", "_uca", "(_idx as string)", "                ")}
               end if` : ""}
             on error _e
               set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
@@ -80804,11 +80918,11 @@ var AppleMailManager = class {
     const result = executeAppleScript(script, { timeoutMs });
     if (!result.success) {
       const err = result.error || "Batch operation failed";
-      return ids.map((id) => ({ id, success: false, error: err }));
+      return operands.map((id) => ({ id, success: false, error: err }));
     }
     if (result.output.startsWith(BATCH_FATAL)) {
       const err = result.output.slice(BATCH_FATAL.length);
-      return ids.map((id) => ({ id, success: false, error: err }));
+      return operands.map((id) => ({ id, success: false, error: err }));
     }
     const parsed = this.parseForensicStream(result.output, valid);
     const { byId } = parsed;
@@ -80821,10 +80935,7 @@ var AppleMailManager = class {
       for (const r of parsed.recons) {
         if (r.pos !== null) posLocation.set(r.pos, { account: r.account, mailbox: r.mailbox });
       }
-      const okPositions = /* @__PURE__ */ new Set();
-      valid.forEach((v, i) => {
-        if (byId.get(v.id)?.success) okPositions.add(i + 1);
-      });
+      const { okPositions } = parsed;
       const dest = forensics?.destination;
       const sameMailbox = (account, mailbox) => dest !== void 0 && dest.account === account && this.resolveMailbox(dest.mailbox, dest.account) === this.resolveMailbox(mailbox, account);
       const expectedFor = (account, mailbox, pos) => {
@@ -80844,7 +80955,7 @@ var AppleMailManager = class {
         new Set(valid.map((v) => String(v.num)))
       );
     }
-    return ids.map(
+    return operands.map(
       (id) => byId.get(id) ?? (Number.isFinite(Number(id)) ? { id, success: false, error: "No result returned" } : { id, success: false, error: "Invalid message ID" })
     );
   }
@@ -83568,8 +83679,9 @@ function withErrorHandling(handler, errorPrefix) {
 
 // src/tools/batchResults.ts
 async function hybridBatchCounts(ids, appleFn, imapFn) {
-  const imapIds = ids.filter((i) => i.startsWith("imap:"));
-  const numericIds = ids.filter((i) => !i.startsWith("imap:"));
+  const distinctIds = [...new Set(ids)];
+  const imapIds = distinctIds.filter((i) => i.startsWith("imap:"));
+  const numericIds = distinctIds.filter((i) => !i.startsWith("imap:"));
   let success = 0;
   let fail = 0;
   const errors = [];

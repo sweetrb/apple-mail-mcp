@@ -16,14 +16,23 @@ import type { ImapBatchResult } from "@/services/imapClient.js";
  * Split a batch of ids into numeric (AppleScript) and imap: (IMAP) groups, run
  * each path, and merge into success/fail counts (I2). imap: ids apply in a
  * single UID command per mailbox; numeric ids use the existing AppleScript batch.
+ *
+ * A batch is a SET of messages: a repeated id names the same message, so it is
+ * operated on — and counted — once. Deduping here makes that true for both
+ * backends at the tool boundary, and keeps `success` a count of messages rather
+ * than of list positions. (The AppleScript path dedupes again on the numeric
+ * value it actually sends, where the #155 effect reconciliation needs it: two
+ * occurrences of one id would otherwise make `expected` disagree with the
+ * mailbox and fire the always-on warning on a correct delete.)
  */
 export async function hybridBatchCounts(
   ids: string[],
   appleFn: (numericIds: string[]) => { success: boolean; error?: string }[],
   imapFn: (imapIds: string[]) => Promise<ImapBatchResult>
 ): Promise<{ success: number; fail: number; errors: string[] }> {
-  const imapIds = ids.filter((i) => i.startsWith("imap:"));
-  const numericIds = ids.filter((i) => !i.startsWith("imap:"));
+  const distinctIds = [...new Set(ids)];
+  const imapIds = distinctIds.filter((i) => i.startsWith("imap:"));
+  const numericIds = distinctIds.filter((i) => !i.startsWith("imap:"));
   let success = 0;
   let fail = 0;
   const errors: string[] = [];

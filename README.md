@@ -858,6 +858,10 @@ default account cannot be determined, the ids fail with an error asking for an e
 `sourceAccount` — a scope the server can't honor is never quietly downgraded to the guess-the-copy
 walk. `sourceAccount` by itself pins nothing, since the mailbox is what an id is scoped to.
 
+**A repeated id is one message.** `ids` is treated as a set: a duplicate names the same message,
+so it is operated on once, and the batch returns **one result per distinct id**. `success` is
+therefore a count of messages, not of list positions.
+
 #### `batch-delete-messages`
 
 | Parameter | Type | Required | Description |
@@ -1299,17 +1303,40 @@ returns the comparison in `structuredContent`:
 | `under` | **Fewer** left than expected. | No |
 | `unknown` | Mail would not report a count, so no comparison is possible. | No |
 
-Only `over` produces a warning in the tool's text response, and that asymmetry is
-the point. New mail arriving mid-operation *raises* the after-count, which can
-only push a reading toward `under` — so `over` cannot be manufactured by ordinary
-traffic. `under`, by contrast, is routine: an account that flags deletions rather
-than removing them leaves the message in place and the count does not move, and a
+#### What an `over` warning does and does not tell you
+
+Only `over` produces a warning in the tool's text response. Be precise about what
+that warning proves, because a warning is useful only for as long as it is
+trusted:
+
+- **It establishes** that more messages left the source mailbox across the window
+  of the operation than the operation accounted for. That is the data-loss
+  direction, and it is the #155 signature.
+- **It does not establish that this server removed them.** The reading is a
+  before/after pair around a window, so anything else that removes mail from that
+  mailbox inside the window reads identically: a Mail.app rule firing mid-batch,
+  a server-side filter, another client (phone, webmail, a second Mail.app)
+  deleting or moving, or an IMAP expunge landing between the two counts.
+
+**Concurrent departure is the benign cause to rule out first**, and the warning
+text says so. What the asymmetry argument actually buys is the other half:
+concurrent *arrivals* cannot produce `over`, because a message arriving
+mid-operation *raises* the after-count and biases the reading toward `under`.
+That is why `over` is the interesting direction — a strong signal, not a proof.
+
+Setting `APPLE_MAIL_MCP_AUDIT_LOG` is what settles which one you have: the
+collateral diff below **names** the messages that disappeared, and "the
+newsletter my rule files every morning" is a very different report from a message
+nothing should have touched.
+
+`under`, by contrast, is routine: an account that flags deletions rather than
+removing them leaves the message in place and the count does not move, and a
 Gmail label mailbox can behave the same way while the delete genuinely succeeded.
 A warning that fires on every ordinary Gmail delete would be ignored exactly when
 it matters, so `under` is **reported** in `countDelta` (with a `note` explaining
 it) and never warned about.
 
-Two more honesty rules:
+Three more honesty rules:
 
 - The **expectation is per source mailbox**. On a Gmail label store, deleting the
   `INBOX` copy drops the `\Inbox` label and deleting the `[Gmail]/All Mail` copy
@@ -1318,6 +1345,10 @@ Two more honesty rules:
   **destination** count is not checked.
 - A move whose destination **is** the source mailbox expects a delta of `0`, not
   the success count, and says so in `note`.
+- A **repeated id is one message**. The batch tools operate on each distinct id
+  once and return one result per distinct id, so `success` counts messages rather
+  than list positions — and `expected` stays comparable with the mailbox instead
+  of double-counting a duplicate into a false `over`.
 
 `imap:` ids are not reconciled. An IMAP UID names exactly one message in exactly
 one mailbox, so the mis-targeting class this exists for cannot occur there; a
@@ -1340,6 +1371,15 @@ id, RFC Message-ID, `date received`), the per-id outcome (`ok` / `notfound` /
 The pre-image is the part that matters after the fact: a Mail.app numeric id is
 unique only within a mailbox and is reused, so on its own it proves nothing about
 which message was acted on. The RFC Message-ID does.
+
+**The record is framed against its own contents.** The Message-ID and (when
+enabled) the subject are written by whoever sent the mail, so the control
+characters this server frames records with are stripped out of every such value
+before it is written — a Message-ID crafted to close a record and open a forged
+one cannot invent evidence in the log it is being recorded in. A value that
+arrives with those characters in it (which a well-formed Message-ID never does)
+is logged with each of them replaced by `U+FFFD`, so the record shows that the
+value was altered rather than quietly shortening it.
 
 ### Collateral identification — which messages actually disappeared
 
