@@ -1350,6 +1350,14 @@ Three more honesty rules:
   warning computed against a guessed expectation would fire on an operation that
   did exactly what it was asked to, which is the one thing this instrumentation
   must never do.
+
+  **This makes a self-move a blind spot for the always-on layer**, and the cost is
+  worth stating plainly: if messages genuinely do disappear during a self-move,
+  nothing warns you, because there was no expectation to compare against. `status`
+  is `unknown` rather than `match`, so the result does not claim the operation was
+  clean — but it does not flag it either. The collateral diff still names anything
+  that vanished, so **enable `APPLE_MAIL_MCP_AUDIT_LOG` if you need coverage for
+  same-mailbox moves.**
 - A **repeated id is one message**. The batch tools operate on each distinct id
   once and return one result per distinct id, so `success` counts messages rather
   than list positions — and `expected` stays comparable with the mailbox instead
