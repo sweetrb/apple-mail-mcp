@@ -78237,6 +78237,8 @@ var CONTENT_MARKER = "CONTENT";
 var MSGID_MARKER = "MSGID";
 var HTML_MARKER = "HTML";
 var BATCH_FATAL = "FATAL";
+var AMBIGUOUS_ID_PREFIX = "Message id ";
+var AMBIGUOUS_ID_BATCH = "This message id is present in more than one mailbox ";
 function normalizeRfcMessageId(mid) {
   return (mid || "").trim().replace(/^<+/, "").replace(/>+$/, "").trim();
 }
@@ -78565,18 +78567,6 @@ var AppleMailManager = class {
   idLocationIndex = /* @__PURE__ */ new Map();
   /** Cap on the id→location index so a long-lived process can't grow unbounded. */
   ID_LOCATION_MAX = 5e3;
-  /**
-   * Publicly record where a message id lives.
-   *
-   * The index normally fills itself from list/search results, but a caller that
-   * already knows an id's home (it carried the id across a process boundary, or
-   * read it from a stored triage list) can register it here so a later by-id
-   * fetch or batch operation resolves within that scope instead of having to
-   * refuse the id as ambiguous (#152).
-   */
-  noteMessageLocation(id, account, mailbox) {
-    this.rememberLocation(id, account, mailbox);
-  }
   /** Record (or refresh) where a message id lives, evicting oldest when full. */
   rememberLocation(id, account, mailbox) {
     if (!id || !account || !mailbox) return;
@@ -78586,6 +78576,32 @@ var AppleMailManager = class {
       const oldest = this.idLocationIndex.keys().next().value;
       if (oldest !== void 0) this.idLocationIndex.delete(oldest);
     }
+  }
+  /** Where a message id was last listed/searched from, if we've seen it. */
+  locationFor(id) {
+    return this.idLocationIndex.get(String(id));
+  }
+  /**
+   * AppleScript fragment resolving `account` + `mailbox` into `_tmb`, leaving
+   * `_tmb` as `missing value` when it can't be pinned down. Exact-name match
+   * only, and a name matching more than one mailbox resolves to nothing rather
+   * than guessing — the same rule the move destination already applies.
+   */
+  resolveMailboxFragment(account, mailbox) {
+    const resolved = this.resolveMailbox(mailbox, account);
+    return `
+        set _tmb to missing value
+        set _acctM to {}
+        repeat with _a in accounts
+          if (name of _a) is "${escapeForAppleScript(account)}" then set end of _acctM to _a
+        end repeat
+        if (count of _acctM) is 1 then
+          set _mbM to {}
+          repeat with _m in (mailboxes of (item 1 of _acctM))
+            if (name of _m) is "${escapeForAppleScript(resolved)}" then set end of _mbM to _m
+          end repeat
+          if (count of _mbM) is 1 then set _tmb to item 1 of _mbM
+        end if`;
   }
   /**
    * Returns cached accounts or fetches fresh data if cache is expired/empty.
@@ -79793,24 +79809,61 @@ var AppleMailManager = class {
     return true;
   }
   /**
-   * Helper to find and operate on a message by ID.
+   * Helper to find and operate on a message by ID, scoped to the mailbox the id
+   * was listed from.
+   *
+   * Mail.app numeric ids are per-mailbox, and on a label store (Gmail, iCloud)
+   * ONE message is present in several mailboxes under the SAME id — INBOX,
+   * "Important" and "All Mail" all report id 75816 for the same mail. This used
+   * to walk every account's every mailbox and mutate the FIRST hit; because
+   * `mailboxes of account` yields INBOX late, an id listed from INBOX was
+   * reliably mutated in "Important" instead, so the op reported success while
+   * the INBOX copy stayed put and a different copy was moved/deleted (#152).
+   *
+   * Which mailbox a mutation lands in is semantic — deleting the INBOX copy and
+   * deleting the "All Mail" copy are different operations — so scope to the
+   * mailbox the id actually came from (`idLocationIndex`, populated by every
+   * list/search) and never guess.
    */
   findMessageScript(id, operation) {
+    const loc = this.locationFor(id);
+    if (loc) {
+      return buildAppLevelScript(`
+      try
+        ${this.resolveMailboxFragment(loc.account, loc.mailbox)}
+        if _tmb is missing value then return "error:Message not found"
+        set matchingMsgs to (messages of _tmb whose id is ${Number(id)})
+        if (count of matchingMsgs) > 0 then
+          set msg to item 1 of matchingMsgs
+          ${operation}
+          return "ok"
+        end if
+        return "error:Message not found"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+    }
     return buildAppLevelScript(`
       try
+        set _hits to {}
+        set _names to ""
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                ${operation}
-                return "ok"
+                set end of _hits to (item 1 of matchingMsgs)
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
               end if
             end try
           end repeat
         end repeat
-        return "error:Message not found"
+        if (count of _hits) is 0 then return "error:Message not found"
+        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the operation targets the right copy"
+        set msg to item 1 of _hits
+        ${operation}
+        return "ok"
       on error errMsg
         return "error:" & errMsg
       end try
@@ -79995,6 +80048,31 @@ var AppleMailManager = class {
     const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
     const safeMailbox = escapeForAppleScript(targetMailbox);
     const safeAccount = escapeForAppleScript(targetAccount);
+    const loc = this.locationFor(id);
+    const findAndMove = loc ? `
+        ${this.resolveMailboxFragment(loc.account, loc.mailbox)}
+        if _tmb is missing value then return "error:Message not found"
+        set matchingMsgs to (messages of _tmb whose id is ${Number(id)})
+        if (count of matchingMsgs) is 0 then return "error:Message not found"
+        move (item 1 of matchingMsgs) to destMailbox
+        return "ok"` : `
+        set _hits to {}
+        set _names to ""
+        repeat with acct in accounts
+          repeat with mb in (mailboxes of acct)
+            try
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
+              if (count of matchingMsgs) > 0 then
+                set end of _hits to (item 1 of matchingMsgs)
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
+              end if
+            end try
+          end repeat
+        end repeat
+        if (count of _hits) is 0 then return "error:Message not found"
+        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the move targets the right copy"
+        move (item 1 of _hits) to destMailbox
+        return "ok"`;
     const script = buildAppLevelScript(`
       try
         -- \`mailboxes of account\` is already flat: it includes nested mailboxes
@@ -80010,21 +80088,7 @@ var AppleMailManager = class {
         if (count of destMatches) is 0 then return "error:Destination mailbox \\"" & destName & "\\" not found in account \\"${safeAccount}\\""
         if (count of destMatches) > 1 then return "error:Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; disambiguate or move by full path"
         set destMailbox to item 1 of destMatches
-
-        -- Find the message by id. The flat mailbox list already covers nested
-        -- mailboxes, so this reaches messages in subfolders without recursing.
-        repeat with acct in accounts
-          repeat with mb in (mailboxes of acct)
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                move (item 1 of matchingMsgs) to destMailbox
-                return "ok"
-              end if
-            end try
-          end repeat
-        end repeat
-        return "error:Message not found"
+        ${findAndMove}
       on error errMsg
         return "error:" & errMsg
       end try
@@ -80058,51 +80122,28 @@ var AppleMailManager = class {
    * Previously each batch method looped and called the per-id method, so a
    * 100-id batch spawned 100 osascript processes — each one re-resolving
    * accounts and walking the whole account→mailbox tree — all serialized
-   * through the gate (issue #31). This still walks the tree exactly once, using
-   * the indexed `whose id is` probe (effectively free), but it no longer treats
-   * "the first mailbox that matches" as the answer — see below.
-   *
-   * ## Why resolution is scoped (#152)
-   *
-   * A Mail.app numeric id can match in MORE THAN ONE mailbox. The obvious case
-   * is Gmail-over-IMAP label aliasing: one message object is reachable through
-   * `INBOX`, `[Gmail]/All Mail` and `[Gmail]/Important` at once, and the walk
-   * order is Mail's own account/mailbox order, not the caller's. The old code
-   * applied `operation` to `item 1` of the FIRST matching mailbox and then
-   * marked the id done, so a batch could act on the `[Gmail]/All Mail` copy of a
-   * message the caller had listed from `Sales Spam` — which for Gmail is a
-   * different operation entirely (deleting the All Mail copy trashes the mail;
-   * deleting the INBOX copy merely removes the Inbox label). Worse, it recorded
-   * `ok` for ANY match, so the reported success count did not describe what had
-   * actually happened.
-   *
-   * Resolution is therefore scoped, mirroring the by-id read fast paths:
-   *   - **Known scope** — an explicit `scope` from the caller, else the
-   *     `idLocationIndex` entry recorded when the id was listed/searched. Only
-   *     that one account+mailbox is probed; a miss is `notfound`, never a
-   *     wander into some other mailbox.
-   *   - **Unknown scope** — every mailbox is probed but NOTHING is applied
-   *     mid-walk. Matches are collected; afterwards a single candidate is
-   *     operated on, and two or more fail that id as `ambiguous` naming the
-   *     candidates. This is the same refusal-to-guess the move-destination
-   *     resolution already applies to an ambiguous mailbox name.
-   *
-   * `ok` is reported only on the path that actually ran `operation` on the
-   * intended message.
-   *
-   * The candidate `whose id is` result is additionally re-checked against the
-   * id's STRING form before being accepted. AppleScript coerces integer
-   * literals above 2^29 to reals, so a very large Mail id could otherwise be
-   * compared imprecisely and match a neighbouring message.
-   *
-   * Per-id outcomes come back as control-char-delimited `position<FS>status`
-   * records (status: `ok`, `notfound`, `ambiguous:<mailboxes>`, or
+   * through the gate (issue #31). Still one osascript invocation, but the ids
+   * are now grouped by the mailbox they were listed from and each group opens
+   * exactly that one mailbox. Per-id outcomes come back as control-char
+   * delimited `position<FS>status` records (status: `ok`, `notfound`, or
    * `error:<msg>`), and results are returned in input order.
    *
-   * `setup` runs once before the walk (used by move to resolve the destination);
-   * it may bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
+   * Scoping is a CORRECTNESS requirement, not an optimization (#152). A Mail.app
+   * numeric id is unique only within a mailbox, and a label store (Gmail,
+   * iCloud) exposes one message in several mailboxes under the same id — INBOX,
+   * "Important" and "All Mail" all report id 75816 for the same mail. The old
+   * tree walk applied `operation` to the FIRST mailbox that matched, and
+   * `mailboxes of account` yields INBOX late, so a batch of ids listed from
+   * INBOX was reliably applied to the "Important" copies instead: every id
+   * reported `ok` while the INBOX messages stayed put and other copies were
+   * moved/deleted. Grouping by recorded source mailbox makes the op land on the
+   * copy the caller actually listed; ids with no recorded mailbox are refused
+   * when ambiguous rather than applied to an arbitrary copy.
+   *
+   * `setup` runs once up front (used by move to resolve the destination); it may
+   * bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
    */
-  runBatchOperation(ids, operation, setup = "", scope) {
+  runBatchOperation(ids, operation, setup = "") {
     const valid = [];
     for (const id of ids) {
       const num = Number(id);
@@ -80111,162 +80152,96 @@ var AppleMailManager = class {
     if (valid.length === 0) {
       return ids.map((id) => ({ id, success: false, error: "Invalid message ID" }));
     }
-    const scopes = valid.map((v) => {
-      const explicit = scope?.account && scope?.mailbox ? { account: scope.account, mailbox: scope.mailbox } : void 0;
-      const loc = explicit ?? this.idLocationIndex.get(v.id);
-      if (!loc) return { account: "", mailbox: "" };
-      return { account: loc.account, mailbox: this.resolveMailbox(loc.mailbox, loc.account) };
+    const groups = /* @__PURE__ */ new Map();
+    const unlocated = [];
+    valid.forEach((v, i) => {
+      const pos = i + 1;
+      const loc = this.locationFor(v.id);
+      if (!loc) {
+        unlocated.push({ num: v.num, pos });
+        return;
+      }
+      const key = `${loc.account}\0${loc.mailbox}`;
+      const g = groups.get(key) ?? { account: loc.account, mailbox: loc.mailbox, items: [] };
+      g.items.push({ num: v.num, pos });
+      groups.set(key, g);
     });
-    const asList = (values) => "{" + values.map((s) => `"${escapeForAppleScript(s)}"`).join(", ") + "}";
+    const asList = (nums) => `{${nums.join(", ")}}`;
+    const scopedBlocks = [...groups.values()].map(
+      (g) => `
+        ${this.resolveMailboxFragment(g.account, g.mailbox)}
+        set _gids to ${asList(g.items.map((it) => it.num))}
+        set _gpos to ${asList(g.items.map((it) => it.pos))}
+        if _tmb is missing value then
+          repeat with _k from 1 to (count of _gpos)
+            set _out to _out & ((item _k of _gpos) as string) & "${FIELD_SEP}error:source mailbox \\"${escapeForAppleScript(g.mailbox)}\\" not found in account \\"${escapeForAppleScript(g.account)}\\"${RECORD_SEP}"
+          end repeat
+        else
+          repeat with _k from 1 to (count of _gids)
+            set _idx to item _k of _gpos
+            try
+              set _m to (messages of _tmb whose id is (item _k of _gids))
+              if (count of _m) > 0 then
+                set _msg to item 1 of _m
+                ${operation}
+                set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
+              else
+                set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+              end if
+            on error _e
+              set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
+            end try
+          end repeat
+        end if`
+    ).join("\n");
+    const unlocatedBlock = unlocated.length ? `
+        set _uids to ${asList(unlocated.map((it) => it.num))}
+        set _upos to ${asList(unlocated.map((it) => it.pos))}
+        set _ucount to count of _uids
+        set _uhit to {}
+        set _umsg to {}
+        set _unames to {}
+        repeat with _k from 1 to _ucount
+          set end of _uhit to 0
+          set end of _umsg to missing value
+          set end of _unames to ""
+        end repeat
+        repeat with acct in accounts
+          repeat with mb in (mailboxes of acct)
+            repeat with _k from 1 to _ucount
+              try
+                set _m to (messages of mb whose id is (item _k of _uids))
+                if (count of _m) > 0 then
+                  set item _k of _uhit to ((item _k of _uhit) + 1)
+                  if (item _k of _uhit) is 1 then set item _k of _umsg to (item 1 of _m)
+                  set item _k of _unames to ((item _k of _unames) & (name of acct) & "/" & (name of mb) & ", ")
+                end if
+              end try
+            end repeat
+          end repeat
+        end repeat
+        repeat with _k from 1 to _ucount
+          set _idx to item _k of _upos
+          if (item _k of _uhit) is 0 then
+            set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+          else if (item _k of _uhit) > 1 then
+            set _out to _out & (_idx as string) & "${FIELD_SEP}error:${AMBIGUOUS_ID_BATCH}(" & (item _k of _unames) & "); list or search that mailbox first so the operation targets the right copy${RECORD_SEP}"
+          else
+            try
+              set _msg to item _k of _umsg
+              ${operation}
+              set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
+            on error _e
+              set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
+            end try
+          end if
+        end repeat` : "";
     const script = buildAppLevelScript(`
       try
         ${setup}
         set _out to ""
-        set _ids to {${valid.map((v) => v.num).join(", ")}}
-        set _idStrs to ${asList(valid.map((v) => v.id))}
-        set _sAcct to ${asList(scopes.map((s) => s.account))}
-        set _sMb to ${asList(scopes.map((s) => s.mailbox))}
-        set _total to count of _ids
-        -- Flat lists only: AppleScript copies a list on access, so a nested
-        -- list element cannot be appended to in place.
-        set _state to {}
-        set _cand to {}
-        set _scopedPending to 0
-        set _unscopedPending to 0
-        repeat with _i from 1 to _total
-          set end of _state to "pending"
-          set end of _cand to ""
-          if (item _i of _sAcct) is "" then
-            set _unscopedPending to _unscopedPending + 1
-          else
-            set _scopedPending to _scopedPending + 1
-          end if
-        end repeat
-
-        repeat with acct in accounts
-          -- Only scoped ids can finish mid-walk; unscoped ids must see every
-          -- mailbox before we can know whether they are ambiguous.
-          if _scopedPending is 0 and _unscopedPending is 0 then exit repeat
-          set _an to ""
-          try
-            set _an to name of acct
-          end try
-          repeat with mb in (mailboxes of acct)
-            if _scopedPending is 0 and _unscopedPending is 0 then exit repeat
-            set _mn to ""
-            try
-              set _mn to name of mb
-            end try
-            repeat with _idx from 1 to _total
-              if (item _idx of _state) is "pending" then
-                set _wantA to item _idx of _sAcct
-                set _isScoped to (_wantA is not "")
-                set _probe to true
-                if _isScoped then
-                  ignoring case
-                    if _an is not _wantA then set _probe to false
-                    if _mn is not (item _idx of _sMb) then set _probe to false
-                  end ignoring
-                end if
-                if _probe then
-                  try
-                    set _m to (messages of mb whose id is (item _idx of _ids))
-                    set _hit to missing value
-                    repeat with _c in _m
-                      if ((id of _c) as string) is (item _idx of _idStrs) then
-                        set _hit to _c
-                        exit repeat
-                      end if
-                    end repeat
-                    if _hit is not missing value then
-                      if _isScoped then
-                        set _msg to _hit
-                        ${operation}
-                        set item _idx of _state to "done"
-                        set _scopedPending to _scopedPending - 1
-                        set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
-                      else
-                        set item _idx of _cand to (item _idx of _cand) & _an & "${FIELD_SEP}" & _mn & "${DIAG_ITEM_SEP}"
-                      end if
-                    end if
-                  on error _e
-                    set item _idx of _state to "done"
-                    if _isScoped then
-                      set _scopedPending to _scopedPending - 1
-                    else
-                      set _unscopedPending to _unscopedPending - 1
-                    end if
-                    set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
-                  end try
-                end if
-              end if
-            end repeat
-          end repeat
-        end repeat
-
-        -- Unscoped ids: act only when the walk found exactly one home.
-        repeat with _idx from 1 to _total
-          if (item _idx of _state) is "pending" and (item _idx of _sAcct) is "" then
-            set AppleScript's text item delimiters to "${DIAG_ITEM_SEP}"
-            set _parts to every text item of (item _idx of _cand)
-            set AppleScript's text item delimiters to ""
-            set _hits to {}
-            repeat with _p in _parts
-              if (_p as string) is not "" then set end of _hits to (_p as string)
-            end repeat
-            if (count of _hits) is 0 then
-              set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
-            else if (count of _hits) > 1 then
-              set AppleScript's text item delimiters to "${DIAG_ITEM_SEP}"
-              set _list to _hits as text
-              set AppleScript's text item delimiters to ""
-              set _out to _out & (_idx as string) & "${FIELD_SEP}ambiguous:" & _list & "${RECORD_SEP}"
-            else
-              set AppleScript's text item delimiters to "${FIELD_SEP}"
-              set _one to every text item of (item 1 of _hits)
-              set AppleScript's text item delimiters to ""
-              try
-                set _oa to item 1 of _one
-                set _om to item 2 of _one
-                set _tmb to missing value
-                ignoring case
-                  repeat with mb2 in (mailboxes of (first account whose name is _oa))
-                    if (name of mb2) is _om then
-                      set _tmb to mb2
-                      exit repeat
-                    end if
-                  end repeat
-                end ignoring
-                if _tmb is missing value then
-                  set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
-                else
-                  set _m2 to (messages of _tmb whose id is (item _idx of _ids))
-                  set _hit2 to missing value
-                  repeat with _c2 in _m2
-                    if ((id of _c2) as string) is (item _idx of _idStrs) then
-                      set _hit2 to _c2
-                      exit repeat
-                    end if
-                  end repeat
-                  if _hit2 is missing value then
-                    set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
-                  else
-                    set _msg to _hit2
-                    ${operation}
-                    set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
-                  end if
-                end if
-              on error _e2
-                set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e2 & "${RECORD_SEP}"
-              end try
-            end if
-            set item _idx of _state to "done"
-          end if
-        end repeat
-
-        repeat with _idx from 1 to _total
-          if (item _idx of _state) is "pending" then set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
-        end repeat
+        ${scopedBlocks}
+        ${unlocatedBlock}
         return _out
       on error errMsg
         return "${BATCH_FATAL}" & errMsg
@@ -80296,16 +80271,6 @@ var AppleMailManager = class {
         byId.set(id, { id, success: true });
       } else if (status === "notfound") {
         byId.set(id, { id, success: false, error: "Message not found" });
-      } else if (status.startsWith("ambiguous:")) {
-        const candidates = status.slice("ambiguous:".length).split(DIAG_ITEM_SEP).filter(Boolean).map((entry2) => {
-          const [acct, mb] = entry2.split(FIELD_SEP);
-          return mb ? `"${mb}" in account "${acct}"` : `"${acct}"`;
-        });
-        byId.set(id, {
-          id,
-          success: false,
-          error: `Message id ${id} matches in ${candidates.length} mailboxes (${candidates.join(", ")}); refusing to guess which one you meant. Re-run scoped to one mailbox, or re-fetch the id with list-messages/search-messages for that mailbox.`
-        });
       } else if (status.startsWith("error:")) {
         byId.set(id, { id, success: false, error: status.slice("error:".length) });
       } else {
@@ -80318,13 +80283,9 @@ var AppleMailManager = class {
   }
   /**
    * Delete multiple messages at once (single tree walk — see runBatchOperation).
-   *
-   * `scope` names the account+mailbox the ids came from. Supply it whenever the
-   * caller knows it: it pins resolution to that one mailbox instead of relying
-   * on the id→location index, which is empty in a freshly started process.
    */
-  batchDeleteMessages(ids, scope) {
-    return this.runBatchOperation(ids, "delete _msg", "", scope);
+  batchDeleteMessages(ids) {
+    return this.runBatchOperation(ids, "delete _msg");
   }
   /**
    * Move multiple messages to a mailbox at once (single tree walk).
@@ -80332,11 +80293,8 @@ var AppleMailManager = class {
    * The destination is resolved once (account-scoped, ambiguity-aware — a name
    * matching more than one mailbox fails the whole batch rather than guessing),
    * then every matched message is moved in the same walk.
-   *
-   * `scope` is the SOURCE account+mailbox the ids came from — distinct from the
-   * `mailbox`/`account` destination arguments.
    */
-  batchMoveMessages(ids, mailbox, account, scope) {
+  batchMoveMessages(ids, mailbox, account) {
     const targetAccount = this.resolveAccount(account);
     const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
     const safeMailbox = escapeForAppleScript(targetMailbox);
@@ -80350,31 +80308,31 @@ var AppleMailManager = class {
         if (count of destMatches) is 0 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" not found in account \\"${safeAccount}\\""
         if (count of destMatches) > 1 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; move by full path"
         set destMailbox to item 1 of destMatches`;
-    return this.runBatchOperation(ids, "move _msg to destMailbox", setup, scope);
+    return this.runBatchOperation(ids, "move _msg to destMailbox", setup);
   }
   /**
    * Mark multiple messages as read at once (single tree walk).
    */
-  batchMarkAsRead(ids, scope) {
-    return this.runBatchOperation(ids, "set read status of _msg to true", "", scope);
+  batchMarkAsRead(ids) {
+    return this.runBatchOperation(ids, "set read status of _msg to true");
   }
   /**
    * Mark multiple messages as unread at once (single tree walk).
    */
-  batchMarkAsUnread(ids, scope) {
-    return this.runBatchOperation(ids, "set read status of _msg to false", "", scope);
+  batchMarkAsUnread(ids) {
+    return this.runBatchOperation(ids, "set read status of _msg to false");
   }
   /**
    * Flag multiple messages at once (single tree walk).
    */
-  batchFlagMessages(ids, colorIndex, scope) {
-    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex), "", scope);
+  batchFlagMessages(ids, colorIndex) {
+    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex));
   }
   /**
    * Unflag multiple messages at once (single tree walk).
    */
-  batchUnflagMessages(ids, scope) {
-    return this.runBatchOperation(ids, "set flagged status of _msg to false", "", scope);
+  batchUnflagMessages(ids) {
+    return this.runBatchOperation(ids, "set flagged status of _msg to false");
   }
   /**
    * List attachments for a message.
@@ -83630,10 +83588,6 @@ function withJsonSchema2020_12(transport2) {
 loadFileConfig();
 var MESSAGE_ID_SCHEMA = external_exports.string().regex(/^(\d+|imap:[A-Za-z0-9_-]+)$/, "Message ID must be numeric or an IMAP id (imap:\u2026)");
 var BATCH_IDS_SCHEMA = external_exports.array(MESSAGE_ID_SCHEMA).min(1, "At least one message ID is required").max(100, "Cannot process more than 100 messages in a single batch");
-var BATCH_SOURCE_MAILBOX_SCHEMA = external_exports.string().optional().describe(
-  "Mailbox the numeric ids were listed from (e.g. 'INBOX'). Pins each id to that mailbox \u2014 strongly recommended, since one numeric id can match in several mailboxes. Ignored for imap: ids."
-);
-var BATCH_SOURCE_ACCOUNT_SCHEMA = external_exports.string().optional().describe("Account the numeric ids were listed from. Pair with sourceMailbox.");
 var FLAG_COLOR_INDEX = {
   red: 0,
   orange: 1,
@@ -83683,10 +83637,7 @@ var BATCH_COUNT_OUTPUT_SCHEMA = {
   ok: external_exports.boolean().optional(),
   success: external_exports.number().optional(),
   failed: external_exports.number().optional(),
-  mailbox: external_exports.string().optional(),
-  // Declared explicitly: a raw zod shape compiles to additionalProperties:false,
-  // so an undeclared key here is rejected by the CLIENT with -32602.
-  errors: external_exports.array(external_exports.string()).optional()
+  mailbox: external_exports.string().optional()
 };
 var CHECK_ITEM_SCHEMA = external_exports.object({}).passthrough();
 var require2 = createRequire(import.meta.url);
@@ -83778,7 +83729,6 @@ async function hybridBatchCounts(ids, appleFn, imapFn) {
     const s = res.filter((r) => r.success).length;
     success += s;
     fail += res.length - s;
-    errors.push(...res.filter((r) => !r.success && r.error).map((r) => r.error));
   }
   if (imapIds.length > 0) {
     const r = await imapFn(imapIds);
@@ -83787,13 +83737,6 @@ async function hybridBatchCounts(ids, appleFn, imapFn) {
     errors.push(...r.errors);
   }
   return { success, fail, errors };
-}
-function formatBatchErrors(errors, max = 5) {
-  const distinct = [...new Set(errors.filter(Boolean))];
-  if (distinct.length === 0) return "";
-  const shown = distinct.slice(0, max);
-  const more = distinct.length - shown.length;
-  return `: ${shown.join("; ")}${more > 0 ? ` (+${more} more)` : ""}`;
 }
 registerTool(
   "search-messages",
@@ -84572,89 +84515,56 @@ registerTool(
 registerTool(
   "batch-delete-messages",
   {
-    description: "Use when: deleting multiple messages in one call (1\u2013100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed, plus an error per failed id.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once \u2014 require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
+    description: "Use when: deleting multiple messages in one call (1\u2013100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once \u2014 require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting.",
     inputSchema: {
-      ids: BATCH_IDS_SCHEMA,
-      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
-      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
+      ids: BATCH_IDS_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
-    const {
-      success: successCount,
-      fail: failCount,
-      errors
-    } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchDeleteMessages(n, { account: sourceAccount, mailbox: sourceMailbox }),
+      (n) => mailManager.batchDeleteMessages(n),
       (im) => imapBatchDelete(im)
     );
-    const structured = {
-      ok: failCount === 0,
-      success: successCount,
-      failed: failCount,
-      ...errors.length > 0 ? { errors } : {}
-    };
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
     if (failCount === 0) {
       return successResponse(`Successfully deleted ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
-      return errorResponse(
-        `Failed to delete all ${failCount} message(s)${formatBatchErrors(errors)}`
-      );
+      return errorResponse(`Failed to delete all ${failCount} message(s)`);
     } else {
-      return successResponse(
-        `Deleted ${successCount} message(s), ${failCount} failed${formatBatchErrors(errors)}`,
-        structured
-      );
+      return successResponse(`Deleted ${successCount} message(s), ${failCount} failed`, structured);
     }
   }, "Error batch deleting messages")
 );
 registerTool(
   "batch-move-messages",
   {
-    description: "Use when: moving multiple messages (1\u2013100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed, plus an error per failed id.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once \u2014 confirm the destination mailbox, and search-messages/list-messages first to confirm the ids. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from \u2014 not the destination) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
+    description: "Use when: moving multiple messages (1\u2013100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once \u2014 confirm the destination mailbox, and search-messages/list-messages first to confirm the ids.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
       mailbox: external_exports.string().min(1, "Destination mailbox is required"),
-      account: external_exports.string().optional().describe("Account containing the destination mailbox"),
-      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
-      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
+      account: external_exports.string().optional().describe("Account containing the destination mailbox")
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids, mailbox, account, sourceMailbox, sourceAccount }) => {
-    const {
-      success: successCount,
-      fail: failCount,
-      errors
-    } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, mailbox, account }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMoveMessages(n, mailbox, account, {
-        account: sourceAccount,
-        mailbox: sourceMailbox
-      }),
+      (n) => mailManager.batchMoveMessages(n, mailbox, account),
       (im) => imapBatchMove(im, mailbox, { account })
     );
-    const structured = {
-      ok: failCount === 0,
-      success: successCount,
-      failed: failCount,
-      mailbox,
-      ...errors.length > 0 ? { errors } : {}
-    };
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount, mailbox };
     if (failCount === 0) {
       return successResponse(
         `Successfully moved ${successCount} message(s) to "${mailbox}"`,
         structured
       );
     } else if (successCount === 0) {
-      return errorResponse(
-        `Failed to move all ${failCount} message(s)${formatBatchErrors(errors)}`
-      );
+      return errorResponse(`Failed to move all ${failCount} message(s)`);
     } else {
       return successResponse(
-        `Moved ${successCount} message(s) to "${mailbox}", ${failCount} failed${formatBatchErrors(errors)}`,
+        `Moved ${successCount} message(s) to "${mailbox}", ${failCount} failed`,
         structured
       );
     }
@@ -84663,39 +84573,26 @@ registerTool(
 registerTool(
   "batch-mark-as-read",
   {
-    description: "Use when: marking multiple messages (1\u2013100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
+    description: "Use when: marking multiple messages (1\u2013100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first.",
     inputSchema: {
-      ids: BATCH_IDS_SCHEMA,
-      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
-      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
+      ids: BATCH_IDS_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
-    const {
-      success: successCount,
-      fail: failCount,
-      errors
-    } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMarkAsRead(n, { account: sourceAccount, mailbox: sourceMailbox }),
+      (n) => mailManager.batchMarkAsRead(n),
       (im) => imapBatchMarkRead(im)
     );
-    const structured = {
-      ok: failCount === 0,
-      success: successCount,
-      failed: failCount,
-      ...errors.length > 0 ? { errors } : {}
-    };
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
     if (failCount === 0) {
       return successResponse(`Successfully marked ${successCount} message(s) as read`, structured);
     } else if (successCount === 0) {
-      return errorResponse(
-        `Failed to mark all ${failCount} message(s) as read${formatBatchErrors(errors)}`
-      );
+      return errorResponse(`Failed to mark all ${failCount} message(s) as read`);
     } else {
       return successResponse(
-        `Marked ${successCount} message(s) as read, ${failCount} failed${formatBatchErrors(errors)}`,
+        `Marked ${successCount} message(s) as read, ${failCount} failed`,
         structured
       );
     }
@@ -84704,42 +84601,29 @@ registerTool(
 registerTool(
   "batch-mark-as-unread",
   {
-    description: "Use when: marking multiple messages (1\u2013100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
+    description: "Use when: marking multiple messages (1\u2013100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first.",
     inputSchema: {
-      ids: BATCH_IDS_SCHEMA,
-      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
-      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
+      ids: BATCH_IDS_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
-    const {
-      success: successCount,
-      fail: failCount,
-      errors
-    } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMarkAsUnread(n, { account: sourceAccount, mailbox: sourceMailbox }),
+      (n) => mailManager.batchMarkAsUnread(n),
       (im) => imapBatchMarkUnread(im)
     );
-    const structured = {
-      ok: failCount === 0,
-      success: successCount,
-      failed: failCount,
-      ...errors.length > 0 ? { errors } : {}
-    };
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
     if (failCount === 0) {
       return successResponse(
         `Successfully marked ${successCount} message(s) as unread`,
         structured
       );
     } else if (successCount === 0) {
-      return errorResponse(
-        `Failed to mark all ${failCount} message(s) as unread${formatBatchErrors(errors)}`
-      );
+      return errorResponse(`Failed to mark all ${failCount} message(s) as unread`);
     } else {
       return successResponse(
-        `Marked ${successCount} message(s) as unread, ${failCount} failed${formatBatchErrors(errors)}`,
+        `Marked ${successCount} message(s) as unread, ${failCount} failed`,
         structured
       );
     }
@@ -84748,85 +84632,53 @@ registerTool(
 registerTool(
   "batch-flag-messages",
   {
-    description: "Use when: flagging multiple messages (1\u2013100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.\nNote: the color is applied on both routes \u2014 AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads \u2014 so a mixed batch of numeric and `imap:` ids all end up colored.",
+    description: "Use when: flagging multiple messages (1\u2013100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: the color is applied on both routes \u2014 AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads \u2014 so a mixed batch of numeric and `imap:` ids all end up colored.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
-      color: FLAG_COLOR_SCHEMA,
-      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
-      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
+      color: FLAG_COLOR_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids, color, sourceMailbox, sourceAccount }) => {
+  withErrorHandling(async ({ ids, color }) => {
     const colorIndex = color ? FLAG_COLOR_INDEX[color] : void 0;
-    const {
-      success: successCount,
-      fail: failCount,
-      errors
-    } = await hybridBatchCounts(
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchFlagMessages(n, colorIndex, {
-        account: sourceAccount,
-        mailbox: sourceMailbox
-      }),
+      (n) => mailManager.batchFlagMessages(n, colorIndex),
       (im) => imapBatchFlag(im, colorIndex)
     );
-    const structured = {
-      ok: failCount === 0,
-      success: successCount,
-      failed: failCount,
-      ...errors.length > 0 ? { errors } : {}
-    };
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
     if (failCount === 0) {
       return successResponse(`Successfully flagged ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
-      return errorResponse(
-        `Failed to flag all ${failCount} message(s)${formatBatchErrors(errors)}`
-      );
+      return errorResponse(`Failed to flag all ${failCount} message(s)`);
     } else {
-      return successResponse(
-        `Flagged ${successCount} message(s), ${failCount} failed${formatBatchErrors(errors)}`,
-        structured
-      );
+      return successResponse(`Flagged ${successCount} message(s), ${failCount} failed`, structured);
     }
   }, "Error batch flagging messages")
 );
 registerTool(
   "batch-unflag-messages",
   {
-    description: "Use when: removing flags from multiple messages (1\u2013100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
+    description: "Use when: removing flags from multiple messages (1\u2013100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first.",
     inputSchema: {
-      ids: BATCH_IDS_SCHEMA,
-      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
-      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
+      ids: BATCH_IDS_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
-    const {
-      success: successCount,
-      fail: failCount,
-      errors
-    } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids }) => {
+    const { success: successCount, fail: failCount } = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchUnflagMessages(n, { account: sourceAccount, mailbox: sourceMailbox }),
+      (n) => mailManager.batchUnflagMessages(n),
       (im) => imapBatchUnflag(im)
     );
-    const structured = {
-      ok: failCount === 0,
-      success: successCount,
-      failed: failCount,
-      ...errors.length > 0 ? { errors } : {}
-    };
+    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
     if (failCount === 0) {
       return successResponse(`Successfully unflagged ${successCount} message(s)`, structured);
     } else if (successCount === 0) {
-      return errorResponse(
-        `Failed to unflag all ${failCount} message(s)${formatBatchErrors(errors)}`
-      );
+      return errorResponse(`Failed to unflag all ${failCount} message(s)`);
     } else {
       return successResponse(
-        `Unflagged ${successCount} message(s), ${failCount} failed${formatBatchErrors(errors)}`,
+        `Unflagged ${successCount} message(s), ${failCount} failed`,
         structured
       );
     }

@@ -829,35 +829,20 @@ Save a message attachment to disk.
 
 All batch operations accept an array of message IDs (max 100 per batch) and return per-item success/failure results.
 
-#### Scoping numeric ids
-
-A **numeric** Mail.app message id is not guaranteed to identify one message on
-its own — the same id can match in several mailboxes at once. The common case is
-Gmail over IMAP, where one message is reachable through `INBOX`,
-`[Gmail]/All Mail` and `[Gmail]/Important` simultaneously; deleting the
-`All Mail` copy is not the same operation as deleting the `INBOX` copy.
-
-Batch operations therefore resolve every numeric id inside a **known scope**:
-
-1. `sourceMailbox` + `sourceAccount`, when you pass them — always prefer this.
-2. Otherwise the mailbox the server last saw that id in (recorded automatically
-   by `list-messages` / `search-messages` in the same session).
-3. Otherwise the whole tree is searched, and an id that matches in **more than
-   one** mailbox is **refused** with an error naming the candidates rather than
-   guessing — the same refusal `move-message` already applies to an ambiguous
-   destination name.
-
-An id is reported successful only when the intended message was the one
-operated on. `imap:` ids already encode their account and mailbox, so they are
-unaffected and ignore `sourceMailbox`/`sourceAccount`.
+**Numeric IDs are scoped to the mailbox you listed them from.** Mail.app numbers messages per
+mailbox, so on a label store (Gmail, iCloud) one message answers to the same id in `INBOX`,
+`Important` and `All Mail` at once — and deleting the `All Mail` copy is not the same operation as
+deleting the `INBOX` copy. Each id is therefore bound to the mailbox it was listed/searched from and
+the operation is applied only there, so **list or search the mailbox immediately before acting on
+it**. An id the server hasn't seen listed is accepted only when exactly one mailbox holds it;
+if several do, that id fails with the candidate mailboxes named instead of being applied to an
+arbitrary copy. `imap:…` ids carry their own account + mailbox + UID and are never ambiguous.
 
 #### `batch-delete-messages`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs to delete (max 100) |
-| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from. Pins each id to that mailbox — see [Scoping numeric ids](#scoping-numeric-ids). Ignored for `imap:` ids. |
-| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 **⚠️ Safety:** Destructive. Requires explicit user confirmation; search/list first to confirm the message ids.
 
@@ -868,16 +853,12 @@ unaffected and ignore `sourceMailbox`/`sourceAccount`.
 | `ids` | string[] | Yes | Message IDs to move (max 100) |
 | `mailbox` | string | Yes | Destination mailbox |
 | `account` | string | No | Account containing mailbox |
-| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from. The **source**, not the destination. Pins each id to that mailbox — see [Scoping numeric ids](#scoping-numeric-ids). Ignored for `imap:` ids. |
-| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 #### `batch-mark-as-read` / `batch-mark-as-unread`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
-| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from. Pins each id to that mailbox — see [Scoping numeric ids](#scoping-numeric-ids). Ignored for `imap:` ids. |
-| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 #### `batch-flag-messages` / `batch-unflag-messages`
 
@@ -885,8 +866,6 @@ unaffected and ignore `sourceMailbox`/`sourceAccount`.
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
 | `color` | string | No | (`batch-flag-messages` only) Flag color — see [`flag-message`](#flag-message--unflag-message). Applied on both routes, so a mixed batch of numeric and `imap:` ids all end up colored. |
-| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from. Pins each id to that mailbox — see [Scoping numeric ids](#scoping-numeric-ids). Ignored for `imap:` ids. |
-| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 ---
 
@@ -1467,6 +1446,15 @@ In a JSON string literal, `\\` — two characters — denotes **one** literal ba
 - Message may have been deleted or moved
 - Message IDs change if the message is moved between mailboxes
 - Use `search-messages` to find the current message ID
+
+### "... is present in more than one mailbox"
+- A bare numeric ID identifies a message only *within a mailbox*, and a label store (Gmail, iCloud)
+  reports the same message under the same ID in `INBOX`, `Important` and `All Mail` at once. The
+  server refuses rather than guessing which copy you meant.
+- Fix it by running `list-messages`/`search-messages` on the mailbox you actually want to act on,
+  then using the IDs from that result — the operation is then scoped to that mailbox.
+- It only affects IDs the server hasn't seen listed (carried over from an earlier session, or typed
+  by hand). `imap:…` IDs encode their own mailbox and never hit this.
 
 ### `search-messages` says "Partial results" or skips a mailbox
 - This is expected for very large IMAP/Gmail mailboxes (e.g. Gmail's `All Mail`, `Important`): Apple Mail can't scan them via AppleScript before timing out, so they're skipped and named in the result rather than silently returning empty.
