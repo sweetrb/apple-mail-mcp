@@ -10,7 +10,11 @@
  *   3. every advertised schema declares the JSON Schema 2020-12 dialect and
  *      carries no draft-07-only construct — the SDK emits draft-07 and current
  *      clients refuse every such tool outright (#147)
- *   4. the diagnostic tools round-trip without a validation rejection. The SDK's
+ *   4. every advertised schema actually COMPILES under a real 2020-12 validator
+ *      (ajv's Ajv2020 — the same library the MCP SDK validates with), because a
+ *      schema can declare the right dialect and still be structurally invalid
+ *      under it. Asserting the "$schema" string is a claim; compiling is proof.
+ *   5. the diagnostic tools round-trip without a validation rejection. The SDK's
  *      validateToolOutput (server mcp.js) THROWS McpError when a success result's
  *      structuredContent is missing or fails the schema, which rejects callTool —
  *      so a resolving call proves a real payload validates against its schema.
@@ -23,6 +27,16 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { resolve } from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+// ajv's 2020-12 entrypoint is CommonJS with `module.exports = Ajv2020` AND an
+// `exports.default` alias, so the ESM default import lands on the namespace-ish
+// object under some loaders and on the class under others — unwrap `.default`
+// when it is there. ajv is a DIRECT devDependency on purpose: it reaches the
+// tree transitively via @modelcontextprotocol/sdk, but pnpm's strict
+// node_modules layout makes a transitive package unimportable.
+import Ajv2020Entry from "ajv/dist/2020.js";
+
+const Ajv2020 = ((Ajv2020Entry as unknown as { default?: unknown }).default ??
+  Ajv2020Entry) as typeof Ajv2020Entry;
 
 const SERVER = resolve(__dirname, "../build/index.js");
 
@@ -211,6 +225,49 @@ describe("outputSchema contract (real server over stdio)", () => {
       }
     }
     expect(offenders, `nested dialect declarations: ${offenders.join("; ")}`).toEqual([]);
+  });
+
+  it("every advertised schema compiles under a REAL 2020-12 validator (ajv)", async () => {
+    // The dialect assertions above check what we CLAIM; this checks whether the
+    // claim holds. A schema can carry `"$schema": ".../2020-12/schema"` and
+    // still be structurally invalid under it (bad `type`, malformed `$ref`,
+    // non-schema in a `properties` slot, a keyword whose value has the wrong
+    // shape) — every one of those is a tool a strict client drops on the floor.
+    //
+    // ajv IS the validator the MCP SDK itself uses, and Ajv2020 will refuse a
+    // schema whose declared meta-schema it doesn't know — so this also
+    // independently re-catches the #147 draft-07 regression from the other end,
+    // via a library rather than a string comparison.
+    //
+    // strict:false on purpose: ajv's strict mode rejects unknown keywords and
+    // benign annotations (title/examples/x-*), which is a style opinion, not a
+    // portability fact. What we need to know is whether the schema is
+    // STRUCTURALLY VALID under 2020-12.
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(0);
+
+    const failures: string[] = [];
+    for (const tool of tools) {
+      for (const [kind, schema] of [
+        ["inputSchema", tool.inputSchema],
+        ["outputSchema", tool.outputSchema],
+      ] as const) {
+        if (!schema) continue;
+        // A fresh instance per schema: ajv caches by $id/serialized schema, and
+        // one poisoned instance must not mask or manufacture later failures.
+        const ajv = new Ajv2020({ strict: false });
+        try {
+          ajv.compile(schema as object);
+        } catch (err) {
+          failures.push(`${tool.name}.${kind}: ${(err as Error).message}`);
+        }
+      }
+    }
+    expect(
+      failures,
+      `every advertised schema must compile under JSON Schema 2020-12 — ` +
+        `a client that validates schemas will refuse these tools outright: ${failures.join("; ")}`
+    ).toEqual([]);
   });
 
   it("diagnostic tools' real output validates against their outputSchema (when reachable)", async () => {
