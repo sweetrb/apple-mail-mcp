@@ -784,6 +784,19 @@ export class AppleMailManager {
   }
 
   /**
+   * Publicly record where a message id lives.
+   *
+   * The index fills itself from list/search results, but that is per-process
+   * state: a caller that carried ids across a process boundary (a stored triage
+   * list, a scheduled job resuming) starts with an empty index, so every id is
+   * "unlocated" and a label-store id gets refused as ambiguous. Registering the
+   * known location restores scoped resolution.
+   */
+  noteMessageLocation(id: string, account: string, mailbox: string): void {
+    this.rememberLocation(id, account, mailbox);
+  }
+
+  /**
    * AppleScript fragment resolving `account` + `mailbox` into `_tmb`, leaving
    * `_tmb` as `missing value` when it can't be pinned down. Exact-name match
    * only, and a name matching more than one mailbox resolves to nothing rather
@@ -2306,10 +2319,12 @@ export class AppleMailManager {
    * Mail.app numeric ids are per-mailbox, and on a label store (Gmail, iCloud)
    * ONE message is present in several mailboxes under the SAME id — INBOX,
    * "Important" and "All Mail" all report id 75816 for the same mail. This used
-   * to walk every account's every mailbox and mutate the FIRST hit; because
-   * `mailboxes of account` yields INBOX late, an id listed from INBOX was
-   * reliably mutated in "Important" instead, so the op reported success while
-   * the INBOX copy stayed put and a different copy was moved/deleted (#152).
+   * to walk every account's every mailbox and mutate the FIRST hit, so whichever
+   * copy `mailboxes of <account>` happened to reach first won and the mailbox the
+   * id was listed from lost whenever an alias came earlier in that (store-
+   * dependent) order — the op reported success while the copy the caller meant
+   * stayed put and a different one was moved/deleted (#152). See
+   * runBatchOperation for the observed ordering on the reporting account.
    *
    * Which mailbox a mutation lands in is semantic — deleting the INBOX copy and
    * deleting the "All Mail" copy are different operations — so scope to the
@@ -2661,6 +2676,59 @@ export class AppleMailManager {
   // ===========================================================================
 
   /**
+   * Turn a caller-supplied batch source scope into an account+mailbox pair.
+   *
+   * `mailbox` is what does the scoping, and it works ON ITS OWN: an omitted
+   * `account` means "the default account" here exactly as it does for every
+   * other tool in this server (see resolveAccount), never "ignore the argument
+   * you were given". Requiring both used to make a lone `sourceMailbox` a silent
+   * no-op — the ids fell back to the whole-tree path and were then refused as
+   * ambiguous, which is the very failure the parameter exists to prevent.
+   *
+   * The safety property is absolute: when the account cannot be determined there
+   * is NO fallback to the scan-and-guess walk. The caller gets an error naming
+   * the mailbox it asked for, so it can retry with an explicit `sourceAccount`.
+   * (An `account` with no `mailbox` cannot pin anything, so it scopes nothing —
+   * those ids still go through the index / ambiguity-checked path.)
+   */
+  private resolveBatchScope(scope?: {
+    account?: string;
+    mailbox?: string;
+  }):
+    | { kind: "none" }
+    | { kind: "scoped"; account: string; mailbox: string }
+    | { kind: "unresolvable"; error: string } {
+    const mailbox = scope?.mailbox?.trim();
+    if (!mailbox) return { kind: "none" };
+
+    const account = scope?.account?.trim();
+    if (account) return { kind: "scoped", account, mailbox };
+
+    const known = this.getCachedAccounts();
+    if (known.length === 0) {
+      return {
+        kind: "unresolvable",
+        error:
+          `Cannot scope to source mailbox "${mailbox}": no sourceAccount was given and no Mail ` +
+          `account could be read (Mail returned none, or the AppleScript transport failed). ` +
+          `Retry with an explicit sourceAccount.`,
+      };
+    }
+
+    const chosen = this.resolveAccount();
+    if (!known.some((a) => a.name === chosen)) {
+      return {
+        kind: "unresolvable",
+        error:
+          `Cannot scope to source mailbox "${mailbox}": no sourceAccount was given and the ` +
+          `default account could not be determined. Retry with an explicit sourceAccount ` +
+          `(available: ${known.map((a) => a.name).join(", ")}).`,
+      };
+    }
+    return { kind: "scoped", account: chosen, mailbox };
+  }
+
+  /**
    * Run one operation over many message IDs in a SINGLE osascript invocation.
    *
    * Previously each batch method looped and called the per-id method, so a
@@ -2676,18 +2744,28 @@ export class AppleMailManager {
    * numeric id is unique only within a mailbox, and a label store (Gmail,
    * iCloud) exposes one message in several mailboxes under the same id — INBOX,
    * "Important" and "All Mail" all report id 75816 for the same mail. The old
-   * tree walk applied `operation` to the FIRST mailbox that matched, and
-   * `mailboxes of account` yields INBOX late, so a batch of ids listed from
-   * INBOX was reliably applied to the "Important" copies instead: every id
-   * reported `ok` while the INBOX messages stayed put and other copies were
-   * moved/deleted. Grouping by recorded source mailbox makes the op land on the
-   * copy the caller actually listed; ids with no recorded mailbox are refused
-   * when ambiguous rather than applied to an arbitrary copy.
+   * tree walk applied `operation` to the FIRST mailbox that matched while
+   * iterating `mailboxes of <account>`, so whichever copy that iteration reached
+   * first won — and the ids' real source mailbox lost whenever an alias came
+   * earlier. Observed on the reporting account (`list-mailboxes`, 2026-08-13):
+   * INBOX 1, "[Gmail]/All Mail" 5, "[Gmail]/Important" 9, "Sales Spam" 12 — so a
+   * batch listed from "Sales Spam" was applied to the All Mail copies while the
+   * Sales Spam messages stayed put, and every id still reported `ok`. That order
+   * is a property of the store, not a guarantee: do not rely on it in either
+   * direction — any mailbox the walk reaches late loses the same way. Grouping by
+   * recorded source mailbox makes the op land on the copy the caller actually
+   * listed; ids with no recorded mailbox are refused when ambiguous rather than
+   * applied to an arbitrary copy.
    *
    * `setup` runs once up front (used by move to resolve the destination); it may
    * bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
    */
-  private runBatchOperation(ids: string[], operation: string, setup = ""): BatchOperationResult[] {
+  private runBatchOperation(
+    ids: string[],
+    operation: string,
+    setup = "",
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
     // Keep the numeric IDs paired with their original string form and 1-based
     // position. The AppleScript reports outcomes by POSITION, not by id: a Mail
     // id large enough to exceed AppleScript's 2^29 integer range coerces to
@@ -2703,6 +2781,20 @@ export class AppleMailManager {
       return ids.map((id) => ({ id, success: false, error: "Invalid message ID" }));
     }
 
+    // An explicit `scope` from the caller outranks the index. The index is
+    // per-process state, so a caller that started a fresh server (or restored a
+    // saved id list) has nothing recorded and every id would land in
+    // `unlocated` — where, on a label store, it gets refused as ambiguous.
+    // Naming the source mailbox is the reliable way to stay on the scoped path.
+    //
+    // A scope we cannot honor FAILS the batch. Silently dropping it would put
+    // every id back on the whole-tree path the caller was trying to avoid.
+    const resolved = this.resolveBatchScope(scope);
+    if (resolved.kind === "unresolvable") {
+      return ids.map((id) => ({ id, success: false, error: resolved.error }));
+    }
+    const callerScope = resolved.kind === "scoped" ? resolved : undefined;
+
     // Group the ids by the mailbox they were listed from. Each group opens that
     // one mailbox and applies the op only there; ids we've never seen listed
     // fall into `unlocated` and are resolved with an ambiguity check.
@@ -2713,7 +2805,7 @@ export class AppleMailManager {
     const unlocated: { num: number; pos: number }[] = [];
     valid.forEach((v, i) => {
       const pos = i + 1;
-      const loc = this.locationFor(v.id);
+      const loc = callerScope ?? this.locationFor(v.id);
       if (!loc) {
         unlocated.push({ num: v.num, pos });
         return;
@@ -2866,8 +2958,11 @@ export class AppleMailManager {
   /**
    * Delete multiple messages at once (single tree walk — see runBatchOperation).
    */
-  batchDeleteMessages(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "delete _msg");
+  batchDeleteMessages(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "delete _msg", "", scope);
   }
 
   /**
@@ -2877,7 +2972,12 @@ export class AppleMailManager {
    * matching more than one mailbox fails the whole batch rather than guessing),
    * then every matched message is moved in the same walk.
    */
-  batchMoveMessages(ids: string[], mailbox: string, account?: string): BatchOperationResult[] {
+  batchMoveMessages(
+    ids: string[],
+    mailbox: string,
+    account?: string,
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
     const targetAccount = this.resolveAccount(account);
     const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
     const safeMailbox = escapeForAppleScript(targetMailbox);
@@ -2896,35 +2996,48 @@ export class AppleMailManager {
         if (count of destMatches) > 1 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; move by full path"
         set destMailbox to item 1 of destMatches`;
 
-    return this.runBatchOperation(ids, "move _msg to destMailbox", setup);
+    return this.runBatchOperation(ids, "move _msg to destMailbox", setup, scope);
   }
 
   /**
    * Mark multiple messages as read at once (single tree walk).
    */
-  batchMarkAsRead(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set read status of _msg to true");
+  batchMarkAsRead(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set read status of _msg to true", "", scope);
   }
 
   /**
    * Mark multiple messages as unread at once (single tree walk).
    */
-  batchMarkAsUnread(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set read status of _msg to false");
+  batchMarkAsUnread(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set read status of _msg to false", "", scope);
   }
 
   /**
    * Flag multiple messages at once (single tree walk).
    */
-  batchFlagMessages(ids: string[], colorIndex?: number): BatchOperationResult[] {
-    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex));
+  batchFlagMessages(
+    ids: string[],
+    colorIndex?: number,
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex), "", scope);
   }
 
   /**
    * Unflag multiple messages at once (single tree walk).
    */
-  batchUnflagMessages(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set flagged status of _msg to false");
+  batchUnflagMessages(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set flagged status of _msg to false", "", scope);
   }
 
   /**

@@ -78582,6 +78582,18 @@ var AppleMailManager = class {
     return this.idLocationIndex.get(String(id));
   }
   /**
+   * Publicly record where a message id lives.
+   *
+   * The index fills itself from list/search results, but that is per-process
+   * state: a caller that carried ids across a process boundary (a stored triage
+   * list, a scheduled job resuming) starts with an empty index, so every id is
+   * "unlocated" and a label-store id gets refused as ambiguous. Registering the
+   * known location restores scoped resolution.
+   */
+  noteMessageLocation(id, account, mailbox) {
+    this.rememberLocation(id, account, mailbox);
+  }
+  /**
    * AppleScript fragment resolving `account` + `mailbox` into `_tmb`, leaving
    * `_tmb` as `missing value` when it can't be pinned down. Exact-name match
    * only, and a name matching more than one mailbox resolves to nothing rather
@@ -79815,10 +79827,12 @@ var AppleMailManager = class {
    * Mail.app numeric ids are per-mailbox, and on a label store (Gmail, iCloud)
    * ONE message is present in several mailboxes under the SAME id — INBOX,
    * "Important" and "All Mail" all report id 75816 for the same mail. This used
-   * to walk every account's every mailbox and mutate the FIRST hit; because
-   * `mailboxes of account` yields INBOX late, an id listed from INBOX was
-   * reliably mutated in "Important" instead, so the op reported success while
-   * the INBOX copy stayed put and a different copy was moved/deleted (#152).
+   * to walk every account's every mailbox and mutate the FIRST hit, so whichever
+   * copy `mailboxes of <account>` happened to reach first won and the mailbox the
+   * id was listed from lost whenever an alias came earlier in that (store-
+   * dependent) order — the op reported success while the copy the caller meant
+   * stayed put and a different one was moved/deleted (#152). See
+   * runBatchOperation for the observed ordering on the reporting account.
    *
    * Which mailbox a mutation lands in is semantic — deleting the INBOX copy and
    * deleting the "All Mail" copy are different operations — so scope to the
@@ -80117,6 +80131,43 @@ var AppleMailManager = class {
   // Batch Operations
   // ===========================================================================
   /**
+   * Turn a caller-supplied batch source scope into an account+mailbox pair.
+   *
+   * `mailbox` is what does the scoping, and it works ON ITS OWN: an omitted
+   * `account` means "the default account" here exactly as it does for every
+   * other tool in this server (see resolveAccount), never "ignore the argument
+   * you were given". Requiring both used to make a lone `sourceMailbox` a silent
+   * no-op — the ids fell back to the whole-tree path and were then refused as
+   * ambiguous, which is the very failure the parameter exists to prevent.
+   *
+   * The safety property is absolute: when the account cannot be determined there
+   * is NO fallback to the scan-and-guess walk. The caller gets an error naming
+   * the mailbox it asked for, so it can retry with an explicit `sourceAccount`.
+   * (An `account` with no `mailbox` cannot pin anything, so it scopes nothing —
+   * those ids still go through the index / ambiguity-checked path.)
+   */
+  resolveBatchScope(scope) {
+    const mailbox = scope?.mailbox?.trim();
+    if (!mailbox) return { kind: "none" };
+    const account = scope?.account?.trim();
+    if (account) return { kind: "scoped", account, mailbox };
+    const known = this.getCachedAccounts();
+    if (known.length === 0) {
+      return {
+        kind: "unresolvable",
+        error: `Cannot scope to source mailbox "${mailbox}": no sourceAccount was given and no Mail account could be read (Mail returned none, or the AppleScript transport failed). Retry with an explicit sourceAccount.`
+      };
+    }
+    const chosen = this.resolveAccount();
+    if (!known.some((a) => a.name === chosen)) {
+      return {
+        kind: "unresolvable",
+        error: `Cannot scope to source mailbox "${mailbox}": no sourceAccount was given and the default account could not be determined. Retry with an explicit sourceAccount (available: ${known.map((a) => a.name).join(", ")}).`
+      };
+    }
+    return { kind: "scoped", account: chosen, mailbox };
+  }
+  /**
    * Run one operation over many message IDs in a SINGLE osascript invocation.
    *
    * Previously each batch method looped and called the per-id method, so a
@@ -80132,18 +80183,23 @@ var AppleMailManager = class {
    * numeric id is unique only within a mailbox, and a label store (Gmail,
    * iCloud) exposes one message in several mailboxes under the same id — INBOX,
    * "Important" and "All Mail" all report id 75816 for the same mail. The old
-   * tree walk applied `operation` to the FIRST mailbox that matched, and
-   * `mailboxes of account` yields INBOX late, so a batch of ids listed from
-   * INBOX was reliably applied to the "Important" copies instead: every id
-   * reported `ok` while the INBOX messages stayed put and other copies were
-   * moved/deleted. Grouping by recorded source mailbox makes the op land on the
-   * copy the caller actually listed; ids with no recorded mailbox are refused
-   * when ambiguous rather than applied to an arbitrary copy.
+   * tree walk applied `operation` to the FIRST mailbox that matched while
+   * iterating `mailboxes of <account>`, so whichever copy that iteration reached
+   * first won — and the ids' real source mailbox lost whenever an alias came
+   * earlier. Observed on the reporting account (`list-mailboxes`, 2026-08-13):
+   * INBOX 1, "[Gmail]/All Mail" 5, "[Gmail]/Important" 9, "Sales Spam" 12 — so a
+   * batch listed from "Sales Spam" was applied to the All Mail copies while the
+   * Sales Spam messages stayed put, and every id still reported `ok`. That order
+   * is a property of the store, not a guarantee: do not rely on it in either
+   * direction — any mailbox the walk reaches late loses the same way. Grouping by
+   * recorded source mailbox makes the op land on the copy the caller actually
+   * listed; ids with no recorded mailbox are refused when ambiguous rather than
+   * applied to an arbitrary copy.
    *
    * `setup` runs once up front (used by move to resolve the destination); it may
    * bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
    */
-  runBatchOperation(ids, operation, setup = "") {
+  runBatchOperation(ids, operation, setup = "", scope) {
     const valid = [];
     for (const id of ids) {
       const num = Number(id);
@@ -80152,11 +80208,16 @@ var AppleMailManager = class {
     if (valid.length === 0) {
       return ids.map((id) => ({ id, success: false, error: "Invalid message ID" }));
     }
+    const resolved = this.resolveBatchScope(scope);
+    if (resolved.kind === "unresolvable") {
+      return ids.map((id) => ({ id, success: false, error: resolved.error }));
+    }
+    const callerScope = resolved.kind === "scoped" ? resolved : void 0;
     const groups = /* @__PURE__ */ new Map();
     const unlocated = [];
     valid.forEach((v, i) => {
       const pos = i + 1;
-      const loc = this.locationFor(v.id);
+      const loc = callerScope ?? this.locationFor(v.id);
       if (!loc) {
         unlocated.push({ num: v.num, pos });
         return;
@@ -80284,8 +80345,8 @@ var AppleMailManager = class {
   /**
    * Delete multiple messages at once (single tree walk — see runBatchOperation).
    */
-  batchDeleteMessages(ids) {
-    return this.runBatchOperation(ids, "delete _msg");
+  batchDeleteMessages(ids, scope) {
+    return this.runBatchOperation(ids, "delete _msg", "", scope);
   }
   /**
    * Move multiple messages to a mailbox at once (single tree walk).
@@ -80294,7 +80355,7 @@ var AppleMailManager = class {
    * matching more than one mailbox fails the whole batch rather than guessing),
    * then every matched message is moved in the same walk.
    */
-  batchMoveMessages(ids, mailbox, account) {
+  batchMoveMessages(ids, mailbox, account, scope) {
     const targetAccount = this.resolveAccount(account);
     const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
     const safeMailbox = escapeForAppleScript(targetMailbox);
@@ -80308,31 +80369,31 @@ var AppleMailManager = class {
         if (count of destMatches) is 0 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" not found in account \\"${safeAccount}\\""
         if (count of destMatches) > 1 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; move by full path"
         set destMailbox to item 1 of destMatches`;
-    return this.runBatchOperation(ids, "move _msg to destMailbox", setup);
+    return this.runBatchOperation(ids, "move _msg to destMailbox", setup, scope);
   }
   /**
    * Mark multiple messages as read at once (single tree walk).
    */
-  batchMarkAsRead(ids) {
-    return this.runBatchOperation(ids, "set read status of _msg to true");
+  batchMarkAsRead(ids, scope) {
+    return this.runBatchOperation(ids, "set read status of _msg to true", "", scope);
   }
   /**
    * Mark multiple messages as unread at once (single tree walk).
    */
-  batchMarkAsUnread(ids) {
-    return this.runBatchOperation(ids, "set read status of _msg to false");
+  batchMarkAsUnread(ids, scope) {
+    return this.runBatchOperation(ids, "set read status of _msg to false", "", scope);
   }
   /**
    * Flag multiple messages at once (single tree walk).
    */
-  batchFlagMessages(ids, colorIndex) {
-    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex));
+  batchFlagMessages(ids, colorIndex, scope) {
+    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex), "", scope);
   }
   /**
    * Unflag multiple messages at once (single tree walk).
    */
-  batchUnflagMessages(ids) {
-    return this.runBatchOperation(ids, "set flagged status of _msg to false");
+  batchUnflagMessages(ids, scope) {
+    return this.runBatchOperation(ids, "set flagged status of _msg to false", "", scope);
   }
   /**
    * List attachments for a message.
@@ -82997,6 +83058,57 @@ function withErrorHandling(handler, errorPrefix) {
   };
 }
 
+// src/tools/batchResults.ts
+async function hybridBatchCounts(ids, appleFn, imapFn) {
+  const imapIds = ids.filter((i) => i.startsWith("imap:"));
+  const numericIds = ids.filter((i) => !i.startsWith("imap:"));
+  let success = 0;
+  let fail = 0;
+  const errors = [];
+  if (numericIds.length > 0) {
+    const res = appleFn(numericIds);
+    const s = res.filter((r) => r.success).length;
+    success += s;
+    fail += res.length - s;
+    errors.push(...res.filter((r) => !r.success && r.error).map((r) => r.error));
+  }
+  if (imapIds.length > 0) {
+    const r = await imapFn(imapIds);
+    success += r.success;
+    fail += r.failed;
+    errors.push(...r.errors);
+  }
+  return { success, fail, errors };
+}
+function distinctErrors(errors) {
+  return [...new Set(errors.filter(Boolean))];
+}
+function formatBatchErrors(errors, max = 5) {
+  const distinct = distinctErrors(errors);
+  if (distinct.length === 0) return "";
+  const shown = distinct.slice(0, max);
+  const more = distinct.length - shown.length;
+  return `: ${shown.join("; ")}${more > 0 ? ` (+${more} more)` : ""}`;
+}
+var MAX_STRUCTURED_BATCH_ERRORS = 20;
+function batchResponse(counts, messages, extra = {}) {
+  const { success, fail, errors } = counts;
+  const distinct = distinctErrors(errors);
+  const reported = distinct.slice(0, MAX_STRUCTURED_BATCH_ERRORS);
+  const structured = {
+    ok: fail === 0,
+    success,
+    failed: fail,
+    ...extra,
+    ...reported.length > 0 ? { errors: reported } : {},
+    ...distinct.length > reported.length ? { errorsTruncated: true } : {}
+  };
+  const suffix = formatBatchErrors(distinct);
+  if (fail === 0) return successResponse(messages.allSucceeded(success), structured);
+  if (success === 0) return errorResponse(`${messages.allFailed(fail)}${suffix}`, structured);
+  return successResponse(`${messages.partial(success, fail)}${suffix}`, structured);
+}
+
 // src/services/imapMultiAccount.ts
 function normalizeMessageId2(row) {
   const raw = typeof row.messageId === "string" ? row.messageId.trim() : "";
@@ -83588,6 +83700,12 @@ function withJsonSchema2020_12(transport2) {
 loadFileConfig();
 var MESSAGE_ID_SCHEMA = external_exports.string().regex(/^(\d+|imap:[A-Za-z0-9_-]+)$/, "Message ID must be numeric or an IMAP id (imap:\u2026)");
 var BATCH_IDS_SCHEMA = external_exports.array(MESSAGE_ID_SCHEMA).min(1, "At least one message ID is required").max(100, "Cannot process more than 100 messages in a single batch");
+var BATCH_SOURCE_MAILBOX_SCHEMA = external_exports.string().optional().describe(
+  "Mailbox the numeric ids were listed from (e.g. 'INBOX'). Pins each id to that mailbox \u2014 strongly recommended, since one numeric id can match in several mailboxes. Works on its own: without sourceAccount it means that mailbox in the default account. Ignored for imap: ids."
+);
+var BATCH_SOURCE_ACCOUNT_SCHEMA = external_exports.string().optional().describe(
+  "Account the numeric ids were listed from. Defaults to the default account. On its own it pins nothing \u2014 pair it with sourceMailbox."
+);
 var FLAG_COLOR_INDEX = {
   red: 0,
   orange: 1,
@@ -83637,7 +83755,19 @@ var BATCH_COUNT_OUTPUT_SCHEMA = {
   ok: external_exports.boolean().optional(),
   success: external_exports.number().optional(),
   failed: external_exports.number().optional(),
-  mailbox: external_exports.string().optional()
+  mailbox: external_exports.string().optional(),
+  // Declared so the failure channel is part of the tool's advertised CONTRACT:
+  // a client can rely on `errors` being string[] and code against it, and it
+  // shows up in generated types and docs. Declaring is not what makes it
+  // deliverable — registerTool() wraps every outputSchema in
+  // `z.object(shape).passthrough()`, so these tools advertise
+  // `additionalProperties: true` (verified against the built server) and an
+  // undeclared key would be carried through, not rejected. Enumerating it is a
+  // promise to callers, not a workaround for a validator.
+  errors: external_exports.array(external_exports.string()).optional(),
+  // Set when `errors` was capped (MAX_STRUCTURED_BATCH_ERRORS distinct reasons),
+  // so a short list is never mistaken for the complete one.
+  errorsTruncated: external_exports.boolean().optional()
 };
 var CHECK_ITEM_SCHEMA = external_exports.object({}).passthrough();
 var require2 = createRequire(import.meta.url);
@@ -83718,26 +83848,6 @@ function registerTool(name, config2, cb) {
 }
 var mailManager = new AppleMailManager();
 registerResourcesAndPrompts(server, mailManager);
-async function hybridBatchCounts(ids, appleFn, imapFn) {
-  const imapIds = ids.filter((i) => i.startsWith("imap:"));
-  const numericIds = ids.filter((i) => !i.startsWith("imap:"));
-  let success = 0;
-  let fail = 0;
-  const errors = [];
-  if (numericIds.length > 0) {
-    const res = appleFn(numericIds);
-    const s = res.filter((r) => r.success).length;
-    success += s;
-    fail += res.length - s;
-  }
-  if (imapIds.length > 0) {
-    const r = await imapFn(imapIds);
-    success += r.success;
-    fail += r.failed;
-    errors.push(...r.errors);
-  }
-  return { success, fail, errors };
-}
 registerTool(
   "search-messages",
   {
@@ -84515,173 +84625,159 @@ registerTool(
 registerTool(
   "batch-delete-messages",
   {
-    description: "Use when: deleting multiple messages in one call (1\u2013100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once \u2014 require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting.",
+    description: "Use when: deleting multiple messages in one call (1\u2013100 ids; moves them to Trash).\nReturns: counts of how many were deleted and how many failed, plus the distinct reasons for any failures.\nDo not use when: deleting just one (use delete-message) or filing messages away (use batch-move-messages).\nSafety: destructive and applies to many messages at once \u2014 require explicit user confirmation, and search-messages/list-messages first to confirm every id is correct before deleting. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
-      ids: BATCH_IDS_SCHEMA
+      ids: BATCH_IDS_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    const counts = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchDeleteMessages(n),
+      (n) => mailManager.batchDeleteMessages(n, { account: sourceAccount, mailbox: sourceMailbox }),
       (im) => imapBatchDelete(im)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
-    if (failCount === 0) {
-      return successResponse(`Successfully deleted ${successCount} message(s)`, structured);
-    } else if (successCount === 0) {
-      return errorResponse(`Failed to delete all ${failCount} message(s)`);
-    } else {
-      return successResponse(`Deleted ${successCount} message(s), ${failCount} failed`, structured);
-    }
+    return batchResponse(counts, {
+      allSucceeded: (n) => `Successfully deleted ${n} message(s)`,
+      allFailed: (n) => `Failed to delete all ${n} message(s)`,
+      partial: (ok, failed) => `Deleted ${ok} message(s), ${failed} failed`
+    });
   }, "Error batch deleting messages")
 );
 registerTool(
   "batch-move-messages",
   {
-    description: "Use when: moving multiple messages (1\u2013100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once \u2014 confirm the destination mailbox, and search-messages/list-messages first to confirm the ids.",
+    description: "Use when: moving multiple messages (1\u2013100 ids) into the same destination mailbox/folder in one call, e.g. bulk archiving.\nReturns: counts of how many were moved and how many failed, plus the distinct reasons for any failures.\nDo not use when: moving just one (use move-message) or deleting (use batch-delete-messages). Use list-mailboxes to confirm the destination name exists.\nSafety: moves many real messages at once \u2014 confirm the destination mailbox, and search-messages/list-messages first to confirm the ids. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from \u2014 not the destination) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
       mailbox: external_exports.string().min(1, "Destination mailbox is required"),
-      account: external_exports.string().optional().describe("Account containing the destination mailbox")
+      account: external_exports.string().optional().describe("Account containing the destination mailbox"),
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids, mailbox, account }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, mailbox, account, sourceMailbox, sourceAccount }) => {
+    const counts = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMoveMessages(n, mailbox, account),
+      (n) => mailManager.batchMoveMessages(n, mailbox, account, {
+        account: sourceAccount,
+        mailbox: sourceMailbox
+      }),
       (im) => imapBatchMove(im, mailbox, { account })
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount, mailbox };
-    if (failCount === 0) {
-      return successResponse(
-        `Successfully moved ${successCount} message(s) to "${mailbox}"`,
-        structured
-      );
-    } else if (successCount === 0) {
-      return errorResponse(`Failed to move all ${failCount} message(s)`);
-    } else {
-      return successResponse(
-        `Moved ${successCount} message(s) to "${mailbox}", ${failCount} failed`,
-        structured
-      );
-    }
+    return batchResponse(
+      counts,
+      {
+        allSucceeded: (n) => `Successfully moved ${n} message(s) to "${mailbox}"`,
+        allFailed: (n) => `Failed to move all ${n} message(s)`,
+        partial: (ok, failed) => `Moved ${ok} message(s) to "${mailbox}", ${failed} failed`
+      },
+      { mailbox }
+    );
   }, "Error batch moving messages")
 );
 registerTool(
   "batch-mark-as-read",
   {
-    description: "Use when: marking multiple messages (1\u2013100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first.",
+    description: "Use when: marking multiple messages (1\u2013100 ids) as read in one call.\nReturns: counts of how many were marked read and how many failed.\nDo not use when: marking just one (use mark-as-read) or marking unread (use batch-mark-as-unread). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
-      ids: BATCH_IDS_SCHEMA
+      ids: BATCH_IDS_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    const counts = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMarkAsRead(n),
+      (n) => mailManager.batchMarkAsRead(n, { account: sourceAccount, mailbox: sourceMailbox }),
       (im) => imapBatchMarkRead(im)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
-    if (failCount === 0) {
-      return successResponse(`Successfully marked ${successCount} message(s) as read`, structured);
-    } else if (successCount === 0) {
-      return errorResponse(`Failed to mark all ${failCount} message(s) as read`);
-    } else {
-      return successResponse(
-        `Marked ${successCount} message(s) as read, ${failCount} failed`,
-        structured
-      );
-    }
+    return batchResponse(counts, {
+      allSucceeded: (n) => `Successfully marked ${n} message(s) as read`,
+      allFailed: (n) => `Failed to mark all ${n} message(s) as read`,
+      partial: (ok, failed) => `Marked ${ok} message(s) as read, ${failed} failed`
+    });
   }, "Error batch marking messages as read")
 );
 registerTool(
   "batch-mark-as-unread",
   {
-    description: "Use when: marking multiple messages (1\u2013100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first.",
+    description: "Use when: marking multiple messages (1\u2013100 ids) as unread in one call.\nReturns: counts of how many were marked unread and how many failed.\nDo not use when: marking just one (use mark-as-unread) or marking read (use batch-mark-as-read). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
-      ids: BATCH_IDS_SCHEMA
+      ids: BATCH_IDS_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    const counts = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchMarkAsUnread(n),
+      (n) => mailManager.batchMarkAsUnread(n, { account: sourceAccount, mailbox: sourceMailbox }),
       (im) => imapBatchMarkUnread(im)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
-    if (failCount === 0) {
-      return successResponse(
-        `Successfully marked ${successCount} message(s) as unread`,
-        structured
-      );
-    } else if (successCount === 0) {
-      return errorResponse(`Failed to mark all ${failCount} message(s) as unread`);
-    } else {
-      return successResponse(
-        `Marked ${successCount} message(s) as unread, ${failCount} failed`,
-        structured
-      );
-    }
+    return batchResponse(counts, {
+      allSucceeded: (n) => `Successfully marked ${n} message(s) as unread`,
+      allFailed: (n) => `Failed to mark all ${n} message(s) as unread`,
+      partial: (ok, failed) => `Marked ${ok} message(s) as unread, ${failed} failed`
+    });
   }, "Error batch marking messages as unread")
 );
 registerTool(
   "batch-flag-messages",
   {
-    description: "Use when: flagging multiple messages (1\u2013100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first.\nNote: the color is applied on both routes \u2014 AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads \u2014 so a mixed batch of numeric and `imap:` ids all end up colored.",
+    description: "Use when: flagging multiple messages (1\u2013100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.\nNote: the color is applied on both routes \u2014 AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads \u2014 so a mixed batch of numeric and `imap:` ids all end up colored.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
-      color: FLAG_COLOR_SCHEMA
+      color: FLAG_COLOR_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids, color }) => {
+  withErrorHandling(async ({ ids, color, sourceMailbox, sourceAccount }) => {
     const colorIndex = color ? FLAG_COLOR_INDEX[color] : void 0;
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+    const counts = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchFlagMessages(n, colorIndex),
+      (n) => mailManager.batchFlagMessages(n, colorIndex, {
+        account: sourceAccount,
+        mailbox: sourceMailbox
+      }),
       (im) => imapBatchFlag(im, colorIndex)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
-    if (failCount === 0) {
-      return successResponse(`Successfully flagged ${successCount} message(s)`, structured);
-    } else if (successCount === 0) {
-      return errorResponse(`Failed to flag all ${failCount} message(s)`);
-    } else {
-      return successResponse(`Flagged ${successCount} message(s), ${failCount} failed`, structured);
-    }
+    return batchResponse(counts, {
+      allSucceeded: (n) => `Successfully flagged ${n} message(s)`,
+      allFailed: (n) => `Failed to flag all ${n} message(s)`,
+      partial: (ok, failed) => `Flagged ${ok} message(s), ${failed} failed`
+    });
   }, "Error batch flagging messages")
 );
 registerTool(
   "batch-unflag-messages",
   {
-    description: "Use when: removing flags from multiple messages (1\u2013100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first.",
+    description: "Use when: removing flags from multiple messages (1\u2013100 ids) in one call.\nReturns: counts of how many were unflagged and how many failed.\nDo not use when: unflagging just one (use unflag-message) or adding flags (use batch-flag-messages). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.",
     inputSchema: {
-      ids: BATCH_IDS_SCHEMA
+      ids: BATCH_IDS_SCHEMA,
+      sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
+      sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA
     },
     outputSchema: BATCH_COUNT_OUTPUT_SCHEMA
   },
-  withErrorHandling(async ({ ids }) => {
-    const { success: successCount, fail: failCount } = await hybridBatchCounts(
+  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    const counts = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchUnflagMessages(n),
+      (n) => mailManager.batchUnflagMessages(n, { account: sourceAccount, mailbox: sourceMailbox }),
       (im) => imapBatchUnflag(im)
     );
-    const structured = { ok: failCount === 0, success: successCount, failed: failCount };
-    if (failCount === 0) {
-      return successResponse(`Successfully unflagged ${successCount} message(s)`, structured);
-    } else if (successCount === 0) {
-      return errorResponse(`Failed to unflag all ${failCount} message(s)`);
-    } else {
-      return successResponse(
-        `Unflagged ${successCount} message(s), ${failCount} failed`,
-        structured
-      );
-    }
+    return batchResponse(counts, {
+      allSucceeded: (n) => `Successfully unflagged ${n} message(s)`,
+      allFailed: (n) => `Failed to unflag all ${n} message(s)`,
+      partial: (ok, failed) => `Unflagged ${ok} message(s), ${failed} failed`
+    });
   }, "Error batch unflagging messages")
 );
 registerTool(
