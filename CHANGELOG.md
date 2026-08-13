@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [2.10.13] - 2026-08-13
+
+### Documentation
+
+- **The README's backslash-escaping instruction was wrong, and the README is the copy that ships.** It told agents to send four backslashes to produce one literal backslash — `Windows paths: C:\Users\ → C:\\\\Users\\\\ in JSON`, and the same four-backslash form in the worked `send-email` example and in the shell-path and regex bullets. A JSON string literal containing four backslashes decodes to **two** literal backslashes, so an agent that followed the instruction sent `C:\\Users\\` and the recipient got a doubled backslash in every path, regex, and escaped space in the message body. The correct form is two backslashes per literal backslash, which is what this repo's `CLAUDE.md` already said — so one repo carried two contradictory instructions, and the wrong one was the published one (`README.md` is in `package.json` `files[]`; `CLAUDE.md` is not). Every four-backslash instruction is now the two-backslash form.
+- **The sentence explaining the rule was self-contradictory and is rewritten.** It read "The `\\\\` in JSON becomes `\\` in the actual string, which represents a single `\`" — but `\\` in the resulting string is two characters, not one. It now states the rule plainly: in a JSON string literal, `\\` (two characters) denotes one literal backslash, and four denote two.
+- **Dropped the Windows examples from `README.md` and `CLAUDE.md`.** This package is `os: ["darwin"]` and drives Mail.app through AppleScript; a `C:\Users\` example is generic MCP boilerplate that was never localized to these servers — and it is precisely where the four-backslash error lived. Replaced with macOS-native examples of equal teaching value: a shell path with an escaped space (`~/Library/Mobile\ Documents/…`, whose unescaped form is not even valid JSON, so the failure mode is real rather than cosmetic) and a regex (`\d+`). Nothing is lost for Windows users: the table's generic rows (`\` → `\\`, `\\` → `\\\\`) are platform-neutral and still cover drive paths.
+- **`README.md` is now covered by an executable doc guard** (`src/readmeEscaping.test.ts`), which is why this bug survived: the guard added a day earlier checked `CLAUDE.md` only — the file that does **not** ship — while the file that does ship went unchecked. It now asserts that every "common patterns" bullet is self-consistent (JSON-decoding the "send this" side yields the "you want" side — the exact assertion that would have caught this), that each worked example decodes to its `→ arrives as:` annotation (parsing the fenced JSON block as JSON and reading its `body` field, rather than eyeballing backslash counts), that every "Incorrect" example genuinely fails to parse, and that neither doc reintroduces a Windows drive path. Each assertion also fails when it finds nothing to check, so a doc rewrite cannot make the suite pass vacuously.
+
+No runtime code changed; the committed `build/` bundle is byte-identical.
+
 ## [2.10.12] - 2026-08-12
 
 ### Fixed
