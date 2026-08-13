@@ -120,6 +120,15 @@ const CONTENT_MARKER = "\x1dCONTENT\x1d"; // subject/plain-text boundary
 const MSGID_MARKER = "\x1dMSGID\x1d"; // subject/RFC-Message-ID boundary (get-message content)
 const HTML_MARKER = "\x1dHTML\x1d"; // plain-text/source boundary
 const BATCH_FATAL = "\x1dFATAL\x1d"; // prefix for a whole-batch failure (e.g. bad destination)
+/**
+ * Leading text of the error returned when a bare numeric id can't be pinned to
+ * one mailbox. Mail.app ids are per-mailbox and a label store repeats one id
+ * across INBOX / "Important" / "All Mail", so a mutation with no recorded
+ * source mailbox has no safe target to pick (#152).
+ */
+const AMBIGUOUS_ID_PREFIX = "Message id ";
+/** Same refusal, phrased for the batch path where the id isn't interpolable. */
+const AMBIGUOUS_ID_BATCH = "This message id is present in more than one mailbox ";
 
 /**
  * Normalize an RFC 5322 Message-ID for backend-independent matching: trim and
@@ -767,6 +776,34 @@ export class AppleMailManager {
       const oldest = this.idLocationIndex.keys().next().value;
       if (oldest !== undefined) this.idLocationIndex.delete(oldest);
     }
+  }
+
+  /** Where a message id was last listed/searched from, if we've seen it. */
+  private locationFor(id: string): { account: string; mailbox: string } | undefined {
+    return this.idLocationIndex.get(String(id));
+  }
+
+  /**
+   * AppleScript fragment resolving `account` + `mailbox` into `_tmb`, leaving
+   * `_tmb` as `missing value` when it can't be pinned down. Exact-name match
+   * only, and a name matching more than one mailbox resolves to nothing rather
+   * than guessing — the same rule the move destination already applies.
+   */
+  private resolveMailboxFragment(account: string, mailbox: string): string {
+    const resolved = this.resolveMailbox(mailbox, account);
+    return `
+        set _tmb to missing value
+        set _acctM to {}
+        repeat with _a in accounts
+          if (name of _a) is "${escapeForAppleScript(account)}" then set end of _acctM to _a
+        end repeat
+        if (count of _acctM) is 1 then
+          set _mbM to {}
+          repeat with _m in (mailboxes of (item 1 of _acctM))
+            if (name of _m) is "${escapeForAppleScript(resolved)}" then set end of _mbM to _m
+          end repeat
+          if (count of _mbM) is 1 then set _tmb to item 1 of _mbM
+        end if`;
   }
 
   /**
@@ -2263,24 +2300,65 @@ export class AppleMailManager {
   }
 
   /**
-   * Helper to find and operate on a message by ID.
+   * Helper to find and operate on a message by ID, scoped to the mailbox the id
+   * was listed from.
+   *
+   * Mail.app numeric ids are per-mailbox, and on a label store (Gmail, iCloud)
+   * ONE message is present in several mailboxes under the SAME id — INBOX,
+   * "Important" and "All Mail" all report id 75816 for the same mail. This used
+   * to walk every account's every mailbox and mutate the FIRST hit; because
+   * `mailboxes of account` yields INBOX late, an id listed from INBOX was
+   * reliably mutated in "Important" instead, so the op reported success while
+   * the INBOX copy stayed put and a different copy was moved/deleted (#152).
+   *
+   * Which mailbox a mutation lands in is semantic — deleting the INBOX copy and
+   * deleting the "All Mail" copy are different operations — so scope to the
+   * mailbox the id actually came from (`idLocationIndex`, populated by every
+   * list/search) and never guess.
    */
   private findMessageScript(id: string, operation: string): string {
+    const loc = this.locationFor(id);
+    if (loc) {
+      return buildAppLevelScript(`
+      try
+        ${this.resolveMailboxFragment(loc.account, loc.mailbox)}
+        if _tmb is missing value then return "error:Message not found"
+        set matchingMsgs to (messages of _tmb whose id is ${Number(id)})
+        if (count of matchingMsgs) > 0 then
+          set msg to item 1 of matchingMsgs
+          ${operation}
+          return "ok"
+        end if
+        return "error:Message not found"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+    }
+
+    // No recorded location (id supplied out-of-band, or evicted from the
+    // index). Collect EVERY mailbox holding this id and act only when it is
+    // unambiguous — refusing beats mutating an arbitrary copy.
     return buildAppLevelScript(`
       try
+        set _hits to {}
+        set _names to ""
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                ${operation}
-                return "ok"
+                set end of _hits to (item 1 of matchingMsgs)
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
               end if
             end try
           end repeat
         end repeat
-        return "error:Message not found"
+        if (count of _hits) is 0 then return "error:Message not found"
+        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the operation targets the right copy"
+        set msg to item 1 of _hits
+        ${operation}
+        return "ok"
       on error errMsg
         return "error:" & errMsg
       end try
@@ -2503,6 +2581,37 @@ export class AppleMailManager {
     const safeMailbox = escapeForAppleScript(targetMailbox);
     const safeAccount = escapeForAppleScript(targetAccount);
 
+    // Locate the SOURCE copy the same way every other by-id mutation does:
+    // scoped to the mailbox the id was listed from, because one Mail.app id
+    // names a different message in every mailbox that holds it (#152).
+    const loc = this.locationFor(id);
+    const findAndMove = loc
+      ? `
+        ${this.resolveMailboxFragment(loc.account, loc.mailbox)}
+        if _tmb is missing value then return "error:Message not found"
+        set matchingMsgs to (messages of _tmb whose id is ${Number(id)})
+        if (count of matchingMsgs) is 0 then return "error:Message not found"
+        move (item 1 of matchingMsgs) to destMailbox
+        return "ok"`
+      : `
+        set _hits to {}
+        set _names to ""
+        repeat with acct in accounts
+          repeat with mb in (mailboxes of acct)
+            try
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
+              if (count of matchingMsgs) > 0 then
+                set end of _hits to (item 1 of matchingMsgs)
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
+              end if
+            end try
+          end repeat
+        end repeat
+        if (count of _hits) is 0 then return "error:Message not found"
+        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the move targets the right copy"
+        move (item 1 of _hits) to destMailbox
+        return "ok"`;
+
     const script = buildAppLevelScript(`
       try
         -- \`mailboxes of account\` is already flat: it includes nested mailboxes
@@ -2518,21 +2627,7 @@ export class AppleMailManager {
         if (count of destMatches) is 0 then return "error:Destination mailbox \\"" & destName & "\\" not found in account \\"${safeAccount}\\""
         if (count of destMatches) > 1 then return "error:Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; disambiguate or move by full path"
         set destMailbox to item 1 of destMatches
-
-        -- Find the message by id. The flat mailbox list already covers nested
-        -- mailboxes, so this reaches messages in subfolders without recursing.
-        repeat with acct in accounts
-          repeat with mb in (mailboxes of acct)
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                move (item 1 of matchingMsgs) to destMailbox
-                return "ok"
-              end if
-            end try
-          end repeat
-        end repeat
-        return "error:Message not found"
+        ${findAndMove}
       on error errMsg
         return "error:" & errMsg
       end try
@@ -2571,15 +2666,26 @@ export class AppleMailManager {
    * Previously each batch method looped and called the per-id method, so a
    * 100-id batch spawned 100 osascript processes — each one re-resolving
    * accounts and walking the whole account→mailbox tree — all serialized
-   * through the gate (issue #31). This walks the tree exactly once: for each
-   * mailbox it probes the still-pending IDs with `whose id is` (indexed, so
-   * effectively free) and applies `operation` to any match, tracking found IDs
-   * so it can stop early once all are accounted for. Per-id outcomes come back
-   * as control-char-delimited `id<FS>status` records (status: `ok`,
-   * `notfound`, or `error:<msg>`), and results are returned in input order.
+   * through the gate (issue #31). Still one osascript invocation, but the ids
+   * are now grouped by the mailbox they were listed from and each group opens
+   * exactly that one mailbox. Per-id outcomes come back as control-char
+   * delimited `position<FS>status` records (status: `ok`, `notfound`, or
+   * `error:<msg>`), and results are returned in input order.
    *
-   * `setup` runs once before the walk (used by move to resolve the destination);
-   * it may bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
+   * Scoping is a CORRECTNESS requirement, not an optimization (#152). A Mail.app
+   * numeric id is unique only within a mailbox, and a label store (Gmail,
+   * iCloud) exposes one message in several mailboxes under the same id — INBOX,
+   * "Important" and "All Mail" all report id 75816 for the same mail. The old
+   * tree walk applied `operation` to the FIRST mailbox that matched, and
+   * `mailboxes of account` yields INBOX late, so a batch of ids listed from
+   * INBOX was reliably applied to the "Important" copies instead: every id
+   * reported `ok` while the INBOX messages stayed put and other copies were
+   * moved/deleted. Grouping by recorded source mailbox makes the op land on the
+   * copy the caller actually listed; ids with no recorded mailbox are refused
+   * when ambiguous rather than applied to an arbitrary copy.
+   *
+   * `setup` runs once up front (used by move to resolve the destination); it may
+   * bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
    */
   private runBatchOperation(ids: string[], operation: string, setup = ""): BatchOperationResult[] {
     // Keep the numeric IDs paired with their original string form and 1-based
@@ -2597,39 +2703,115 @@ export class AppleMailManager {
       return ids.map((id) => ({ id, success: false, error: "Invalid message ID" }));
     }
 
+    // Group the ids by the mailbox they were listed from. Each group opens that
+    // one mailbox and applies the op only there; ids we've never seen listed
+    // fall into `unlocated` and are resolved with an ambiguity check.
+    const groups = new Map<
+      string,
+      { account: string; mailbox: string; items: { num: number; pos: number }[] }
+    >();
+    const unlocated: { num: number; pos: number }[] = [];
+    valid.forEach((v, i) => {
+      const pos = i + 1;
+      const loc = this.locationFor(v.id);
+      if (!loc) {
+        unlocated.push({ num: v.num, pos });
+        return;
+      }
+      const key = `${loc.account} ${loc.mailbox}`;
+      const g = groups.get(key) ?? { account: loc.account, mailbox: loc.mailbox, items: [] };
+      g.items.push({ num: v.num, pos });
+      groups.set(key, g);
+    });
+
+    const asList = (nums: number[]): string => `{${nums.join(", ")}}`;
+
+    // One block per source mailbox: resolve it once, then apply the op to each
+    // of that mailbox's ids.
+    const scopedBlocks = [...groups.values()]
+      .map(
+        (g) => `
+        ${this.resolveMailboxFragment(g.account, g.mailbox)}
+        set _gids to ${asList(g.items.map((it) => it.num))}
+        set _gpos to ${asList(g.items.map((it) => it.pos))}
+        if _tmb is missing value then
+          repeat with _k from 1 to (count of _gpos)
+            set _out to _out & ((item _k of _gpos) as string) & "${FIELD_SEP}error:source mailbox \\"${escapeForAppleScript(g.mailbox)}\\" not found in account \\"${escapeForAppleScript(g.account)}\\"${RECORD_SEP}"
+          end repeat
+        else
+          repeat with _k from 1 to (count of _gids)
+            set _idx to item _k of _gpos
+            try
+              set _m to (messages of _tmb whose id is (item _k of _gids))
+              if (count of _m) > 0 then
+                set _msg to item 1 of _m
+                ${operation}
+                set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
+              else
+                set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+              end if
+            on error _e
+              set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
+            end try
+          end repeat
+        end if`
+      )
+      .join("\n");
+
+    // Ids with no recorded source mailbox: count every mailbox holding each id
+    // and act only where exactly one does. Anything ambiguous is refused with
+    // the candidates named, never applied to whichever copy sorts first.
+    const unlocatedBlock = unlocated.length
+      ? `
+        set _uids to ${asList(unlocated.map((it) => it.num))}
+        set _upos to ${asList(unlocated.map((it) => it.pos))}
+        set _ucount to count of _uids
+        set _uhit to {}
+        set _umsg to {}
+        set _unames to {}
+        repeat with _k from 1 to _ucount
+          set end of _uhit to 0
+          set end of _umsg to missing value
+          set end of _unames to ""
+        end repeat
+        repeat with acct in accounts
+          repeat with mb in (mailboxes of acct)
+            repeat with _k from 1 to _ucount
+              try
+                set _m to (messages of mb whose id is (item _k of _uids))
+                if (count of _m) > 0 then
+                  set item _k of _uhit to ((item _k of _uhit) + 1)
+                  if (item _k of _uhit) is 1 then set item _k of _umsg to (item 1 of _m)
+                  set item _k of _unames to ((item _k of _unames) & (name of acct) & "/" & (name of mb) & ", ")
+                end if
+              end try
+            end repeat
+          end repeat
+        end repeat
+        repeat with _k from 1 to _ucount
+          set _idx to item _k of _upos
+          if (item _k of _uhit) is 0 then
+            set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+          else if (item _k of _uhit) > 1 then
+            set _out to _out & (_idx as string) & "${FIELD_SEP}error:${AMBIGUOUS_ID_BATCH}(" & (item _k of _unames) & "); list or search that mailbox first so the operation targets the right copy${RECORD_SEP}"
+          else
+            try
+              set _msg to item _k of _umsg
+              ${operation}
+              set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
+            on error _e
+              set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
+            end try
+          end if
+        end repeat`
+      : "";
+
     const script = buildAppLevelScript(`
       try
         ${setup}
         set _out to ""
-        set _done to {}
-        set _ids to {${valid.map((v) => v.num).join(", ")}}
-        set _total to count of _ids
-        repeat with acct in accounts
-          if (count of _done) is _total then exit repeat
-          repeat with mb in (mailboxes of acct)
-            if (count of _done) is _total then exit repeat
-            repeat with _idx from 1 to _total
-              if _idx is not in _done then
-                set _theId to item _idx of _ids
-                try
-                  set _m to (messages of mb whose id is _theId)
-                  if (count of _m) > 0 then
-                    set _msg to item 1 of _m
-                    ${operation}
-                    set end of _done to _idx
-                    set _out to _out & (_idx as string) & "${FIELD_SEP}ok${RECORD_SEP}"
-                  end if
-                on error _e
-                  set end of _done to _idx
-                  set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
-                end try
-              end if
-            end repeat
-          end repeat
-        end repeat
-        repeat with _idx from 1 to _total
-          if _idx is not in _done then set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
-        end repeat
+        ${scopedBlocks}
+        ${unlocatedBlock}
         return _out
       on error errMsg
         return "${BATCH_FATAL}" & errMsg
