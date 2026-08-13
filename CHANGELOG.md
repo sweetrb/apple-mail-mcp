@@ -1,5 +1,41 @@
 ## [Unreleased]
 
+## [2.10.17] - 2026-08-13
+
+Instrumentation for [#155](https://github.com/sweetrb/apple-mail-mcp/issues/155) — the unexplained residual from #152, where a batch delete removed two messages whose ids were never passed. #153/#154 fixed a real mis-targeting defect, but that mechanism explains acting on the wrong *copy of a listed message*; it does not explain acting on a message nobody named. That symptom is unreproducible today for one reason: **a destructive operation reported success because the AppleScript did not throw, never because a message was observed to go away.** This release makes every delete and move check its own effect.
+
+### Added
+
+- **`countDelta` on `delete-message`, `move-message`, `batch-delete-messages` and `batch-move-messages` — always on, no configuration.** Each of those tools now counts the affected **source** mailbox immediately before and immediately after the mutation and returns the comparison (`before`, `after`, `expected`, `observed`, `status`) in `structuredContent`, declared in each tool's output schema. Both counts are taken **inside the AppleScript the operation was already running**, so this costs **zero additional `osascript` invocations** — the single-invocation property from #31 is unchanged.
+- **A warning when more messages left the mailbox than were operated on.** `status: "over"` is the #155 signature and the only status that adds a warning line to the tool's text response. It never fails the call: by the time the delta is known the mutation has happened, and the point is to report it truthfully rather than fail retroactively.
+- **`APPLE_MAIL_MCP_AUDIT_LOG` — an opt-in NDJSON forensic log** (off by default, and generating no extra Apple Events when off). One record per destructive operation: timestamp, tool, server version, arguments, the **pre-image** of every message the operation resolved (account, mailbox, numeric id, RFC Message-ID, `date received`), the per-id outcome (`ok`/`notfound`/`error` + reason), and the reconciliation. The pre-image is what proves *which* message was targeted — a Mail.app numeric id is unique only within a mailbox and is reused, so after the fact it proves nothing on its own.
+- **Collateral identification** (also gated on `APPLE_MAIL_MCP_AUDIT_LOG`). The mailbox's `(numeric id, Message-ID)` pairs are captured before and after the mutation and diffed, so the log names every message that disappeared — including any the caller never listed, under `unrequested`. That is the evidence #155 is missing. It is O(mailbox size), so it is bounded by **`APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX`** (default 2000 messages; `0` disables it), and **when the bound bites the skip is recorded with its reason** rather than omitted — a silently skipped snapshot reads as "nothing collateral happened", which is the same failure class as a vacuous test.
+- **`APPLE_MAIL_MCP_AUDIT_SUBJECTS`** — a **second, separate** opt-in that adds message subjects to the pre-image. See Security below.
+- **`AppleMailManager.consumeLastForensics()`** — the report for the destructive operation just run (count deltas, pre-images, per-id outcomes, collateral diff), read once by the tool layer.
+
+### Changed
+
+- **The honest expectation, worked out rather than assumed.** A delete on a Gmail label mailbox removes the label; a delete on `[Gmail]/All Mail` trashes the message — different operations, but the mailbox the ids came from loses exactly one entry per successful id either way, so that is what is compared. Two cases are called out instead of guessed: a move whose **destination is the source mailbox** expects a delta of `0` and says so in `note`, and a count Mail will not report yields `status: "unknown"` with `before`/`after` null rather than a fabricated comparison.
+- **`under` is reported but never warned about.** Fewer messages leaving than expected is routine — an account that flags deletions instead of removing them leaves the count unmoved while the operation genuinely succeeded, and new mail arriving mid-operation biases every reading in that direction. Warning there would fire on ordinary deletes on ordinary accounts, and a warning that cries wolf is ignored exactly when it matters. Only `over` warns, and `over` cannot be manufactured by ordinary traffic: an arriving message raises the after-count, which can only push a reading toward `under`.
+- `imap:` ids are deliberately not reconciled — an IMAP UID names exactly one message in exactly one mailbox, so the mis-targeting class this instrumentation exists for cannot occur there. A batch of only `imap:` ids returns no `countDelta` rather than an invented one.
+- The non-destructive batch tools (`batch-mark-as-read`/`-unread`, `batch-flag-messages`/`batch-unflag-messages`) generate byte-identical AppleScript to before: the instrumentation is requested per operation, not per server.
+
+### Security
+
+- **The audit log's default records what identifies a message, not what it says**: RFC Message-ID, `date received`, mailbox, account and numeric id. Enough to say *which* message; nothing about its contents.
+- **Subjects require their own opt-in** (`APPLE_MAIL_MCP_AUDIT_SUBJECTS=1`). A subject line is frequently the entire sensitive payload, and it is not needed to diagnose #155 — the Message-ID already pins the message uniquely for whoever owns the mailbox.
+- **Message bodies are never written, under any setting.** There is no default log location, so enabling the log is a deliberate act; the file grows without bound and is never rotated by this server, which the README states plainly.
+- **Nothing is written to stdout.** stdout is the JSON-RPC transport; the audit record goes to the configured file and incidental diagnostics to stderr, and a failed write is reported and swallowed rather than failing a mutation that already happened. A test asserts the audit path never touches stdout.
+
+### Documentation
+
+- New README section **Auditing destructive operations** — the `countDelta` shape and its four-valued `status`, why only `over` warns, the three environment variables, an example collateral record, and what the log file contains, costs and where it goes.
+- `countDelta` noted on all four destructive tools in the Tool Reference, plus an Effect-reconciliation row in the Diagnostics feature table.
+
+### Internal
+
+- `runBatchOperation`'s per-source-mailbox group key is now one shared `groupKey()` helper. It was two inline template literals with different separators, which made every reconciliation lookup miss and report `expected: 0` — i.e. the precise false alarm this feature must never emit.
+
 ## [2.10.16] - 2026-08-13
 
 Follow-up to the 2.10.15 batch-scoping fix (#152). That release bound each numeric id to the mailbox it was listed from; this one closes the gaps that left it unreachable, unexplained, or unusable in practice.
