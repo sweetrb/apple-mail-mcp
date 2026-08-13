@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+## [2.10.15] - 2026-08-13
+
+### Fixed
+
+- **Batch operations could mutate a message the caller never named, and still report it as a success** (#152). `runBatchOperation` generated one AppleScript that walked **every** account and **every** mailbox and, for each pending id, applied the operation to `item 1` of the **first** mailbox where `whose id is N` matched — then marked that id done and recorded `ok`. The walk order is Mail's own account/mailbox order, which has nothing to do with the mailbox the caller listed the ids from, so a batch could act on a different copy of the message than intended, and the reported `success` count did not describe what had actually happened. Every batch tool was affected: `batch-delete-messages`, `batch-move-messages`, `batch-mark-as-read`/`unread`, `batch-flag-messages`/`batch-unflag-messages`.
+- **The premise is that a numeric id identifies one message; it does not.** The reproducing case is Gmail-over-IMAP label aliasing: one message is reachable through `INBOX`, `[Gmail]/All Mail` and `[Gmail]/Important` at the same time, so `whose id is N` matches in all of them. On a real account, id `79345` was reachable from both `Sales Spam` (walk position 12) and `[Gmail]/All Mail` (walk position 5) — All Mail is reached first, so a batch targeting the `Sales Spam` copy operated on the All Mail copy instead. For Gmail those are different operations: deleting the `All Mail` copy trashes the mail, while deleting the `INBOX` copy only removes the Inbox label.
+- **Resolution is now scoped, and ambiguity is refused rather than guessed.** Each numeric id resolves against, in order: an explicit `sourceMailbox`/`sourceAccount` from the caller; else the account+mailbox the id→location index recorded when `list-messages`/`search-messages` produced the id; else the whole tree. In the first two cases only that one mailbox is probed, and a miss is `notfound` — never a wander into another mailbox. In the last case matches are **collected** without applying anything, and an id matching more than one mailbox fails with an error naming every candidate, mirroring the refusal `move-message` already applies to an ambiguous destination name. `ok` is reported only on the path that actually ran the operation on the intended message.
+- The single-osascript-per-batch property (#31) is preserved — still one tree walk, still using the indexed `whose id is` probe, with early exit once every scoped id is accounted for.
+- **Per-id failure reasons are no longer discarded.** `hybridBatchCounts` dropped the AppleScript path's `error` strings, so a refused id appeared only as an anonymous increment of the failure count. Failures now surface in the tool's text response and in a new `errors` array on the structured result (declared in the output schema — an undeclared key would be rejected by the client).
+- A matched candidate is re-checked against the id's **string** form before being accepted, because AppleScript coerces integer literals above 2^29 to reals; a sufficiently large Mail id could otherwise be compared imprecisely.
+
+### Added
+
+- `sourceMailbox` / `sourceAccount` on all six batch tools — the mailbox the numeric ids were listed from. Optional, but strongly recommended: it pins resolution instead of relying on same-session index state. `imap:` ids already encode their account and mailbox, are resolved directly, and ignore both parameters.
+- `AppleMailManager.noteMessageLocation(id, account, mailbox)` for callers that carried an id across a process boundary and already know where it lives.
+
+### Documentation
+
+- New README section **"Scoping numeric ids"** under Batch Operations, explaining why a numeric id is not self-identifying and what the three-step resolution does, plus `sourceMailbox`/`sourceAccount` rows on every batch tool's parameter table.
+
 ## [2.10.14] - 2026-08-13
 
 ### Documentation
