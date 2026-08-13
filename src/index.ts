@@ -108,6 +108,11 @@ import { ImapIdleWatcher } from "@/services/imapIdle.js";
 import { loadFileConfig } from "@/services/fileConfig.js";
 import { isOrphaned } from "@/utils/orphan.js";
 import { withJsonSchema2020_12 } from "@/utils/jsonSchemaDialect.js";
+import {
+  writeDestructiveAudit,
+  reconciliationWarnings,
+  type DestructiveOpReport,
+} from "@/services/auditLog.js";
 
 // Load file-based config FIRST (2.1.1) — before anything reads APPLE_MAIL_MCP_*.
 // Lets users configure the server when the host app strips the MCP env block.
@@ -263,6 +268,34 @@ const BATCH_COUNT_OUTPUT_SCHEMA = {
   // so a short list is never mistaken for the complete one.
   errorsTruncated: z.boolean().optional(),
 };
+
+/**
+ * Always-on effect reconciliation for the destructive tools (#155).
+ *
+ * Declared on `delete-message`, `move-message`, `batch-delete-messages` and
+ * `batch-move-messages` so "what did this operation actually do to the mailbox"
+ * is part of the advertised contract and not something a client has to scrape
+ * out of the text. One entry per affected SOURCE mailbox; an array even for the
+ * single-message tools so one shape covers all four.
+ */
+const COUNT_DELTA_OUTPUT_SCHEMA = z
+  .array(
+    z.object({
+      account: z.string().optional(),
+      mailbox: z.string().optional(),
+      before: z.number().nullable().optional(),
+      after: z.number().nullable().optional(),
+      // Nullable for the same reason before/after/observed are: null means no
+      // comparison was possible. For `expected` that is a move whose
+      // destination IS the source mailbox — it always pairs with
+      // `status: "unknown"`, and never with a warning.
+      expected: z.number().nullable().optional(),
+      observed: z.number().nullable().optional(),
+      status: z.enum(["match", "over", "under", "unknown"]).optional(),
+      note: z.string().optional(),
+    })
+  )
+  .optional();
 
 /** A health/doctor check item — loose to accept both health-check
  *  ({name, passed, message}) and doctor ({name, status, detail}) items. */
@@ -444,6 +477,32 @@ registerResourcesAndPrompts(server, mailManager);
 // in @/tools/batchResults — one shaping path for all six batch tools, and the
 // only way that half can be unit-tested (this module opens a transport on
 // import, so a test can never load it).
+
+/**
+ * Collect the forensic report the destructive operation just produced (#155),
+ * write the opt-in audit record, and hand back what the tool response has to
+ * carry: the always-on `countDelta` and any reconciliation warning.
+ *
+ * Read IMMEDIATELY after the manager call and never awaited across — every
+ * AppleScript path is synchronous, so nothing can interleave.
+ *
+ * `imap:` ids do not reach this: an IMAP UID names exactly one message in
+ * exactly one mailbox, so the mis-targeting class this instrumentation exists
+ * for cannot occur there. A batch of only `imap:` ids therefore yields no
+ * `countDelta`, which is the honest answer rather than a fabricated one.
+ */
+function collectForensics(
+  tool: string,
+  args: Record<string, unknown>
+): { countDelta?: DestructiveOpReport["countDeltas"]; warnings: string[] } {
+  const report = mailManager.consumeLastForensics();
+  if (!report) return { warnings: [] };
+  writeDestructiveAudit({ tool, args, serverVersion: version }, report);
+  return {
+    ...(report.countDeltas.length > 0 ? { countDelta: report.countDeltas } : {}),
+    warnings: reconciliationWarnings(report),
+  };
+}
 
 // =============================================================================
 // Message Tools
@@ -1442,7 +1501,11 @@ registerTool(
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
     },
-    outputSchema: { ok: z.boolean().optional(), id: z.string().optional() },
+    outputSchema: {
+      ok: z.boolean().optional(),
+      id: z.string().optional(),
+      countDelta: COUNT_DELTA_OUTPUT_SCHEMA,
+    },
   },
   withErrorHandling(
     ({ id }) =>
@@ -1450,8 +1513,16 @@ registerTool(
         imap: () => imapDeleteMessageById(id),
         apple: () => {
           const { success, error } = mailManager.deleteMessage(id);
+          const { countDelta, warnings } = collectForensics("delete-message", { id });
           return success
-            ? successResponse("Message deleted", { ok: true, id })
+            ? successResponse(
+                `Message deleted${warnings.length ? `\n\n${warnings.join("\n")}` : ""}`,
+                {
+                  ok: true,
+                  id,
+                  ...(countDelta ? { countDelta } : {}),
+                }
+              )
             : errorResponse(error || `Failed to delete message "${id}"`);
         },
         ok: "Message deleted",
@@ -1478,6 +1549,7 @@ registerTool(
       ok: z.boolean().optional(),
       id: z.string().optional(),
       mailbox: z.string().optional(),
+      countDelta: COUNT_DELTA_OUTPUT_SCHEMA,
     },
   },
   withErrorHandling(
@@ -1486,8 +1558,16 @@ registerTool(
         imap: () => imapMoveMessageById(id, mailbox),
         apple: () => {
           const { success, error } = mailManager.moveMessage(id, mailbox, account);
+          const { countDelta, warnings } = collectForensics("move-message", {
+            id,
+            mailbox,
+            account,
+          });
           return success
-            ? successResponse(`Message moved to "${mailbox}"`, { ok: true, id, mailbox })
+            ? successResponse(
+                `Message moved to "${mailbox}"${warnings.length ? `\n\n${warnings.join("\n")}` : ""}`,
+                { ok: true, id, mailbox, ...(countDelta ? { countDelta } : {}) }
+              )
             : errorResponse(error || `Failed to move message to "${mailbox}"`);
         },
         ok: `Message moved to "${mailbox}"`,
@@ -1510,19 +1590,36 @@ registerTool(
       sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
       sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA,
     },
-    outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
+    outputSchema: { ...BATCH_COUNT_OUTPUT_SCHEMA, countDelta: COUNT_DELTA_OUTPUT_SCHEMA },
   },
   withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
+    let forensics: ReturnType<typeof collectForensics> = { warnings: [] };
     const counts = await hybridBatchCounts(
       ids,
-      (n) => mailManager.batchDeleteMessages(n, { account: sourceAccount, mailbox: sourceMailbox }),
+      (n) => {
+        const res = mailManager.batchDeleteMessages(n, {
+          account: sourceAccount,
+          mailbox: sourceMailbox,
+        });
+        forensics = collectForensics("batch-delete-messages", {
+          ids,
+          sourceMailbox,
+          sourceAccount,
+        });
+        return res;
+      },
       (im) => imapBatchDelete(im)
     );
-    return batchResponse(counts, {
-      allSucceeded: (n) => `Successfully deleted ${n} message(s)`,
-      allFailed: (n) => `Failed to delete all ${n} message(s)`,
-      partial: (ok, failed) => `Deleted ${ok} message(s), ${failed} failed`,
-    });
+    return batchResponse(
+      counts,
+      {
+        allSucceeded: (n) => `Successfully deleted ${n} message(s)`,
+        allFailed: (n) => `Failed to delete all ${n} message(s)`,
+        partial: (ok, failed) => `Deleted ${ok} message(s), ${failed} failed`,
+      },
+      forensics.countDelta ? { countDelta: forensics.countDelta } : {},
+      forensics.warnings
+    );
   }, "Error batch deleting messages")
 );
 
@@ -1540,16 +1637,26 @@ registerTool(
       sourceMailbox: BATCH_SOURCE_MAILBOX_SCHEMA,
       sourceAccount: BATCH_SOURCE_ACCOUNT_SCHEMA,
     },
-    outputSchema: BATCH_COUNT_OUTPUT_SCHEMA,
+    outputSchema: { ...BATCH_COUNT_OUTPUT_SCHEMA, countDelta: COUNT_DELTA_OUTPUT_SCHEMA },
   },
   withErrorHandling(async ({ ids, mailbox, account, sourceMailbox, sourceAccount }) => {
+    let forensics: ReturnType<typeof collectForensics> = { warnings: [] };
     const counts = await hybridBatchCounts(
       ids,
-      (n) =>
-        mailManager.batchMoveMessages(n, mailbox, account, {
+      (n) => {
+        const res = mailManager.batchMoveMessages(n, mailbox, account, {
           account: sourceAccount,
           mailbox: sourceMailbox,
-        }),
+        });
+        forensics = collectForensics("batch-move-messages", {
+          ids,
+          mailbox,
+          account,
+          sourceMailbox,
+          sourceAccount,
+        });
+        return res;
+      },
       (im) => imapBatchMove(im, mailbox, { account })
     );
     return batchResponse(
@@ -1559,7 +1666,8 @@ registerTool(
         allFailed: (n) => `Failed to move all ${n} message(s)`,
         partial: (ok, failed) => `Moved ${ok} message(s) to "${mailbox}", ${failed} failed`,
       },
-      { mailbox }
+      { mailbox, ...(forensics.countDelta ? { countDelta: forensics.countDelta } : {}) },
+      forensics.warnings
     );
   }, "Error batch moving messages")
 );

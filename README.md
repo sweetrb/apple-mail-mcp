@@ -202,6 +202,7 @@ Read/list/get tools also return **structured JSON** (`structuredContent`) alongs
 | **Doctor** | Diagnose Mail permission, account state, and each IMAP/SMTP backend with actionable messages |
 | **Statistics** | Message and unread counts per account, recently received stats |
 | **Sync Status** | Check if Mail.app is actively syncing |
+| **Effect reconciliation** | Every delete/move reports what it actually did to the mailbox (`countDelta`), and warns when more messages left than were operated on — see [Auditing destructive operations](#auditing-destructive-operations) |
 
 ### MCP resources & prompts
 
@@ -779,6 +780,9 @@ Delete a message (move to trash).
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Message ID |
 
+`structuredContent` carries `countDelta` — what the delete actually did to the
+source mailbox. See [Auditing destructive operations](#auditing-destructive-operations).
+
 **⚠️ Safety:** Destructive. Requires explicit user confirmation; search/list first to confirm the message id.
 
 ---
@@ -798,6 +802,9 @@ name matches **more than one** mailbox (e.g. `Archive` under both `Work` and
 `Thornlands`), the move is refused with an error naming every candidate — pass
 the full path. The same applies to `batch-move-messages`, `delete-mailbox` and
 `rename-mailbox`.
+
+`structuredContent` carries `countDelta` — what the move actually did to the
+**source** mailbox. See [Auditing destructive operations](#auditing-destructive-operations).
 
 ---
 
@@ -851,6 +858,10 @@ default account cannot be determined, the ids fail with an error asking for an e
 `sourceAccount` — a scope the server can't honor is never quietly downgraded to the guess-the-copy
 walk. `sourceAccount` by itself pins nothing, since the mailbox is what an id is scoped to.
 
+**A repeated id is one message.** `ids` is treated as a set: a duplicate names the same message,
+so it is operated on once, and the batch returns **one result per distinct id**. `success` is
+therefore a count of messages, not of list positions.
+
 #### `batch-delete-messages`
 
 | Parameter | Type | Required | Description |
@@ -858,6 +869,9 @@ walk. `sourceAccount` by itself pins nothing, since the mailbox is what an id is
 | `ids` | string[] | Yes | Message IDs to delete (max 100) |
 | `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
 | `sourceAccount` | string | No | Account the numeric ids were listed from. Defaults to the default account; on its own it pins nothing — pair it with `sourceMailbox`. |
+
+`structuredContent` carries `countDelta` — what the batch actually did to each
+source mailbox. See [Auditing destructive operations](#auditing-destructive-operations).
 
 **⚠️ Safety:** Destructive. Requires explicit user confirmation; search/list first to confirm the message ids.
 
@@ -870,6 +884,9 @@ walk. `sourceAccount` by itself pins nothing, since the mailbox is what an id is
 | `account` | string | No | Account containing mailbox |
 | `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
 | `sourceAccount` | string | No | Account the numeric ids were listed from. Defaults to the default account; on its own it pins nothing — pair it with `sourceMailbox`. |
+
+`structuredContent` carries `countDelta` — what the batch actually did to each
+**source** mailbox. See [Auditing destructive operations](#auditing-destructive-operations).
 
 #### `batch-mark-as-read` / `batch-mark-as-unread`
 
@@ -1239,6 +1256,197 @@ Check Mail.app sync activity.
 **Parameters:** None
 
 **Returns:** Whether sync is detected, pending uploads, recent activity, and seconds since last change.
+
+---
+
+## Auditing destructive operations
+
+`delete-message`, `move-message`, `batch-delete-messages` and
+`batch-move-messages` report what they actually did, not merely that Mail.app did
+not raise an error. This exists because of
+[#155](https://github.com/sweetrb/apple-mail-mcp/issues/155): a batch delete was
+reported to have removed two messages whose ids were never passed, and nothing in
+the server recorded enough to explain it.
+
+### `countDelta` — always on, no configuration
+
+Every one of those four tools counts the affected **source** mailbox immediately
+before and immediately after the mutation, **inside the same AppleScript it was
+already running** (no extra `osascript` invocations, no measurable cost), and
+returns the comparison in `structuredContent`:
+
+```json
+{
+  "ok": true,
+  "success": 2,
+  "failed": 0,
+  "countDelta": [
+    {
+      "account": "you@gmail.com",
+      "mailbox": "INBOX",
+      "before": 412,
+      "after": 408,
+      "expected": 2,
+      "observed": 4,
+      "status": "over"
+    }
+  ]
+}
+```
+
+`status` is deliberately four-valued rather than a pass/fail flag:
+
+| `status` | Meaning | Warns? |
+|----------|---------|--------|
+| `match` | Exactly as many messages left the mailbox as the operation acted on. | No |
+| `over` | **More** left than were operated on. Messages are unaccounted for. | **Yes** |
+| `under` | **Fewer** left than expected. | No |
+| `unknown` | No comparison was possible: either Mail would not report a count (`before`/`after` null) or there is no predictable expectation (`expected` null — see the self-move rule below). | No |
+
+#### What an `over` warning does and does not tell you
+
+Only `over` produces a warning in the tool's text response. Be precise about what
+that warning proves, because a warning is useful only for as long as it is
+trusted:
+
+- **It establishes** that more messages left the source mailbox across the window
+  of the operation than the operation accounted for. That is the data-loss
+  direction, and it is the #155 signature.
+- **It does not establish that this server removed them.** The reading is a
+  before/after pair around a window, so anything else that removes mail from that
+  mailbox inside the window reads identically: a Mail.app rule firing mid-batch,
+  a server-side filter, another client (phone, webmail, a second Mail.app)
+  deleting or moving, or an IMAP expunge landing between the two counts.
+
+**Concurrent departure is the benign cause to rule out first**, and the warning
+text says so. What the asymmetry argument actually buys is the other half:
+concurrent *arrivals* cannot produce `over`, because a message arriving
+mid-operation *raises* the after-count and biases the reading toward `under`.
+That is why `over` is the interesting direction — a strong signal, not a proof.
+
+Setting `APPLE_MAIL_MCP_AUDIT_LOG` is what settles which one you have: the
+collateral diff below **names** the messages that disappeared, and "the
+newsletter my rule files every morning" is a very different report from a message
+nothing should have touched.
+
+`under`, by contrast, is routine: an account that flags deletions rather than
+removing them leaves the message in place and the count does not move, and a
+Gmail label mailbox can behave the same way while the delete genuinely succeeded.
+A warning that fires on every ordinary Gmail delete would be ignored exactly when
+it matters, so `under` is **reported** in `countDelta` (with a `note` explaining
+it) and never warned about.
+
+Three more honesty rules:
+
+- The **expectation is per source mailbox**. On a Gmail label store, deleting the
+  `INBOX` copy drops the `\Inbox` label and deleting the `[Gmail]/All Mail` copy
+  trashes the message — different operations, but either way the mailbox the ids
+  came from loses exactly one entry per id. That is what is compared. A move's
+  **destination** count is not checked.
+- A move whose destination **is** the source mailbox is **not compared at all**.
+  No message should leave, but what Mail does to the count when a message is
+  re-filed into the mailbox it already occupies is unspecified — so `expected` is
+  `null`, `status` is `unknown`, `note` says why, and no warning is raised. A
+  warning computed against a guessed expectation would fire on an operation that
+  did exactly what it was asked to, which is the one thing this instrumentation
+  must never do.
+
+  **This makes a self-move a blind spot for the always-on layer**, and the cost is
+  worth stating plainly: if messages genuinely do disappear during a self-move,
+  nothing warns you, because there was no expectation to compare against. `status`
+  is `unknown` rather than `match`, so the result does not claim the operation was
+  clean — but it does not flag it either. The collateral diff still names anything
+  that vanished, so **enable `APPLE_MAIL_MCP_AUDIT_LOG` if you need coverage for
+  same-mailbox moves.**
+- A **repeated id is one message**. The batch tools operate on each distinct id
+  once and return one result per distinct id, so `success` counts messages rather
+  than list positions — and `expected` stays comparable with the mailbox instead
+  of double-counting a duplicate into a false `over`.
+
+`imap:` ids are not reconciled. An IMAP UID names exactly one message in exactly
+one mailbox, so the mis-targeting class this exists for cannot occur there; a
+batch of only `imap:` ids returns no `countDelta` rather than a fabricated one.
+
+### `APPLE_MAIL_MCP_AUDIT_LOG` — opt-in forensic log
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APPLE_MAIL_MCP_AUDIT_LOG` | *(off)* | Absolute path to an NDJSON file. Setting it enables the audit log **and** the collateral diff below |
+| `APPLE_MAIL_MCP_AUDIT_SUBJECTS` | `0` | Set `1` to also record message **subjects**. Separate, deliberate second opt-in — see Privacy |
+| `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX` | `2000` | Skip the collateral snapshot for mailboxes larger than this many messages. `0` disables the snapshot entirely |
+
+When set, each destructive operation appends **one JSON object per line**
+containing: timestamp, tool name, server version, the arguments it was called
+with, the **pre-image** of every message it resolved (account, mailbox, numeric
+id, RFC Message-ID, `date received`), the per-id outcome (`ok` / `notfound` /
+`error` + reason), the `countDelta` above, and the collateral diff.
+
+The pre-image is the part that matters after the fact: a Mail.app numeric id is
+unique only within a mailbox and is reused, so on its own it proves nothing about
+which message was acted on. The RFC Message-ID does.
+
+**The record is framed against its own contents.** The Message-ID and (when
+enabled) the subject are written by whoever sent the mail, so the control
+characters this server frames records with are stripped out of every such value
+before it is written — a Message-ID crafted to close a record and open a forged
+one cannot invent evidence in the log it is being recorded in. The same stripping
+is applied to every other value read out of Mail at runtime (`date received`,
+mailbox and account names, the text of an error Mail raised, the candidate list
+behind an "ambiguous id" refusal), so no emitter is an exception. A value that
+arrives with those characters in it (which a well-formed Message-ID never does)
+is logged with each of them replaced by `U+FFFD`, so the record shows that the
+value was altered rather than quietly shortening it.
+
+### Collateral identification — which messages actually disappeared
+
+Also gated on `APPLE_MAIL_MCP_AUDIT_LOG`. The mailbox's `(numeric id, Message-ID)`
+pairs are captured before and after the mutation and diffed, so the log names
+every message that left — **including ones the caller never listed**:
+
+```json
+{
+  "account": "you@gmail.com",
+  "mailbox": "INBOX",
+  "snapshot": "ok",
+  "disappeared": [
+    { "id": "75811", "messageId": "a@example.com" },
+    { "id": "75814", "messageId": "d@example.com" }
+  ],
+  "unrequested": [{ "id": "75814", "messageId": "d@example.com" }],
+  "appeared": []
+}
+```
+
+A non-empty `unrequested` **is** the #155 symptom, with names attached. Please
+attach that line to the issue if you ever see one.
+
+`id` is always the plain decimal id you passed, even on a mailbox whose ids
+exceed AppleScript's 2^29 integer range (where Mail hands them back as
+`9.99999999E+8`). That normalisation is also what keeps `unrequested` truthful:
+compared in the raw form, a message you explicitly asked to delete would be
+reported here as collateral.
+
+This costs one bulk property read per snapshot and is O(mailbox size), so it is
+bounded by `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX`. When the bound bites, the record
+says so explicitly (`"snapshot": "skipped"` with a reason) rather than omitting
+the field — a silently skipped snapshot would read as "nothing collateral
+happened", which is worse than no snapshot at all. `countDelta` is unaffected by
+the skip and still reconciles the counts.
+
+### Privacy, and what the file costs you
+
+- **Default:** identifying metadata only — Message-ID, date, mailbox, account,
+  numeric id. Enough to say *which* message, nothing about what it says.
+- **Subjects are behind their own opt-in** (`APPLE_MAIL_MCP_AUDIT_SUBJECTS=1`)
+  because a subject line is frequently the entire sensitive payload, and it is
+  not needed to diagnose #155.
+- **Message bodies are never logged, under any setting.**
+- The file **grows without bound** and is never rotated or truncated by this
+  server. Point it somewhere you control, and delete it when you are done. It is
+  written with your user's permissions, wherever you point it; there is no
+  default location precisely so that turning it on is a deliberate act.
+- Writes go to that file and nowhere else. Diagnostics go to **stderr**; nothing
+  is ever written to stdout, which is the JSON-RPC transport.
 
 ---
 

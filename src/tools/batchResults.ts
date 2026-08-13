@@ -16,14 +16,23 @@ import type { ImapBatchResult } from "@/services/imapClient.js";
  * Split a batch of ids into numeric (AppleScript) and imap: (IMAP) groups, run
  * each path, and merge into success/fail counts (I2). imap: ids apply in a
  * single UID command per mailbox; numeric ids use the existing AppleScript batch.
+ *
+ * A batch is a SET of messages: a repeated id names the same message, so it is
+ * operated on — and counted — once. Deduping here makes that true for both
+ * backends at the tool boundary, and keeps `success` a count of messages rather
+ * than of list positions. (The AppleScript path dedupes again on the numeric
+ * value it actually sends, where the #155 effect reconciliation needs it: two
+ * occurrences of one id would otherwise make `expected` disagree with the
+ * mailbox and fire the always-on warning on a correct delete.)
  */
 export async function hybridBatchCounts(
   ids: string[],
   appleFn: (numericIds: string[]) => { success: boolean; error?: string }[],
   imapFn: (imapIds: string[]) => Promise<ImapBatchResult>
 ): Promise<{ success: number; fail: number; errors: string[] }> {
-  const imapIds = ids.filter((i) => i.startsWith("imap:"));
-  const numericIds = ids.filter((i) => !i.startsWith("imap:"));
+  const distinctIds = [...new Set(ids)];
+  const imapIds = distinctIds.filter((i) => i.startsWith("imap:"));
+  const numericIds = distinctIds.filter((i) => !i.startsWith("imap:"));
   let success = 0;
   let fail = 0;
   const errors: string[] = [];
@@ -80,6 +89,11 @@ export const MAX_STRUCTURED_BATCH_ERRORS = 20;
  * All three outcomes carry `structuredContent`, INCLUDING the all-failed one.
  * That branch used to answer with text only, so the single outcome a caller most
  * needs to act on was the one it could not read from the typed channel.
+ *
+ * `warnings` (the always-on effect reconciliation, #155) is appended to the text
+ * on its own lines and NEVER changes the success/failure verdict: by the time it
+ * is known the mutation has already happened, and the point is to report it
+ * truthfully, not to fail retroactively.
  */
 export function batchResponse(
   counts: { success: number; fail: number; errors: string[] },
@@ -88,7 +102,8 @@ export function batchResponse(
     allFailed: (failed: number) => string;
     partial: (succeeded: number, failed: number) => string;
   },
-  extra: Record<string, unknown> = {}
+  extra: Record<string, unknown> = {},
+  warnings: string[] = []
 ): ToolResponse {
   const { success, fail, errors } = counts;
   const distinct = distinctErrors(errors);
@@ -102,8 +117,10 @@ export function batchResponse(
     ...(distinct.length > reported.length ? { errorsTruncated: true } : {}),
   };
   const suffix = formatBatchErrors(distinct);
+  const warn = warnings.length > 0 ? `\n\n${warnings.join("\n")}` : "";
 
-  if (fail === 0) return successResponse(messages.allSucceeded(success), structured);
-  if (success === 0) return errorResponse(`${messages.allFailed(fail)}${suffix}`, structured);
-  return successResponse(`${messages.partial(success, fail)}${suffix}`, structured);
+  if (fail === 0) return successResponse(`${messages.allSucceeded(success)}${warn}`, structured);
+  if (success === 0)
+    return errorResponse(`${messages.allFailed(fail)}${suffix}${warn}`, structured);
+  return successResponse(`${messages.partial(success, fail)}${suffix}${warn}`, structured);
 }
