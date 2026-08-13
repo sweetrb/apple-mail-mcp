@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [2.10.16] - 2026-08-13
+
+Follow-up to the 2.10.15 batch-scoping fix (#152). That release bound each numeric id to the mailbox it was listed from; this one closes the two gaps that left it unreachable or unexplained in practice.
+
+### Fixed
+
+- **The refusal message never reached the caller.** 2.10.15 added a real diagnostic — an ambiguous id fails naming every mailbox that holds it — but `hybridBatchCounts` discarded the AppleScript path's per-id `error` strings, keeping only a count. So a user whose batch was correctly refused saw `Deleted 22 message(s), 2 failed` and nothing else, with no way to learn which ids were ambiguous or what to do about it. Per-id reasons now appear in the tool's text response and in an `errors` array on the structured result. `errors` is declared in the batch output schema, because a raw zod shape compiles to `additionalProperties: false` and an undeclared key is rejected client-side with `-32602`.
+
+### Added
+
+- **`sourceMailbox` / `sourceAccount` on all six batch tools** — the mailbox the numeric ids were listed from. The id→location binding introduced in 2.10.15 lives in per-process memory, so a client that reconnects, restarts the server, or replays a stored list of ids has an empty index: every id falls to the whole-tree path and, on a label store where one message answers to the same id in `INBOX`, `Important` and `All Mail`, is then refused as ambiguous. Naming the source mailbox keeps those ids on the scoped path. An explicit scope also overrides a stale remembered location. For `batch-move-messages` these name the **source**, distinct from `mailbox` (the destination). `imap:` ids already encode account + mailbox + UID and ignore both.
+- **`AppleMailManager.noteMessageLocation(id, account, mailbox)`** — registers a known id→mailbox binding directly, for callers that obtained ids outside this process.
+
+### Documentation
+
+- README Batch Operations gains a paragraph on why the remembered binding is per-server and when to pass the source mailbox explicitly, plus `sourceMailbox`/`sourceAccount` rows on every batch tool's parameter table.
+
 ## [2.10.15] - 2026-08-13
 
 ### Fixed
