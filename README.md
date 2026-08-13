@@ -838,11 +838,20 @@ it**. An id the server hasn't seen listed is accepted only when exactly one mail
 if several do, that id fails with the candidate mailboxes named instead of being applied to an
 arbitrary copy. `imap:…` ids carry their own account + mailbox + UID and are never ambiguous.
 
+**Say which mailbox with `sourceMailbox` / `sourceAccount`.** The binding above is remembered
+per running server, so a client that reconnects, restarts, or replays a saved list of ids has
+nothing recorded and every id takes the slower whole-tree path — where, on a label store, it is
+likely to be refused as ambiguous. Passing the source mailbox explicitly is the reliable way to
+stay scoped, and it overrides the remembered location. These parameters name where the ids **came
+from**; for `batch-move-messages` that is distinct from `mailbox`, the destination.
+
 #### `batch-delete-messages`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs to delete (max 100) |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 **⚠️ Safety:** Destructive. Requires explicit user confirmation; search/list first to confirm the message ids.
 
@@ -853,12 +862,16 @@ arbitrary copy. `imap:…` ids carry their own account + mailbox + UID and are n
 | `ids` | string[] | Yes | Message IDs to move (max 100) |
 | `mailbox` | string | Yes | Destination mailbox |
 | `account` | string | No | Account containing mailbox |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 #### `batch-mark-as-read` / `batch-mark-as-unread`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 #### `batch-flag-messages` / `batch-unflag-messages`
 
@@ -866,6 +879,8 @@ arbitrary copy. `imap:…` ids carry their own account + mailbox + UID and are n
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
 | `color` | string | No | (`batch-flag-messages` only) Flag color — see [`flag-message`](#flag-message--unflag-message). Applied on both routes, so a mixed batch of numeric and `imap:` ids all end up colored. |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
 
 ---
 

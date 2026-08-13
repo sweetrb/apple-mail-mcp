@@ -784,6 +784,19 @@ export class AppleMailManager {
   }
 
   /**
+   * Publicly record where a message id lives.
+   *
+   * The index fills itself from list/search results, but that is per-process
+   * state: a caller that carried ids across a process boundary (a stored triage
+   * list, a scheduled job resuming) starts with an empty index, so every id is
+   * "unlocated" and a label-store id gets refused as ambiguous. Registering the
+   * known location restores scoped resolution.
+   */
+  noteMessageLocation(id: string, account: string, mailbox: string): void {
+    this.rememberLocation(id, account, mailbox);
+  }
+
+  /**
    * AppleScript fragment resolving `account` + `mailbox` into `_tmb`, leaving
    * `_tmb` as `missing value` when it can't be pinned down. Exact-name match
    * only, and a name matching more than one mailbox resolves to nothing rather
@@ -2687,7 +2700,12 @@ export class AppleMailManager {
    * `setup` runs once up front (used by move to resolve the destination); it may
    * bail the whole batch by returning a `BATCH_FATAL`-prefixed string.
    */
-  private runBatchOperation(ids: string[], operation: string, setup = ""): BatchOperationResult[] {
+  private runBatchOperation(
+    ids: string[],
+    operation: string,
+    setup = "",
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
     // Keep the numeric IDs paired with their original string form and 1-based
     // position. The AppleScript reports outcomes by POSITION, not by id: a Mail
     // id large enough to exceed AppleScript's 2^29 integer range coerces to
@@ -2706,6 +2724,16 @@ export class AppleMailManager {
     // Group the ids by the mailbox they were listed from. Each group opens that
     // one mailbox and applies the op only there; ids we've never seen listed
     // fall into `unlocated` and are resolved with an ambiguity check.
+    //
+    // An explicit `scope` from the caller outranks the index. The index is
+    // per-process state, so a caller that started a fresh server (or restored a
+    // saved id list) has nothing recorded and every id would land in
+    // `unlocated` — where, on a label store, it gets refused as ambiguous.
+    // Naming the source mailbox is the reliable way to stay on the scoped path.
+    const callerScope =
+      scope?.account && scope?.mailbox
+        ? { account: scope.account, mailbox: scope.mailbox }
+        : undefined;
     const groups = new Map<
       string,
       { account: string; mailbox: string; items: { num: number; pos: number }[] }
@@ -2713,7 +2741,7 @@ export class AppleMailManager {
     const unlocated: { num: number; pos: number }[] = [];
     valid.forEach((v, i) => {
       const pos = i + 1;
-      const loc = this.locationFor(v.id);
+      const loc = callerScope ?? this.locationFor(v.id);
       if (!loc) {
         unlocated.push({ num: v.num, pos });
         return;
@@ -2866,8 +2894,11 @@ export class AppleMailManager {
   /**
    * Delete multiple messages at once (single tree walk — see runBatchOperation).
    */
-  batchDeleteMessages(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "delete _msg");
+  batchDeleteMessages(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "delete _msg", "", scope);
   }
 
   /**
@@ -2877,7 +2908,12 @@ export class AppleMailManager {
    * matching more than one mailbox fails the whole batch rather than guessing),
    * then every matched message is moved in the same walk.
    */
-  batchMoveMessages(ids: string[], mailbox: string, account?: string): BatchOperationResult[] {
+  batchMoveMessages(
+    ids: string[],
+    mailbox: string,
+    account?: string,
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
     const targetAccount = this.resolveAccount(account);
     const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
     const safeMailbox = escapeForAppleScript(targetMailbox);
@@ -2896,35 +2932,48 @@ export class AppleMailManager {
         if (count of destMatches) > 1 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; move by full path"
         set destMailbox to item 1 of destMatches`;
 
-    return this.runBatchOperation(ids, "move _msg to destMailbox", setup);
+    return this.runBatchOperation(ids, "move _msg to destMailbox", setup, scope);
   }
 
   /**
    * Mark multiple messages as read at once (single tree walk).
    */
-  batchMarkAsRead(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set read status of _msg to true");
+  batchMarkAsRead(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set read status of _msg to true", "", scope);
   }
 
   /**
    * Mark multiple messages as unread at once (single tree walk).
    */
-  batchMarkAsUnread(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set read status of _msg to false");
+  batchMarkAsUnread(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set read status of _msg to false", "", scope);
   }
 
   /**
    * Flag multiple messages at once (single tree walk).
    */
-  batchFlagMessages(ids: string[], colorIndex?: number): BatchOperationResult[] {
-    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex));
+  batchFlagMessages(
+    ids: string[],
+    colorIndex?: number,
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, this.flagOperation("_msg", colorIndex), "", scope);
   }
 
   /**
    * Unflag multiple messages at once (single tree walk).
    */
-  batchUnflagMessages(ids: string[]): BatchOperationResult[] {
-    return this.runBatchOperation(ids, "set flagged status of _msg to false");
+  batchUnflagMessages(
+    ids: string[],
+    scope?: { account?: string; mailbox?: string }
+  ): BatchOperationResult[] {
+    return this.runBatchOperation(ids, "set flagged status of _msg to false", "", scope);
   }
 
   /**
