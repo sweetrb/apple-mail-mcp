@@ -111,9 +111,13 @@ export function auditSnapshotMax(): number {
  *               only status that raises a warning in the tool response.
  * - `under`   — FEWER left than expected. This has legitimate causes on real
  *               stores (see `note`), so it is reported but never warned about.
- * - `unknown` — the count could not be read, or the expected delta is not
- *               predictable for this operation (e.g. a move whose destination is
- *               the source mailbox). Said plainly rather than guessed.
+ * - `unknown` — no comparison was possible: either the count could not be read
+ *               (`before`/`after` null), or the expected delta is not
+ *               predictable for this operation (`expected` null — a move whose
+ *               destination IS the source mailbox is the one case, see `note`).
+ *               Said plainly rather than guessed, and never warned about: a
+ *               warning computed against a number nobody can justify is exactly
+ *               the false alarm this instrumentation must not produce.
  */
 export interface CountDelta {
   /** Account holding the affected mailbox ("" when Mail would not say). */
@@ -124,8 +128,12 @@ export interface CountDelta {
   before: number | null;
   /** Message count after the mutation; null when Mail would not report it. */
   after: number | null;
-  /** How many messages this operation should have removed from `mailbox`. */
-  expected: number;
+  /**
+   * How many messages this operation should have removed from `mailbox`, or
+   * null when that is not predictable and no honest comparison exists. Null
+   * always pairs with `status: "unknown"`.
+   */
+  expected: number | null;
   /** `before - after`; null when either count is unavailable. */
   observed: number | null;
   status: "match" | "over" | "under" | "unknown";
@@ -264,6 +272,13 @@ export function writeDestructiveAudit(ctx: AuditContext, report: DestructiveOpRe
  * raises the after-count, which biases a reading toward `under`. So `over` is
  * the interesting direction and a strong signal — not a proof of a defect.
  *
+ * **What is never warned about, by construction.** `over` requires an `expected`
+ * this server can justify. When it cannot — a move whose destination IS the
+ * source mailbox, where Mail's behaviour for re-filing a message into the
+ * mailbox it already occupies is unspecified — the delta is classified `unknown`
+ * with `expected: null` and no comparison is made at all. Warning off a guessed
+ * expectation would fire on an operation that did exactly what it was asked to.
+ *
  * `under`, by contrast, is routine and never warns. Apple Mail's `delete` on an
  * account whose deleted mail is not moved to Trash only sets `\Deleted`, so the
  * message stays in the mailbox and the count does not drop; a Gmail label
@@ -272,7 +287,10 @@ export function writeDestructiveAudit(ctx: AuditContext, report: DestructiveOpRe
  * warning that cries wolf is ignored precisely when it matters.
  */
 export function countDeltaWarning(d: CountDelta): string | null {
-  if (d.status !== "over") return null;
+  // `expected: null` means no comparison was possible, so there is nothing to
+  // be over. The status check alone would already cover it; both are asserted
+  // so a future status change cannot resurrect a warning without an expectation.
+  if (d.status !== "over" || d.expected === null) return null;
   const extra = (d.observed ?? 0) - d.expected;
   const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
   return (

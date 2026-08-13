@@ -78270,7 +78270,7 @@ function writeDestructiveAudit(ctx, report) {
   });
 }
 function countDeltaWarning(d) {
-  if (d.status !== "over") return null;
+  if (d.status !== "over" || d.expected === null) return null;
   const extra = (d.observed ?? 0) - d.expected;
   const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
   return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. Anything else removing mail from this mailbox at the same moment \u2014 a Mail rule, a server-side filter, another client, an IMAP expunge \u2014 reads the same way, so rule that out first. If nothing else was touching it, this is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
@@ -78550,6 +78550,13 @@ function buildAccountScopedScript(account, command) {
 function groupKey(account, mailbox) {
   return `${account}\0${mailbox}`;
 }
+function canonicalNumericId(raw) {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed === "") return "";
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? String(n) : trimmed;
+}
+var SELF_MOVE_NOTE = "Destination is the source mailbox, so no message should leave it. What Mail does to the count when a message is re-filed into the mailbox it already occupies is unspecified, so there is no expected delta to compare against: this mailbox is reported without a comparison and is never warned about.";
 function snapshotKey(entry) {
   return `${entry.id}\0${entry.messageId}`;
 }
@@ -78776,6 +78783,20 @@ ${indent}set AppleScript's text item delimiters to "${DELIMITER_REPLACEMENT}"
 ${indent}set ${varName} to _zParts as string
 ${indent}set AppleScript's text item delimiters to _zTid`;
   }
+  /**
+   * AppleScript emitting one `error:` outcome record into `_out`, with the
+   * runtime error text sanitised first.
+   *
+   * Mail composes that text, and it routinely quotes back a mailbox or message
+   * property, so it is a runtime-read value like any other — the same invariant
+   * that covers the Message-ID and the snapshot covers it. `_zErr` (not `_e`)
+   * because `sanitizeFragment` rewrites its variable in place and the handler's
+   * own binding should be left alone.
+   */
+  errorEmit(indent) {
+    return `${indent}set _zErr to (_e as string)${this.sanitizeFragment("_zErr", indent)}
+${indent}set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _zErr & "${RECORD_SEP}"`;
+  }
   /** AppleScript emitting one RECON record into `_out`. */
   reconEmit(acctExpr, mbExpr, beforeVar, afterVar, posExpr = '""') {
     return `
@@ -78810,7 +78831,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * Caveat recorded in the docs: `(id of msg) as string` renders a Mail id above
    * AppleScript's 2^29 integer range in scientific notation. The Message-ID is
    * the authoritative key in this record for exactly that reason; the numeric id
-   * is a convenience.
+   * is a convenience — and it is put back into decimal form by
+   * `canonicalNumericId` in `parseSnapshot`, because the raw exponential string
+   * would otherwise fail the `unrequested` membership test and name a REQUESTED
+   * message as collateral.
    */
   snapshotFragment(phase, acctExpr, mbExpr, countVar, mbVar = "_tmb") {
     const max = auditSnapshotMax();
@@ -78955,12 +78979,23 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
     return { byId, okPositions, outcomes, preImages, recons, snaps };
   }
-  /** Parse one SNAP payload into (numeric id → RFC Message-ID) entries. */
+  /**
+   * Parse one SNAP payload into (numeric id → RFC Message-ID) entries.
+   *
+   * The id is CANONICALISED as it is parsed (`canonicalNumericId`), because
+   * AppleScript renders a Mail id above 2^29 in scientific notation. That is the
+   * only point where the AppleScript representation and the caller's own id
+   * strings meet, so normalising here fixes both the `unrequested` membership
+   * test and the id the report hands back to a human.
+   */
   parseSnapshot(payload) {
     if (!payload) return [];
     return payload.split(SNAP_ITEM).map((entry) => {
       const i = entry.indexOf(SNAP_PAIR);
-      return i < 0 ? { id: entry, messageId: "" } : { id: entry.slice(0, i), messageId: entry.slice(i + SNAP_PAIR.length) };
+      return i < 0 ? { id: canonicalNumericId(entry), messageId: "" } : {
+        id: canonicalNumericId(entry.slice(0, i)),
+        messageId: entry.slice(i + SNAP_PAIR.length)
+      };
     });
   }
   /**
@@ -78969,8 +79004,17 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * `expectedFor(account, mailbox, pos)` says how many messages the operation
    * should have removed from that mailbox — the caller knows this because only
    * the caller knows which ids succeeded and whether a move's destination IS the
-   * source mailbox (in which case nothing should leave and the honest expected
-   * delta is 0, not the success count).
+   * source mailbox.
+   *
+   * It returns **null** for "not predictable", and null propagates: the mailbox
+   * is classified `unknown` and no comparison is made. That is the only honest
+   * answer for a self-move — Mail's behaviour when a message is re-filed into
+   * the mailbox it already occupies is unspecified, so any number here would be
+   * a guess, and a guess is what turns this instrumentation into a false alarm.
+   *
+   * `requestedNumericIds` MUST already be canonical (`canonicalNumericId`): it is
+   * compared against ids that came back through AppleScript, where a value above
+   * 2^29 arrives in scientific notation.
    */
   buildForensicReport(parsed, valid, expectedFor, locationFor, noteFor, requestedNumericIds) {
     const merged = /* @__PURE__ */ new Map();
@@ -78980,7 +79024,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const prev = merged.get(key);
       if (prev) {
         prev.after = r.after;
-        prev.expected += expected;
+        prev.expected = prev.expected === null || expected === null ? null : prev.expected + expected;
       } else {
         merged.set(key, {
           account: r.account,
@@ -78996,7 +79040,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const observed = readable ? m.before - m.after : null;
       const note = noteFor(m.account, m.mailbox);
       let status;
-      if (!readable) status = "unknown";
+      if (!readable || m.expected === null) status = "unknown";
       else if (observed === m.expected) status = "match";
       else if ((observed ?? 0) > m.expected) status = "over";
       else status = "under";
@@ -79066,7 +79110,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const beforeKeys = new Set(beforeEntries.map((e) => snapshotKey(e)));
       const disappeared = beforeEntries.filter((e) => !afterKeys.has(snapshotKey(e)));
       const appeared = afterEntries.filter((e) => !beforeKeys.has(snapshotKey(e)));
-      const unrequested = disappeared.filter((e) => !requestedNumericIds.has(e.id));
+      const unrequested = disappeared.filter(
+        (e) => !requestedNumericIds.has(canonicalNumericId(e.id))
+      );
       collateral.push({
         account: g.account,
         mailbox: g.mailbox,
@@ -80397,10 +80443,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     this.lastForensics = this.buildForensicReport(
       parsed,
       valid,
-      (account, mailbox) => sameMailbox(account, mailbox) || !succeeded ? 0 : 1,
+      // null, not 0, for a self-move — see SELF_MOVE_NOTE.
+      (account, mailbox) => sameMailbox(account, mailbox) ? null : succeeded ? 1 : 0,
       () => home ? { account: home.account, mailbox: home.mailbox } : this.locationFor(id) ?? { account: "", mailbox: "" },
-      (account, mailbox) => sameMailbox(account, mailbox) ? "Destination is the source mailbox, so no message should leave it; expected delta is 0." : void 0,
-      /* @__PURE__ */ new Set([String(Number(id))])
+      (account, mailbox) => sameMailbox(account, mailbox) ? SELF_MOVE_NOTE : void 0,
+      /* @__PURE__ */ new Set([canonicalNumericId(String(Number(id)))])
     );
   }
   /**
@@ -80813,6 +80860,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const scopedBlocks = [...groups.values()].map((g) => {
       const acctLit = `"${escapeForAppleScript(stripStreamDelimiters(g.account))}"`;
       const mbLit = `"${escapeForAppleScript(stripStreamDelimiters(g.mailbox))}"`;
+      const acctInProse = escapeForAppleScript(stripStreamDelimiters(g.account));
+      const mbInProse = escapeForAppleScript(stripStreamDelimiters(g.mailbox));
       const pre = instrument ? this.preImageFragment("_msg") : "";
       return `
         ${this.resolveMailboxFragment(g.account, g.mailbox)}
@@ -80820,7 +80869,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         set _gpos to ${asList(g.items.map((it) => it.pos))}
         if _tmb is missing value then
           repeat with _k from 1 to (count of _gpos)
-            set _out to _out & ((item _k of _gpos) as string) & "${FIELD_SEP}error:source mailbox \\"${escapeForAppleScript(g.mailbox)}\\" not found in account \\"${escapeForAppleScript(g.account)}\\"${RECORD_SEP}"
+            set _out to _out & ((item _k of _gpos) as string) & "${FIELD_SEP}error:source mailbox \\"${mbInProse}\\" not found in account \\"${acctInProse}\\"${RECORD_SEP}"
           end repeat
         else${instrument ? `${this.countFragment("_cb")}${this.snapshotFragment("before", acctLit, mbLit, "_cb")}` : ""}
           repeat with _k from 1 to (count of _gids)
@@ -80836,7 +80885,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
               end if
             on error _e
-              set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
+${this.errorEmit("              ")}
             end try
           end repeat${instrument ? `${this.countFragment("_ca")}${this.snapshotFragment("after", acctLit, mbLit, "_ca")}${this.reconEmit(acctLit, mbLit, "_cb", "_ca")}` : ""}
         end if`;
@@ -80872,7 +80921,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           if (item _k of _uhit) is 0 then
             set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
           else if (item _k of _uhit) > 1 then
-            set _out to _out & (_idx as string) & "${FIELD_SEP}error:${AMBIGUOUS_ID_BATCH}(" & (item _k of _unames) & "); list or search that mailbox first so the operation targets the right copy${RECORD_SEP}"
+            set _uname to (item _k of _unames)${this.sanitizeFragment("_uname", "            ")}
+            set _out to _out & (_idx as string) & "${FIELD_SEP}error:${AMBIGUOUS_ID_BATCH}(" & _uname & "); list or search that mailbox first so the operation targets the right copy${RECORD_SEP}"
           else
             set _pre to ""
             try
@@ -80899,7 +80949,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 ${this.reconEmitFromMessage("_ucb", "_uca", "(_idx as string)", "                ")}
               end if` : ""}
             on error _e
-              set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _e & "${RECORD_SEP}"
+${this.errorEmit("              ")}
             end try
           end if
         end repeat` : "";
@@ -80939,20 +80989,22 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const dest = forensics?.destination;
       const sameMailbox = (account, mailbox) => dest !== void 0 && dest.account === account && this.resolveMailbox(dest.mailbox, dest.account) === this.resolveMailbox(mailbox, account);
       const expectedFor = (account, mailbox, pos) => {
-        if (sameMailbox(account, mailbox)) return 0;
+        if (sameMailbox(account, mailbox)) return null;
         if (pos !== null) return okPositions.has(pos) ? 1 : 0;
         const group = groups.get(groupKey(account, mailbox));
         if (!group) return 0;
         return group.items.filter((it) => okPositions.has(it.pos)).length;
       };
-      const noteFor = (account, mailbox) => sameMailbox(account, mailbox) ? "Destination is the source mailbox, so no message should leave it; expected delta is 0." : void 0;
+      const noteFor = (account, mailbox) => sameMailbox(account, mailbox) ? SELF_MOVE_NOTE : void 0;
       this.lastForensics = this.buildForensicReport(
         parsed,
         valid,
         expectedFor,
         (pos) => posLocation.get(pos) ?? { account: "", mailbox: "" },
         noteFor,
-        new Set(valid.map((v) => String(v.num)))
+        // Canonicalised, because the ids this is compared against come back
+        // from AppleScript — see canonicalNumericId.
+        new Set(valid.map((v) => canonicalNumericId(String(v.num))))
       );
     }
     return operands.map(
@@ -84399,7 +84451,11 @@ var COUNT_DELTA_OUTPUT_SCHEMA = external_exports.array(
     mailbox: external_exports.string().optional(),
     before: external_exports.number().nullable().optional(),
     after: external_exports.number().nullable().optional(),
-    expected: external_exports.number().optional(),
+    // Nullable for the same reason before/after/observed are: null means no
+    // comparison was possible. For `expected` that is a move whose
+    // destination IS the source mailbox — it always pairs with
+    // `status: "unknown"`, and never with a warning.
+    expected: external_exports.number().nullable().optional(),
     observed: external_exports.number().nullable().optional(),
     status: external_exports.enum(["match", "over", "under", "unknown"]).optional(),
     note: external_exports.string().optional()

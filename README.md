@@ -1301,7 +1301,7 @@ returns the comparison in `structuredContent`:
 | `match` | Exactly as many messages left the mailbox as the operation acted on. | No |
 | `over` | **More** left than were operated on. Messages are unaccounted for. | **Yes** |
 | `under` | **Fewer** left than expected. | No |
-| `unknown` | Mail would not report a count, so no comparison is possible. | No |
+| `unknown` | No comparison was possible: either Mail would not report a count (`before`/`after` null) or there is no predictable expectation (`expected` null — see the self-move rule below). | No |
 
 #### What an `over` warning does and does not tell you
 
@@ -1343,8 +1343,13 @@ Three more honesty rules:
   trashes the message — different operations, but either way the mailbox the ids
   came from loses exactly one entry per id. That is what is compared. A move's
   **destination** count is not checked.
-- A move whose destination **is** the source mailbox expects a delta of `0`, not
-  the success count, and says so in `note`.
+- A move whose destination **is** the source mailbox is **not compared at all**.
+  No message should leave, but what Mail does to the count when a message is
+  re-filed into the mailbox it already occupies is unspecified — so `expected` is
+  `null`, `status` is `unknown`, `note` says why, and no warning is raised. A
+  warning computed against a guessed expectation would fire on an operation that
+  did exactly what it was asked to, which is the one thing this instrumentation
+  must never do.
 - A **repeated id is one message**. The batch tools operate on each distinct id
   once and return one result per distinct id, so `success` counts messages rather
   than list positions — and `expected` stays comparable with the mailbox instead
@@ -1376,7 +1381,10 @@ which message was acted on. The RFC Message-ID does.
 enabled) the subject are written by whoever sent the mail, so the control
 characters this server frames records with are stripped out of every such value
 before it is written — a Message-ID crafted to close a record and open a forged
-one cannot invent evidence in the log it is being recorded in. A value that
+one cannot invent evidence in the log it is being recorded in. The same stripping
+is applied to every other value read out of Mail at runtime (`date received`,
+mailbox and account names, the text of an error Mail raised, the candidate list
+behind an "ambiguous id" refusal), so no emitter is an exception. A value that
 arrives with those characters in it (which a well-formed Message-ID never does)
 is logged with each of them replaced by `U+FFFD`, so the record shows that the
 value was altered rather than quietly shortening it.
@@ -1403,6 +1411,12 @@ every message that left — **including ones the caller never listed**:
 
 A non-empty `unrequested` **is** the #155 symptom, with names attached. Please
 attach that line to the issue if you ever see one.
+
+`id` is always the plain decimal id you passed, even on a mailbox whose ids
+exceed AppleScript's 2^29 integer range (where Mail hands them back as
+`9.99999999E+8`). That normalisation is also what keeps `unrequested` truthful:
+compared in the raw form, a message you explicitly asked to delete would be
+reported here as collateral.
 
 This costs one bulk property read per snapshot and is O(mailbox size), so it is
 bounded by `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX`. When the bound bites, the record

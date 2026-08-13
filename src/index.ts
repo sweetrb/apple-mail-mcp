@@ -285,7 +285,11 @@ const COUNT_DELTA_OUTPUT_SCHEMA = z
       mailbox: z.string().optional(),
       before: z.number().nullable().optional(),
       after: z.number().nullable().optional(),
-      expected: z.number().optional(),
+      // Nullable for the same reason before/after/observed are: null means no
+      // comparison was possible. For `expected` that is a move whose
+      // destination IS the source mailbox — it always pairs with
+      // `status: "unknown"`, and never with a warning.
+      expected: z.number().nullable().optional(),
       observed: z.number().nullable().optional(),
       status: z.enum(["match", "over", "under", "unknown"]).optional(),
       note: z.string().optional(),
