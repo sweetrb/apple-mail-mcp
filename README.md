@@ -845,13 +845,19 @@ likely to be refused as ambiguous. Passing the source mailbox explicitly is the 
 stay scoped, and it overrides the remembered location. These parameters name where the ids **came
 from**; for `batch-move-messages` that is distinct from `mailbox`, the destination.
 
+`sourceMailbox` is the one that scopes, and it works on its own: omitting `sourceAccount` means
+that mailbox **in the default account**, exactly as an omitted `account` does elsewhere. If the
+default account cannot be determined, the ids fail with an error asking for an explicit
+`sourceAccount` — a scope the server can't honor is never quietly downgraded to the guess-the-copy
+walk. `sourceAccount` by itself pins nothing, since the mailbox is what an id is scoped to.
+
 #### `batch-delete-messages`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs to delete (max 100) |
 | `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
-| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Defaults to the default account; on its own it pins nothing — pair it with `sourceMailbox`. |
 
 **⚠️ Safety:** Destructive. Requires explicit user confirmation; search/list first to confirm the message ids.
 
@@ -863,7 +869,7 @@ from**; for `batch-move-messages` that is distinct from `mailbox`, the destinati
 | `mailbox` | string | Yes | Destination mailbox |
 | `account` | string | No | Account containing mailbox |
 | `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
-| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Defaults to the default account; on its own it pins nothing — pair it with `sourceMailbox`. |
 
 #### `batch-mark-as-read` / `batch-mark-as-unread`
 
@@ -871,7 +877,7 @@ from**; for `batch-move-messages` that is distinct from `mailbox`, the destinati
 |-----------|------|----------|-------------|
 | `ids` | string[] | Yes | Message IDs (max 100) |
 | `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
-| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Defaults to the default account; on its own it pins nothing — pair it with `sourceMailbox`. |
 
 #### `batch-flag-messages` / `batch-unflag-messages`
 
@@ -880,7 +886,7 @@ from**; for `batch-move-messages` that is distinct from `mailbox`, the destinati
 | `ids` | string[] | Yes | Message IDs (max 100) |
 | `color` | string | No | (`batch-flag-messages` only) Flag color — see [`flag-message`](#flag-message--unflag-message). Applied on both routes, so a mixed batch of numeric and `imap:` ids all end up colored. |
 | `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
-| `sourceAccount` | string | No | Account the numeric ids were listed from. Pair with `sourceMailbox`. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Defaults to the default account; on its own it pins nothing — pair it with `sourceMailbox`. |
 
 ---
 

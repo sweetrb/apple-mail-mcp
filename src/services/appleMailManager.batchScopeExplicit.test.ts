@@ -17,7 +17,15 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const FIELD_SEP = "\x1f";
 const RECORD_SEP = "\x1e";
 
-const h = vi.hoisted(() => ({ calls: [] as string[] }));
+const h = vi.hoisted(() => ({
+  calls: [] as string[],
+  /** Accounts Mail.app "has", as fetchAccounts' name<FS>email<FS>enabled rows. */
+  accounts: [
+    ["iCloud", "rob@me.com", "false"],
+    ["rob@superiortech.io", "rob@superiortech.io", "true"],
+    ["robert.b.sweet@gmail.com", "robert.b.sweet@gmail.com", "true"],
+  ] as string[][],
+}));
 
 vi.mock("@/utils/applescript.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/utils/applescript.js")>();
@@ -25,6 +33,20 @@ vi.mock("@/utils/applescript.js", async (importOriginal) => {
     ...actual,
     executeAppleScript: (script: string) => {
       h.calls.push(script);
+      // Account enumeration — what resolveAccount() consults when the caller
+      // names a source mailbox but no source account.
+      if (script.includes("set accountList to {}")) {
+        return {
+          success: true,
+          output: h.accounts.map((a) => a.join(FIELD_SEP)).join(RECORD_SEP),
+          error: undefined as string | undefined,
+        };
+      }
+      // Mail's default-send probe: answer "no opinion" so account choice falls
+      // through to "first enabled account", the documented order.
+      if (script.includes("make new outgoing message")) {
+        return { success: true, output: "", error: undefined as string | undefined };
+      }
       // Report `ok` for every position the batch script asked about, so the
       // parsing path is exercised without pretending to be Mail.
       const positions = [...script.matchAll(/set _gpos to \{([^}]*)\}/g)]
@@ -48,6 +70,12 @@ describe("explicit batch source scope", () => {
 
   beforeEach(() => {
     h.calls.length = 0;
+    h.accounts = [
+      ["iCloud", "rob@me.com", "false"],
+      ["rob@superiortech.io", "rob@superiortech.io", "true"],
+      ["robert.b.sweet@gmail.com", "robert.b.sweet@gmail.com", "true"],
+    ];
+    delete process.env.APPLE_MAIL_MCP_DEFAULT_ACCOUNT;
     mgr = new AppleMailManager();
   });
 
@@ -63,6 +91,43 @@ describe("explicit batch source scope", () => {
     // The unlocated fallback walk must not be generated at all: with a scope,
     // no id is unlocated, so nothing may probe every account/mailbox.
     expect(s).not.toContain("repeat with acct in accounts");
+  });
+
+  // A source mailbox on its own has to work: everywhere else in this server an
+  // omitted `account` means "the default account" (resolveAccount), never
+  // "ignore the argument you were given". Discarding a lone `sourceMailbox` sent
+  // the batch down the whole-tree path, where the id it was meant to pin is then
+  // refused as ambiguous — precisely the failure the parameter exists to prevent.
+  it("scopes on sourceMailbox ALONE, resolving the account the way the rest of the server does", () => {
+    const res = mgr.batchDeleteMessages(["79345"], { mailbox: "Sales Spam" });
+
+    expect(res).toEqual([{ id: "79345", success: true }]);
+    const s = batchScript();
+    expect(s).toContain("Sales Spam");
+    // Resolved to the first ENABLED account (iCloud is disabled and must not be
+    // chosen implicitly — #47).
+    expect(s).toContain("rob@superiortech.io");
+    expect(s).not.toContain("repeat with acct in accounts");
+  });
+
+  it("honors the default-account override when scoping on sourceMailbox alone", () => {
+    process.env.APPLE_MAIL_MCP_DEFAULT_ACCOUNT = "robert.b.sweet@gmail.com";
+    mgr.batchMarkAsRead(["79345"], { mailbox: "INBOX" });
+
+    const s = batchScript();
+    expect(s).toContain("robert.b.sweet@gmail.com");
+    expect(s).not.toContain("repeat with acct in accounts");
+  });
+
+  it("FAILS the ids when no account can be resolved — never falls back to the walk", () => {
+    h.accounts = []; // Mail answered, and there genuinely are no accounts.
+    const res = mgr.batchDeleteMessages(["79345", "79346"], { mailbox: "Sales Spam" });
+
+    expect(res.every((r) => !r.success)).toBe(true);
+    expect(res[0].error).toContain("Sales Spam");
+    expect(res[0].error).toContain("sourceAccount");
+    // The whole point: a scope we cannot honor is an error, not a scan-and-guess.
+    expect(batchScript()).toBe("");
   });
 
   it("without a scope and a cold index, falls back to the ambiguity-checked walk", () => {

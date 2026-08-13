@@ -6,10 +6,15 @@
  * store (Gmail, iCloud) exposes ONE message in several mailboxes under the SAME
  * id: on a real account, id 75816 is reported by "Important", "All Mail" AND
  * "INBOX" for the same mail. The old implementation walked every account's every
- * mailbox and applied the operation to the FIRST match; `mailboxes of account`
- * yields INBOX late, so a batch of ids listed from INBOX was reliably applied to
- * the "Important" copies instead — every id reported `ok` while the INBOX
- * messages stayed put and other copies were moved/deleted.
+ * mailbox and applied the operation to the FIRST match, so the copy that won was
+ * whichever `mailboxes of <account>` reached first — and the mailbox the ids were
+ * actually listed from lost whenever an alias came earlier in that order. On the
+ * reporting account (`list-mailboxes`, 2026-08-13) the walk ran INBOX 1,
+ * "[Gmail]/All Mail" 5, "[Gmail]/Important" 9, "Sales Spam" 12, so a batch listed
+ * from "Sales Spam" was applied to the All Mail copies — every id reported `ok`
+ * while the Sales Spam messages stayed put. That order is store-dependent, not
+ * guaranteed in either direction; any late-walked source mailbox loses the same
+ * way.
  *
  * These tests assert the generated AppleScript is mailbox-scoped, and that the
  * unscoped first-match-wins walk is gone. executeAppleScript is fully mocked, so
