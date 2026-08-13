@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [2.10.15] - 2026-08-13
+
+### Fixed
+
+- **Every by-id message mutation could land on a different message than the one you named, and report success for it** (#152). A Mail.app numeric message id is unique only *within a mailbox*, and a label store (Gmail, iCloud) exposes one message in several mailboxes under the **same** id — verified on a real account, id `75815` is reported simultaneously by `All Mail`, `Sent Mail` and `INBOX`. `move-message`, `delete-message`, `batch-move-messages`, `batch-delete-messages` and the batch read/flag ops all walked every account's every mailbox and applied the operation to the **first** match. `mailboxes of account` yields `INBOX` late, so an id listed from INBOX was reliably operated on in `All Mail`/`Important` instead: the call reported success, the INBOX message stayed where it was, and a different copy was moved or deleted. The reported `success` count was the number of ids passed, not the number of messages actually affected, so it could not be used to verify the outcome either.
+- **Mutations are now scoped to the mailbox the id was listed from.** The fix reuses `idLocationIndex` — the id→(account, mailbox) map that every `list-messages`/`search-messages` already populates, and that the read paths already consult for exactly this reason — so the normal list-then-mutate flow now opens the one right mailbox instead of guessing. This also removes the full account→mailbox tree walk from the batch path, so batches touch far fewer mailboxes than before.
+- **An id with no recorded source mailbox is refused when it is ambiguous, rather than resolved to an arbitrary copy.** Ids supplied out-of-band (or evicted from the index) are looked up across all mailboxes; if exactly one holds the id the operation proceeds as before, and if several do the call fails naming the candidate mailboxes and asking you to list or search that mailbox first. Silently mutating whichever copy sorted first is what made the original bug invisible.
+- Note for callers that already use `imap:` ids: those were never affected. They encode account + mailbox path + UID, so they were always unambiguous — this bug was specific to the bare-numeric AppleScript ids returned when no IMAP account is configured.
+
 ## [2.10.14] - 2026-08-13
 
 ### Documentation

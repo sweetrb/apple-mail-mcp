@@ -68,6 +68,25 @@ body: "Run: cp ~/Library/Mobile\ Documents/report.pdf ~/Desktop/"
 
 All message operations require an `id` parameter. **Always get IDs first** using `list-messages` or `search-messages`:
 
+**A bare numeric ID is only meaningful together with the mailbox it came from.** Mail.app numbers
+messages per mailbox, and a label store (Gmail, iCloud) reports the *same* message under the *same*
+id in several mailboxes at once — `INBOX`, `Important` and `All Mail` will all answer to id `75815`.
+Moving or deleting the `All Mail` copy is a different operation from moving or deleting the `INBOX`
+copy, so the server binds each id to the mailbox you listed it from and operates only there.
+
+Practical consequences:
+
+- **List or search the mailbox you intend to act on, immediately before acting on it.** Don't carry
+  numeric ids across from an unrelated listing, and don't invent them.
+- An id the server has never seen listed is resolved only if exactly one mailbox holds it. If
+  several do, the call **fails** and names them — re-list the mailbox you meant rather than retrying
+  the same id or trying a different tool.
+- `imap:…` ids (returned when an IMAP account is configured) already encode account + mailbox +
+  UID, so they are unambiguous anywhere and are never subject to this.
+- A batch call's success count reports messages the server actually operated on. Treat a `notfound`
+  or an ambiguity error for some ids as a partial result and re-list, rather than assuming the whole
+  batch applied.
+
 ```text
 # List messages returns IDs
 list-messages mailbox="INBOX"
