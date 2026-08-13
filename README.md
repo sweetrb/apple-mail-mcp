@@ -579,7 +579,7 @@ Dropped connections reconnect with backoff, and the watchers shut down cleanly o
 
 Enable it in your MCP client config alongside the IMAP settings:
 
-```jsonc
+```json
 {
   "mcpServers": {
     "apple-mail": {
@@ -677,6 +677,20 @@ Return an attachment's bytes as base64 (the read counterpart to inline-base64 se
 | `attachmentName` | string | Yes | Attachment filename (from `list-attachments`) |
 
 **Returns:** The attachment bytes, base64-encoded (also in `structuredContent.contentBase64`).
+
+---
+
+#### `resolve-message-id`
+
+Map `imap:` message IDs to their numeric Mail.app IDs, via each message's RFC 5322 `Message-ID` (the join key both backends share). Needed only for the two tools that are numeric-ID-only — `reply-to-message` and `forward-message`. Numeric IDs pass through unchanged.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | 1–100 message IDs, each numeric or `imap:…` |
+
+**Returns:** For each input ID, its `numericId` (or `null` when it can't be resolved) and the `messageId` used, plus `count` and `resolvedCount`. The lookup scopes to the message's account and checks its INBOX first, to avoid scanning a large All Mail/Archive mailbox.
+
+> **You do not need this for flag colors (v2.10.0+).** Colors used to require the numeric-ID path, and older docs and tool descriptions said so. `flag-message` and `batch-flag-messages` now write the color over IMAP directly, as Mail.app's `$MailFlagBit0/1/2` keywords, so a smart mailbox keyed on flag color matches an IMAP-flagged message. Resolving IDs just to apply a color reintroduces the AppleScript/TCC dependency 2.10.0 removed. Flag, move, mark, and delete all accept `imap:` IDs as-is.
 
 ---
 
@@ -1309,7 +1323,7 @@ This repo ships a `.mcp.json` at its root so that, when you run `claude` from in
 
 The entrypoint is written as:
 
-```json
+```text
 "args": ["${CLAUDE_PROJECT_DIR:-.}/build/index.js"]
 ```
 

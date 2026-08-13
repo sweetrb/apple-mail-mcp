@@ -111,7 +111,7 @@ The server reads `APPLE_MAIL_MCP_*` settings. There are two ways to supply them;
 Works with clients that pass an `env` block through to the server (e.g. **Claude
 Code** via `~/.claude.json`, and most standard `mcpServers` configs).
 
-```jsonc
+```json
 {
   "mcpServers": {
     "apple-mail": {
