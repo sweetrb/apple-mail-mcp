@@ -1375,21 +1375,33 @@ When sending content containing backslashes (`\`) to this MCP server, **you must
 
 **Why:** The MCP protocol uses JSON for parameter passing. In JSON, a single backslash is an escape character. To include a literal backslash in content, it must be escaped as `\\`.
 
-**Example - Email with file path:**
+**Correct — email containing a shell path with an escaped space:**
+
 ```json
 {
   "to": ["colleague@company.com"],
   "subject": "File Location",
-  "body": "The file is at C:\\\\Users\\\\Documents\\\\report.pdf"
+  "body": "Run: cp ~/Library/Mobile\\ Documents/report.pdf ~/Desktop/"
 }
 ```
 
-The `\\\\` in JSON becomes `\\` in the actual string, which represents a single `\` in the email.
+→ arrives as: `Run: cp ~/Library/Mobile\ Documents/report.pdf ~/Desktop/`
+
+In a JSON string literal, `\\` — two characters — denotes **one** literal backslash. Four backslashes (`\\\\`) denote **two** literal backslashes, so send those only when the text genuinely contains `\\`.
+
+**Incorrect — the unescaped backslash makes this invalid JSON:**
+
+```text
+"body": "Run: cp ~/Library/Mobile\ Documents/report.pdf ~/Desktop/"
+```
+
+`\ ` (backslash-space) is not a valid JSON escape sequence, so the call is rejected — or, with a laxer parser, the backslash is silently dropped.
 
 **Common patterns requiring escaping:**
-- Windows paths: `C:\Users\` → `C:\\\\Users\\\\` in JSON
-- Shell escaped spaces: `Mobile\ Documents` → `Mobile\\\\ Documents` in JSON
-- Regex patterns: `\d+` → `\\\\d+` in JSON
+
+- Shell escaped spaces: `Mobile\ Documents` → `Mobile\\ Documents` in JSON
+- Regex patterns: `\d+` → `\\d+` in JSON
+- A literal double backslash: `\\` → `\\\\` in JSON
 
 **If you see errors** when sending emails with backslashes, double-check that backslashes are properly escaped in the JSON payload.
 
