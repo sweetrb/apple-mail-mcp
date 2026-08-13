@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [2.10.14] - 2026-08-13
+
+### Documentation
+
+- **`resolve-message-id` has been advertised since 2.8.0 and was never in the README's Tool Reference** — 50 tools on the wire, 49 documented. Nothing surfaced it: the tool works, `tools/list` returns it, and every check in this repo compared the README only to itself. It now has a full entry (parameters, return shape, the account/INBOX-first scoping), including the point 2.10.1 corrected everywhere else: it is **not** needed to apply a flag color any more. An agent that believes otherwise resolves `imap:` ids purely to color a flag and reintroduces the AppleScript/TCC dependency 2.10.0 removed — the dependency that previously killed four consecutive scheduled jobs.
+- **New guard: `src/docsTruth.test.ts`, which checks the docs against the CODE rather than against themselves.** `readmeEscaping.test.ts` and `claudeMdEscaping.test.ts` prove one section of one doc is internally consistent; they cannot see a doc that is coherent and wrong. This one asserts three things across `README.md`, `CLAUDE.md` and `docs/*.md`: every ` ```json ` fence parses as JSON (a malformed example in setup docs breaks whoever copies it); every `APPLE_*` environment variable the docs name exists somewhere under `src/`, with tests excluded, so a renamed or deleted knob cannot keep being advertised; and the README's `## Tool Reference` documents **exactly** the tool surface the built server advertises over stdio — both directions, so a tool shipped without docs and a renamed tool whose docs stayed behind each fail, with the offending names printed. The tool list is read off the wire, not regexed out of `src/index.ts`, because the wire is the contract users see. Every assertion also fails when it finds nothing to check, so deleting the inputs cannot make the suite pass on an empty set.
+- **Two fence retags, both honest rather than allowlisted.** The `"args": ["${CLAUDE_PROJECT_DIR:-.}/build/index.js"]` example is a one-line fragment, not a JSON document, so it is now ` ```text ` — the tag the escaping section already uses for the identically shaped `"body": "…"` fragment. The IMAP `env` blocks in `README.md` and `docs/IMAP-SETUP.md` were tagged ` ```jsonc ` while containing no comment: plain valid JSON, where the tag bought nothing but exemption from the parse check. They are now ` ```json ` and are checked, and a companion assertion makes that permanent — a ` ```jsonc ` block with no comment in it fails, so the tag cannot become a way to opt out.
+
+No runtime code changed; the committed `build/` bundle is byte-identical.
+
 ## [2.10.13] - 2026-08-13
 
 ### Documentation
