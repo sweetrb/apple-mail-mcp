@@ -46,6 +46,8 @@ If you send a single backslash without escaping:
 body: "The file is at C:\\Users\\Documents\\report.pdf"
 ```
 
+→ arrives as: `The file is at C:\Users\Documents\report.pdf`
+
 **Incorrect - Will fail:**
 
 ```text

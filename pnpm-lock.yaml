@@ -49,6 +49,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.1.9
         version: 4.1.10(vitest@4.1.10)
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
       esbuild:
         specifier: ^0.28.1
         version: 0.28.1
