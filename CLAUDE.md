@@ -24,11 +24,11 @@ Keychain gotchas). Verify with the `doctor` tool.
 
 The MCP protocol uses JSON for parameters. In JSON, `\` is an escape character. To include a literal backslash:
 
-| You want    | Send in JSON parameter |
-|-------------|------------------------|
-| `\`         | `\\`                   |
-| `\\`        | `\\\\`                 |
-| `C:\Users\` | `C:\\Users\\`          |
+| You want            | Send in JSON parameter |
+|---------------------|------------------------|
+| `\`                 | `\\`                   |
+| `\\`                | `\\\\`                 |
+| `Mobile\ Documents` | `Mobile\\ Documents`   |
 
 ### Why This Matters
 
@@ -40,18 +40,26 @@ If you send a single backslash without escaping:
 
 ### Examples
 
-**Correct - Windows path in email:**
+**Correct - shell path with an escaped space:**
 
 ```text
-body: "The file is at C:\\Users\\Documents\\report.pdf"
+body: "Run: cp ~/Library/Mobile\\ Documents/report.pdf ~/Desktop/"
 ```
 
-→ arrives as: `The file is at C:\Users\Documents\report.pdf`
+→ arrives as: `Run: cp ~/Library/Mobile\ Documents/report.pdf ~/Desktop/`
+
+**Correct - regex in the body:**
+
+```text
+body: "Invoice numbers match \\d+"
+```
+
+→ arrives as: `Invoice numbers match \d+`
 
 **Incorrect - Will fail:**
 
 ```text
-body: "The file is at C:\Users\Documents\report.pdf"
+body: "Run: cp ~/Library/Mobile\ Documents/report.pdf ~/Desktop/"
 ```
 
 ## Tool Usage Tips
@@ -376,8 +384,9 @@ Replaced `with opening window` with `without opening window` for both `reply` an
 Before sending emails with paths or special characters, verify escaping:
 
 - `~/path/to/file` - No escaping needed (no backslashes)
-- `C:\Users\` - Needs escaping: `C:\\Users\\`
+- `~/Library/Mobile\ Documents` - Needs escaping: `~/Library/Mobile\\ Documents`
 - `file\ name.txt` - Needs escaping: `file\\ name.txt`
+- `\d+` - Needs escaping: `\\d+`
 
 ## Recurring macOS permission prompts → offer the official-Node fix
 
