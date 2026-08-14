@@ -93,30 +93,32 @@ describe("explicit batch source scope", () => {
     expect(s).not.toContain("repeat with acct in accounts");
   });
 
-  // A source mailbox on its own has to work: everywhere else in this server an
-  // omitted `account` means "the default account" (resolveAccount), never
-  // "ignore the argument you were given". Discarding a lone `sourceMailbox` sent
-  // the batch down the whole-tree path, where the id it was meant to pin is then
-  // refused as ambiguous — precisely the failure the parameter exists to prevent.
-  it("scopes on sourceMailbox ALONE, resolving the account the way the rest of the server does", () => {
+  it("rejects sourceMailbox without sourceAccount instead of guessing an account", () => {
     const res = mgr.batchDeleteMessages(["79345"], { mailbox: "Sales Spam" });
 
-    expect(res).toEqual([{ id: "79345", success: true }]);
-    const s = batchScript();
-    expect(s).toContain("Sales Spam");
-    // Resolved to the first ENABLED account (iCloud is disabled and must not be
-    // chosen implicitly — #47).
-    expect(s).toContain("rob@superiortech.io");
-    expect(s).not.toContain("repeat with acct in accounts");
+    expect(res).toEqual([
+      {
+        id: "79345",
+        success: false,
+        error: expect.stringContaining("without sourceAccount"),
+      },
+    ]);
+    expect(batchScript()).toBe("");
   });
 
-  it("honors the default-account override when scoping on sourceMailbox alone", () => {
+  it("rejects whitespace-only source fields instead of silently dropping the scope", () => {
     process.env.APPLE_MAIL_MCP_DEFAULT_ACCOUNT = "robert.b.sweet@gmail.com";
-    mgr.batchMarkAsRead(["79345"], { mailbox: "INBOX" });
+    const mailboxOnly = mgr.batchMarkAsRead(["79345"], { mailbox: "   " });
+    const accountOnly = mgr.batchMarkAsRead(["79345"], {
+      account: "   ",
+      mailbox: "INBOX",
+    });
 
-    const s = batchScript();
-    expect(s).toContain("robert.b.sweet@gmail.com");
-    expect(s).not.toContain("repeat with acct in accounts");
+    expect(mailboxOnly[0].success).toBe(false);
+    expect(mailboxOnly[0].error).toMatch(/whitespace-only/);
+    expect(accountOnly[0].success).toBe(false);
+    expect(accountOnly[0].error).toMatch(/whitespace-only/);
+    expect(batchScript()).toBe("");
   });
 
   it("FAILS the ids when no account can be resolved — never falls back to the walk", () => {

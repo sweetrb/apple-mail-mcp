@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [2.10.24] - 2026-08-14
+
+### Changed
+
+- **Numeric batch source scopes now require both `sourceAccount` and `sourceMailbox`.**
+  A lone `sourceMailbox` was resolved against the mutable default-send account, so ids
+  listed from a non-default account were scoped to the *default* account's same-named
+  mailbox — and a numeric id that also exists there was mutated silently. That is the
+  #152 failure mode moved from cross-mailbox to cross-account, and it was strictly
+  worse than passing no scope at all, which refuses the case as ambiguous. Both fields
+  are now required together, and a whitespace-only value is rejected outright instead
+  of being silently discarded. `imap:` ids are unaffected — they already carry account,
+  mailbox and UID. Closes items 1 and 2 of #156.
+
 ## [2.10.23] - 2026-08-14
 
 ### Changed

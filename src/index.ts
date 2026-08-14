@@ -133,14 +133,14 @@ const BATCH_SOURCE_MAILBOX_SCHEMA = z
   .string()
   .optional()
   .describe(
-    "Mailbox the numeric ids were listed from (e.g. 'INBOX'). Pins each id to that mailbox — strongly recommended, since one numeric id can match in several mailboxes. Works on its own: without sourceAccount it means that mailbox in the default account. Ignored for imap: ids."
+    "Mailbox the numeric ids were listed from (e.g. 'INBOX'). Must be paired with sourceAccount to form an unambiguous scope. Ignored for imap: ids."
   );
 
 const BATCH_SOURCE_ACCOUNT_SCHEMA = z
   .string()
   .optional()
   .describe(
-    "Account the numeric ids were listed from. Defaults to the default account. On its own it pins nothing — pair it with sourceMailbox."
+    "Account the numeric ids were listed from. Required when sourceMailbox is supplied; on its own it pins nothing."
   );
 
 /** Apple Mail flag colors → the 0-6 palette index. `grey` is an alias for `gray`.
