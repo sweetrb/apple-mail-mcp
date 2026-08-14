@@ -96,19 +96,16 @@ Two more hosts can run the same `apple-mail` MCP server (`npx -y apple-mail-mcp`
   ```
 
   Restart your Hermes session afterward so the tools load.
-
 - **[Antigravity](https://antigravity.google/)** (Google) — add the server entry from [`.antigravity-plugin/mcp_config.json`](https://github.com/sweetrb/apple-mail-mcp/blob/main/.antigravity-plugin/mcp_config.json) to `~/.gemini/config/mcp_config.json` (or via Antigravity's MCP settings).
 
 ### Manual Installation
 
 **1. Install the server:**
-
 ```bash
 npm install -g apple-mail-mcp
 ```
 
 **2. Add to Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
-
 ```json
 {
   "mcpServers": {
@@ -121,7 +118,6 @@ npm install -g apple-mail-mcp
 ```
 
 **3. Restart Claude Desktop** and start using natural language:
-
 ```
 "Show me my unread emails"
 ```
@@ -147,13 +143,6 @@ block **or** a `config.json` file (for hosts like Claude Desktop that strip `env
 Keychain, both config methods, multi-account, SMTP, verification with the `doctor`
 tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 
-## Documentation
-
-- [Threat model](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/THREAT-MODEL.md)
-- [IMAP / SMTP setup guide](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md)
-- [Node runtime and TCC permissions](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md)
-- [Stability and performance audit](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/STABILITY-PERF-AUDIT-2026-06-17.md)
-
 ## Requirements
 
 - **macOS** - Apple Mail and AppleScript are macOS-only
@@ -165,54 +154,54 @@ tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 
 ### Messages
 
-| Feature               | Description                                                                                |
-| --------------------- | ------------------------------------------------------------------------------------------ |
-| **List Messages**     | List messages with pagination, sender filter, date display                                 |
-| **Search Messages**   | Search by sender, subject, content, date range, read/flagged status — across all accounts  |
-| **Read Messages**     | Get full email content (plain text or HTML)                                                |
-| **Send Email**        | Compose and send new emails (attach by file path or inline base64 content)                 |
+| Feature | Description |
+|---------|-------------|
+| **List Messages** | List messages with pagination, sender filter, date display |
+| **Search Messages** | Search by sender, subject, content, date range, read/flagged status — across all accounts |
+| **Read Messages** | Get full email content (plain text or HTML) |
+| **Send Email** | Compose and send new emails (attach by file path or inline base64 content) |
 | **Send Serial Email** | Mail merge — send personalized emails to a list of recipients with {{placeholder}} support |
-| **Create Draft**      | Save emails to Drafts folder (attach by file path or inline base64 content)                |
-| **Reply**             | Reply to messages (with reply-all support)                                                 |
-| **Forward**           | Forward messages to new recipients                                                         |
-| **Get Thread**        | Group a conversation by normalized subject (across AppleScript or IMAP)                    |
-| **Mark Read/Unread**  | Change read status (single or batch)                                                       |
-| **Flag/Unflag**       | Flag or unflag messages (single or batch)                                                  |
-| **Delete Messages**   | Move messages to trash (single or batch)                                                   |
-| **Move Messages**     | Organize into mailboxes (single or batch)                                                  |
-| **List Attachments**  | View attachment metadata (name, type, size)                                                |
-| **Save Attachment**   | Save attachments to disk                                                                   |
-| **Fetch Attachment**  | Get an attachment's bytes as base64 (no disk write)                                        |
+| **Create Draft** | Save emails to Drafts folder (attach by file path or inline base64 content) |
+| **Reply** | Reply to messages (with reply-all support) |
+| **Forward** | Forward messages to new recipients |
+| **Get Thread** | Group a conversation by normalized subject (across AppleScript or IMAP) |
+| **Mark Read/Unread** | Change read status (single or batch) |
+| **Flag/Unflag** | Flag or unflag messages (single or batch) |
+| **Delete Messages** | Move messages to trash (single or batch) |
+| **Move Messages** | Organize into mailboxes (single or batch) |
+| **List Attachments** | View attachment metadata (name, type, size) |
+| **Save Attachment** | Save attachments to disk |
+| **Fetch Attachment** | Get an attachment's bytes as base64 (no disk write) |
 
 Read/list/get tools also return **structured JSON** (`structuredContent`) alongside the text, so agents can consume results without parsing prose.
 
 ### Mailbox & Account Management
 
-| Feature                          | Description                                 |
-| -------------------------------- | ------------------------------------------- |
-| **List Mailboxes**               | Show all folders with message/unread counts |
-| **Create/Delete/Rename Mailbox** | Full mailbox lifecycle management           |
-| **List Accounts**                | Show configured accounts                    |
-| **Unread Count**                 | Get unread counts per mailbox               |
+| Feature | Description |
+|---------|-------------|
+| **List Mailboxes** | Show all folders with message/unread counts |
+| **Create/Delete/Rename Mailbox** | Full mailbox lifecycle management |
+| **List Accounts** | Show configured accounts |
+| **Unread Count** | Get unread counts per mailbox |
 
 ### Rules, Contacts & Templates
 
-| Feature                  | Description                                                                              |
-| ------------------------ | ---------------------------------------------------------------------------------------- |
-| **List Rules**           | View all mail rules and their enabled status                                             |
-| **Enable/Disable Rules** | Toggle mail rules on or off                                                              |
-| **Create/Delete Rules**  | Create rules with conditions + actions, or delete by name                                |
-| **Search Contacts**      | Look up contacts from Contacts.app by name                                               |
-| **Email Templates**      | Save, list, use, and delete reusable email templates (persisted to disk across restarts) |
+| Feature | Description |
+|---------|-------------|
+| **List Rules** | View all mail rules and their enabled status |
+| **Enable/Disable Rules** | Toggle mail rules on or off |
+| **Create/Delete Rules** | Create rules with conditions + actions, or delete by name |
+| **Search Contacts** | Look up contacts from Contacts.app by name |
+| **Email Templates** | Save, list, use, and delete reusable email templates (persisted to disk across restarts) |
 
 ### Diagnostics
 
-| Feature                   | Description                                                                                                                                                                                                     |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Health Check**          | Verify Mail.app connectivity                                                                                                                                                                                    |
-| **Doctor**                | Diagnose Mail permission, account state, and each IMAP/SMTP backend with actionable messages                                                                                                                    |
-| **Statistics**            | Message and unread counts per account, recently received stats                                                                                                                                                  |
-| **Sync Status**           | Check if Mail.app is actively syncing                                                                                                                                                                           |
+| Feature | Description |
+|---------|-------------|
+| **Health Check** | Verify Mail.app connectivity |
+| **Doctor** | Diagnose Mail permission, account state, and each IMAP/SMTP backend with actionable messages |
+| **Statistics** | Message and unread counts per account, recently received stats |
+| **Sync Status** | Check if Mail.app is actively syncing |
 | **Effect reconciliation** | Every delete/move reports what it actually did to the mailbox (`countDelta`), and warns when more messages left than were operated on — see [Auditing destructive operations](#auditing-destructive-operations) |
 
 ### MCP resources & prompts
@@ -233,18 +222,18 @@ This section documents all available tools. AI agents should use these tool name
 
 Search for messages matching criteria. Searches all accounts by default.
 
-| Parameter   | Type    | Required | Description                                         |
-| ----------- | ------- | -------- | --------------------------------------------------- |
-| `query`     | string  | No       | Text to search in subject/sender                    |
-| `from`      | string  | No       | Filter by sender email address                      |
-| `subject`   | string  | No       | Filter by subject line                              |
-| `mailbox`   | string  | No       | Mailbox to search in (omit to search all mailboxes) |
-| `account`   | string  | No       | Account to search in (omit to search all accounts)  |
-| `isRead`    | boolean | No       | Filter by read status                               |
-| `isFlagged` | boolean | No       | Filter by flagged status                            |
-| `dateFrom`  | string  | No       | Start date filter (e.g., "January 1, 2026")         |
-| `dateTo`    | string  | No       | End date filter (e.g., "March 1, 2026")             |
-| `limit`     | number  | No       | Max results, 1–500 (default: 50)                    |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | No | Text to search in subject/sender |
+| `from` | string | No | Filter by sender email address |
+| `subject` | string | No | Filter by subject line |
+| `mailbox` | string | No | Mailbox to search in (omit to search all mailboxes) |
+| `account` | string | No | Account to search in (omit to search all accounts) |
+| `isRead` | boolean | No | Filter by read status |
+| `isFlagged` | boolean | No | Filter by flagged status |
+| `dateFrom` | string | No | Start date filter (e.g., "January 1, 2026") |
+| `dateTo` | string | No | End date filter (e.g., "March 1, 2026") |
+| `limit` | number | No | Max results, 1–500 (default: 50) |
 
 **Large mailboxes & partial results.** Apple Mail's AppleScript bridge cannot
 search very large IMAP/Gmail mailboxes (tens of thousands of messages) before
@@ -273,12 +262,12 @@ to disable the guard and attempt every mailbox regardless of size).
 
 Get the full content of a message.
 
-| Parameter    | Type    | Required | Description                                                                                                                                                                      |
-| ------------ | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`         | string  | Yes      | Message ID                                                                                                                                                                       |
-| `preferHtml` | boolean | No       | Return HTML source instead of plain text                                                                                                                                         |
-| `mailbox`    | string  | No       | Mailbox holding the message (e.g. `"Sent Items"`). With `account`, opens that mailbox directly instead of scanning every mailbox — this is the fix for timeouts on large folders |
-| `account`    | string  | No       | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan                                                                                                  |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID |
+| `preferHtml` | boolean | No | Return HTML source instead of plain text |
+| `mailbox` | string | No | Mailbox holding the message (e.g. `"Sent Items"`). With `account`, opens that mailbox directly instead of scanning every mailbox — this is the fix for timeouts on large folders |
+| `account` | string | No | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan |
 
 **Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available).
 
@@ -295,14 +284,14 @@ Get the full content of a message.
 
 List messages in a mailbox.
 
-| Parameter    | Type    | Required | Description                                      |
-| ------------ | ------- | -------- | ------------------------------------------------ |
-| `mailbox`    | string  | No       | Mailbox name (omit to list from all mailboxes)   |
-| `account`    | string  | No       | Account name                                     |
-| `limit`      | number  | No       | Max messages, 1–500 (default: 50)                |
-| `offset`     | number  | No       | Number of messages to skip, ≥ 0 (for pagination) |
-| `from`       | string  | No       | Filter by sender email address or name           |
-| `unreadOnly` | boolean | No       | Only show unread messages                        |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `mailbox` | string | No | Mailbox name (omit to list from all mailboxes) |
+| `account` | string | No | Account name |
+| `limit` | number | No | Max messages, 1–500 (default: 50) |
+| `offset` | number | No | Number of messages to skip, ≥ 0 (for pagination) |
+| `from` | string | No | Filter by sender email address or name |
+| `unreadOnly` | boolean | No | Only show unread messages |
 
 **Returns:** List of messages with ID, date, subject, and sender.
 
@@ -326,7 +315,6 @@ Send a new email immediately.
 | `transport` | `"applescript"` \| `"smtp"` | No | Send transport. If omitted, **SMTP is used automatically when configured** (otherwise AppleScript). Pass `"smtp"` to require clean MIME, or `"applescript"` to force the Mail.app path — see [SMTP transport](#smtp-transport) |
 
 **Example:**
-
 ```json
 {
   "to": ["colleague@company.com"],
@@ -355,7 +343,7 @@ Two differences to know when SMTP is auto-preferred:
   `transport: "applescript"` if you need the local Sent copy.
 - **`account` is a From override, not account selection.** Over SMTP, `account`
   is used as the From address only when it is an email address; a Mail.app
-  account _label_ (e.g. `"Work"`) can't select an account over SMTP, so a call
+  account *label* (e.g. `"Work"`) can't select an account over SMTP, so a call
   that passes one is left on the AppleScript path automatically. To force
   account selection, pass `transport: "applescript"` explicitly. For sender
   safety, an email-form override must match the SMTP login user, the configured
@@ -407,7 +395,6 @@ security add-generic-password -s apple-mail-mcp-smtp -a you@gmail.com -w
 
 Once the env vars are set, a plain `send-email` (no `transport`) already goes
 out clean:
-
 ```json
 {
   "to": ["colleague@company.com"],
@@ -454,7 +441,7 @@ What routes to IMAP when an account is IMAP-configured:
 - **Folder ops:** `create-mailbox`, `rename-mailbox`, `delete-mailbox` — IMAP's `CREATE`/`RENAME`/`DELETE` succeed on the iCloud/Gmail/Workspace/Exchange mailboxes Mail.app's AppleScript bridge can't touch (#42).
 - **Message mutations:** `mark-as-read`/`unread`, `flag-message`/`unflag-message`, `move-message`, `delete-message`.
 - **Batch mutations (2.1):** `batch-mark-as-read`/`unread`, `batch-flag`/`unflag-messages`, `batch-move-messages`, `batch-delete-messages` — `imap:` ids are grouped by mailbox and applied as a single `UID STORE`/`UID MOVE`; numeric ids in the same batch still use AppleScript.
-- **Counts & stats (2.1):** `get-unread-count` and `list-mailboxes` use `STATUS`; `get-mail-stats` uses `STATUS` + `SEARCH SINCE` — authoritative and fast even on huge mailboxes. As of v2.6.0 these prefer IMAP whenever it's configured (see _Read routing_ below), merging across accounts when no `account` is given.
+- **Counts & stats (2.1):** `get-unread-count` and `list-mailboxes` use `STATUS`; `get-mail-stats` uses `STATUS` + `SEARCH SINCE` — authoritative and fast even on huge mailboxes. As of v2.6.0 these prefer IMAP whenever it's configured (see *Read routing* below), merging across accounts when no `account` is given.
 - **Attachments (2.1):** `list-attachments`, `save-attachment`, `fetch-attachment` use `BODYSTRUCTURE` + `FETCH BODY[part]` for `imap:` ids — faster and able to see MIME-embedded attachments AppleScript misses.
 - **Threading (2.1):** `get-thread` links a conversation via `References`/`Message-ID` (`HEADER SEARCH`) for an `imap:` seed, falling back to subject grouping otherwise.
 
@@ -474,9 +461,9 @@ matching `account` is passed. There are three cases:
 - **Explicit IMAP account** — single-account IMAP (fast server-side path).
 - **Explicit non-IMAP account** — AppleScript (that account isn't on IMAP).
 - **No `account` given** — **merge across all accounts**: the query fans out over
-  _every_ configured IMAP account, **and** AppleScript runs **only for the
+  *every* configured IMAP account, **and** AppleScript runs **only for the
   accounts no IMAP config covers** (the account list is partitioned — accounts
-  already served by IMAP are _not_ re-scanned via AppleScript). If every Mail
+  already served by IMAP are *not* re-scanned via AppleScript). If every Mail
   account is IMAP-configured, AppleScript is skipped entirely. The results are
   merged so no account is dropped. Message lists still de-duplicate as a safety
   net (preferring the IMAP copy, which carries the round-trippable `imap:` id) and
@@ -554,9 +541,9 @@ those slots. This server keeps its footprint small:
   polling every 30s, so it can't linger holding sockets after its session is gone.
 
 The catch is **multiple concurrent instances**. A host like the Claude desktop
-app spawns a _separate_ set of MCP servers per open conversation (and respawns
+app spawns a *separate* set of MCP servers per open conversation (and respawns
 them after a crash), so the footprint is **per instance × accounts**. With IDLE
-off, an idle instance trends to 0 connections; with many _active_ conversations
+off, an idle instance trends to 0 connections; with many *active* conversations
 or IDLE on, the per-account total climbs toward Gmail's 15-connection cap and can
 starve Apple Mail of slots (→ intermittent "cannot connect"). If you hit that,
 close idle Claude conversations, keep `APPLE_MAIL_MCP_IMAP_IDLE` off unless you
@@ -633,23 +620,22 @@ Enable it in your MCP client config alongside the IMAP settings:
 
 Send individual personalized emails to a list of recipients (mail merge). Each recipient receives their own email — recipients don't see each other. Supports `{{placeholder}}` tokens in both subject and body.
 
-| Parameter    | Type     | Required | Description                                         |
-| ------------ | -------- | -------- | --------------------------------------------------- |
-| `recipients` | object[] | Yes      | List of recipients, max 100 (see below)             |
-| `subject`    | string   | Yes      | Email subject — use `{{Key}}` for placeholders      |
-| `body`       | string   | Yes      | Email body — use `{{Key}}` for placeholders         |
-| `account`    | string   | No       | Send from specific account                          |
-| `delayMs`    | number   | No       | Delay between sends in ms (default: 500, max 10000) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `recipients` | object[] | Yes | List of recipients, max 100 (see below) |
+| `subject` | string | Yes | Email subject — use `{{Key}}` for placeholders |
+| `body` | string | Yes | Email body — use `{{Key}}` for placeholders |
+| `account` | string | No | Send from specific account |
+| `delayMs` | number | No | Delay between sends in ms (default: 500, max 10000) |
 
 Each recipient object:
 
-| Field       | Type   | Required | Description                                 |
-| ----------- | ------ | -------- | ------------------------------------------- |
-| `email`     | string | Yes      | Recipient email address                     |
-| `variables` | object | Yes      | Key-value pairs for placeholder replacement |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | string | Yes | Recipient email address |
+| `variables` | object | Yes | Key-value pairs for placeholder replacement |
 
 **Example:**
-
 ```json
 {
   "recipients": [
@@ -687,12 +673,12 @@ Save an email to Drafts without sending.
 
 Group a conversation by normalized subject (across the AppleScript or IMAP backend).
 
-| Parameter | Type   | Required | Description                                            |
-| --------- | ------ | -------- | ------------------------------------------------------ |
-| `id`      | string | Yes      | A message ID in the conversation (numeric or `imap:…`) |
-| `account` | string | No       | Account to search (omit to search all)                 |
-| `mailbox` | string | No       | Mailbox to search (omit to search all)                 |
-| `limit`   | number | No       | Max messages in the thread (default 50)                |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | A message ID in the conversation (numeric or `imap:…`) |
+| `account` | string | No | Account to search (omit to search all) |
+| `mailbox` | string | No | Mailbox to search (omit to search all) |
+| `limit` | number | No | Max messages in the thread (default 50) |
 
 **Returns:** The conversation's messages, oldest-first.
 
@@ -700,10 +686,10 @@ Group a conversation by normalized subject (across the AppleScript or IMAP backe
 
 Return an attachment's bytes as base64 (the read counterpart to inline-base64 send).
 
-| Parameter        | Type   | Required | Description                                   |
-| ---------------- | ------ | -------- | --------------------------------------------- |
-| `id`             | string | Yes      | Message ID (numeric or `imap:…`)              |
-| `attachmentName` | string | Yes      | Attachment filename (from `list-attachments`) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID (numeric or `imap:…`) |
+| `attachmentName` | string | Yes | Attachment filename (from `list-attachments`) |
 
 **Returns:** The attachment bytes, base64-encoded (also in `structuredContent.contentBase64`).
 
@@ -713,9 +699,9 @@ Return an attachment's bytes as base64 (the read counterpart to inline-base64 se
 
 Map `imap:` message IDs to their numeric Mail.app IDs, via each message's RFC 5322 `Message-ID` (the join key both backends share). Needed only for the two tools that are numeric-ID-only — `reply-to-message` and `forward-message`. Numeric IDs pass through unchanged.
 
-| Parameter | Type     | Required | Description                                 |
-| --------- | -------- | -------- | ------------------------------------------- |
-| `ids`     | string[] | Yes      | 1–100 message IDs, each numeric or `imap:…` |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | 1–100 message IDs, each numeric or `imap:…` |
 
 **Returns:** For each input ID, its `numericId` (or `null` when it can't be resolved) and the `messageId` used, plus `count` and `resolvedCount`. The lookup scopes to the message's account and checks its INBOX first, to avoid scanning a large All Mail/Archive mailbox.
 
@@ -727,15 +713,14 @@ Map `imap:` message IDs to their numeric Mail.app IDs, via each message's RFC 53
 
 Reply to an existing message.
 
-| Parameter  | Type    | Required | Description                                             |
-| ---------- | ------- | -------- | ------------------------------------------------------- |
-| `id`       | string  | Yes      | Message ID to reply to                                  |
-| `body`     | string  | Yes      | Reply body                                              |
-| `replyAll` | boolean | No       | Reply to all recipients (default: false)                |
-| `send`     | boolean | No       | Send immediately (default: true, false = save as draft) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID to reply to |
+| `body` | string | Yes | Reply body |
+| `replyAll` | boolean | No | Reply to all recipients (default: false) |
+| `send` | boolean | No | Send immediately (default: true, false = save as draft) |
 
 **Example - Reply to sender only:**
-
 ```json
 {
   "id": "12345",
@@ -744,7 +729,6 @@ Reply to an existing message.
 ```
 
 **Example - Reply all, save as draft:**
-
 ```json
 {
   "id": "12345",
@@ -764,12 +748,12 @@ Reply to an existing message.
 
 Forward a message to new recipients.
 
-| Parameter | Type     | Required | Description                                             |
-| --------- | -------- | -------- | ------------------------------------------------------- |
-| `id`      | string   | Yes      | Message ID to forward                                   |
-| `to`      | string[] | Yes      | Recipients to forward to                                |
-| `body`    | string   | No       | Message to prepend                                      |
-| `send`    | boolean  | No       | Send immediately (default: true, false = save as draft) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID to forward |
+| `to` | string[] | Yes | Recipients to forward to |
+| `body` | string | No | Message to prepend |
+| `send` | boolean | No | Send immediately (default: true, false = save as draft) |
 
 > **Transport (v2.5.0):** when SMTP is configured, `forward-message` sends via **clean SMTP** (a fresh message with the original quoted, no threading headers — a forward starts a new conversation). When SMTP is not configured it falls back to Mail.app's AppleScript `forward … without opening window`. See [SMTP transport](#smtp-transport).
 
@@ -781,9 +765,9 @@ Forward a message to new recipients.
 
 Change read status of a message.
 
-| Parameter | Type   | Required | Description |
-| --------- | ------ | -------- | ----------- |
-| `id`      | string | Yes      | Message ID  |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID |
 
 ---
 
@@ -791,10 +775,10 @@ Change read status of a message.
 
 Flag or unflag a message. `flag-message` optionally takes a flag **color**; `unflag-message` removes the flag entirely (which also clears any color).
 
-| Parameter | Type   | Required | Description                                                                                                                                     |
-| --------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`      | string | Yes      | Message ID                                                                                                                                      |
-| `color`   | string | No       | (`flag-message` only) Flag color: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray` (`grey` accepted). Omit for Mail's default flag. |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID |
+| `color` | string | No | (`flag-message` only) Flag color: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray` (`grey` accepted). Omit for Mail's default flag. |
 
 **Flag colors** are an Apple Mail feature — the message's `flag index` (0 red, 1 orange, 2 yellow, 3 green, 4 blue, 5 purple, 6 gray), which is the property a Mail smart mailbox can match on. **The color is applied on both routes** (since 2.10.0): AppleScript sets the flag index directly, and for an **IMAP-routed** id (`imap:…`) the color is written as Mail.app's `$MailFlagBit0/1/2` keywords — a 3-bit field holding the same palette index. `\Flagged` on its own really is colorless, but those keywords ride alongside it in an ordinary `UID STORE`, so a smart mailbox keyed on flag color matches an IMAP-flagged message too. You do **not** need to resolve to a numeric id just to color a flag.
 
@@ -806,9 +790,9 @@ To **read** a color, the IMAP read path returns `flagColorIndex` in `structuredC
 
 Delete a message (move to trash).
 
-| Parameter | Type   | Required | Description |
-| --------- | ------ | -------- | ----------- |
-| `id`      | string | Yes      | Message ID  |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID |
 
 `structuredContent` carries `countDelta` — what the delete actually did to the
 source mailbox. See [Auditing destructive operations](#auditing-destructive-operations).
@@ -821,11 +805,11 @@ source mailbox. See [Auditing destructive operations](#auditing-destructive-oper
 
 Move a message to a different mailbox.
 
-| Parameter | Type   | Required | Description                                                                                   |
-| --------- | ------ | -------- | --------------------------------------------------------------------------------------------- |
-| `id`      | string | Yes      | Message ID                                                                                    |
-| `mailbox` | string | Yes      | Destination mailbox — full path (`Work/Archive`) or a leaf name that is unique on the account |
-| `account` | string | No       | Account containing mailbox                                                                    |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID |
+| `mailbox` | string | Yes | Destination mailbox — full path (`Work/Archive`) or a leaf name that is unique on the account |
+| `account` | string | No | Account containing mailbox |
 
 A destination is matched first as a full path, then as a leaf name. If a leaf
 name matches **more than one** mailbox (e.g. `Archive` under both `Work` and
@@ -842,9 +826,9 @@ the full path. The same applies to `batch-move-messages`, `delete-mailbox` and
 
 List attachments on a message.
 
-| Parameter | Type   | Required | Description |
-| --------- | ------ | -------- | ----------- |
-| `id`      | string | Yes      | Message ID  |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID |
 
 **Returns:** List of attachments with name, MIME type, and size.
 
@@ -900,11 +884,11 @@ therefore a count of messages, not of list positions.
 
 #### `batch-delete-messages`
 
-| Parameter       | Type     | Required | Description                                                                                                      |
-| --------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
-| `ids`           | string[] | Yes      | Message IDs to delete (max 100)                                                                                  |
-| `sourceMailbox` | string   | No       | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids.                         |
-| `sourceAccount` | string   | No       | Account the numeric ids were listed from. Required when `sourceMailbox` is supplied; on its own it pins nothing. |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | Message IDs to delete (max 100) |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Required when `sourceMailbox` is supplied; on its own it pins nothing. |
 
 `structuredContent` carries `countDelta` — what the batch actually did to each
 source mailbox. See [Auditing destructive operations](#auditing-destructive-operations).
@@ -913,33 +897,33 @@ source mailbox. See [Auditing destructive operations](#auditing-destructive-oper
 
 #### `batch-move-messages`
 
-| Parameter       | Type     | Required | Description                                                                                                      |
-| --------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
-| `ids`           | string[] | Yes      | Message IDs to move (max 100)                                                                                    |
-| `mailbox`       | string   | Yes      | Destination mailbox                                                                                              |
-| `account`       | string   | No       | Account containing mailbox                                                                                       |
-| `sourceMailbox` | string   | No       | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids.                         |
-| `sourceAccount` | string   | No       | Account the numeric ids were listed from. Required when `sourceMailbox` is supplied; on its own it pins nothing. |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | Message IDs to move (max 100) |
+| `mailbox` | string | Yes | Destination mailbox |
+| `account` | string | No | Account containing mailbox |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Required when `sourceMailbox` is supplied; on its own it pins nothing. |
 
 `structuredContent` carries `countDelta` — what the batch actually did to each
 **source** mailbox. See [Auditing destructive operations](#auditing-destructive-operations).
 
 #### `batch-mark-as-read` / `batch-mark-as-unread`
 
-| Parameter       | Type     | Required | Description                                                                                                      |
-| --------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
-| `ids`           | string[] | Yes      | Message IDs (max 100)                                                                                            |
-| `sourceMailbox` | string   | No       | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids.                         |
-| `sourceAccount` | string   | No       | Account the numeric ids were listed from. Required when `sourceMailbox` is supplied; on its own it pins nothing. |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | Message IDs (max 100) |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Required when `sourceMailbox` is supplied; on its own it pins nothing. |
 
 #### `batch-flag-messages` / `batch-unflag-messages`
 
-| Parameter       | Type     | Required | Description                                                                                                                                                                            |
-| --------------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ids`           | string[] | Yes      | Message IDs (max 100)                                                                                                                                                                  |
-| `color`         | string   | No       | (`batch-flag-messages` only) Flag color — see [`flag-message`](#flag-message--unflag-message). Applied on both routes, so a mixed batch of numeric and `imap:` ids all end up colored. |
-| `sourceMailbox` | string   | No       | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids.                                                                                               |
-| `sourceAccount` | string   | No       | Account the numeric ids were listed from. Required when `sourceMailbox` is supplied; on its own it pins nothing.                                                                       |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | Message IDs (max 100) |
+| `color` | string | No | (`batch-flag-messages` only) Flag color — see [`flag-message`](#flag-message--unflag-message). Applied on both routes, so a mixed batch of numeric and `imap:` ids all end up colored. |
+| `sourceMailbox` | string | No | Mailbox the **numeric** ids were listed from — pins them to it. Ignored for `imap:` ids. |
+| `sourceAccount` | string | No | Account the numeric ids were listed from. Required when `sourceMailbox` is supplied; on its own it pins nothing. |
 
 ---
 
@@ -949,9 +933,9 @@ source mailbox. See [Auditing destructive operations](#auditing-destructive-oper
 
 List all mailboxes for an account.
 
-| Parameter | Type   | Required | Description          |
-| --------- | ------ | -------- | -------------------- |
-| `account` | string | No       | Account to list from |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `account` | string | No | Account to list from |
 
 **Returns:** List of mailbox names with message and unread counts.
 
@@ -961,10 +945,10 @@ List all mailboxes for an account.
 
 Get unread message count.
 
-| Parameter | Type   | Required | Description                                         |
-| --------- | ------ | -------- | --------------------------------------------------- |
-| `mailbox` | string | No       | Mailbox to check (omit for **INBOX**)               |
-| `account` | string | No       | Account to check (omit to sum each account's INBOX) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `mailbox` | string | No | Mailbox to check (omit for **INBOX**) |
+| `account` | string | No | Account to check (omit to sum each account's INBOX) |
 
 **Returns:** The unread count for the requested scope.
 
@@ -976,10 +960,10 @@ Get unread message count.
 
 Create a new mailbox.
 
-| Parameter | Type   | Required | Description          |
-| --------- | ------ | -------- | -------------------- |
-| `name`    | string | Yes      | Mailbox name         |
-| `account` | string | No       | Account to create in |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Mailbox name |
+| `account` | string | No | Account to create in |
 
 ---
 
@@ -987,10 +971,10 @@ Create a new mailbox.
 
 Delete a mailbox.
 
-| Parameter | Type   | Required | Description                |
-| --------- | ------ | -------- | -------------------------- |
-| `name`    | string | Yes      | Mailbox name               |
-| `account` | string | No       | Account containing mailbox |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Mailbox name |
+| `account` | string | No | Account containing mailbox |
 
 **⚠️ Safety:** Destructive — deletes the mailbox and its contents. Requires explicit user confirmation; list mailboxes first to confirm the name.
 
@@ -1000,11 +984,11 @@ Delete a mailbox.
 
 Rename a mailbox (creates new, moves messages, deletes old).
 
-| Parameter | Type   | Required | Description                |
-| --------- | ------ | -------- | -------------------------- |
-| `oldName` | string | Yes      | Current mailbox name       |
-| `newName` | string | Yes      | New mailbox name           |
-| `account` | string | No       | Account containing mailbox |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `oldName` | string | Yes | Current mailbox name |
+| `newName` | string | Yes | New mailbox name |
+| `account` | string | No | Account containing mailbox |
 
 ---
 
@@ -1030,12 +1014,12 @@ List existing smart mailboxes.
 
 Create a smart mailbox with a simple contains rule.
 
-| Parameter         | Type   | Required | Description                    |
-| ----------------- | ------ | -------- | ------------------------------ |
-| `name`            | string | Yes      | Name for the smart mailbox     |
-| `fromContains`    | string | No       | Match if From contains this    |
-| `subjectContains` | string | No       | Match if Subject contains this |
-| `bodyContains`    | string | No       | Match if Body contains this    |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Name for the smart mailbox |
+| `fromContains` | string | No | Match if From contains this |
+| `subjectContains` | string | No | Match if Subject contains this |
+| `bodyContains` | string | No | Match if Body contains this |
 
 Provide at least one of the three `*Contains` fields.
 
@@ -1047,9 +1031,9 @@ Provide at least one of the three `*Contains` fields.
 
 Delete a smart mailbox by name.
 
-| Parameter | Type   | Required | Description        |
-| --------- | ------ | -------- | ------------------ |
-| `name`    | string | Yes      | Smart mailbox name |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Smart mailbox name |
 
 **⚠️ Safety:** destructive — removes the smart mailbox from `SyncedSmartMailboxes.plist` (backed up + atomic; every other smart mailbox is preserved). Not undoable in-app. Confirm the exact name with `list-smart-mailboxes` first, and quit Mail first for reliable results.
 
@@ -1059,11 +1043,11 @@ Delete a smart mailbox by name.
 
 High-level tool: scan recent messages in your INBOXes, detect likely newsletters (volume + signals like List-Unsubscribe, noreply, repetitive subjects), and create smart mailboxes for them (names prefixed "NL: ...").
 
-| Parameter  | Type    | Required | Description                                |
-| ---------- | ------- | -------- | ------------------------------------------ |
-| `dryRun`   | boolean | No       | Default true — only propose, do not create |
-| `minCount` | number  | No       | Min messages from a sender (default 3)     |
-| `days`     | number  | No       | Lookback window in days (default 90)       |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `dryRun` | boolean | No | Default true — only propose, do not create |
+| `minCount` | number | No | Min messages from a sender (default 3) |
+| `days` | number | No | Lookback window in days (default 90) |
 
 Defaults to a **safe dry run** that only proposes. Pass `dryRun: false` to actually create the smart mailboxes for newsletters cluttering your Inbox.
 
@@ -1099,9 +1083,9 @@ List all mail rules.
 
 Enable or disable a mail rule.
 
-| Parameter | Type   | Required | Description |
-| --------- | ------ | -------- | ----------- |
-| `name`    | string | Yes      | Rule name   |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Rule name |
 
 ---
 
@@ -1125,7 +1109,6 @@ then call `enable-rule` explicitly when the rule is approved. Set
 `enabled: true` only when immediate activation is deliberate.
 
 **Example:**
-
 ```json
 {
   "name": "Newsletters",
@@ -1140,9 +1123,9 @@ then call `enable-rule` explicitly when the rule is approved. Set
 
 Delete a mail rule by name.
 
-| Parameter | Type   | Required | Description |
-| --------- | ------ | -------- | ----------- |
-| `name`    | string | Yes      | Rule name   |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Rule name |
 
 **⚠️ Safety:** Destructive. Requires explicit user confirmation; list rules first to confirm the name.
 
@@ -1156,9 +1139,9 @@ Search the macOS Contacts database by name, organization, nickname, or email sub
 
 Since 2.8.7 this reads the AddressBook SQLite files directly rather than driving Contacts.app over AppleScript, so **Contacts.app need not be running and no Automation grant is involved** — but the Node runtime does need **Full Disk Access**, and **Node 22.5+** (see [Requirements](#requirements)). Without either, the tool returns an empty list rather than an error.
 
-| Parameter | Type   | Required | Description                                                                       |
-| --------- | ------ | -------- | --------------------------------------------------------------------------------- |
-| `query`   | string | Yes      | Substring matched against full name, organization, nickname, or any email address |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Substring matched against full name, organization, nickname, or any email address |
 
 **Returns:** List of contacts with name, email addresses, and phone numbers. Results are **not** truncated — a broad query returns every match.
 
@@ -1172,14 +1155,14 @@ Email templates are **persisted to disk** so they survive server restarts, store
 
 Save or update an email template.
 
-| Parameter | Type     | Required | Description                |
-| --------- | -------- | -------- | -------------------------- |
-| `name`    | string   | Yes      | Template name              |
-| `subject` | string   | Yes      | Default subject line       |
-| `body`    | string   | Yes      | Template body              |
-| `to`      | string[] | No       | Default recipients         |
-| `cc`      | string[] | No       | Default CC recipients      |
-| `id`      | string   | No       | Template ID (for updating) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Template name |
+| `subject` | string | Yes | Default subject line |
+| `body` | string | Yes | Template body |
+| `to` | string[] | No | Default recipients |
+| `cc` | string[] | No | Default CC recipients |
+| `id` | string | No | Template ID (for updating) |
 
 ---
 
@@ -1195,9 +1178,9 @@ List all saved templates.
 
 Get a template by ID.
 
-| Parameter | Type   | Required | Description |
-| --------- | ------ | -------- | ----------- |
-| `id`      | string | Yes      | Template ID |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Template ID |
 
 ---
 
@@ -1205,9 +1188,9 @@ Get a template by ID.
 
 Delete a template.
 
-| Parameter | Type   | Required | Description |
-| --------- | ------ | -------- | ----------- |
-| `id`      | string | Yes      | Template ID |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Template ID |
 
 **⚠️ Safety:** Destructive — removes the template from the on-disk store. Requires explicit user confirmation; list templates first to confirm the id.
 
@@ -1217,13 +1200,13 @@ Delete a template.
 
 Create a draft from a template, with optional overrides.
 
-| Parameter | Type     | Required | Description         |
-| --------- | -------- | -------- | ------------------- |
-| `id`      | string   | Yes      | Template ID         |
-| `to`      | string[] | No       | Override recipients |
-| `cc`      | string[] | No       | Override CC         |
-| `subject` | string   | No       | Override subject    |
-| `body`    | string   | No       | Override body       |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Template ID |
+| `to` | string[] | No | Override recipients |
+| `cc` | string[] | No | Override CC |
+| `subject` | string | No | Override subject |
+| `body` | string | No | Override body |
 
 ---
 
@@ -1253,9 +1236,9 @@ Run a full setup diagnostic: Mail.app automation permission, account state (flag
 
 Get mail statistics.
 
-| Parameter | Type   | Required | Description                                                                                                             |
-| --------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `account` | string | No       | Limit to one account (uses fast IMAP `STATUS` when that account is IMAP-configured). Omit to merge across all accounts. |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `account` | string | No | Limit to one account (uses fast IMAP `STATUS` when that account is IMAP-configured). Omit to merge across all accounts. |
 
 **Returns:** Total and per-account message/unread counts, plus recently received stats (24h, 7d, 30d). The scoped IMAP path also returns a `perMailbox` breakdown.
 
@@ -1338,12 +1321,12 @@ returns the comparison in `structuredContent`:
 
 `status` is deliberately four-valued rather than a pass/fail flag:
 
-| `status`  | Meaning                                                                                                                                                                           | Warns?  |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `match`   | Exactly as many messages left the mailbox as the operation acted on.                                                                                                              | No      |
-| `over`    | **More** left than were operated on. Messages are unaccounted for.                                                                                                                | **Yes** |
-| `under`   | **Fewer** left than expected.                                                                                                                                                     | No      |
-| `unknown` | No comparison was possible: either Mail would not report a count (`before`/`after` null) or there is no predictable expectation (`expected` null — see the self-move rule below). | No      |
+| `status` | Meaning | Warns? |
+|----------|---------|--------|
+| `match` | Exactly as many messages left the mailbox as the operation acted on. | No |
+| `over` | **More** left than were operated on. Messages are unaccounted for. | **Yes** |
+| `under` | **Fewer** left than expected. | No |
+| `unknown` | No comparison was possible: either Mail would not report a count (`before`/`after` null) or there is no predictable expectation (`expected` null — see the self-move rule below). | No |
 
 #### What an `over` warning does and does not tell you
 
@@ -1362,8 +1345,8 @@ trusted:
 
 **Concurrent departure is the benign cause to rule out first**, and the warning
 text says so. What the asymmetry argument actually buys is the other half:
-concurrent _arrivals_ cannot produce `over`, because a message arriving
-mid-operation _raises_ the after-count and biases the reading toward `under`.
+concurrent *arrivals* cannot produce `over`, because a message arriving
+mid-operation *raises* the after-count and biases the reading toward `under`.
 That is why `over` is the interesting direction — a strong signal, not a proof.
 
 Setting `APPLE_MAIL_MCP_AUDIT_LOG` is what settles which one you have: the
@@ -1400,7 +1383,6 @@ Three more honesty rules:
   clean — but it does not flag it either. The collateral diff still names anything
   that vanished, so **enable `APPLE_MAIL_MCP_AUDIT_LOG` if you need coverage for
   same-mailbox moves.**
-
 - A **repeated id is one message**. The batch tools operate on each distinct id
   once and return one result per distinct id, so `success` counts messages rather
   than list positions — and `expected` stays comparable with the mailbox instead
@@ -1412,11 +1394,11 @@ batch of only `imap:` ids returns no `countDelta` rather than a fabricated one.
 
 ### `APPLE_MAIL_MCP_AUDIT_LOG` — opt-in forensic log
 
-| Variable                            | Default | Description                                                                                                   |
-| ----------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
-| `APPLE_MAIL_MCP_AUDIT_LOG`          | _(off)_ | Absolute path to an NDJSON file. Setting it enables the audit log **and** the collateral diff below           |
-| `APPLE_MAIL_MCP_AUDIT_SUBJECTS`     | `0`     | Set `1` to also record message **subjects**. Separate, deliberate second opt-in — see Privacy                 |
-| `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX` | `2000`  | Skip the collateral snapshot for mailboxes larger than this many messages. `0` disables the snapshot entirely |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APPLE_MAIL_MCP_AUDIT_LOG` | *(off)* | Absolute path to an NDJSON file. Setting it enables the audit log **and** the collateral diff below |
+| `APPLE_MAIL_MCP_AUDIT_SUBJECTS` | `0` | Set `1` to also record message **subjects**. Separate, deliberate second opt-in — see Privacy |
+| `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX` | `2000` | Skip the collateral snapshot for mailboxes larger than this many messages. `0` disables the snapshot entirely |
 
 When set, each destructive operation appends **one JSON object per line**
 containing: timestamp, tool name, server version, the arguments it was called
@@ -1479,7 +1461,7 @@ the skip and still reconciles the counts.
 ### Privacy, and what the file costs you
 
 - **Default:** identifying metadata only — Message-ID, date, mailbox, account,
-  numeric id. Enough to say _which_ message, nothing about what it says.
+  numeric id. Enough to say *which* message, nothing about what it says.
 - **Subjects are behind their own opt-in** (`APPLE_MAIL_MCP_AUDIT_SUBJECTS=1`)
   because a subject line is frequently the entire sensitive payload, and it is
   not needed to diagnose #155.
@@ -1567,6 +1549,13 @@ AI: [calls move-message for each, with mailbox="Archive"]
 
 ---
 
+## Documentation
+
+- [Threat model](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/THREAT-MODEL.md)
+- [IMAP / SMTP setup guide](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md)
+- [Node runtime and TCC permissions](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md)
+- [Stability and performance audit](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/STABILITY-PERF-AUDIT-2026-06-17.md)
+
 ## Installation Options
 
 ### npm (Recommended)
@@ -1587,7 +1576,6 @@ The repo ships prebuilt, dependency-free `build/index.js` and `build/cli.js` bun
 > You can also install straight from GitHub with `npm install -g github:sweetrb/apple-mail-mcp`, but that builds from source (requires pnpm) — prefer the registry package above.
 
 If installed from source, use this configuration:
-
 ```json
 {
   "mcpServers": {
@@ -1609,11 +1597,11 @@ The entrypoint is written as:
 "args": ["${CLAUDE_PROJECT_DIR:-.}/build/index.js"]
 ```
 
-`CLAUDE_PROJECT_DIR` is the variable Claude Code injects into a project/user-scoped server's environment, and it resolves to the repo root. **You must launch `claude` from inside the repo** for this to work — the bare `.` fallback is only a last resort and is _not_ reliable, because it resolves against the launching process's working directory, not the repo.
+`CLAUDE_PROJECT_DIR` is the variable Claude Code injects into a project/user-scoped server's environment, and it resolves to the repo root. **You must launch `claude` from inside the repo** for this to work — the bare `.` fallback is only a last resort and is *not* reliable, because it resolves against the launching process's working directory, not the repo.
 
-> **Why not `${CLAUDE_PLUGIN_ROOT}`?** `CLAUDE_PLUGIN_ROOT` is set **only** for marketplace plugin installs, never for a project-scope clone, so it can't drive the clone workflow. Conversely, a plugin install can't use `CLAUDE_PROJECT_DIR` (in a plugin, that points at the _user's_ project, not the plugin's own directory). Claude Code does **not** support nested defaults like `${CLAUDE_PLUGIN_ROOT:-${CLAUDE_PROJECT_DIR:-.}}`, so a single entrypoint string cannot serve both contexts. The two distribution paths are therefore decoupled: the **plugin** carries its own MCP config in `.claude-plugin/plugin.json` (using `${CLAUDE_PLUGIN_ROOT}`), while the root `.mcp.json` is dedicated to the **clone** workflow (using `${CLAUDE_PROJECT_DIR:-.}`). Because `plugin.json` declares its own `mcpServers`, the plugin does not also auto-load the root `.mcp.json`, so there is no double-registration.
+> **Why not `${CLAUDE_PLUGIN_ROOT}`?** `CLAUDE_PLUGIN_ROOT` is set **only** for marketplace plugin installs, never for a project-scope clone, so it can't drive the clone workflow. Conversely, a plugin install can't use `CLAUDE_PROJECT_DIR` (in a plugin, that points at the *user's* project, not the plugin's own directory). Claude Code does **not** support nested defaults like `${CLAUDE_PLUGIN_ROOT:-${CLAUDE_PROJECT_DIR:-.}}`, so a single entrypoint string cannot serve both contexts. The two distribution paths are therefore decoupled: the **plugin** carries its own MCP config in `.claude-plugin/plugin.json` (using `${CLAUDE_PLUGIN_ROOT}`), while the root `.mcp.json` is dedicated to the **clone** workflow (using `${CLAUDE_PROJECT_DIR:-.}`). Because `plugin.json` declares its own `mcpServers`, the plugin does not also auto-load the root `.mcp.json`, so there is no double-registration.
 
-> **Heads-up on scope precedence:** project-scope (`.mcp.json`) outranks user-scope. If you _also_ have an `apple-mail` entry registered at user scope (e.g. an absolute path in `~/.claude.json`), the project-scope entry wins and the user-scope one is ignored entirely. Pick one — for local development on this repo, the project-scope `.mcp.json` is the intended source. To pin a specific local build instead, register it at **local** scope (`claude mcp add apple-mail -s local -- node /abs/path/build/index.js`), which outranks project scope.
+> **Heads-up on scope precedence:** project-scope (`.mcp.json`) outranks user-scope. If you *also* have an `apple-mail` entry registered at user scope (e.g. an absolute path in `~/.claude.json`), the project-scope entry wins and the user-scope one is ignored entirely. Pick one — for local development on this repo, the project-scope `.mcp.json` is the intended source. To pin a specific local build instead, register it at **local** scope (`claude mcp add apple-mail -s local -- node /abs/path/build/index.js`), which outranks project scope.
 
 ---
 
@@ -1717,26 +1705,22 @@ In a JSON string literal, `\\` — two characters — denotes **one** literal ba
 ## Troubleshooting
 
 ### "Mail.app not responding"
-
 - Ensure Mail.app is not frozen
 - Try opening Mail.app manually
 - Restart the MCP server
 
 ### "Permission denied"
-
 - macOS needs automation permission
 - Go to System Settings > Privacy & Security > Automation
 - Ensure your terminal/Claude has permission to control Mail
 
 ### "Message not found"
-
 - Message may have been deleted or moved
 - Message IDs change if the message is moved between mailboxes
 - Use `search-messages` to find the current message ID
 
 ### "... is present in more than one mailbox"
-
-- A bare numeric ID identifies a message only _within a mailbox_, and a label store (Gmail, iCloud)
+- A bare numeric ID identifies a message only *within a mailbox*, and a label store (Gmail, iCloud)
   reports the same message under the same ID in `INBOX`, `Important` and `All Mail` at once. The
   server refuses rather than guessing which copy you meant.
 - Fix it by running `list-messages`/`search-messages` on the mailbox you actually want to act on,
@@ -1745,34 +1729,29 @@ In a JSON string literal, `\\` — two characters — denotes **one** literal ba
   by hand). `imap:…` IDs encode their own mailbox and never hit this.
 
 ### `search-messages` says "Partial results" or skips a mailbox
-
 - This is expected for very large IMAP/Gmail mailboxes (e.g. Gmail's `All Mail`, `Important`): Apple Mail can't scan them via AppleScript before timing out, so they're skipped and named in the result rather than silently returning empty.
 - To search inside one, scope the call with `mailbox` **and** a `dateFrom`/`dateTo` window.
 - Raise or disable the threshold with `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default `5000`; `0` disables the guard) — note that disabling it can make a single search take minutes.
 - A `Partial results` warning means coverage was incomplete; it is **not** a confirmed "no such mail."
 
 ### "Account not found"
-
 - Account names must match exactly (case-sensitive)
 - Use `list-accounts` to see exact account names
 
 ### "Failed to send email"
-
 - Check your network connection
 - Verify Mail.app can send emails manually
 - Check if the account is configured correctly in Mail.app
 
 ### "invalid outputSchema … unsupported dialect" — every tool is refused
-
 - Full text: `Tool '<name>' has an invalid outputSchema: JSON Schema declares an unsupported dialect ("$schema": "http://json-schema.org/draft-07/schema#"). The default validator supports JSON Schema 2020-12 only.` The server connects, but **no tool is usable**.
 - **Upgrade to 2.10.12 or later.** Earlier versions advertised their tool schemas in JSON Schema **draft-07** (the MCP SDK's converter default); MCP has since standardized on **2020-12** and clients reject anything else. 2.10.12 normalizes every advertised `inputSchema`/`outputSchema` to 2020-12 on the way out. See [issue #147](https://github.com/sweetrb/apple-mail-mcp/issues/147).
 - Nothing to configure — restart your host app after upgrading so it re-reads the tool list.
 
 ### `apple-mail` server fails to connect when run from a clone
-
 - The root `.mcp.json` resolves its entrypoint via `${CLAUDE_PROJECT_DIR:-.}/build/index.js`. **Launch `claude` from inside the repo directory** — `CLAUDE_PROJECT_DIR` only resolves to the repo root in that case; the bare `.` fallback uses the launching shell's working directory and will point at the wrong place otherwise.
 - If you've been editing the source, rerun `npm run build` — the server is `build/index.js`, and the committed bundle only reflects your changes after a rebuild.
-- Run `claude mcp list` to check status. If you see a _conflicting scopes_ warning for `apple-mail`, you have it registered at more than one scope; project-scope wins. See [Running from a clone](#running-from-a-clone-in-claude-code-project-scope-mcpjson) for how scope precedence resolves.
+- Run `claude mcp list` to check status. If you see a *conflicting scopes* warning for `apple-mail`, you have it registered at more than one scope; project-scope wins. See [Running from a clone](#running-from-a-clone-in-claude-code-project-scope-mcpjson) for how scope precedence resolves.
 - If `claude mcp get apple-mail` shows **⏸ Pending approval**, approve the project-scope server (Claude Code prompts on startup, or run it again after approving).
 
 ---
