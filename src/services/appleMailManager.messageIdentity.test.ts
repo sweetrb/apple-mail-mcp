@@ -57,6 +57,32 @@ describe("by-id message identity", () => {
     expect(script).not.toContain("messages of mb whose id is 42");
   });
 
+  it("uses the recorded mailbox resolver for message reads", () => {
+    mgr.noteMessageLocation("42", "work@example.com", "INBOX");
+
+    h.output = "Subject\x1dMSGID\x1d<id@example.com>\x1dCONTENT\x1dbody\x1dHTML\x1d";
+    expect(mgr.getMessageContent("42")).toMatchObject({
+      id: "42",
+      subject: "Subject",
+      plainText: "body",
+      rfcMessageId: "id@example.com",
+    });
+    let script = lastScript();
+    expect(script).toContain('first account whose name is "work@example.com"');
+    expect(script).toContain('if (name of mb) is "INBOX" then');
+    expect(script).toContain("messages of targetMb whose id is 42");
+    expect(script).not.toContain("messages of mb whose id is 42");
+
+    h.calls.length = 0;
+    h.output = "raw MIME source";
+    expect(mgr.getRawSource("42")).toBe("raw MIME source");
+    script = lastScript();
+    expect(script).toContain('first account whose name is "work@example.com"');
+    expect(script).toContain('if (name of mb) is "INBOX" then');
+    expect(script).toContain("messages of targetMb whose id is 42");
+    expect(script).not.toContain("messages of mb whose id is 42");
+  });
+
   it("does not read an arbitrary first match when an id has no recorded location", () => {
     h.output =
       "error:Message id 42 is present in more than one mailbox (Work/INBOX, Work/All Mail); list or search that mailbox first so the read targets the right copy";
