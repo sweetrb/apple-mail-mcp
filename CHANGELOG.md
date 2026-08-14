@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [2.10.27] - 2026-08-14
+
+### Changed
+
+- **New Mail rules are disabled by default.** `create-rule` now creates a rule
+  with `enabled: false`; callers must review it with `list-rules` and Mail.app,
+  then explicitly enable it with `enable-rule` when the behavior is intended.
+
 ## [2.10.26] - 2026-08-14
 
 ### Security
