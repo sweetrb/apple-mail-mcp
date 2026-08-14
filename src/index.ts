@@ -1865,7 +1865,7 @@ registerTool(
       if (!r.success || !r.base64) {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
-      writeFileSync(target.savedPath, Buffer.from(r.base64, "base64"));
+      writeFileSync(target.savedPath, Buffer.from(r.base64, "base64"), { flag: "wx", mode: 0o600 });
       return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`, {
         ok: true,
         attachmentName,

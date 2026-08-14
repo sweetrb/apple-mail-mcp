@@ -15,6 +15,8 @@
 
 import { spawnSync } from "child_process";
 import {
+  constants as fsConstants,
+  chmodSync,
   existsSync,
   writeFileSync,
   readFileSync,
@@ -339,8 +341,11 @@ export function resolveAttachmentSaveTarget(
   if (!isPathWithinAllowedRoots(savedPath)) {
     throw new Error(`Output path "${savedPath}" is outside allowed directories`);
   }
-  if (existsSync(savedPath) && lstatSync(savedPath).isSymbolicLink()) {
-    throw new Error(`Refusing to overwrite symbolic link "${savedPath}"`);
+  if (existsSync(savedPath)) {
+    if (lstatSync(savedPath).isSymbolicLink()) {
+      throw new Error(`Refusing to overwrite symbolic link "${savedPath}"`);
+    }
+    throw new Error(`Refusing to overwrite existing file "${savedPath}"`);
   }
 
   return { saveDirectory, savedPath };
@@ -4101,7 +4106,25 @@ ${this.errorEmit("              ")}
     }
 
     const safeName = escapeForAppleScript(attachmentName);
-    const safePath = escapeForAppleScript(target.saveDirectory);
+    let temporaryDirectory: string;
+    try {
+      // Mail.app writes the attachment into a private directory created with
+      // mkdtempSync, so another process cannot pre-create or swap the staging
+      // path before COPYFILE_EXCL commits it to the caller's destination.
+      temporaryDirectory = mkdtempSync(join(target.saveDirectory, ".apple-mail-mcp-"));
+    } catch (error) {
+      console.error(`Failed to create attachment staging directory: ${error}`);
+      return false;
+    }
+    const temporaryPath = join(temporaryDirectory, "attachment");
+    const safeTemporaryPath = escapeForAppleScript(temporaryPath);
+    const cleanupTemporaryDirectory = () => {
+      try {
+        rmSync(temporaryDirectory, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup; the destination was not replaced by cleanup.
+      }
+    };
     const numericId = Number(id);
 
     // Attempt 1: AppleScript save
@@ -4115,7 +4138,7 @@ ${this.errorEmit("              ")}
                 set msg to item 1 of matchingMsgs
                 repeat with att in mail attachments of msg
                   if name of att is "${safeName}" then
-                    set savePath to POSIX file "${safePath}/${safeName}"
+                    set savePath to POSIX file "${safeTemporaryPath}"
                     save att in savePath
                     return "ok"
                   end if
@@ -4134,8 +4157,25 @@ ${this.errorEmit("              ")}
     const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (result.success && result.output === "ok") {
-      return true;
+      try {
+        // The preflight above prevents ordinary overwrites. COPYFILE_EXCL also
+        // closes the check/use race if another process creates the destination
+        // while Mail.app is saving the attachment to its private temp path.
+        copyFileSync(temporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
+        // Mail.app controls the mode of the source file. Normalize the final
+        // artifact after the exclusive copy so the shipped guarantee is true
+        // for the AppleScript path as well as the MIME fallback.
+        chmodSync(target.savedPath, 0o600);
+        cleanupTemporaryDirectory();
+        return true;
+      } catch (err) {
+        cleanupTemporaryDirectory();
+        console.error(`Failed to commit attachment to disk: ${err}`);
+        return false;
+      }
     }
+
+    cleanupTemporaryDirectory();
 
     // Attempt 2: MIME source fallback
     const rawSource = this.getRawSource(id);
@@ -4150,12 +4190,29 @@ ${this.errorEmit("              ")}
       return false;
     }
 
+    let mimeTemporaryDirectory: string | undefined;
     try {
-      writeFileSync(target.savedPath, attachment.data);
+      // Keep MIME staging private and on the destination filesystem. The
+      // final COPYFILE_EXCL is the only operation that creates the caller's
+      // path, so this fallback has the same no-overwrite boundary as the
+      // AppleScript path. A staging-directory failure is a safe false result.
+      mimeTemporaryDirectory = mkdtempSync(join(target.saveDirectory, ".apple-mail-mcp-"));
+      const mimeTemporaryPath = join(mimeTemporaryDirectory, "attachment");
+      writeFileSync(mimeTemporaryPath, attachment.data, { flag: "wx", mode: 0o600 });
+      copyFileSync(mimeTemporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
+      chmodSync(target.savedPath, 0o600);
       return true;
     } catch (err) {
       console.error(`Failed to write attachment to disk: ${err}`);
       return false;
+    } finally {
+      if (mimeTemporaryDirectory) {
+        try {
+          rmSync(mimeTemporaryDirectory, { recursive: true, force: true });
+        } catch {
+          // Best-effort cleanup; the destination was never replaced by cleanup.
+        }
+      }
     }
   }
 

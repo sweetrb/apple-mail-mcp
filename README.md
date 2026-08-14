@@ -824,6 +824,11 @@ List attachments on a message.
 
 Save a message attachment to disk.
 
+The destination must not already exist: `save-attachment` fails closed instead
+of overwriting an existing file. AppleScript and MIME fallback paths stage the
+bytes privately, commit with an exclusive create, and leave the saved file
+owner-readable/writable (`0600`).
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Message ID |
