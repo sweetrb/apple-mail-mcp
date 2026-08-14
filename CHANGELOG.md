@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [2.10.23] - 2026-08-14
+
+### Changed
+
+- **The Codex plugin now launches an exactly pinned server build.** `codex/.mcp.json`
+  invoked `npx -y apple-mail-mcp`, which resolves `latest` at launch — so the plugin
+  manifest's version and the runtime it actually started were two independent claims,
+  and neither the install nor the running server was auditable from the manifest alone.
+  The spec is now pinned to the plugin's own version, and `scripts/sync-plugin-version.mjs`
+  rewrites that pin on every bump (CI's `--check` mode fails the PR on drift), so the two
+  cannot separate again.
+
 ## [2.10.22] - 2026-08-14
 
 ### Internal
