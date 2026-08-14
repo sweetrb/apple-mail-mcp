@@ -40,11 +40,11 @@ export const DATE_FILTER_SCHEMA = z
   })
   .optional();
 
-// Attachments: absolute file paths and/or inline base64 content (B4).
+// Attachments: allowlisted absolute file paths and/or inline base64 content (B4).
 export const ATTACHMENTS_SCHEMA = z
   .array(
     z.union([
-      z.string().describe("Absolute path to an existing file"),
+      z.string().describe("Absolute path to an existing file in an allowed read root"),
       z.object({
         filename: z.string().min(1).max(255).describe("Filename to give the attachment"),
         contentBase64: z
@@ -65,6 +65,7 @@ export const ATTACHMENTS_SCHEMA = z
   .max(20, "Cannot attach more than 20 files")
   .optional()
   .describe(
-    "Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or " +
-      "inline {filename, contentBase64} objects up to 25 MiB decoded each."
+    "Files to attach: absolute paths in the configured attachment read roots (e.g. " +
+      "'/Users/me/Documents/report.pdf') and/or inline {filename, contentBase64} objects " +
+      "up to 25 MiB decoded each."
   );
