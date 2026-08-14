@@ -78057,6 +78057,7 @@ import { tmpdir } from "os";
 
 // src/utils/attachmentLimits.ts
 var MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+var MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
 var MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
 var MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
 function isInlineAttachmentBase64WithinLimit(contentBase64) {
@@ -83454,9 +83455,16 @@ function collectAttachments(node, out = []) {
   for (const child of node.childNodes ?? []) collectAttachments(child, out);
   return out;
 }
-async function streamToBuffer(content) {
+async function streamToBuffer(content, maxBytes) {
   const chunks = [];
-  for await (const chunk of content) chunks.push(Buffer.from(chunk));
+  let total = 0;
+  for await (const chunk of content) {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`);
+    }
+    chunks.push(Buffer.from(chunk));
+  }
   return Buffer.concat(chunks);
 }
 async function imapListAttachments(id, deps = {}) {
@@ -83493,14 +83501,24 @@ async function imapFetchAttachment(id, attachmentName, deps = {}) {
         error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`
       };
     }
-    const dl = await client.download(String(ref.uid), match.part, { uid: true });
-    const buf = await streamToBuffer(dl.content);
-    return {
-      success: true,
-      base64: buf.toString("base64"),
-      bytes: buf.length,
-      mimeType: match.mimeType
-    };
+    if (match.size > MAX_IMAP_ATTACHMENT_BYTES) {
+      return {
+        success: false,
+        error: `IMAP attachment "${attachmentName}" is ${match.size} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`
+      };
+    }
+    try {
+      const dl = await client.download(String(ref.uid), match.part, { uid: true });
+      const buf = await streamToBuffer(dl.content, MAX_IMAP_ATTACHMENT_BYTES);
+      return {
+        success: true,
+        base64: buf.toString("base64"),
+        bytes: buf.length,
+        mimeType: match.mimeType
+      };
+    } catch (e) {
+      return { success: false, error: `IMAP attachment fetch failed: ${errText(e)}` };
+    }
   });
 }
 async function imapBatch(ids, deps, op) {
