@@ -11920,6 +11920,18 @@ var SENSITIVE_HOME_ROOTS = [
   join(homedir(), ".config", "gh"),
   join(homedir(), "Library", "Keychains")
 ];
+function canonicalize(path) {
+  return realpathSync.native(path);
+}
+function sensitiveRoots() {
+  return SENSITIVE_HOME_ROOTS.map((root) => {
+    try {
+      return canonicalize(root);
+    } catch {
+      return root;
+    }
+  });
+}
 function isWithinRoot(candidate, root) {
   return candidate === root || candidate.startsWith(root + sep);
 }
@@ -11928,8 +11940,13 @@ function hasHiddenPathSegment(candidate) {
 }
 function isProtectedPath(candidate) {
   if (hasHiddenPathSegment(candidate)) return true;
-  if (SENSITIVE_HOME_ROOTS.some((root) => isWithinRoot(candidate, root))) return true;
-  const home = resolve(homedir());
+  if (sensitiveRoots().some((root) => isWithinRoot(candidate, root))) return true;
+  let home;
+  try {
+    home = canonicalize(homedir());
+  } catch {
+    home = resolve(homedir());
+  }
   if (!isWithinRoot(candidate, home)) return false;
   const relative = candidate.slice(home.length).split(sep).filter(Boolean);
   return relative.length >= 4 && relative[0].toLowerCase() === "library" && relative[1].toLowerCase() === "application support" && relative.at(-1)?.toLowerCase() === "config.json";
@@ -11946,7 +11963,7 @@ function configuredRoots(env) {
   const resolved = [];
   for (const root of requested) {
     try {
-      const canonical = realpathSync(resolve(root));
+      const canonical = canonicalize(resolve(root));
       if (!resolved.includes(canonical)) resolved.push(canonical);
     } catch {
     }
@@ -11959,7 +11976,7 @@ function resolveAttachmentReadPath(filePath, env = process.env) {
   }
   let canonical;
   try {
-    canonical = realpathSync(filePath);
+    canonical = canonicalize(filePath);
   } catch {
     throw new Error(`Attachment file not found: "${filePath}"`);
   }

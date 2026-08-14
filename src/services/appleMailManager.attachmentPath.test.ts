@@ -57,7 +57,6 @@ describe("attachment path boundaries", () => {
     expect(h.calls).toBe(0);
   });
 
-<<<<<<< HEAD
   it("rejects an existing regular-file destination", () => {
     const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
     cleanup.push(root);
@@ -68,8 +67,6 @@ describe("attachment path boundaries", () => {
     expect(h.calls).toBe(0);
   });
 
-||||||| parent of 3dcdbf1 (fix: constrain outbound attachment reads)
-=======
   it("rejects an outbound attachment outside the default read roots", () => {
     const file = "/etc/hosts";
 
@@ -80,7 +77,6 @@ describe("attachment path boundaries", () => {
     expect(h.calls).toBe(0);
   });
 
->>>>>>> 3dcdbf1 (fix: constrain outbound attachment reads)
   it("uses a temporary directory when fetching attachment bytes", () => {
     const mgr = new AppleMailManager();
     const save = vi.spyOn(mgr, "saveAttachment").mockImplementation((_id, name, directory) => {

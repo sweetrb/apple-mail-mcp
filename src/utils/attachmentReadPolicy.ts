@@ -23,6 +23,34 @@ const SENSITIVE_HOME_ROOTS = [
   join(homedir(), "Library", "Keychains"),
 ];
 
+/**
+ * Canonicalize with the platform call, not the JS emulation.
+ *
+ * `fs.realpathSync` resolves symlinks but preserves whatever casing the caller
+ * supplied; only `fs.realpathSync.native` returns the true on-disk name. macOS
+ * APFS is case-insensitive by default, so without the native call a denied path
+ * is reachable by respelling one segment — `~/library/keychains/login.keychain-db`
+ * opens the same file as `~/Library/Keychains/...` but matches no deny root.
+ *
+ * Normalizing both the candidate and the roots this way keeps exact comparison
+ * correct on case-sensitive volumes too, where the respelling simply does not
+ * exist and canonicalization throws.
+ */
+function canonicalize(path: string): string {
+  return realpathSync.native(path);
+}
+
+/** Deny roots in their true on-disk spelling; unresolvable entries keep their literal form. */
+function sensitiveRoots(): string[] {
+  return SENSITIVE_HOME_ROOTS.map((root) => {
+    try {
+      return canonicalize(root);
+    } catch {
+      return root;
+    }
+  });
+}
+
 function isWithinRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(root + sep);
 }
@@ -33,9 +61,14 @@ function hasHiddenPathSegment(candidate: string): boolean {
 
 function isProtectedPath(candidate: string): boolean {
   if (hasHiddenPathSegment(candidate)) return true;
-  if (SENSITIVE_HOME_ROOTS.some((root) => isWithinRoot(candidate, root))) return true;
+  if (sensitiveRoots().some((root) => isWithinRoot(candidate, root))) return true;
 
-  const home = resolve(homedir());
+  let home: string;
+  try {
+    home = canonicalize(homedir());
+  } catch {
+    home = resolve(homedir());
+  }
   if (!isWithinRoot(candidate, home)) return false;
   const relative = candidate.slice(home.length).split(sep).filter(Boolean);
   return (
@@ -66,7 +99,7 @@ function configuredRoots(env: NodeJS.ProcessEnv): string[] {
   const resolved: string[] = [];
   for (const root of requested) {
     try {
-      const canonical = realpathSync(resolve(root));
+      const canonical = canonicalize(resolve(root));
       if (!resolved.includes(canonical)) resolved.push(canonical);
     } catch {
       // A default user directory may not exist yet. It cannot authorize a
@@ -93,7 +126,7 @@ export function resolveAttachmentReadPath(
 
   let canonical: string;
   try {
-    canonical = realpathSync(filePath);
+    canonical = canonicalize(filePath);
   } catch {
     throw new Error(`Attachment file not found: "${filePath}"`);
   }
