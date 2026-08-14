@@ -133,10 +133,10 @@ jobs:
       greenmail:
         image: greenmail/standalone:2.1.0
         ports:
-          - 3143:3143
+          - 3993:3993
         env:
           GREENMAIL_OPTS: >-
-            -Dgreenmail.setup.test.imap
+            -Dgreenmail.setup.test.imaps
             -Dgreenmail.hostname=0.0.0.0
             -Dgreenmail.users=tester:secret@example.com
             -Dgreenmail.verbose
@@ -160,19 +160,19 @@ jobs:
         # to bypass EBADPLATFORM). The IMAP code path is platform-agnostic.
         run: pnpm install --frozen-lockfile
 
-      - name: Wait for GreenMail IMAP (localhost:3143)
+      - name: Wait for GreenMail IMAPS (localhost:3993)
         run: |
           for i in $(seq 1 30); do
-            if (echo > /dev/tcp/127.0.0.1/3143) >/dev/null 2>&1; then echo "IMAP up"; exit 0; fi
+            if (echo > /dev/tcp/127.0.0.1/3993) >/dev/null 2>&1; then echo "IMAPS up"; exit 0; fi
             sleep 1
           done
-          echo "::error::GreenMail IMAP did not become ready"; exit 1
+          echo "::error::GreenMail IMAPS did not become ready"; exit 1
 
       - name: Run IMAP integration tests
         run: pnpm run test:imap
         env:
           RUN_IMAP_IT: "1"
           GREENMAIL_HOST: 127.0.0.1
-          GREENMAIL_IMAP_PORT: "3143"
+          GREENMAIL_IMAP_PORT: "3993"
           GREENMAIL_USER: tester
           GREENMAIL_PASS: secret
