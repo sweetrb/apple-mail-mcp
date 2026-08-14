@@ -8,6 +8,7 @@ const root = process.cwd();
 const checkMode = process.argv.includes("--check");
 const packageJson = readJson("package.json");
 const version = packageJson.version;
+const PACKAGE = packageJson.name;
 const mismatches = [];
 
 updateJson(".claude-plugin/plugin.json", (data) => {
@@ -16,6 +17,20 @@ updateJson(".claude-plugin/plugin.json", (data) => {
 
 updateJson("codex/.codex-plugin/plugin.json", (data) => {
   data.version = version;
+});
+
+// The Codex plugin launches the server through npx. The spec is pinned to an
+// exact version so the plugin manifest and the runtime it starts are one trust
+// claim rather than two — which only holds if the pin is synced on every bump,
+// hence its presence here rather than as a hand-maintained literal.
+updateJson("codex/.mcp.json", (data) => {
+  const server = data.mcpServers?.["apple-mail"];
+  if (!server) throw new Error("codex/.mcp.json: missing mcpServers['apple-mail']");
+  const i = server.args?.findIndex((a) => a === PACKAGE || a.startsWith(`${PACKAGE}@`));
+  if (i === undefined || i < 0) {
+    throw new Error(`codex/.mcp.json: no ${PACKAGE} argument to pin`);
+  }
+  server.args[i] = `${PACKAGE}@${version}`;
 });
 
 updateJson(".claude-plugin/marketplace.json", (data) => {
