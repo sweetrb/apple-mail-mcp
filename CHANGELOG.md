@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+## [2.10.29] - 2026-08-14
+
+### Security
+
+- **Attachment path canonicalization now uses the platform call, closing a case-folding
+  bypass.** `fs.realpathSync` resolves symlinks but preserves the caller's casing, and
+  macOS APFS is case-insensitive by default — so a denied location was reachable simply
+  by respelling a segment: `~/library/keychains/login.keychain-db` opened the same file
+  as `~/Library/Keychains/...` while matching no deny root. Both the candidate path and
+  the configured roots are now canonicalized with `fs.realpathSync.native`, which returns
+  the true on-disk name, so exact comparison stays correct on case-sensitive volumes too.
+
+- **Outbound attachment paths are constrained to a canonical, explicit filesystem boundary.**
+  Ordinary home-directory, `/Volumes`, and temporary roots remain available, while
+  hidden files and credential/configuration locations are denied. The
+  `APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS` setting adds deliberate absolute roots
+  without bypassing protected-path checks, and symlink escapes are rejected.
+
 ## [2.10.28] - 2026-08-14
 
 ### Security

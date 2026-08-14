@@ -35,7 +35,7 @@ afterEach(() => {
   h.savePath = "";
 });
 
-describe("saveAttachment path boundary", () => {
+describe("attachment path boundaries", () => {
   it("rejects an allowed-root symlink that resolves outside the allowed roots", () => {
     const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
     cleanup.push(root);
@@ -64,6 +64,16 @@ describe("saveAttachment path boundary", () => {
 
     const mgr = new AppleMailManager();
     expect(mgr.saveAttachment("1", "hosts", root)).toBe(false);
+    expect(h.calls).toBe(0);
+  });
+
+  it("rejects an outbound attachment outside the default read roots", () => {
+    const file = "/etc/hosts";
+
+    const mgr = new AppleMailManager();
+    expect(() =>
+      mgr.sendEmail(["to@example.com"], "subject", "body", undefined, undefined, undefined, [file])
+    ).toThrow(/outside the allowed read roots/);
     expect(h.calls).toBe(0);
   });
 

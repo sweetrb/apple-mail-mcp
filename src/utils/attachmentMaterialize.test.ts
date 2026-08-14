@@ -1,14 +1,31 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync, readdirSync } from "fs";
-import { isAbsolute } from "path";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
+import { isAbsolute, join } from "path";
 import { tmpdir } from "os";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
 
 describe("materializeAttachments (B4)", () => {
   it("passes through plain string paths and creates nothing", () => {
-    const m = materializeAttachments(["/Users/me/a.pdf", "/tmp/b.txt"]);
-    expect(m.paths).toEqual(["/Users/me/a.pdf", "/tmp/b.txt"]);
-    m.cleanup();
+    const dir = mkdtempSync(join(tmpdir(), "amcp-path-test-"));
+    try {
+      const first = join(dir, "a.pdf");
+      const second = join(dir, "b.txt");
+      writeFileSync(first, "a");
+      writeFileSync(second, "b");
+      const m = materializeAttachments([first, second]);
+      expect(m.paths).toEqual([realpathSync(first), realpathSync(second)]);
+      m.cleanup();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("writes inline base64 content to a temp file and cleans it up", () => {
@@ -24,14 +41,25 @@ describe("materializeAttachments (B4)", () => {
   });
 
   it("mixes paths and inline content, sanitizing the filename", () => {
-    const m = materializeAttachments([
-      "/tmp/keep.pdf",
-      { filename: "../evil/name.txt", contentBase64: Buffer.from("x").toString("base64") },
-    ]);
-    expect(m.paths[0]).toBe("/tmp/keep.pdf");
-    expect(m.paths[1]).not.toContain("/evil/");
-    expect(existsSync(m.paths[1])).toBe(true);
-    m.cleanup();
+    const dir = mkdtempSync(join(tmpdir(), "amcp-path-test-"));
+    try {
+      const existing = join(dir, "keep.pdf");
+      writeFileSync(existing, "keep");
+      const m = materializeAttachments([
+        existing,
+        { filename: "../evil/name.txt", contentBase64: Buffer.from("x").toString("base64") },
+      ]);
+      expect(m.paths[0]).toBe(realpathSync(existing));
+      expect(m.paths[1]).not.toContain("/evil/");
+      expect(existsSync(m.paths[1])).toBe(true);
+      m.cleanup();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an existing path outside the default user-content roots", () => {
+    expect(() => materializeAttachments(["/etc/hosts"])).toThrow(/outside the allowed read roots/);
   });
 
   it("throws when inline content is missing fields", () => {

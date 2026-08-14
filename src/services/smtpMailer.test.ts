@@ -294,6 +294,21 @@ describe("sendViaSmtp", () => {
     expect(r.error).toMatch(/must be absolute/);
   });
 
+  it("rejects an existing attachment outside the default read roots", async () => {
+    const file = "/etc/hosts";
+    const createTransport = vi.fn().mockReturnValue({ sendMail: vi.fn(), close: vi.fn() });
+
+    const r = await sendViaSmtp(
+      { to: ["b@example.com"], subject: "s", body: "b", attachments: [file] },
+      testConfig,
+      createTransport as never
+    );
+
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/outside the allowed read roots/);
+    expect(createTransport).not.toHaveBeenCalled();
+  });
+
   it("uses the per-call from override when provided", async () => {
     const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
     const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
