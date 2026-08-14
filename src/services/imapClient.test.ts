@@ -196,7 +196,22 @@ describe("resolveImapConfig", () => {
     expect(c.host).toBe("imap.gmail.com");
     expect(c.port).toBe(993);
     expect(c.secure).toBe(true);
+    expect(c.allowPlaintext).toBe(false);
     expect(c.pass).toBe("pw");
+  });
+  it("requires explicit opt-in before allowing plaintext IMAP", () => {
+    const c = resolveImapConfig({
+      [IMAP_ENV.user]: "rob@example.com",
+      [IMAP_ENV.password]: "pw",
+      [IMAP_ENV.port]: "143",
+      [IMAP_ENV.allowPlaintext]: "1",
+    });
+    expect(c.secure).toBe(false);
+    expect(c.allowPlaintext).toBe(true);
+    expect(buildImapConnectionOptions(c)).toMatchObject({
+      secure: false,
+      doSTARTTLS: false,
+    });
   });
   it("throws an actionable error when no password is available", () => {
     expect(() => resolveImapConfig({ [IMAP_ENV.user]: "rob@example.com" })).toThrow(
@@ -1351,6 +1366,12 @@ describe("mail transport TLS policy", () => {
     });
     expect(buildImapConnectionOptions(cfg)).toMatchObject({
       secure: true,
+      doSTARTTLS: false,
+    });
+    expect(
+      buildImapConnectionOptions({ ...cfg, secure: false, allowPlaintext: true })
+    ).toMatchObject({
+      secure: false,
       doSTARTTLS: false,
     });
   });

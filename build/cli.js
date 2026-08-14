@@ -11919,6 +11919,7 @@ var SMTP_ENV = {
   host: "APPLE_MAIL_MCP_SMTP_HOST",
   port: "APPLE_MAIL_MCP_SMTP_PORT",
   secure: "APPLE_MAIL_MCP_SMTP_SECURE",
+  allowPlaintext: "APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT",
   user: "APPLE_MAIL_MCP_SMTP_USER",
   from: "APPLE_MAIL_MCP_SMTP_FROM",
   allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
@@ -11969,7 +11970,17 @@ function resolveSmtpConfig(env = process.env) {
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
   }
-  return { host, port, secure, user, pass, from, allowedFrom };
+  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
+  return {
+    host,
+    port,
+    secure,
+    allowPlaintext,
+    user,
+    pass,
+    from,
+    allowedFrom
+  };
 }
 function buildAttachments(attachments) {
   if (!attachments || attachments.length === 0) return void 0;
@@ -12008,13 +12019,19 @@ async function sendViaSmtp(opts, config, createTransport = import_nodemailer.def
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
+  const requireTLS = !cfg.secure && !cfg.allowPlaintext;
+  if (!cfg.secure && cfg.allowPlaintext) {
+    console.warn(
+      `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
+    );
+  }
   const transporter = createTransport({
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
     // Port 587/143-style configurations must not silently downgrade to
     // plaintext when the server advertises no usable TLS upgrade.
-    requireTLS: !cfg.secure,
+    requireTLS,
     auth: { user: cfg.user, pass: cfg.pass }
   });
   const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
@@ -12035,9 +12052,11 @@ async function sendViaSmtp(opts, config, createTransport = import_nodemailer.def
     });
     return { success: true, messageId: info.messageId };
   } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const tlsHint = requireTLS ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.` : "";
     return {
       success: false,
-      error: `SMTP send failed: ${error instanceof Error ? error.message : String(error)}`
+      error: `SMTP send failed: ${detail}.${tlsHint}`
     };
   } finally {
     transporter.close();

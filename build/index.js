@@ -82393,6 +82393,7 @@ var SMTP_ENV = {
   host: "APPLE_MAIL_MCP_SMTP_HOST",
   port: "APPLE_MAIL_MCP_SMTP_PORT",
   secure: "APPLE_MAIL_MCP_SMTP_SECURE",
+  allowPlaintext: "APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT",
   user: "APPLE_MAIL_MCP_SMTP_USER",
   from: "APPLE_MAIL_MCP_SMTP_FROM",
   allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
@@ -82453,7 +82454,17 @@ function resolveSmtpConfig(env = process.env) {
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
   }
-  return { host, port, secure, user, pass, from, allowedFrom };
+  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
+  return {
+    host,
+    port,
+    secure,
+    allowPlaintext,
+    user,
+    pass,
+    from,
+    allowedFrom
+  };
 }
 function buildAttachments(attachments) {
   if (!attachments || attachments.length === 0) return void 0;
@@ -82492,13 +82503,19 @@ async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.de
   } catch (error2) {
     return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
   }
+  const requireTLS = !cfg.secure && !cfg.allowPlaintext;
+  if (!cfg.secure && cfg.allowPlaintext) {
+    console.warn(
+      `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
+    );
+  }
   const transporter = createTransport({
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
     // Port 587/143-style configurations must not silently downgrade to
     // plaintext when the server advertises no usable TLS upgrade.
-    requireTLS: !cfg.secure,
+    requireTLS,
     auth: { user: cfg.user, pass: cfg.pass }
   });
   const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
@@ -82519,9 +82536,11 @@ async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.de
     });
     return { success: true, messageId: info.messageId };
   } catch (error2) {
+    const detail = error2 instanceof Error ? error2.message : String(error2);
+    const tlsHint = requireTLS ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.` : "";
     return {
       success: false,
-      error: `SMTP send failed: ${error2 instanceof Error ? error2.message : String(error2)}`
+      error: `SMTP send failed: ${detail}.${tlsHint}`
     };
   } finally {
     transporter.close();
@@ -82694,6 +82713,7 @@ var IMAP_ENV = {
   password: "APPLE_MAIL_MCP_IMAP_PASSWORD",
   keychainService: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE",
   keychainAccount: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT",
+  allowPlaintext: "APPLE_MAIL_MCP_IMAP_ALLOW_PLAINTEXT",
   // C2 multi-account: JSON array of additional accounts, e.g.
   // [{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]
   accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS"
@@ -82733,6 +82753,9 @@ function depsForAccount(account, deps) {
 }
 function depsForMessageRef(ref, deps) {
   return depsForAccount(ref.account, deps);
+}
+function isTruthySetting(value) {
+  return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
 }
 function specMatchesSelector(spec, selector) {
   return spec.accountLabel === selector || spec.user === selector || (spec.aliases?.includes(selector) ?? false);
@@ -82799,7 +82822,7 @@ function listImapAccountSpecs(env = process.env) {
   }
   return specs;
 }
-function specToConfig(spec) {
+function specToConfig(spec, allowPlaintext = false) {
   if (!Number.isInteger(spec.port) || spec.port <= 0) {
     throw new Error(`Invalid IMAP port for account "${spec.accountLabel}": "${spec.port}".`);
   }
@@ -82816,6 +82839,7 @@ function specToConfig(spec) {
     host: spec.host,
     port: spec.port,
     secure: spec.port === 993,
+    allowPlaintext,
     user: spec.user,
     pass,
     accountLabel: spec.accountLabel
@@ -82833,9 +82857,10 @@ function listImapAccountLabels(env = process.env) {
 }
 function resolveImapConfigs(env = process.env) {
   const out = [];
+  const allowPlaintext = isTruthySetting(env[IMAP_ENV.allowPlaintext]);
   for (const spec of listImapAccountSpecs(env)) {
     try {
-      out.push(specToConfig(spec));
+      out.push(specToConfig(spec, allowPlaintext));
     } catch (e) {
       console.error(`Skipping IMAP account "${spec.accountLabel}": ${String(e)}`);
     }
@@ -82860,15 +82885,19 @@ function resolveImapConfig(env = process.env, account) {
   } else {
     spec = specs[0];
   }
-  return specToConfig(spec);
+  return specToConfig(spec, isTruthySetting(env[IMAP_ENV.allowPlaintext]));
 }
 function buildImapConnectionOptions(cfg) {
   return {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    // secure=true starts with implicit TLS, so there is no STARTTLS upgrade to
+    // negotiate on that connection.
     // ImapFlow otherwise treats STARTTLS as opportunistic when secure=false.
-    doSTARTTLS: !cfg.secure,
+    // The only way to disable this is the deliberate, documented plaintext
+    // escape hatch; the secure default remains fail-closed.
+    doSTARTTLS: !cfg.secure && !cfg.allowPlaintext,
     auth: { user: cfg.user, pass: cfg.pass },
     logger: false
   };
@@ -82877,7 +82906,17 @@ var defaultConnect = async (cfg) => {
   const client = new import_imapflow.ImapFlow(buildImapConnectionOptions(cfg));
   client.on("error", () => {
   });
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (error2) {
+    if (!cfg.secure && !cfg.allowPlaintext) {
+      const detail = error2 instanceof Error ? error2.message : String(error2);
+      throw new Error(
+        `IMAP connection failed: ${detail}. STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${IMAP_ENV.allowPlaintext}=1.`
+      );
+    }
+    throw error2;
+  }
   return client;
 };
 function resolveMailboxPath(mailbox, mode) {
@@ -84169,16 +84208,20 @@ function subjectFromGetMessage(info) {
 // src/services/imapIdle.ts
 var import_imapflow2 = __toESM(require_imap_flow(), 1);
 var defaultIdleConnect = async (cfg) => {
-  const client = new import_imapflow2.ImapFlow({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    auth: { user: cfg.user, pass: cfg.pass },
-    logger: false
-  });
+  const client = new import_imapflow2.ImapFlow(buildImapConnectionOptions(cfg));
   client.on("error", () => {
   });
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (error2) {
+    if (!cfg.secure && !cfg.allowPlaintext) {
+      const detail = error2 instanceof Error ? error2.message : String(error2);
+      throw new Error(
+        `IMAP IDLE connection failed: ${detail}. STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${IMAP_ENV.allowPlaintext}=1.`
+      );
+    }
+    throw error2;
+  }
   return client;
 };
 var ImapIdleWatcher = class {
