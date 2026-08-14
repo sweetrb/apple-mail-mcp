@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
-import { homedir, tmpdir } from "os";
-import { join } from "path";
+import { homedir } from "os";
+import { dirname, join } from "path";
 
-const h = vi.hoisted(() => ({ calls: 0, success: false, output: "" }));
+const h = vi.hoisted(() => ({ calls: 0, success: false, output: "", savePath: "" }));
 
 vi.mock("@/utils/applescript.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/utils/applescript.js")>();
@@ -14,6 +14,7 @@ vi.mock("@/utils/applescript.js", async (importOriginal) => {
       if (h.success && h.output === "ok") {
         const match = script.match(/set savePath to POSIX file "([^"]+)"/);
         if (!match) throw new Error("test AppleScript did not contain a staging path");
+        h.savePath = match[1];
         writeFileSync(match[1], "payload", { flag: "wx", mode: 0o600 });
         return { success: true, output: "ok" };
       }
@@ -31,6 +32,7 @@ afterEach(() => {
   h.calls = 0;
   h.success = false;
   h.output = "";
+  h.savePath = "";
 });
 
 describe("saveAttachment path boundary", () => {
@@ -46,7 +48,7 @@ describe("saveAttachment path boundary", () => {
   });
 
   it("rejects an existing symbolic-link destination", () => {
-    const root = mkdtempSync(join(tmpdir(), "apple-mail-mcp-test-"));
+    const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
     cleanup.push(root);
     symlinkSync("/etc/hosts", join(root, "hosts"));
 
@@ -56,7 +58,7 @@ describe("saveAttachment path boundary", () => {
   });
 
   it("rejects an existing regular-file destination", () => {
-    const root = mkdtempSync(join(tmpdir(), "apple-mail-mcp-test-"));
+    const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
     cleanup.push(root);
     writeFileSync(join(root, "hosts"), "keep me");
 
@@ -109,5 +111,13 @@ cGF5bG9hZA==
     expect(mgr.saveAttachment("1", "report.txt", root)).toBe(true);
     expect(statSync(join(root, "report.txt")).mode & 0o777).toBe(0o600);
     expect(readdirSync(root)).toEqual(["report.txt"]);
+
+    // Mail.app must never be handed the caller's destination path: the file may
+    // only appear there via the COPYFILE_EXCL commit out of a private mkdtemp
+    // staging directory. Without this, dropping the staging step and letting Mail
+    // write straight to the destination leaves every other assertion green.
+    expect(h.savePath).not.toBe(join(root, "report.txt"));
+    expect(h.savePath).toContain(".apple-mail-mcp-");
+    expect(dirname(h.savePath)).not.toBe(root);
   });
 });
