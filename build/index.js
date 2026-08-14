@@ -79724,17 +79724,19 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
     const script = buildAppLevelScript(`
       try
+        set _hits to {}
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                ${innerFetch}
-              end if
+              if (count of matchingMsgs) > 0 then set end of _hits to item 1 of matchingMsgs
             end try
           end repeat
         end repeat
+        if (count of _hits) is 1 then
+          set msg to item 1 of _hits
+          ${innerFetch}
+        end if
         return ""
       on error errMsg
         return ""
@@ -79796,17 +79798,19 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
     const script = buildAppLevelScript(`
       try
+        set _hits to {}
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                return source of msg
-              end if
+              if (count of matchingMsgs) > 0 then set end of _hits to item 1 of matchingMsgs
             end try
           end repeat
         end repeat
+        if (count of _hits) is 1 then
+          set msg to item 1 of _hits
+          return source of msg
+        end if
         return ""
       on error errMsg
         return ""
@@ -80256,27 +80260,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
     const sendAction = send ? "send theReply" : "";
-    const script = buildAppLevelScript(`
-      try
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                set theReply to reply msg without opening window${replyAllClause}
-                set content of theReply to "${safeBody}"
-                ${sendAction}
-                return "ok"
-              end if
-            end try
-          end repeat
-        end repeat
-        return "error:Message not found"
-      on error errMsg
-        return "error:" & errMsg
-      end try
-    `);
+    const script = this.findMessageScript(
+      id,
+      `
+          set theReply to reply msg without opening window${replyAllClause}
+          set content of theReply to "${safeBody}"
+          ${sendAction}`
+    );
     const result = executeAppleScript(script, { timeoutMs: 6e4 });
     if (!result.success || result.output.startsWith("error:")) {
       console.error(`Failed to reply to message: ${result.error || result.output}`);
@@ -80301,28 +80291,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       recipientCommands += `make new to recipient at end of to recipients of theForward with properties {address:"${escapeForAppleScript(addr)}"}
 `;
     }
-    const script = buildAppLevelScript(`
-      try
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                set theForward to forward msg without opening window
-                ${recipientCommands}
-                ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
-                ${sendAction}
-                return "ok"
-              end if
-            end try
-          end repeat
-        end repeat
-        return "error:Message not found"
-      on error errMsg
-        return "error:" & errMsg
-      end try
-    `);
+    const script = this.findMessageScript(
+      id,
+      `
+          set theForward to forward msg without opening window
+          ${recipientCommands}
+          ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
+          ${sendAction}`
+    );
     const result = executeAppleScript(script, { timeoutMs: 6e4 });
     if (!result.success || result.output.startsWith("error:")) {
       console.error(`Failed to forward message: ${result.error || result.output}`);
