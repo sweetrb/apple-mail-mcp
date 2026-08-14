@@ -7,12 +7,14 @@
  *
  * Gated by RUN_IMAP_IT so it is skipped in the normal unit suite. CI sets it and
  * provides a GreenMail service; locally:
- *   docker run -d --rm -p 3143:3143 -e GREENMAIL_OPTS='-Dgreenmail.setup.test.imap -Dgreenmail.users=tester:secret@example.com -Dgreenmail.auth.disabled' greenmail/standalone:2.1.0
+ *   docker run -d --rm -p 3993:3993 -e GREENMAIL_OPTS='-Dgreenmail.setup.test.imaps -Dgreenmail.users=tester:secret@example.com -Dgreenmail.auth.disabled' greenmail/standalone:2.1.0
  *   RUN_IMAP_IT=1 npm run test:imap
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { ImapFlow } from "imapflow";
 import {
+  buildImapConnectionOptions,
+  type ImapClientLike,
   type ImapConfig,
   imapListMessages,
   imapSearchMessages,
@@ -41,21 +43,32 @@ const run = process.env.RUN_IMAP_IT ? describe : describe.skip;
 
 const cfg: ImapConfig = {
   host: process.env.GREENMAIL_HOST ?? "127.0.0.1",
-  port: Number(process.env.GREENMAIL_IMAP_PORT ?? 3143),
-  secure: false,
+  port: Number(process.env.GREENMAIL_IMAP_PORT ?? 3993),
+  secure: true,
   user: process.env.GREENMAIL_USER ?? "tester",
   pass: process.env.GREENMAIL_PASS ?? "secret",
   accountLabel: "greenmail",
 };
-const deps = { config: cfg };
+const deps = {
+  config: cfg,
+  // GreenMail uses a self-signed test certificate. This connector is confined
+  // to the integration fixture; production defaultConnect keeps certificate
+  // verification enabled and requires TLS for non-implicit connections.
+  connect: async (connectionConfig: ImapConfig) => {
+    const c = new ImapFlow({
+      ...buildImapConnectionOptions(connectionConfig),
+      tls: { rejectUnauthorized: false },
+    });
+    c.on("error", () => {});
+    await c.connect();
+    return c as unknown as ImapClientLike;
+  },
+};
 
 function raw(): ImapFlow {
   return new ImapFlow({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    auth: { user: cfg.user, pass: cfg.pass },
-    logger: false,
+    ...buildImapConnectionOptions(cfg),
+    tls: { rejectUnauthorized: false },
   });
 }
 
