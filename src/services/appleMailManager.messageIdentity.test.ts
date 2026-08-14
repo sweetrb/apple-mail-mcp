@@ -58,18 +58,31 @@ describe("by-id message identity", () => {
   });
 
   it("does not read an arbitrary first match when an id has no recorded location", () => {
+    h.output =
+      "error:Message id 42 is present in more than one mailbox (Work/INBOX, Work/All Mail); list or search that mailbox first so the read targets the right copy";
     expect(mgr.getRawSource("42")).toBeNull();
     let script = lastScript();
     expect(script).toContain("set _hits to {}");
+    expect(script).toContain('set _names to ""');
+    expect(script).toContain("if (count of _hits) > 1 then");
     expect(script).toContain("if (count of _hits) is 1 then");
     expect(script.indexOf("return source of msg")).toBeGreaterThan(
       script.indexOf("if (count of _hits) is 1 then")
     );
+    expect(mgr.consumeLastMessageLookupError()).toMatch(
+      /^Message id 42 is present in more than one mailbox/
+    );
 
     h.calls.length = 0;
+    h.output =
+      "error:Message id 42 is present in more than one mailbox (Work/INBOX, Work/All Mail); list or search that mailbox first so the read targets the right copy";
     expect(mgr.getMessageContent("42")).toBeNull();
     script = lastScript();
     expect(script).toContain("set _hits to {}");
+    expect(script).toContain("if (count of _hits) > 1 then");
     expect(script).toContain("if (count of _hits) is 1 then");
+    expect(mgr.consumeLastMessageLookupError()).toMatch(
+      /^Message id 42 is present in more than one mailbox/
+    );
   });
 });

@@ -78653,6 +78653,8 @@ var AppleMailManager = class {
    * misses and falls back to the full scan, so it can never wedge a lookup.
    */
   idLocationIndex = /* @__PURE__ */ new Map();
+  /** Error from the most recent numeric message read, if it was refused. */
+  lastMessageLookupError;
   /** Cap on the id→location index so a long-lived process can't grow unbounded. */
   ID_LOCATION_MAX = 5e3;
   /** Record (or refresh) where a message id lives, evicting oldest when full. */
@@ -78680,6 +78682,12 @@ var AppleMailManager = class {
    */
   noteMessageLocation(id, account, mailbox) {
     this.rememberLocation(id, account, mailbox);
+  }
+  /** Consume the most recent read refusal so the tool layer can preserve it. */
+  consumeLastMessageLookupError() {
+    const error2 = this.lastMessageLookupError;
+    this.lastMessageLookupError = void 0;
+    return error2;
   }
   /**
    * AppleScript fragment resolving `account` + `mailbox` into `_tmb`, leaving
@@ -79699,6 +79707,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    *   returned the entire raw MIME blob mislabeled as HTML (#32).
    */
   getMessageContent(id, includeHtml = false, hint) {
+    this.lastMessageLookupError = void 0;
     const sourceFetch = includeHtml ? `set htmlSource to ""
                 try
                   set htmlSource to source of msg
@@ -79725,14 +79734,20 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const script = buildAppLevelScript(`
       try
         set _hits to {}
+        set _names to ""
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then set end of _hits to item 1 of matchingMsgs
+              if (count of matchingMsgs) > 0 then
+                set end of _hits to item 1 of matchingMsgs
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
+              end if
             end try
           end repeat
         end repeat
+        if (count of _hits) is 0 then return "error:Message not found"
+        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
         if (count of _hits) is 1 then
           set msg to item 1 of _hits
           ${innerFetch}
@@ -79756,6 +79771,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   parseMessageContent(id, result, includeHtml) {
     if (!result.success || !result.output.trim()) {
       if (!result.success) console.error(`Failed to get message content: ${result.error}`);
+      return null;
+    }
+    if (result.output.startsWith("error:")) {
+      this.lastMessageLookupError = result.output.slice("error:".length).trim();
       return null;
     }
     const htmlSplit = result.output.split(HTML_MARKER);
@@ -79785,6 +79804,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * a 20MB attachment can take several seconds over Exchange/IMAP.
    */
   getRawSource(id, hint) {
+    this.lastMessageLookupError = void 0;
     const loc = hint?.account && hint?.mailbox ? { account: hint.account, mailbox: hint.mailbox } : this.idLocationIndex.get(id.toString());
     if (loc) {
       const scopedScript = this.scopedByIdScript(
@@ -79794,19 +79814,30 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         "return source of msg"
       );
       const scoped = executeAppleScript(scopedScript, { timeoutMs: 12e4 });
-      if (scoped.success && scoped.output.trim()) return scoped.output;
+      if (scoped.success && scoped.output.trim() && !scoped.output.startsWith("error:")) {
+        return scoped.output;
+      }
+      if (scoped.success && scoped.output.startsWith("error:")) {
+        this.lastMessageLookupError = scoped.output.slice("error:".length).trim();
+      }
     }
     const script = buildAppLevelScript(`
       try
         set _hits to {}
+        set _names to ""
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then set end of _hits to item 1 of matchingMsgs
+              if (count of matchingMsgs) > 0 then
+                set end of _hits to item 1 of matchingMsgs
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
+              end if
             end try
           end repeat
         end repeat
+        if (count of _hits) is 0 then return "error:Message not found"
+        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
         if (count of _hits) is 1 then
           set msg to item 1 of _hits
           return source of msg
@@ -79818,6 +79849,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     `);
     const result = executeAppleScript(script, { timeoutMs: 12e4 });
     if (!result.success || !result.output.trim()) {
+      return null;
+    }
+    if (result.output.startsWith("error:")) {
+      this.lastMessageLookupError = result.output.slice("error:".length).trim();
       return null;
     }
     return result.output;
@@ -84711,7 +84746,10 @@ Do not use when: you don't yet have an id (use search-messages or list-messages 
           account,
           mailbox
         });
-        if (!content) return errorResponse(`Message with ID "${id}" not found`);
+        if (!content) {
+          const lookupError = mailManager.consumeLastMessageLookupError();
+          return errorResponse(lookupError ?? `Message with ID "${id}" not found`);
+        }
         const isHtml = preferHtml === true && !!content.htmlContent;
         const body = isHtml ? content.htmlContent : content.plainText;
         return successResponse(`Subject: ${content.subject}

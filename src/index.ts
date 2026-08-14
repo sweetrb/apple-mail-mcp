@@ -661,7 +661,10 @@ registerTool(
             account,
             mailbox,
           });
-          if (!content) return errorResponse(`Message with ID "${id}" not found`);
+          if (!content) {
+            const lookupError = mailManager.consumeLastMessageLookupError();
+            return errorResponse(lookupError ?? `Message with ID "${id}" not found`);
+          }
           const isHtml = preferHtml === true && !!content.htmlContent;
           const body = isHtml ? content.htmlContent! : content.plainText;
           return successResponse(`Subject: ${content.subject}\n\n${body}`, {
