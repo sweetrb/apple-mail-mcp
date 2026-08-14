@@ -227,6 +227,9 @@ import {
   AUDIT_SNAPSHOT_MAX_ENV,
   reconciliationWarnings,
   writeDestructiveAudit,
+  falseOkWarning,
+  type CountDelta,
+  type CollateralDiff,
 } from "@/services/auditLog.js";
 
 let tmp: string;
@@ -836,5 +839,69 @@ describe("#155 acceptance: N ids passed, N+2 messages disappear", () => {
       { id: "75814", messageId: "d@example.com" },
       { id: "75815", messageId: "e@example.com" },
     ]);
+  });
+});
+
+describe("false-ok detection (#155)", () => {
+  const delta = (o: Partial<CountDelta> = {}): CountDelta => ({
+    account: "iCloud",
+    mailbox: "INBOX",
+    before: 29,
+    after: 29,
+    expected: 4,
+    observed: 0,
+    status: "under",
+    ...o,
+  });
+  const clean = (o: Partial<CollateralDiff> = {}): CollateralDiff => ({
+    account: "iCloud",
+    mailbox: "INBOX",
+    snapshot: "ok",
+    disappeared: [],
+    unrequested: [],
+    appeared: [],
+    ...o,
+  });
+
+  it("warns when everything reported ok but nothing observably happened", () => {
+    // scottstern0325's exact record from #155, on iCloud against 2.10.17.
+    const w = falseOkWarning(delta(), clean());
+    expect(w).toMatch(/Reported success with no observed effect/);
+    expect(w).toContain("issues/155");
+  });
+
+  it("stays silent when the snapshot could not be taken", () => {
+    // The flag-only account and a total no-op are genuinely indistinguishable
+    // here, so warning would cry wolf on ordinary deletes.
+    expect(falseOkWarning(delta(), clean({ snapshot: "unavailable" }))).toBeNull();
+    expect(falseOkWarning(delta(), clean({ snapshot: "skipped" }))).toBeNull();
+    expect(falseOkWarning(delta(), undefined)).toBeNull();
+  });
+
+  it("stays silent when messages did leave the mailbox", () => {
+    expect(
+      falseOkWarning(delta(), clean({ disappeared: [{ id: "1", messageId: "<a@b>" }] }))
+    ).toBeNull();
+  });
+
+  it("stays silent on a PARTIAL under, where flag-only and partial failure look alike", () => {
+    expect(falseOkWarning(delta({ after: 26, observed: 3 }), clean())).toBeNull();
+  });
+
+  it("stays silent on match, over and unknown", () => {
+    expect(falseOkWarning(delta({ status: "match", observed: 4, after: 25 }), clean())).toBeNull();
+    expect(falseOkWarning(delta({ status: "over", observed: 6, after: 23 }), clean())).toBeNull();
+    expect(falseOkWarning(delta({ status: "unknown", expected: null }), clean())).toBeNull();
+  });
+
+  it("is surfaced by reconciliationWarnings alongside the over warning", () => {
+    const warnings = reconciliationWarnings({
+      countDeltas: [delta()],
+      preImages: [],
+      outcomes: [],
+      collateral: [clean()],
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/Reported success with no observed effect/);
   });
 });

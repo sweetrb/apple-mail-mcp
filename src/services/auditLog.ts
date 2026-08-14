@@ -304,7 +304,59 @@ export function countDeltaWarning(d: CountDelta): string | null {
   );
 }
 
+/**
+ * The one `under` reading that is NOT routine: a total no-op reported as success.
+ *
+ * The blanket `under` suppression above is justified by accounts that flag
+ * `\Deleted` without removing the message, so the source count never drops. That
+ * argument holds for the *shape* of the account, not for every reading — and it
+ * suppressed a real defect (#155, reported on iCloud against 2.10.17):
+ *
+ * ```json
+ * {"outcomes":[{"id":"68196","status":"ok"}, ...4 ids all "ok"],
+ *  "countDeltas":[{"before":29,"after":29,"expected":4,"observed":0,"status":"under"}],
+ *  "collateral":[{"snapshot":"ok","disappeared":[],"unrequested":[],"appeared":[]}]}
+ * ```
+ *
+ * Four successes reported for an operation in which, by this server's own
+ * measurement, nothing happened.
+ *
+ * The discriminator is the collateral snapshot. A flag-only account removes
+ * nothing observably — but so does a total no-op, and the two are
+ * indistinguishable *only when the snapshot could not be taken*. Here it was
+ * taken, it read the mailbox fine, and it says nothing left. Requiring
+ * `snapshot === "ok"` and an empty `disappeared` is what keeps this from firing
+ * on the ordinary flag-only delete the blanket suppression exists to protect.
+ *
+ * Deliberately narrow: `observed === 0` only. A partial under (3 of 4 removed)
+ * stays unwarned, because that is exactly where a flag-only account and a
+ * partial failure DO look alike.
+ */
+export function falseOkWarning(d: CountDelta, collateral?: CollateralDiff): string | null {
+  if (d.status !== "under" || d.expected === null) return null;
+  if (d.observed !== 0 || d.expected <= 0) return null;
+  if (!collateral || collateral.snapshot !== "ok") return null;
+  if ((collateral.disappeared?.length ?? 0) !== 0) return null;
+
+  const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
+  return (
+    `⚠️ Reported success with no observed effect in ${where}: ${d.expected} message(s) were ` +
+    `operated on and reported ok, but the mailbox count did not move (${d.before} → ${d.after}) ` +
+    `and the collateral snapshot — which read this mailbox successfully — shows no message left ` +
+    `it. Either the operation silently did nothing, or Mail's count and listing are both stale ` +
+    `and the messages did move. Check the destination (Trash for a delete) before assuming ` +
+    `either: if they are there, this is a measurement-timing bug; if they are still in the ` +
+    `source mailbox minutes later, the operation failed while reporting success. Please report ` +
+    `at https://github.com/sweetrb/apple-mail-mcp/issues/155 with ` +
+    `${AUDIT_LOG_ENV}=/path/to/audit.ndjson set.`
+  );
+}
+
 /** Every warning a report has to raise, in mailbox order. */
 export function reconciliationWarnings(report: DestructiveOpReport): string[] {
-  return report.countDeltas.map(countDeltaWarning).filter((w): w is string => w !== null);
+  const collateralFor = (d: CountDelta) =>
+    report.collateral.find((c) => c.account === d.account && c.mailbox === d.mailbox);
+  return report.countDeltas
+    .flatMap((d) => [countDeltaWarning(d), falseOkWarning(d, collateralFor(d))])
+    .filter((w): w is string => w !== null);
 }

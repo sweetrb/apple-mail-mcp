@@ -78371,8 +78371,17 @@ function countDeltaWarning(d) {
   const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
   return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. Anything else removing mail from this mailbox at the same moment \u2014 a Mail rule, a server-side filter, another client, an IMAP expunge \u2014 reads the same way, so rule that out first. If nothing else was touching it, this is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
 }
+function falseOkWarning(d, collateral) {
+  if (d.status !== "under" || d.expected === null) return null;
+  if (d.observed !== 0 || d.expected <= 0) return null;
+  if (!collateral || collateral.snapshot !== "ok") return null;
+  if ((collateral.disappeared?.length ?? 0) !== 0) return null;
+  const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
+  return `\u26A0\uFE0F Reported success with no observed effect in ${where}: ${d.expected} message(s) were operated on and reported ok, but the mailbox count did not move (${d.before} \u2192 ${d.after}) and the collateral snapshot \u2014 which read this mailbox successfully \u2014 shows no message left it. Either the operation silently did nothing, or Mail's count and listing are both stale and the messages did move. Check the destination (Trash for a delete) before assuming either: if they are there, this is a measurement-timing bug; if they are still in the source mailbox minutes later, the operation failed while reporting success. Please report at https://github.com/sweetrb/apple-mail-mcp/issues/155 with ${AUDIT_LOG_ENV}=/path/to/audit.ndjson set.`;
+}
 function reconciliationWarnings(report) {
-  return report.countDeltas.map(countDeltaWarning).filter((w) => w !== null);
+  const collateralFor = (d) => report.collateral.find((c) => c.account === d.account && c.mailbox === d.mailbox);
+  return report.countDeltas.flatMap((d) => [countDeltaWarning(d), falseOkWarning(d, collateralFor(d))]).filter((w) => w !== null);
 }
 
 // src/services/appleMailManager.ts
