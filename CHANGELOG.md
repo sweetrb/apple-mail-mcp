@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [2.10.28] - 2026-08-14
+
+### Security
+
+- **Non-implicit-TLS mail connections now fail closed.** SMTP requires STARTTLS
+  and IMAP requires a successful STARTTLS upgrade by default. The explicit
+  `APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT=1` and
+  `APPLE_MAIL_MCP_IMAP_ALLOW_PLAINTEXT=1` escape hatches are disabled by
+  default, documented as unsafe, and named in transport failure messages.
+
 ## [2.10.27] - 2026-08-14
 
 ### Changed

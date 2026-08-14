@@ -43,6 +43,7 @@ describe("resolveSmtpConfig", () => {
     expect(cfg.pass).toBe("s3cret");
     expect(cfg.port).toBe(587); // STARTTLS default
     expect(cfg.secure).toBe(false);
+    expect(cfg.allowPlaintext).toBe(false);
     expect(cfg.from).toBe("alice@example.com"); // defaults to user
   });
 
@@ -50,6 +51,15 @@ describe("resolveSmtpConfig", () => {
     const cfg = resolveSmtpConfig({ ...baseEnv, [SMTP_ENV.secure]: "true" });
     expect(cfg.secure).toBe(true);
     expect(cfg.port).toBe(465);
+  });
+
+  it("requires explicit opt-in before allowing plaintext SMTP", () => {
+    const cfg = resolveSmtpConfig({
+      ...baseEnv,
+      [SMTP_ENV.allowPlaintext]: "1",
+    });
+    expect(cfg.secure).toBe(false);
+    expect(cfg.allowPlaintext).toBe(true);
   });
 
   it("honors an explicit port and From override", () => {
@@ -191,6 +201,29 @@ describe("sendViaSmtp", () => {
     expect(payload.from).toBe("alice@example.com");
     expect(payload.to).toEqual(["bob@example.com"]);
     expect(close).toHaveBeenCalled();
+  });
+
+  it("passes the explicit plaintext opt-out through to Nodemailer", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<plain>" });
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      { ...testConfig, allowPlaintext: true },
+      createTransport as never
+    );
+
+    expect(result.success).toBe(true);
+    expect(createTransport).toHaveBeenCalledWith({
+      host: "smtp.example.com",
+      port: 587,
+      secure: false,
+      requireTLS: false,
+      auth: { user: "alice@example.com", pass: "s3cret" },
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(SMTP_ENV.allowPlaintext));
+    warn.mockRestore();
   });
 
   it("sends multipart/alternative when an htmlBody is provided", async () => {

@@ -52,7 +52,8 @@ const cfg: ImapConfig = {
 const deps = {
   config: cfg,
   // GreenMail uses a self-signed test certificate. This connector is confined
-  // to the integration fixture; production defaultConnect keeps certificate
+  // to the integration fixture and deliberately disables certificate
+  // verification for that fixture only; production defaultConnect keeps
   // verification enabled and requires TLS for non-implicit connections.
   connect: async (connectionConfig: ImapConfig) => {
     const c = new ImapFlow({

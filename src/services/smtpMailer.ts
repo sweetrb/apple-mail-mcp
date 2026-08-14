@@ -61,6 +61,8 @@ export interface SmtpConfig {
   host: string;
   port: number;
   secure: boolean;
+  /** Deliberate insecure escape hatch; false/undefined requires STARTTLS. */
+  allowPlaintext?: boolean;
   user: string;
   pass: string;
   from: string;
@@ -82,6 +84,7 @@ export const SMTP_ENV = {
   host: "APPLE_MAIL_MCP_SMTP_HOST",
   port: "APPLE_MAIL_MCP_SMTP_PORT",
   secure: "APPLE_MAIL_MCP_SMTP_SECURE",
+  allowPlaintext: "APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT",
   user: "APPLE_MAIL_MCP_SMTP_USER",
   from: "APPLE_MAIL_MCP_SMTP_FROM",
   allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
@@ -208,7 +211,17 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
     );
   }
 
-  return { host: host as string, port, secure, user: user as string, pass, from, allowedFrom };
+  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
+  return {
+    host: host as string,
+    port,
+    secure,
+    allowPlaintext,
+    user: user as string,
+    pass,
+    from,
+    allowedFrom,
+  };
 }
 
 /**
@@ -267,13 +280,19 @@ export async function sendViaSmtp(
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 
+  const requireTLS = !cfg.secure && !cfg.allowPlaintext;
+  if (!cfg.secure && cfg.allowPlaintext) {
+    console.warn(
+      `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
+    );
+  }
   const transporter = createTransport({
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
     // Port 587/143-style configurations must not silently downgrade to
     // plaintext when the server advertises no usable TLS upgrade.
-    requireTLS: !cfg.secure,
+    requireTLS,
     auth: { user: cfg.user, pass: cfg.pass },
   });
 
@@ -296,9 +315,13 @@ export async function sendViaSmtp(
     });
     return { success: true, messageId: info.messageId };
   } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const tlsHint = requireTLS
+      ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.`
+      : "";
     return {
       success: false,
-      error: `SMTP send failed: ${error instanceof Error ? error.message : String(error)}`,
+      error: `SMTP send failed: ${detail}.${tlsHint}`,
     };
   } finally {
     transporter.close();

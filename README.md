@@ -358,12 +358,19 @@ fallback.
 Configure SMTP via environment variables on the MCP server. The password is
 read from the macOS **Keychain** by default, so no secret goes in config:
 
+Non-implicit-TLS SMTP connections fail closed if STARTTLS is unavailable.
+`APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT=1` is a deliberate escape hatch for a
+trusted isolated server or test fixture; it disables the upgrade requirement and
+can expose credentials and message content. The server emits a warning when it
+is used. Keep the default unset.
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `APPLE_MAIL_MCP_SMTP_HOST` | Yes | — | SMTP server hostname (e.g. `smtp.fastmail.com`) |
 | `APPLE_MAIL_MCP_SMTP_USER` | Yes | — | SMTP username |
 | `APPLE_MAIL_MCP_SMTP_PORT` | No | `465` if secure, else `587` | SMTP port |
 | `APPLE_MAIL_MCP_SMTP_SECURE` | No | `false` | `true` for implicit TLS (port 465); otherwise STARTTLS |
+| `APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT` | No | `0` | Set `1` only for an explicitly trusted plaintext test/server; otherwise STARTTLS is required |
 | `APPLE_MAIL_MCP_SMTP_FROM` | No | = user | From address |
 | `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` | No | — | Comma-separated sender aliases permitted as per-message From overrides |
 | `APPLE_MAIL_MCP_SMTP_PASSWORD` | No | — | Password (if set, used instead of the Keychain) |
@@ -480,6 +487,7 @@ for an explicitly-named IMAP account, never on an omitted account.
 | `APPLE_MAIL_MCP_IMAP_ACCOUNT` | No | = user | Mail account name to match for routing |
 | `APPLE_MAIL_MCP_IMAP_HOST` | No | `imap.gmail.com` | IMAP server hostname |
 | `APPLE_MAIL_MCP_IMAP_PORT` | No | `993` | IMAP port (993 = implicit TLS) |
+| `APPLE_MAIL_MCP_IMAP_ALLOW_PLAINTEXT` | No | `0` | Set `1` only for an explicitly trusted plaintext test/server; otherwise STARTTLS is required |
 | `APPLE_MAIL_MCP_IMAP_PASSWORD` | No | — | Password (if set, used instead of the Keychain) |
 | `APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE` | No | — | Keychain item service/server name |
 | `APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT` | No | = user | Keychain item account |
@@ -494,6 +502,12 @@ for an explicitly-named IMAP account, never on an omitted account.
 Each entry accepts `account`, `user`, `host`, `port`, `password`, `keychainService`,
 `keychainAccount`. Calls route to the account matching their `account` argument (or the
 decoded `imap:` id), and each account keeps its own pooled connection.
+
+Non-implicit-TLS IMAP connections require STARTTLS and fail closed when the server
+does not offer a usable upgrade. `APPLE_MAIL_MCP_IMAP_ALLOW_PLAINTEXT=1` is a
+deliberate escape hatch for a trusted isolated server or test fixture; it disables
+the upgrade requirement and can expose credentials and message content. Keep the
+default unset.
 
 As with SMTP, the password is read from the macOS **Keychain** by default (use
 an app-specific password for Gmail/Workspace/iCloud), so no secret goes in
