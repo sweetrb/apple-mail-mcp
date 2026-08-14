@@ -3485,18 +3485,18 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   /**
    * Turn a caller-supplied batch source scope into an account+mailbox pair.
    *
-   * `mailbox` is what does the scoping, and it works ON ITS OWN: an omitted
-   * `account` means "the default account" here exactly as it does for every
-   * other tool in this server (see resolveAccount), never "ignore the argument
-   * you were given". Requiring both used to make a lone `sourceMailbox` a silent
-   * no-op — the ids fell back to the whole-tree path and were then refused as
-   * ambiguous, which is the very failure the parameter exists to prevent.
+   * A numeric source scope is an account+mailbox pair. A mailbox name alone is
+   * not an identity: the same mailbox can exist in several accounts, and a
+   * numeric Mail id is not globally unique. Resolving a missing account from
+   * mutable default-send state can therefore target the wrong account. Require
+   * both fields so a caller cannot silently cross that account boundary.
    *
    * The safety property is absolute: when the account cannot be determined there
    * is NO fallback to the scan-and-guess walk. The caller gets an error naming
    * the mailbox it asked for, so it can retry with an explicit `sourceAccount`.
    * (An `account` with no `mailbox` cannot pin anything, so it scopes nothing —
-   * those ids still go through the index / ambiguity-checked path.)
+   * those ids still go through the index / ambiguity-checked path. A supplied
+   * whitespace-only field is rejected rather than silently discarded.)
    */
   private resolveBatchScope(scope?: {
     account?: string;
@@ -3505,34 +3505,34 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     | { kind: "none" }
     | { kind: "scoped"; account: string; mailbox: string }
     | { kind: "unresolvable"; error: string } {
-    const mailbox = scope?.mailbox?.trim();
+    const rawMailbox = scope?.mailbox;
+    const rawAccount = scope?.account;
+    const mailbox = rawMailbox?.trim();
+    const account = rawAccount?.trim();
+
+    if (rawMailbox !== undefined && !mailbox) {
+      return {
+        kind: "unresolvable",
+        error: "sourceMailbox must contain a mailbox name; whitespace-only scope is not allowed.",
+      };
+    }
+    if (rawAccount !== undefined && !account) {
+      return {
+        kind: "unresolvable",
+        error: "sourceAccount must contain an account name; whitespace-only scope is not allowed.",
+      };
+    }
     if (!mailbox) return { kind: "none" };
-
-    const account = scope?.account?.trim();
-    if (account) return { kind: "scoped", account, mailbox };
-
-    const known = this.getCachedAccounts();
-    if (known.length === 0) {
+    if (!account) {
       return {
         kind: "unresolvable",
         error:
-          `Cannot scope to source mailbox "${mailbox}": no sourceAccount was given and no Mail ` +
-          `account could be read (Mail returned none, or the AppleScript transport failed). ` +
-          `Retry with an explicit sourceAccount.`,
+          `Cannot scope to source mailbox "${mailbox}" without sourceAccount: numeric Mail ids ` +
+          `are only unique within an account and mailbox. Retry with both sourceAccount and ` +
+          `sourceMailbox explicitly set.`,
       };
     }
-
-    const chosen = this.resolveAccount();
-    if (!known.some((a) => a.name === chosen)) {
-      return {
-        kind: "unresolvable",
-        error:
-          `Cannot scope to source mailbox "${mailbox}": no sourceAccount was given and the ` +
-          `default account could not be determined. Retry with an explicit sourceAccount ` +
-          `(available: ${known.map((a) => a.name).join(", ")}).`,
-      };
-    }
-    return { kind: "scoped", account: chosen, mailbox };
+    return { kind: "scoped", account, mailbox };
   }
 
   /**
