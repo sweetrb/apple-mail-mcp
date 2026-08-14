@@ -2546,7 +2546,10 @@ registerTool(
           "At least one action is required (markRead, markFlagged, delete, or moveTo)"
         ),
       matchAll: z.boolean().default(true),
-      enabled: z.boolean().default(true),
+      enabled: z
+        .boolean()
+        .default(false)
+        .describe("Enable immediately; defaults to false so the rule must be reviewed first"),
     },
     outputSchema: {
       name: z.string().optional(),

@@ -1085,9 +1085,14 @@ Create a Mail rule with one or more conditions and actions.
 | `conditions` | object[] | Yes | One or more `{field, operator, value}` (see below) |
 | `actions` | object | Yes | At least one of `markRead`, `markFlagged`, `delete`, `moveTo` |
 | `matchAll` | boolean | No | `true` (default) = all conditions must match; `false` = any |
-| `enabled` | boolean | No | Whether the rule is enabled on creation (default `true`) |
+| `enabled` | boolean | No | Whether the rule is enabled on creation (default `false`) |
 
 Each condition is `{ field, operator, value }` where `field` is one of `from`, `to`, `cc`, `subject`, `content` and `operator` is one of `contains`, `notContains`, `equals`, `beginsWith`, `endsWith`. Actions: `markRead` / `markFlagged` / `delete` (booleans), `moveTo` (mailbox name) with optional `moveToAccount`.
+
+New rules are created **disabled by default**, including rules that delete or move
+messages. Review the conditions and actions with `list-rules` and in Mail.app,
+then call `enable-rule` explicitly when the rule is approved. Set
+`enabled: true` only when immediate activation is deliberate.
 
 **Example:**
 ```json

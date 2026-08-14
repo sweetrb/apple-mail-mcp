@@ -5260,7 +5260,7 @@ end tell`;
       return { success: false, error: "A rule needs at least one action." };
     }
 
-    const enabled = opts.enabled !== false;
+    const enabled = opts.enabled === true;
     const matchAll = opts.matchAll !== false; // default: all conditions must match
 
     const script = buildAppLevelScript(`
