@@ -1597,6 +1597,7 @@ The entrypoint is written as:
 | Date filter format | Date filters must be valid parseable dates (e.g., "January 1, 2026" or "2026-03-15"); bare numbers or non-date strings are rejected |
 | Attachment save path restrictions | `save-attachment` only allows saving to home directory, `/tmp`, `/private/tmp`, and `/Volumes`; path traversal is blocked |
 | Attachment count limit | `send-email` and `create-draft` accept a maximum of 20 file attachments |
+| IMAP attachment fetch size | `fetch-attachment` / `save-attachment` over IMAP refuse a part larger than 25 MiB — rejected before download when the server declares the size, and the stream is cut off at the limit when it does not |
 
 ### Mail.app `<blockquote>` wrapping on macOS 15+ (workaround in v1.6.0)
 
