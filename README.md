@@ -143,6 +143,13 @@ block **or** a `config.json` file (for hosts like Claude Desktop that strip `env
 Keychain, both config methods, multi-account, SMTP, verification with the `doctor`
 tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 
+## Documentation
+
+- [Threat model](docs/THREAT-MODEL.md)
+- [IMAP / SMTP setup guide](docs/IMAP-SETUP.md)
+- [Node runtime and TCC permissions](docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md)
+- [Stability and performance audit](docs/STABILITY-PERF-AUDIT-2026-06-17.md)
+
 ## Requirements
 
 - **macOS** - Apple Mail and AppleScript are macOS-only
