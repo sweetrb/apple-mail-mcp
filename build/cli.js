@@ -12012,6 +12012,9 @@ async function sendViaSmtp(opts, config, createTransport = import_nodemailer.def
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    // Port 587/143-style configurations must not silently downgrade to
+    // plaintext when the server advertises no usable TLS upgrade.
+    requireTLS: !cfg.secure,
     auth: { user: cfg.user, pass: cfg.pass }
   });
   const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;

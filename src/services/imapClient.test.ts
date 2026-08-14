@@ -34,6 +34,7 @@ import {
   __setPoolConnect,
   __resetPool,
   dropAllPools,
+  buildImapConnectionOptions,
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
@@ -1339,5 +1340,18 @@ describe("connection pooling (#50 / A3)", () => {
       { config: cfg, connect: async () => make() }
     );
     expect(logouts).toBe(2); // injected path logs out each call (no pooling)
+  });
+});
+
+describe("mail transport TLS policy", () => {
+  it("requires STARTTLS for non-implicit IMAP connections", () => {
+    expect(buildImapConnectionOptions({ ...cfg, secure: false })).toMatchObject({
+      secure: false,
+      doSTARTTLS: true,
+    });
+    expect(buildImapConnectionOptions(cfg)).toMatchObject({
+      secure: true,
+      doSTARTTLS: false,
+    });
   });
 });

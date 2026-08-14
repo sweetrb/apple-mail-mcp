@@ -457,14 +457,21 @@ export function resolveImapConfig(
   return specToConfig(spec);
 }
 
-const defaultConnect: ImapConnect = async (cfg) => {
-  const client = new ImapFlow({
+/** Build the transport options with TLS required for STARTTLS connections. */
+export function buildImapConnectionOptions(cfg: ImapConfig) {
+  return {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    // ImapFlow otherwise treats STARTTLS as opportunistic when secure=false.
+    doSTARTTLS: !cfg.secure,
     auth: { user: cfg.user, pass: cfg.pass },
-    logger: false,
-  });
+    logger: false as const,
+  };
+}
+
+const defaultConnect: ImapConnect = async (cfg) => {
+  const client = new ImapFlow(buildImapConnectionOptions(cfg));
   // ImapFlow is an EventEmitter: once connect() resolves, a later socket error
   // on this pooled, long-lived client (idle Gmail/iCloud timeout, server BYE,
   // network drop) emits 'error'. With no listener that is an *uncaught*
