@@ -1,16 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 
-const h = vi.hoisted(() => ({ calls: 0 }));
+const h = vi.hoisted(() => ({ calls: 0, success: false, output: "" }));
 
 vi.mock("@/utils/applescript.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/utils/applescript.js")>();
   return {
     ...actual,
-    executeAppleScript: () => {
+    executeAppleScript: (script: string) => {
       h.calls += 1;
+      if (h.success && h.output === "ok") {
+        const match = script.match(/set savePath to POSIX file "([^"]+)"/);
+        if (!match) throw new Error("test AppleScript did not contain a staging path");
+        writeFileSync(match[1], "payload", { flag: "wx", mode: 0o600 });
+        return { success: true, output: "ok" };
+      }
       return { success: false, output: "", error: "unexpected call" };
     },
   };
@@ -23,6 +29,8 @@ const cleanup: string[] = [];
 afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
   h.calls = 0;
+  h.success = false;
+  h.output = "";
 });
 
 describe("saveAttachment path boundary", () => {
@@ -87,5 +95,19 @@ cGF5bG9hZA==
 
     expect(mgr.saveAttachment("1", "report.txt", root)).toBe(true);
     expect(statSync(join(root, "report.txt")).mode & 0o777).toBe(0o600);
+    expect(readdirSync(root)).toEqual(["report.txt"]);
+  });
+
+  it("stages AppleScript files privately and normalizes the final mode", () => {
+    const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
+    cleanup.push(root);
+    h.success = true;
+    h.output = "ok";
+
+    const mgr = new AppleMailManager();
+
+    expect(mgr.saveAttachment("1", "report.txt", root)).toBe(true);
+    expect(statSync(join(root, "report.txt")).mode & 0o777).toBe(0o600);
+    expect(readdirSync(root)).toEqual(["report.txt"]);
   });
 });

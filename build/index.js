@@ -77517,6 +77517,7 @@ var StdioServerTransport = class {
 import { spawnSync as spawnSync2 } from "child_process";
 import {
   constants as fsConstants,
+  chmodSync,
   existsSync as existsSync3,
   writeFileSync as writeFileSync3,
   readFileSync as readFileSync2,
@@ -81211,6 +81212,7 @@ ${this.errorEmit("              ")}
     if (result.success && result.output === "ok") {
       try {
         copyFileSync(temporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
+        chmodSync(target.savedPath, 384);
         cleanupTemporaryDirectory();
         return true;
       } catch (err) {
@@ -81230,12 +81232,24 @@ ${this.errorEmit("              ")}
       console.error(`Failed to save attachment: "${attachmentName}" not found in MIME source`);
       return false;
     }
+    let mimeTemporaryDirectory;
     try {
-      writeFileSync3(target.savedPath, attachment.data, { flag: "wx", mode: 384 });
+      mimeTemporaryDirectory = mkdtempSync2(join4(target.saveDirectory, ".apple-mail-mcp-"));
+      const mimeTemporaryPath = join4(mimeTemporaryDirectory, "attachment");
+      writeFileSync3(mimeTemporaryPath, attachment.data, { flag: "wx", mode: 384 });
+      copyFileSync(mimeTemporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
+      chmodSync(target.savedPath, 384);
       return true;
     } catch (err) {
       console.error(`Failed to write attachment to disk: ${err}`);
       return false;
+    } finally {
+      if (mimeTemporaryDirectory) {
+        try {
+          rmSync2(mimeTemporaryDirectory, { recursive: true, force: true });
+        } catch {
+        }
+      }
     }
   }
   /**
