@@ -271,6 +271,9 @@ export async function sendViaSmtp(
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    // Port 587/143-style configurations must not silently downgrade to
+    // plaintext when the server advertises no usable TLS upgrade.
+    requireTLS: !cfg.secure,
     auth: { user: cfg.user, pass: cfg.pass },
   });
 

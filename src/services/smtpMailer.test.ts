@@ -180,6 +180,7 @@ describe("sendViaSmtp", () => {
       host: "smtp.example.com",
       port: 587,
       secure: false,
+      requireTLS: true,
       auth: { user: "alice@example.com", pass: "s3cret" },
     });
 

@@ -82496,6 +82496,9 @@ async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.de
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    // Port 587/143-style configurations must not silently downgrade to
+    // plaintext when the server advertises no usable TLS upgrade.
+    requireTLS: !cfg.secure,
     auth: { user: cfg.user, pass: cfg.pass }
   });
   const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
@@ -82859,14 +82862,19 @@ function resolveImapConfig(env = process.env, account) {
   }
   return specToConfig(spec);
 }
-var defaultConnect = async (cfg) => {
-  const client = new import_imapflow.ImapFlow({
+function buildImapConnectionOptions(cfg) {
+  return {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    // ImapFlow otherwise treats STARTTLS as opportunistic when secure=false.
+    doSTARTTLS: !cfg.secure,
     auth: { user: cfg.user, pass: cfg.pass },
     logger: false
-  });
+  };
+}
+var defaultConnect = async (cfg) => {
+  const client = new import_imapflow.ImapFlow(buildImapConnectionOptions(cfg));
   client.on("error", () => {
   });
   await client.connect();
