@@ -85703,7 +85703,7 @@ registerTool(
       if (!r.success || !r.base64) {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
-      writeFileSync4(target.savedPath, Buffer.from(r.base64, "base64"), { flag: "wx" });
+      writeFileSync4(target.savedPath, Buffer.from(r.base64, "base64"), { flag: "wx", mode: 384 });
       return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`, {
         ok: true,
         attachmentName,
