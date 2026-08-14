@@ -81231,7 +81231,7 @@ ${this.errorEmit("              ")}
       return false;
     }
     try {
-      writeFileSync3(target.savedPath, attachment.data, { flag: "wx" });
+      writeFileSync3(target.savedPath, attachment.data, { flag: "wx", mode: 384 });
       return true;
     } catch (err) {
       console.error(`Failed to write attachment to disk: ${err}`);

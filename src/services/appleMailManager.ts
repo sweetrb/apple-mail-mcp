@@ -4186,7 +4186,7 @@ ${this.errorEmit("              ")}
     }
 
     try {
-      writeFileSync(target.savedPath, attachment.data, { flag: "wx" });
+      writeFileSync(target.savedPath, attachment.data, { flag: "wx", mode: 0o600 });
       return true;
     } catch (err) {
       console.error(`Failed to write attachment to disk: ${err}`);

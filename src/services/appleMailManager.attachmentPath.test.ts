@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 
@@ -69,5 +69,23 @@ describe("saveAttachment path boundary", () => {
     expect(result.success).toBe(true);
     expect(Buffer.from(result.base64 as string, "base64").toString()).toBe("payload");
     expect(save.mock.calls[0][2]).not.toMatch(/report\.txt$/);
+  });
+
+  it("creates MIME fallback files with owner-only permissions", () => {
+    const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
+    cleanup.push(root);
+    const mgr = new AppleMailManager();
+    vi.spyOn(mgr, "getRawSource").mockReturnValue(`Content-Type: multipart/mixed; boundary="b"
+
+--b
+Content-Type: text/plain
+Content-Disposition: attachment; filename="report.txt"
+Content-Transfer-Encoding: base64
+
+cGF5bG9hZA==
+--b--`);
+
+    expect(mgr.saveAttachment("1", "report.txt", root)).toBe(true);
+    expect(statSync(join(root, "report.txt")).mode & 0o777).toBe(0o600);
   });
 });
