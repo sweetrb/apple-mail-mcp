@@ -1549,6 +1549,13 @@ AI: [calls move-message for each, with mailbox="Archive"]
 
 ---
 
+## Documentation
+
+- [Threat model](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/THREAT-MODEL.md)
+- [IMAP / SMTP setup guide](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md)
+- [Node runtime and TCC permissions](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/NODE-RUNTIME-AND-TCC-PERMISSIONS.md)
+- [Stability and performance audit](https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/STABILITY-PERF-AUDIT-2026-06-17.md)
+
 ## Installation Options
 
 ### npm (Recommended)
