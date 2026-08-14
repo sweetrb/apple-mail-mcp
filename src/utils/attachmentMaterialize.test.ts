@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "fs";
 import { isAbsolute, join } from "path";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
 
 describe("materializeAttachments (B4)", () => {
@@ -59,14 +59,7 @@ describe("materializeAttachments (B4)", () => {
   });
 
   it("rejects an existing path outside the default user-content roots", () => {
-    const dir = mkdtempSync(join(homedir(), ".amcp-attachment-read-test-"));
-    try {
-      const secret = join(dir, "secret.txt");
-      writeFileSync(secret, "private");
-      expect(() => materializeAttachments([secret])).toThrow(/outside the allowed read roots/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(() => materializeAttachments(["/etc/hosts"])).toThrow(/outside the allowed read roots/);
   });
 
   it("throws when inline content is missing fields", () => {

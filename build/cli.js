@@ -11913,20 +11913,31 @@ import { realpathSync, statSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { delimiter, isAbsolute, join, resolve, sep } from "path";
 var ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
-var DEFAULT_ATTACHMENT_READ_ROOTS = [
-  join(homedir(), "Desktop"),
-  join(homedir(), "Documents"),
-  join(homedir(), "Downloads"),
-  tmpdir(),
-  "/tmp",
-  "/private/tmp"
+var DEFAULT_ATTACHMENT_READ_ROOTS = [homedir(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
+var SENSITIVE_HOME_ROOTS = [
+  join(homedir(), ".ssh"),
+  join(homedir(), ".aws"),
+  join(homedir(), ".config", "gh"),
+  join(homedir(), "Library", "Keychains")
 ];
 function isWithinRoot(candidate, root) {
   return candidate === root || candidate.startsWith(root + sep);
 }
+function hasHiddenPathSegment(candidate) {
+  return candidate.split(sep).some((segment) => segment.startsWith(".") && segment.length > 1);
+}
+function isProtectedPath(candidate) {
+  if (hasHiddenPathSegment(candidate)) return true;
+  if (SENSITIVE_HOME_ROOTS.some((root) => isWithinRoot(candidate, root))) return true;
+  const home = resolve(homedir());
+  if (!isWithinRoot(candidate, home)) return false;
+  const relative = candidate.slice(home.length).split(sep).filter(Boolean);
+  return relative.length >= 4 && relative[0].toLowerCase() === "library" && relative[1].toLowerCase() === "application support" && relative.at(-1)?.toLowerCase() === "config.json";
+}
 function configuredRoots(env) {
   const raw = env[ATTACHMENT_READ_ROOTS_ENV];
-  const requested = raw === void 0 ? DEFAULT_ATTACHMENT_READ_ROOTS : raw.split(delimiter).map((root) => root.trim()).filter(Boolean);
+  const extraRoots = raw === void 0 ? [] : raw.split(delimiter).map((root) => root.trim()).filter(Boolean);
+  const requested = [...DEFAULT_ATTACHMENT_READ_ROOTS, ...extraRoots];
   for (const root of requested) {
     if (!isAbsolute(root)) {
       throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
@@ -11960,9 +11971,14 @@ function resolveAttachmentReadPath(filePath, env = process.env) {
     if (error instanceof Error && error.message.includes("not a regular file")) throw error;
     throw new Error(`Attachment file not found: "${filePath}"`);
   }
+  if (isProtectedPath(canonical)) {
+    throw new Error(
+      `Attachment path is in a protected location: "${filePath}". Hidden files and credential/configuration locations cannot be sent as attachments.`
+    );
+  }
   if (!configuredRoots(env).some((root) => isWithinRoot(canonical, root))) {
     throw new Error(
-      `Attachment path is outside the allowed read roots: "${filePath}". Use Desktop, Documents, Downloads, or a temporary directory, or configure ${ATTACHMENT_READ_ROOTS_ENV}.`
+      `Attachment path is outside the allowed read roots: "${filePath}". Use an ordinary home-directory, /Volumes, or temporary path, or configure ${ATTACHMENT_READ_ROOTS_ENV} for an additional explicit root.`
     );
   }
   return canonical;

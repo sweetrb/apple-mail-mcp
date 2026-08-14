@@ -2,10 +2,11 @@
  * Filesystem boundary for outbound attachments.
  *
  * Attachment paths are read by either Mail.app or Nodemailer. Keep those
- * reads inside user-content roots by default so an absolute path supplied by
- * an untrusted caller cannot turn `send-email` or `create-draft` into an
- * arbitrary local-file disclosure primitive. Extra roots require an explicit
- * APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS setting.
+ * reads inside ordinary user-content roots by default so an absolute path
+ * supplied by an untrusted caller cannot turn `send-email` or `create-draft`
+ * into an arbitrary local-file disclosure primitive. Hidden files and known
+ * credential/configuration locations remain denied even under the home root.
+ * Extra roots require an explicit APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS setting.
  */
 import { realpathSync, statSync } from "fs";
 import { homedir, tmpdir } from "os";
@@ -13,28 +14,48 @@ import { delimiter, isAbsolute, join, resolve, sep } from "path";
 
 export const ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
 
-const DEFAULT_ATTACHMENT_READ_ROOTS = [
-  join(homedir(), "Desktop"),
-  join(homedir(), "Documents"),
-  join(homedir(), "Downloads"),
-  tmpdir(),
-  "/tmp",
-  "/private/tmp",
+const DEFAULT_ATTACHMENT_READ_ROOTS = [homedir(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
+
+const SENSITIVE_HOME_ROOTS = [
+  join(homedir(), ".ssh"),
+  join(homedir(), ".aws"),
+  join(homedir(), ".config", "gh"),
+  join(homedir(), "Library", "Keychains"),
 ];
 
 function isWithinRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(root + sep);
 }
 
+function hasHiddenPathSegment(candidate: string): boolean {
+  return candidate.split(sep).some((segment) => segment.startsWith(".") && segment.length > 1);
+}
+
+function isProtectedPath(candidate: string): boolean {
+  if (hasHiddenPathSegment(candidate)) return true;
+  if (SENSITIVE_HOME_ROOTS.some((root) => isWithinRoot(candidate, root))) return true;
+
+  const home = resolve(homedir());
+  if (!isWithinRoot(candidate, home)) return false;
+  const relative = candidate.slice(home.length).split(sep).filter(Boolean);
+  return (
+    relative.length >= 4 &&
+    relative[0].toLowerCase() === "library" &&
+    relative[1].toLowerCase() === "application support" &&
+    relative.at(-1)?.toLowerCase() === "config.json"
+  );
+}
+
 function configuredRoots(env: NodeJS.ProcessEnv): string[] {
   const raw = env[ATTACHMENT_READ_ROOTS_ENV];
-  const requested =
+  const extraRoots =
     raw === undefined
-      ? DEFAULT_ATTACHMENT_READ_ROOTS
+      ? []
       : raw
           .split(delimiter)
           .map((root) => root.trim())
           .filter(Boolean);
+  const requested = [...DEFAULT_ATTACHMENT_READ_ROOTS, ...extraRoots];
 
   for (const root of requested) {
     if (!isAbsolute(root)) {
@@ -86,10 +107,17 @@ export function resolveAttachmentReadPath(
     throw new Error(`Attachment file not found: "${filePath}"`);
   }
 
+  if (isProtectedPath(canonical)) {
+    throw new Error(
+      `Attachment path is in a protected location: "${filePath}". ` +
+        "Hidden files and credential/configuration locations cannot be sent as attachments."
+    );
+  }
+
   if (!configuredRoots(env).some((root) => isWithinRoot(canonical, root))) {
     throw new Error(
       `Attachment path is outside the allowed read roots: "${filePath}". ` +
-        `Use Desktop, Documents, Downloads, or a temporary directory, or configure ${ATTACHMENT_READ_ROOTS_ENV}.`
+        `Use an ordinary home-directory, /Volumes, or temporary path, or configure ${ATTACHMENT_READ_ROOTS_ENV} for an additional explicit root.`
     );
   }
 

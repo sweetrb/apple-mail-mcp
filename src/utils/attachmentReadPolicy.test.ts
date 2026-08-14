@@ -19,42 +19,54 @@ describe("outbound attachment read policy", () => {
     }
   });
 
-  it("rejects a regular file in an unconfigured home-directory location", () => {
-    const dir = mkdtempSync(join(homedir(), ".amcp-read-policy-"));
+  it("allows a regular file in an ordinary home-directory location", () => {
+    const dir = mkdtempSync(join(homedir(), "amcp-read-policy-"));
     try {
       const file = join(dir, "private.txt");
       writeFileSync(file, "private");
-      expect(() => resolveAttachmentReadPath(file)).toThrow(/outside the allowed read roots/);
+      expect(resolveAttachmentReadPath(file)).toBe(realpathSync(file));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("authorizes an explicit absolute root without widening the default policy", () => {
+  it("rejects hidden home-directory paths by default", () => {
     const dir = mkdtempSync(join(homedir(), ".amcp-read-policy-"));
     try {
       const file = join(dir, "selected.txt");
-      writeFileSync(file, "selected");
-      expect(resolveAttachmentReadPath(file, { [ATTACHMENT_READ_ROOTS_ENV]: dir })).toBe(
-        realpathSync(file)
-      );
+      writeFileSync(file, "secret");
+      expect(() => resolveAttachmentReadPath(file)).toThrow(/protected location/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("rejects application config files under the home Library", () => {
+    const dir = mkdtempSync(join(homedir(), "Library", "Application Support", "amcp-read-policy-"));
+    try {
+      const file = join(dir, "config.json");
+      writeFileSync(file, "{}");
+      expect(() => resolveAttachmentReadPath(file)).toThrow(/protected location/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("authorizes an explicit absolute root outside the defaults", () => {
+    const file = "/etc/hosts";
+    expect(resolveAttachmentReadPath(file, { [ATTACHMENT_READ_ROOTS_ENV]: "/etc" })).toBe(
+      realpathSync(file)
+    );
   });
 
   it("rejects a symlink that resolves outside an allowed temporary root", () => {
     const allowed = mkdtempSync(join(tmpdir(), "amcp-read-policy-"));
-    const outside = mkdtempSync(join(homedir(), ".amcp-read-policy-"));
     try {
-      const secret = join(outside, "secret.txt");
       const link = join(allowed, "link.txt");
-      writeFileSync(secret, "secret");
-      symlinkSync(secret, link);
+      symlinkSync("/etc/hosts", link);
       expect(() => resolveAttachmentReadPath(link)).toThrow(/outside the allowed read roots/);
     } finally {
       rmSync(allowed, { recursive: true, force: true });
-      rmSync(outside, { recursive: true, force: true });
     }
   });
 });

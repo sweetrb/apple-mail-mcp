@@ -71,10 +71,7 @@ describe("attachment path boundaries", () => {
 ||||||| parent of 3dcdbf1 (fix: constrain outbound attachment reads)
 =======
   it("rejects an outbound attachment outside the default read roots", () => {
-    const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
-    cleanup.push(root);
-    const file = join(root, "private.txt");
-    writeFileSync(file, "private");
+    const file = "/etc/hosts";
 
     const mgr = new AppleMailManager();
     expect(() =>
