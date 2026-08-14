@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+## [2.10.31] - 2026-08-14
+
+### Fixed
+
+- **Batch operations scoped to a disabled account are now refused instead of half-applied.**
+  `disabledAccountGuard` was consulted by the single-message paths but never by
+  `runBatchOperation`, so a batch pinned to an account that is switched off in Mail went
+  straight to AppleScript, failed server-side with AppleEvent -10000, and could leave a
+  mailbox partially changed. The guard still fails **open** — an inconclusive probe never
+  blocks a valid operation. Closes item 3 of #156.
+
+### Changed
+
+- **The two destructive batch tool handlers moved into `src/tools/batchMutations.ts`.**
+  `sourceMailbox`/`sourceAccount` were forwarded into the manager by code inside
+  `index.ts`, which opens a stdio transport at import and therefore cannot be loaded by a
+  unit test — so transposing the two fields, or dropping one, passed the entire suite.
+  The handlers now take an injected dependency bundle, and the forwarding (including that
+  a move's destination `account` stays distinct from `sourceAccount`) is asserted directly.
+  No behaviour change. Closes item 4 of #156.
+
 ## [2.10.30] - 2026-08-14
 
 ### Fixed

@@ -3661,6 +3661,19 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (resolved.kind === "unresolvable") {
       return operands.map((id) => ({ id, success: false, error: resolved.error }));
     }
+    // #156 item 3. `runBatchOperation` never consulted this guard, so a batch
+    // scoped to a disabled account went straight to AppleScript, failed
+    // server-side with AppleEvent -10000, and could leave a mailbox half-changed
+    // — the exact case disabledAccountGuard exists to refuse up front for the
+    // single-message paths. The guard fails OPEN (an inconclusive probe returns
+    // null), so this cannot block an operation on an account whose state Mail
+    // will not report.
+    if (resolved.kind === "scoped") {
+      const disabled = this.disabledAccountGuard(resolved.account);
+      if (disabled) {
+        return operands.map((id) => ({ id, success: false, error: disabled }));
+      }
+    }
     const callerScope = resolved.kind === "scoped" ? resolved : undefined;
 
     // Group the ids by the mailbox they were listed from. Each group opens that
