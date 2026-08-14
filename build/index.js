@@ -81166,9 +81166,21 @@ ${this.errorEmit("              ")}
       return false;
     }
     const safeName = escapeForAppleScript(attachmentName);
-    const temporaryName = `.apple-mail-mcp-${randomUUID()}.attachment`;
-    const temporaryPath = resolve(target.saveDirectory, temporaryName);
+    let temporaryDirectory;
+    try {
+      temporaryDirectory = mkdtempSync2(join4(target.saveDirectory, ".apple-mail-mcp-"));
+    } catch (error2) {
+      console.error(`Failed to create attachment staging directory: ${error2}`);
+      return false;
+    }
+    const temporaryPath = join4(temporaryDirectory, "attachment");
     const safeTemporaryPath = escapeForAppleScript(temporaryPath);
+    const cleanupTemporaryDirectory = () => {
+      try {
+        rmSync2(temporaryDirectory, { recursive: true, force: true });
+      } catch {
+      }
+    };
     const numericId = Number(id);
     const script = buildAppLevelScript(`
       try
@@ -81199,21 +81211,15 @@ ${this.errorEmit("              ")}
     if (result.success && result.output === "ok") {
       try {
         copyFileSync(temporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
-        unlinkSync(temporaryPath);
+        cleanupTemporaryDirectory();
         return true;
       } catch (err) {
-        try {
-          if (existsSync3(temporaryPath)) unlinkSync(temporaryPath);
-        } catch {
-        }
+        cleanupTemporaryDirectory();
         console.error(`Failed to commit attachment to disk: ${err}`);
         return false;
       }
     }
-    try {
-      if (existsSync3(temporaryPath)) unlinkSync(temporaryPath);
-    } catch {
-    }
+    cleanupTemporaryDirectory();
     const rawSource = this.getRawSource(id);
     if (!rawSource) {
       console.error(`Failed to save attachment: could not retrieve message source`);

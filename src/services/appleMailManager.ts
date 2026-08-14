@@ -4105,9 +4105,25 @@ ${this.errorEmit("              ")}
     }
 
     const safeName = escapeForAppleScript(attachmentName);
-    const temporaryName = `.apple-mail-mcp-${randomUUID()}.attachment`;
-    const temporaryPath = resolve(target.saveDirectory, temporaryName);
+    let temporaryDirectory: string;
+    try {
+      // Mail.app writes the attachment into a private directory created with
+      // mkdtempSync, so another process cannot pre-create or swap the staging
+      // path before COPYFILE_EXCL commits it to the caller's destination.
+      temporaryDirectory = mkdtempSync(join(target.saveDirectory, ".apple-mail-mcp-"));
+    } catch (error) {
+      console.error(`Failed to create attachment staging directory: ${error}`);
+      return false;
+    }
+    const temporaryPath = join(temporaryDirectory, "attachment");
     const safeTemporaryPath = escapeForAppleScript(temporaryPath);
+    const cleanupTemporaryDirectory = () => {
+      try {
+        rmSync(temporaryDirectory, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup; the destination was not replaced by cleanup.
+      }
+    };
     const numericId = Number(id);
 
     // Attempt 1: AppleScript save
@@ -4145,24 +4161,16 @@ ${this.errorEmit("              ")}
         // closes the check/use race if another process creates the destination
         // while Mail.app is saving the attachment to its private temp path.
         copyFileSync(temporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
-        unlinkSync(temporaryPath);
+        cleanupTemporaryDirectory();
         return true;
       } catch (err) {
-        try {
-          if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
-        } catch {
-          // Best-effort cleanup; the destination was not replaced.
-        }
+        cleanupTemporaryDirectory();
         console.error(`Failed to commit attachment to disk: ${err}`);
         return false;
       }
     }
 
-    try {
-      if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
-    } catch {
-      // Best-effort cleanup before the MIME fallback.
-    }
+    cleanupTemporaryDirectory();
 
     // Attempt 2: MIME source fallback
     const rawSource = this.getRawSource(id);
