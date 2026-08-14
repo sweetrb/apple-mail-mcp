@@ -80959,6 +80959,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (resolved.kind === "unresolvable") {
       return operands.map((id) => ({ id, success: false, error: resolved.error }));
     }
+    if (resolved.kind === "scoped") {
+      const disabled = this.disabledAccountGuard(resolved.account);
+      if (disabled) {
+        return operands.map((id) => ({ id, success: false, error: disabled }));
+      }
+    }
     const callerScope = resolved.kind === "scoped" ? resolved : void 0;
     const groups = /* @__PURE__ */ new Map();
     const unlocated = [];
@@ -84006,6 +84012,72 @@ ${warnings.join("\n")}` : "";
   return successResponse(`${messages.partial(success, fail)}${suffix}${warn}`, structured);
 }
 
+// src/tools/batchMutations.ts
+function toManagerScope(args) {
+  return { account: args.sourceAccount, mailbox: args.sourceMailbox };
+}
+async function runBatchDelete(deps, args) {
+  const { ids, sourceMailbox, sourceAccount } = args;
+  let forensics = { warnings: [] };
+  const counts = await hybridBatchCounts(
+    ids,
+    (n) => {
+      const res = deps.batchDeleteMessages(n, toManagerScope({ sourceAccount, sourceMailbox }));
+      forensics = deps.collectForensics("batch-delete-messages", {
+        ids,
+        sourceMailbox,
+        sourceAccount
+      });
+      return res;
+    },
+    (im) => deps.imapBatchDelete(im)
+  );
+  return batchResponse(
+    counts,
+    {
+      allSucceeded: (n) => `Successfully deleted ${n} message(s)`,
+      allFailed: (n) => `Failed to delete all ${n} message(s)`,
+      partial: (ok, failed) => `Deleted ${ok} message(s), ${failed} failed`
+    },
+    forensics.countDelta ? { countDelta: forensics.countDelta } : {},
+    forensics.warnings
+  );
+}
+async function runBatchMove(deps, args) {
+  const { ids, mailbox, account, sourceMailbox, sourceAccount } = args;
+  let forensics = { warnings: [] };
+  const counts = await hybridBatchCounts(
+    ids,
+    (n) => {
+      const res = deps.batchMoveMessages(
+        n,
+        mailbox,
+        account,
+        toManagerScope({ sourceAccount, sourceMailbox })
+      );
+      forensics = deps.collectForensics("batch-move-messages", {
+        ids,
+        mailbox,
+        account,
+        sourceMailbox,
+        sourceAccount
+      });
+      return res;
+    },
+    (im) => deps.imapBatchMove(im, mailbox, { account })
+  );
+  return batchResponse(
+    counts,
+    {
+      allSucceeded: (n) => `Successfully moved ${n} message(s) to "${mailbox}"`,
+      allFailed: (n) => `Failed to move all ${n} message(s)`,
+      partial: (ok, failed) => `Moved ${ok} message(s) to "${mailbox}", ${failed} failed`
+    },
+    { mailbox, ...forensics.countDelta ? { countDelta: forensics.countDelta } : {} },
+    forensics.warnings
+  );
+}
+
 // src/services/imapMultiAccount.ts
 function normalizeMessageId2(row) {
   const raw = typeof row.messageId === "string" ? row.messageId.trim() : "";
@@ -85578,6 +85650,13 @@ ${warnings.join("\n")}` : ""}`,
     "Error moving message"
   )
 );
+var batchMutationDeps = {
+  batchDeleteMessages: (ids, scope) => mailManager.batchDeleteMessages(ids, scope),
+  batchMoveMessages: (ids, mailbox, account, scope) => mailManager.batchMoveMessages(ids, mailbox, account, scope),
+  imapBatchDelete: (ids) => imapBatchDelete(ids),
+  imapBatchMove: (ids, mailbox, opts) => imapBatchMove(ids, mailbox, opts),
+  collectForensics: (tool, args) => collectForensics(tool, args)
+};
 registerTool(
   "batch-delete-messages",
   {
@@ -85589,35 +85668,10 @@ registerTool(
     },
     outputSchema: { ...BATCH_COUNT_OUTPUT_SCHEMA, countDelta: COUNT_DELTA_OUTPUT_SCHEMA }
   },
-  withErrorHandling(async ({ ids, sourceMailbox, sourceAccount }) => {
-    let forensics = { warnings: [] };
-    const counts = await hybridBatchCounts(
-      ids,
-      (n) => {
-        const res = mailManager.batchDeleteMessages(n, {
-          account: sourceAccount,
-          mailbox: sourceMailbox
-        });
-        forensics = collectForensics("batch-delete-messages", {
-          ids,
-          sourceMailbox,
-          sourceAccount
-        });
-        return res;
-      },
-      (im) => imapBatchDelete(im)
-    );
-    return batchResponse(
-      counts,
-      {
-        allSucceeded: (n) => `Successfully deleted ${n} message(s)`,
-        allFailed: (n) => `Failed to delete all ${n} message(s)`,
-        partial: (ok, failed) => `Deleted ${ok} message(s), ${failed} failed`
-      },
-      forensics.countDelta ? { countDelta: forensics.countDelta } : {},
-      forensics.warnings
-    );
-  }, "Error batch deleting messages")
+  withErrorHandling(
+    async ({ ids, sourceMailbox, sourceAccount }) => runBatchDelete(batchMutationDeps, { ids, sourceMailbox, sourceAccount }),
+    "Error batch deleting messages"
+  )
 );
 registerTool(
   "batch-move-messages",
@@ -85632,37 +85686,10 @@ registerTool(
     },
     outputSchema: { ...BATCH_COUNT_OUTPUT_SCHEMA, countDelta: COUNT_DELTA_OUTPUT_SCHEMA }
   },
-  withErrorHandling(async ({ ids, mailbox, account, sourceMailbox, sourceAccount }) => {
-    let forensics = { warnings: [] };
-    const counts = await hybridBatchCounts(
-      ids,
-      (n) => {
-        const res = mailManager.batchMoveMessages(n, mailbox, account, {
-          account: sourceAccount,
-          mailbox: sourceMailbox
-        });
-        forensics = collectForensics("batch-move-messages", {
-          ids,
-          mailbox,
-          account,
-          sourceMailbox,
-          sourceAccount
-        });
-        return res;
-      },
-      (im) => imapBatchMove(im, mailbox, { account })
-    );
-    return batchResponse(
-      counts,
-      {
-        allSucceeded: (n) => `Successfully moved ${n} message(s) to "${mailbox}"`,
-        allFailed: (n) => `Failed to move all ${n} message(s)`,
-        partial: (ok, failed) => `Moved ${ok} message(s) to "${mailbox}", ${failed} failed`
-      },
-      { mailbox, ...forensics.countDelta ? { countDelta: forensics.countDelta } : {} },
-      forensics.warnings
-    );
-  }, "Error batch moving messages")
+  withErrorHandling(
+    async ({ ids, mailbox, account, sourceMailbox, sourceAccount }) => runBatchMove(batchMutationDeps, { ids, mailbox, account, sourceMailbox, sourceAccount }),
+    "Error batch moving messages"
+  )
 );
 registerTool(
   "batch-mark-as-read",
