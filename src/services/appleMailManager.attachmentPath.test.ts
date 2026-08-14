@@ -47,6 +47,16 @@ describe("saveAttachment path boundary", () => {
     expect(h.calls).toBe(0);
   });
 
+  it("rejects an existing regular-file destination", () => {
+    const root = mkdtempSync(join(tmpdir(), "apple-mail-mcp-test-"));
+    cleanup.push(root);
+    writeFileSync(join(root, "hosts"), "keep me");
+
+    const mgr = new AppleMailManager();
+    expect(mgr.saveAttachment("1", "hosts", root)).toBe(false);
+    expect(h.calls).toBe(0);
+  });
+
   it("uses a temporary directory when fetching attachment bytes", () => {
     const mgr = new AppleMailManager();
     const save = vi.spyOn(mgr, "saveAttachment").mockImplementation((_id, name, directory) => {

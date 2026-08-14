@@ -77516,6 +77516,7 @@ var StdioServerTransport = class {
 // src/services/appleMailManager.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import {
+  constants as fsConstants,
   existsSync as existsSync3,
   writeFileSync as writeFileSync3,
   readFileSync as readFileSync2,
@@ -78375,8 +78376,11 @@ function resolveAttachmentSaveTarget(savePath, attachmentName) {
   if (!isPathWithinAllowedRoots(savedPath)) {
     throw new Error(`Output path "${savedPath}" is outside allowed directories`);
   }
-  if (existsSync3(savedPath) && lstatSync(savedPath).isSymbolicLink()) {
-    throw new Error(`Refusing to overwrite symbolic link "${savedPath}"`);
+  if (existsSync3(savedPath)) {
+    if (lstatSync(savedPath).isSymbolicLink()) {
+      throw new Error(`Refusing to overwrite symbolic link "${savedPath}"`);
+    }
+    throw new Error(`Refusing to overwrite existing file "${savedPath}"`);
   }
   return { saveDirectory, savedPath };
 }
@@ -81162,7 +81166,9 @@ ${this.errorEmit("              ")}
       return false;
     }
     const safeName = escapeForAppleScript(attachmentName);
-    const safePath = escapeForAppleScript(target.saveDirectory);
+    const temporaryName = `.apple-mail-mcp-${randomUUID()}.attachment`;
+    const temporaryPath = resolve(target.saveDirectory, temporaryName);
+    const safeTemporaryPath = escapeForAppleScript(temporaryPath);
     const numericId = Number(id);
     const script = buildAppLevelScript(`
       try
@@ -81174,7 +81180,7 @@ ${this.errorEmit("              ")}
                 set msg to item 1 of matchingMsgs
                 repeat with att in mail attachments of msg
                   if name of att is "${safeName}" then
-                    set savePath to POSIX file "${safePath}/${safeName}"
+                    set savePath to POSIX file "${safeTemporaryPath}"
                     save att in savePath
                     return "ok"
                   end if
@@ -81191,7 +81197,22 @@ ${this.errorEmit("              ")}
     `);
     const result = executeAppleScript(script, { timeoutMs: 6e4 });
     if (result.success && result.output === "ok") {
-      return true;
+      try {
+        copyFileSync(temporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
+        unlinkSync(temporaryPath);
+        return true;
+      } catch (err) {
+        try {
+          if (existsSync3(temporaryPath)) unlinkSync(temporaryPath);
+        } catch {
+        }
+        console.error(`Failed to commit attachment to disk: ${err}`);
+        return false;
+      }
+    }
+    try {
+      if (existsSync3(temporaryPath)) unlinkSync(temporaryPath);
+    } catch {
     }
     const rawSource = this.getRawSource(id);
     if (!rawSource) {
@@ -81204,7 +81225,7 @@ ${this.errorEmit("              ")}
       return false;
     }
     try {
-      writeFileSync3(target.savedPath, attachment.data);
+      writeFileSync3(target.savedPath, attachment.data, { flag: "wx" });
       return true;
     } catch (err) {
       console.error(`Failed to write attachment to disk: ${err}`);
@@ -85676,7 +85697,7 @@ registerTool(
       if (!r.success || !r.base64) {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
-      writeFileSync4(target.savedPath, Buffer.from(r.base64, "base64"));
+      writeFileSync4(target.savedPath, Buffer.from(r.base64, "base64"), { flag: "wx" });
       return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`, {
         ok: true,
         attachmentName,

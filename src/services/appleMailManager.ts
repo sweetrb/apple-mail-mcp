@@ -15,6 +15,7 @@
 
 import { spawnSync } from "child_process";
 import {
+  constants as fsConstants,
   existsSync,
   writeFileSync,
   readFileSync,
@@ -339,8 +340,11 @@ export function resolveAttachmentSaveTarget(
   if (!isPathWithinAllowedRoots(savedPath)) {
     throw new Error(`Output path "${savedPath}" is outside allowed directories`);
   }
-  if (existsSync(savedPath) && lstatSync(savedPath).isSymbolicLink()) {
-    throw new Error(`Refusing to overwrite symbolic link "${savedPath}"`);
+  if (existsSync(savedPath)) {
+    if (lstatSync(savedPath).isSymbolicLink()) {
+      throw new Error(`Refusing to overwrite symbolic link "${savedPath}"`);
+    }
+    throw new Error(`Refusing to overwrite existing file "${savedPath}"`);
   }
 
   return { saveDirectory, savedPath };
@@ -4101,7 +4105,9 @@ ${this.errorEmit("              ")}
     }
 
     const safeName = escapeForAppleScript(attachmentName);
-    const safePath = escapeForAppleScript(target.saveDirectory);
+    const temporaryName = `.apple-mail-mcp-${randomUUID()}.attachment`;
+    const temporaryPath = resolve(target.saveDirectory, temporaryName);
+    const safeTemporaryPath = escapeForAppleScript(temporaryPath);
     const numericId = Number(id);
 
     // Attempt 1: AppleScript save
@@ -4115,7 +4121,7 @@ ${this.errorEmit("              ")}
                 set msg to item 1 of matchingMsgs
                 repeat with att in mail attachments of msg
                   if name of att is "${safeName}" then
-                    set savePath to POSIX file "${safePath}/${safeName}"
+                    set savePath to POSIX file "${safeTemporaryPath}"
                     save att in savePath
                     return "ok"
                   end if
@@ -4134,7 +4140,28 @@ ${this.errorEmit("              ")}
     const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (result.success && result.output === "ok") {
-      return true;
+      try {
+        // The preflight above prevents ordinary overwrites. COPYFILE_EXCL also
+        // closes the check/use race if another process creates the destination
+        // while Mail.app is saving the attachment to its private temp path.
+        copyFileSync(temporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
+        unlinkSync(temporaryPath);
+        return true;
+      } catch (err) {
+        try {
+          if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+        } catch {
+          // Best-effort cleanup; the destination was not replaced.
+        }
+        console.error(`Failed to commit attachment to disk: ${err}`);
+        return false;
+      }
+    }
+
+    try {
+      if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+    } catch {
+      // Best-effort cleanup before the MIME fallback.
     }
 
     // Attempt 2: MIME source fallback
@@ -4151,7 +4178,7 @@ ${this.errorEmit("              ")}
     }
 
     try {
-      writeFileSync(target.savedPath, attachment.data);
+      writeFileSync(target.savedPath, attachment.data, { flag: "wx" });
       return true;
     } catch (err) {
       console.error(`Failed to write attachment to disk: ${err}`);
