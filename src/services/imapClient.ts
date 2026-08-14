@@ -29,6 +29,7 @@ import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
+import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
 
 export const IMAP_ENV = {
   user: "APPLE_MAIL_MCP_IMAP_USER",
@@ -1440,9 +1441,19 @@ function collectAttachments(node: ImapBodyStructure, out: AttachmentPart[] = [])
   return out;
 }
 
-async function streamToBuffer(content: AsyncIterable<Uint8Array>): Promise<Buffer> {
+async function streamToBuffer(
+  content: AsyncIterable<Uint8Array>,
+  maxBytes: number
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of content) chunks.push(Buffer.from(chunk));
+  let total = 0;
+  for await (const chunk of content) {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`);
+    }
+    chunks.push(Buffer.from(chunk));
+  }
   return Buffer.concat(chunks);
 }
 
@@ -1496,14 +1507,24 @@ export async function imapFetchAttachment(
         error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`,
       };
     }
-    const dl = await client.download(String(ref.uid), match.part, { uid: true });
-    const buf = await streamToBuffer(dl.content);
-    return {
-      success: true,
-      base64: buf.toString("base64"),
-      bytes: buf.length,
-      mimeType: match.mimeType,
-    };
+    if (match.size > MAX_IMAP_ATTACHMENT_BYTES) {
+      return {
+        success: false,
+        error: `IMAP attachment "${attachmentName}" is ${match.size} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`,
+      };
+    }
+    try {
+      const dl = await client.download(String(ref.uid), match.part, { uid: true });
+      const buf = await streamToBuffer(dl.content, MAX_IMAP_ATTACHMENT_BYTES);
+      return {
+        success: true,
+        base64: buf.toString("base64"),
+        bytes: buf.length,
+        mimeType: match.mimeType,
+      };
+    } catch (e) {
+      return { success: false, error: `IMAP attachment fetch failed: ${errText(e)}` };
+    }
   });
 }
 

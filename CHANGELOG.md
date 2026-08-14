@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.10.21] - 2026-08-14
+
+### Fixed
+
+- **IMAP attachment fetches are capped at 25 MiB, matching inline attachment limits.** Declared oversized parts are rejected before download, and streamed data is bounded even when the server's BODYSTRUCTURE size is missing or inaccurate.
+
 ## [2.10.17] - 2026-08-13
 
 Instrumentation for [#155](https://github.com/sweetrb/apple-mail-mcp/issues/155) — the unexplained residual from #152, where a batch delete removed two messages whose ids were never passed. #153/#154 fixed a real mis-targeting defect, but that mechanism explains acting on the wrong *copy of a listed message*; it does not explain acting on a message nobody named. That symptom is unreproducible today for one reason: **a destructive operation reported success because the AppleScript did not throw, never because a message was observed to go away.** This release makes every delete and move check its own effect.

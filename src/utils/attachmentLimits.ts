@@ -1,6 +1,9 @@
 /** Maximum decoded size of one inline attachment (25 MiB). */
 export const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
+/** Maximum size fetched from IMAP for one attachment (25 MiB). */
+export const MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
+
 /** Maximum base64 length capable of representing the decoded byte limit. */
 export const MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
 

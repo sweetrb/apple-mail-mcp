@@ -37,6 +37,7 @@ import {
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
+import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
 
 const cfg: ImapConfig = {
   host: "imap.gmail.com",
@@ -1007,6 +1008,61 @@ describe("attachments via BODYSTRUCTURE (I1)", () => {
     expect(r.success).toBe(true);
     expect(Buffer.from(r.base64 as string, "base64").toString()).toBe("bytes-of-2");
     expect(r.mimeType).toBe("application/pdf");
+  });
+
+  it("rejects a BODYSTRUCTURE attachment above the fetch limit before downloading", async () => {
+    let downloaded = false;
+    const base = attClient();
+    const client: ImapClientLike = {
+      ...base,
+      fetchOne: async () => ({
+        uid: 9,
+        bodyStructure: {
+          type: "multipart/mixed",
+          childNodes: [
+            {
+              part: "2",
+              type: "application/pdf",
+              disposition: "attachment",
+              dispositionParameters: { filename: "report.pdf" },
+              size: MAX_IMAP_ATTACHMENT_BYTES + 1,
+            },
+          ],
+        },
+      }),
+      download: async () => {
+        downloaded = true;
+        return { content: (async function* () {})() };
+      },
+    };
+
+    const r = await imapFetchAttachment(MID, "report.pdf", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/25 MiB/i);
+    expect(downloaded).toBe(false);
+  });
+
+  it("stops a streamed attachment when it crosses the fetch limit", async () => {
+    const base = attClient();
+    const client: ImapClientLike = {
+      ...base,
+      download: async () => ({
+        content: (async function* () {
+          yield Buffer.alloc(MAX_IMAP_ATTACHMENT_BYTES);
+          yield Buffer.from([0]);
+        })(),
+      }),
+    };
+
+    const r = await imapFetchAttachment(MID, "report.pdf", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/25 MiB/i);
   });
 
   it("errors clearly when the attachment name isn't found", async () => {
