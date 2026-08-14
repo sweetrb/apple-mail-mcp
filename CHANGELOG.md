@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [2.10.25] - 2026-08-14
+
+### Fixed
+
+- **Numeric message reads now refuse ambiguous ids instead of choosing an arbitrary copy.**
+  The manager uses the caller's account/mailbox hint or remembered location first,
+  then scans all mailboxes only when needed. A full scan with zero matches returns
+  not-found; multiple matches return the same actionable ambiguity error as the
+  batch mutation path, and the tool layer surfaces that diagnostic to the caller.
+
 ## [2.10.24] - 2026-08-14
 
 ### Changed
