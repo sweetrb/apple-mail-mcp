@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [2.10.28] - 2026-08-14
+
 ### Security
 
 - **Non-implicit-TLS mail connections now fail closed.** SMTP requires STARTTLS
