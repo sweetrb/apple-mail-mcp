@@ -133,6 +133,7 @@ const DIAG_ITEM_SEP = "\x1dM\x1d"; // between diagnostics list items
 const CONTENT_MARKER = "\x1dCONTENT\x1d"; // subject/plain-text boundary
 const MSGID_MARKER = "\x1dMSGID\x1d"; // subject/RFC-Message-ID boundary (get-message content)
 const HTML_MARKER = "\x1dHTML\x1d"; // plain-text/source boundary
+const LOOKUP_ERROR_MARKER = "\x1dERR\x1d"; // GS-wrapped — by-id lookup failure; must not be a bare text prefix because the success payload of the same script leads with the sender-controlled subject
 const BATCH_FATAL = "\x1dFATAL\x1d"; // prefix for a whole-batch failure (e.g. bad destination)
 /**
  * Forensic record tags (#155). These ride in the SAME delimited stream as the
@@ -2277,8 +2278,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end try
           end repeat
         end repeat
-        if (count of _hits) is 0 then return "error:Message not found"
-        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
+        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
         if (count of _hits) is 1 then
           set msg to item 1 of _hits
           ${innerFetch}
@@ -2311,8 +2312,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return null;
     }
 
-    if (result.output.startsWith("error:")) {
-      this.lastMessageLookupError = result.output.slice("error:".length).trim();
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+      this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       return null;
     }
 
@@ -2371,11 +2372,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         "return source of msg"
       );
       const scoped = executeAppleScript(scopedScript, { timeoutMs: 120000 });
-      if (scoped.success && scoped.output.trim() && !scoped.output.startsWith("error:")) {
+      if (
+        scoped.success &&
+        scoped.output.trim() &&
+        !scoped.output.startsWith(LOOKUP_ERROR_MARKER)
+      ) {
         return scoped.output;
       }
-      if (scoped.success && scoped.output.startsWith("error:")) {
-        this.lastMessageLookupError = scoped.output.slice("error:".length).trim();
+      if (scoped.success && scoped.output.startsWith(LOOKUP_ERROR_MARKER)) {
+        this.lastMessageLookupError = scoped.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       }
       // Miss (stale index) → fall through to the full scan.
     }
@@ -2395,8 +2400,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end try
           end repeat
         end repeat
-        if (count of _hits) is 0 then return "error:Message not found"
-        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
+        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
         if (count of _hits) is 1 then
           set msg to item 1 of _hits
           return source of msg
@@ -2412,8 +2417,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (!result.success || !result.output.trim()) {
       return null;
     }
-    if (result.output.startsWith("error:")) {
-      this.lastMessageLookupError = result.output.slice("error:".length).trim();
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+      this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       return null;
     }
 

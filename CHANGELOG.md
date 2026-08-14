@@ -10,6 +10,14 @@
   not-found; multiple matches return the same actionable ambiguity error as the
   batch mutation path, and the tool layer surfaces that diagnostic to the caller.
 
+- **A lookup failure is no longer signalled by a bare `error:` text prefix.** The success
+  payload of the same read script leads with the message *subject*, which is whatever the
+  sender wrote — so any message whose subject began with `error:` was reported as a failed
+  lookup and became unreadable through `get-message`, with the remainder of its own payload
+  surfaced as the error text. The failure channel is now the GS-wrapped `\x1dERR\x1d`
+  marker, matching the existing `CONTENT`/`MSGID`/`HTML` delimiters, which sender-supplied
+  text cannot forge.
+
 ## [2.10.24] - 2026-08-14
 
 ### Changed

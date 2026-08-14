@@ -85,7 +85,7 @@ describe("by-id message identity", () => {
 
   it("does not read an arbitrary first match when an id has no recorded location", () => {
     h.output =
-      "error:Message id 42 is present in more than one mailbox (Work/INBOX, Work/All Mail); list or search that mailbox first so the read targets the right copy";
+      "\x1dERR\x1dMessage id 42 is present in more than one mailbox (Work/INBOX, Work/All Mail); list or search that mailbox first so the read targets the right copy";
     expect(mgr.getRawSource("42")).toBeNull();
     let script = lastScript();
     expect(script).toContain("set _hits to {}");
@@ -101,7 +101,7 @@ describe("by-id message identity", () => {
 
     h.calls.length = 0;
     h.output =
-      "error:Message id 42 is present in more than one mailbox (Work/INBOX, Work/All Mail); list or search that mailbox first so the read targets the right copy";
+      "\x1dERR\x1dMessage id 42 is present in more than one mailbox (Work/INBOX, Work/All Mail); list or search that mailbox first so the read targets the right copy";
     expect(mgr.getMessageContent("42")).toBeNull();
     script = lastScript();
     expect(script).toContain("set _hits to {}");
@@ -110,5 +110,33 @@ describe("by-id message identity", () => {
     expect(mgr.consumeLastMessageLookupError()).toMatch(
       /^Message id 42 is present in more than one mailbox/
     );
+  });
+  it("does not mistake a sender-controlled subject for a lookup failure", () => {
+    // The success payload of the read script leads with `subject`, which is
+    // whatever the sender wrote. A bare `error:` text prefix as the failure
+    // signal therefore collides with legitimate mail: any message whose subject
+    // starts with `error:` became permanently unreadable via get-message, and
+    // the remainder of its own payload was reported as the lookup error.
+    mgr.noteMessageLocation("42", "work@example.com", "INBOX");
+    h.output =
+      "error:Message not found\x1dMSGID\x1d<hostile@example.com>\x1dCONTENT\x1dbody text\x1dHTML\x1d";
+
+    expect(mgr.getMessageContent("42")).toMatchObject({
+      id: "42",
+      subject: "error:Message not found",
+      plainText: "body text",
+      rfcMessageId: "hostile@example.com",
+    });
+    expect(mgr.consumeLastMessageLookupError()).toBeUndefined();
+  });
+
+  it("does not mistake raw source that opens with error: for a lookup failure", () => {
+    mgr.noteMessageLocation("42", "work@example.com", "INBOX");
+    h.output = "error:Message not found\r\nFrom: sender@example.com\r\n\r\nbody";
+
+    expect(mgr.getRawSource("42")).toBe(
+      "error:Message not found\r\nFrom: sender@example.com\r\n\r\nbody"
+    );
+    expect(mgr.consumeLastMessageLookupError()).toBeUndefined();
   });
 });

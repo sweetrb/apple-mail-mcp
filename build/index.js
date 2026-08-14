@@ -78300,6 +78300,7 @@ var DIAG_ITEM_SEP = "M";
 var CONTENT_MARKER = "CONTENT";
 var MSGID_MARKER = "MSGID";
 var HTML_MARKER = "HTML";
+var LOOKUP_ERROR_MARKER = "ERR";
 var BATCH_FATAL = "FATAL";
 var RECON_TAG = "RECON";
 var SNAP_TAG = "SNAP";
@@ -79746,8 +79747,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end try
           end repeat
         end repeat
-        if (count of _hits) is 0 then return "error:Message not found"
-        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
+        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
         if (count of _hits) is 1 then
           set msg to item 1 of _hits
           ${innerFetch}
@@ -79773,8 +79774,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       if (!result.success) console.error(`Failed to get message content: ${result.error}`);
       return null;
     }
-    if (result.output.startsWith("error:")) {
-      this.lastMessageLookupError = result.output.slice("error:".length).trim();
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+      this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       return null;
     }
     const htmlSplit = result.output.split(HTML_MARKER);
@@ -79814,11 +79815,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         "return source of msg"
       );
       const scoped = executeAppleScript(scopedScript, { timeoutMs: 12e4 });
-      if (scoped.success && scoped.output.trim() && !scoped.output.startsWith("error:")) {
+      if (scoped.success && scoped.output.trim() && !scoped.output.startsWith(LOOKUP_ERROR_MARKER)) {
         return scoped.output;
       }
-      if (scoped.success && scoped.output.startsWith("error:")) {
-        this.lastMessageLookupError = scoped.output.slice("error:".length).trim();
+      if (scoped.success && scoped.output.startsWith(LOOKUP_ERROR_MARKER)) {
+        this.lastMessageLookupError = scoped.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       }
     }
     const script = buildAppLevelScript(`
@@ -79836,8 +79837,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end try
           end repeat
         end repeat
-        if (count of _hits) is 0 then return "error:Message not found"
-        if (count of _hits) > 1 then return "error:${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
+        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
         if (count of _hits) is 1 then
           set msg to item 1 of _hits
           return source of msg
@@ -79851,8 +79852,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (!result.success || !result.output.trim()) {
       return null;
     }
-    if (result.output.startsWith("error:")) {
-      this.lastMessageLookupError = result.output.slice("error:".length).trim();
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+      this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       return null;
     }
     return result.output;
