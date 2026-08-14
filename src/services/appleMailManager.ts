@@ -133,6 +133,7 @@ const DIAG_ITEM_SEP = "\x1dM\x1d"; // between diagnostics list items
 const CONTENT_MARKER = "\x1dCONTENT\x1d"; // subject/plain-text boundary
 const MSGID_MARKER = "\x1dMSGID\x1d"; // subject/RFC-Message-ID boundary (get-message content)
 const HTML_MARKER = "\x1dHTML\x1d"; // plain-text/source boundary
+const LOOKUP_ERROR_MARKER = "\x1dERR\x1d"; // GS-wrapped — by-id lookup failure; must not be a bare text prefix because the success payload of the same script leads with the sender-controlled subject
 const BATCH_FATAL = "\x1dFATAL\x1d"; // prefix for a whole-batch failure (e.g. bad destination)
 /**
  * Forensic record tags (#155). These ride in the SAME delimited stream as the
@@ -902,6 +903,9 @@ export class AppleMailManager {
    */
   private idLocationIndex = new Map<string, { account: string; mailbox: string }>();
 
+  /** Error from the most recent numeric message read, if it was refused. */
+  private lastMessageLookupError: string | undefined;
+
   /** Cap on the id→location index so a long-lived process can't grow unbounded. */
   private readonly ID_LOCATION_MAX = 5000;
 
@@ -933,6 +937,13 @@ export class AppleMailManager {
    */
   noteMessageLocation(id: string, account: string, mailbox: string): void {
     this.rememberLocation(id, account, mailbox);
+  }
+
+  /** Consume the most recent read refusal so the tool layer can preserve it. */
+  consumeLastMessageLookupError(): string | undefined {
+    const error = this.lastMessageLookupError;
+    this.lastMessageLookupError = undefined;
+    return error;
   }
 
   /**
@@ -2209,6 +2220,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     includeHtml = false,
     hint?: { account?: string; mailbox?: string }
   ): MessageContent | null {
+    this.lastMessageLookupError = undefined;
     // Only `source of msg` is fetched when HTML is requested. `content of msg`
     // is the plain-text body and is always cheap.
     const sourceFetch = includeHtml
@@ -2253,17 +2265,25 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     const script = buildAppLevelScript(`
       try
+        set _hits to {}
+        set _names to ""
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                ${innerFetch}
+                set end of _hits to item 1 of matchingMsgs
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
               end if
             end try
           end repeat
         end repeat
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
+        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
+        if (count of _hits) is 1 then
+          set msg to item 1 of _hits
+          ${innerFetch}
+        end if
         return ""
       on error errMsg
         return ""
@@ -2289,6 +2309,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   ): MessageContent | null {
     if (!result.success || !result.output.trim()) {
       if (!result.success) console.error(`Failed to get message content: ${result.error}`);
+      return null;
+    }
+
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+      this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       return null;
     }
 
@@ -2330,6 +2355,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * a 20MB attachment can take several seconds over Exchange/IMAP.
    */
   getRawSource(id: string, hint?: { account?: string; mailbox?: string }): string | null {
+    this.lastMessageLookupError = undefined;
     // Fast path: fetch from the known mailbox directly (same rationale as
     // getMessageContent — the unscoped scan below times out for a message in a
     // late-iterated large folder like "Sent Items"). See idLocationIndex.
@@ -2346,23 +2372,40 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         "return source of msg"
       );
       const scoped = executeAppleScript(scopedScript, { timeoutMs: 120000 });
-      if (scoped.success && scoped.output.trim()) return scoped.output;
+      if (
+        scoped.success &&
+        scoped.output.trim() &&
+        !scoped.output.startsWith(LOOKUP_ERROR_MARKER)
+      ) {
+        return scoped.output;
+      }
+      if (scoped.success && scoped.output.startsWith(LOOKUP_ERROR_MARKER)) {
+        this.lastMessageLookupError = scoped.output.slice(LOOKUP_ERROR_MARKER.length).trim();
+      }
       // Miss (stale index) → fall through to the full scan.
     }
 
     const script = buildAppLevelScript(`
       try
+        set _hits to {}
+        set _names to ""
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                return source of msg
+                set end of _hits to item 1 of matchingMsgs
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
               end if
             end try
           end repeat
         end repeat
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
+        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
+        if (count of _hits) is 1 then
+          set msg to item 1 of _hits
+          return source of msg
+        end if
         return ""
       on error errMsg
         return ""
@@ -2372,6 +2415,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const result = executeAppleScript(script, { timeoutMs: 120000 });
 
     if (!result.success || !result.output.trim()) {
+      return null;
+    }
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+      this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       return null;
     }
 
@@ -2917,27 +2964,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const replyAllClause = replyAll ? " with reply to all" : "";
     const sendAction = send ? "send theReply" : "";
 
-    const script = buildAppLevelScript(`
-      try
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                set theReply to reply msg without opening window${replyAllClause}
-                set content of theReply to "${safeBody}"
-                ${sendAction}
-                return "ok"
-              end if
-            end try
-          end repeat
-        end repeat
-        return "error:Message not found"
-      on error errMsg
-        return "error:" & errMsg
-      end try
-    `);
+    const script = this.findMessageScript(
+      id,
+      `
+          set theReply to reply msg without opening window${replyAllClause}
+          set content of theReply to "${safeBody}"
+          ${sendAction}`
+    );
 
     const result = executeAppleScript(script, { timeoutMs: 60000 });
 
@@ -2968,28 +3001,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       recipientCommands += `make new to recipient at end of to recipients of theForward with properties {address:"${escapeForAppleScript(addr)}"}\n`;
     }
 
-    const script = buildAppLevelScript(`
-      try
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
-                set theForward to forward msg without opening window
-                ${recipientCommands}
-                ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
-                ${sendAction}
-                return "ok"
-              end if
-            end try
-          end repeat
-        end repeat
-        return "error:Message not found"
-      on error errMsg
-        return "error:" & errMsg
-      end try
-    `);
+    const script = this.findMessageScript(
+      id,
+      `
+          set theForward to forward msg without opening window
+          ${recipientCommands}
+          ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
+          ${sendAction}`
+    );
 
     const result = executeAppleScript(script, { timeoutMs: 60000 });
 
