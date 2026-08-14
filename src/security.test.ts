@@ -6,33 +6,23 @@ import { describe, it, expect } from "vitest";
 import { resolve, isAbsolute } from "path";
 import { homedir } from "os";
 import { existsSync } from "fs";
-import { z } from "zod";
 import { escapeForAppleScript, escapeForAppleScriptBody } from "@/services/appleMailManager.js";
-
-// Re-define the schemas here to test them in isolation (they're module-scoped in index.ts)
-const MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
-
-const BATCH_IDS_SCHEMA = z
-  .array(MESSAGE_ID_SCHEMA)
-  .min(1, "At least one message ID is required")
-  .max(100, "Cannot process more than 100 messages in a single batch");
-
-const DATE_FILTER_SCHEMA = z
-  .string()
-  .regex(
-    /^[a-zA-Z0-9 ,/\-:]+$/,
-    "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
-  )
-  .refine((val) => !isNaN(new Date(val).getTime()), {
-    message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')",
-  })
-  .optional();
+import {
+  ATTACHMENTS_SCHEMA,
+  BATCH_IDS_SCHEMA,
+  DATE_FILTER_SCHEMA,
+  MESSAGE_ID_SCHEMA,
+} from "@/schemas.js";
 
 describe("MESSAGE_ID_SCHEMA", () => {
   it("accepts valid numeric IDs", () => {
     expect(MESSAGE_ID_SCHEMA.parse("12345")).toBe("12345");
     expect(MESSAGE_ID_SCHEMA.parse("0")).toBe("0");
     expect(MESSAGE_ID_SCHEMA.parse("999999999")).toBe("999999999");
+  });
+
+  it("accepts injection-safe IMAP ids", () => {
+    expect(MESSAGE_ID_SCHEMA.parse("imap:YWJjXzEyMw")).toBe("imap:YWJjXzEyMw");
   });
 
   it("rejects non-numeric IDs", () => {
@@ -56,6 +46,10 @@ describe("BATCH_IDS_SCHEMA", () => {
   it("accepts valid batch of numeric IDs", () => {
     const result = BATCH_IDS_SCHEMA.parse(["1", "2", "3"]);
     expect(result).toEqual(["1", "2", "3"]);
+  });
+
+  it("accepts a batch of IMAP ids", () => {
+    expect(BATCH_IDS_SCHEMA.parse(["imap:YWJj", "imap:ZGVm"])).toEqual(["imap:YWJj", "imap:ZGVm"]);
   });
 
   it("rejects empty array", () => {
@@ -236,12 +230,6 @@ describe("buildAttachmentCommands validation", () => {
     const matches = result.match(/make new attachment/g);
     expect(matches).toHaveLength(2);
   });
-
-  // Schema-level test: attachment array cap
-  const ATTACHMENTS_SCHEMA = z
-    .array(z.string())
-    .max(20, "Cannot attach more than 20 files")
-    .optional();
 
   it("rejects more than 20 attachments at schema level", () => {
     const paths = Array.from({ length: 21 }, (_, i) => `/tmp/file${i}.pdf`);
