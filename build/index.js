@@ -84110,6 +84110,33 @@ function registerResourcesAndPrompts(server2, mailManager2) {
   );
 }
 
+// src/schemas.ts
+var MESSAGE_ID_SCHEMA = external_exports.string().regex(/^(\d+|imap:[A-Za-z0-9_-]+)$/, "Message ID must be numeric or an IMAP id (imap:\u2026)");
+var BATCH_IDS_SCHEMA = external_exports.array(MESSAGE_ID_SCHEMA).min(1, "At least one message ID is required").max(100, "Cannot process more than 100 messages in a single batch");
+var DATE_FILTER_SCHEMA = external_exports.string().regex(
+  /^[a-zA-Z0-9 ,/\-:]+$/,
+  "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
+).refine((val) => !isNaN(new Date(val).getTime()), {
+  message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')"
+}).optional();
+var ATTACHMENTS_SCHEMA = external_exports.array(
+  external_exports.union([
+    external_exports.string().describe("Absolute path to an existing file"),
+    external_exports.object({
+      filename: external_exports.string().min(1).max(255).describe("Filename to give the attachment"),
+      contentBase64: external_exports.string().min(1).max(
+        MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS,
+        "Inline attachment exceeds the 25 MiB decoded size limit"
+      ).refine(
+        isInlineAttachmentBase64WithinLimit,
+        "Inline attachment exceeds the 25 MiB decoded size limit"
+      ).describe("Base64-encoded file content (maximum 25 MiB decoded)")
+    })
+  ])
+).max(20, "Cannot attach more than 20 files").optional().describe(
+  "Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or inline {filename, contentBase64} objects up to 25 MiB decoded each."
+);
+
 // src/tools/thread.ts
 function normalizeSubject(subject) {
   const prefix = /^\s*(?:(?:re|fwd?|fw|aw|wg|sv|vs|antw|antwort|enc|rif)\s*(?:\[\d+\])?\s*:\s*)+/i;
@@ -84392,8 +84419,6 @@ function withJsonSchema2020_12(transport2) {
 
 // src/index.ts
 loadFileConfig();
-var MESSAGE_ID_SCHEMA = external_exports.string().regex(/^(\d+|imap:[A-Za-z0-9_-]+)$/, "Message ID must be numeric or an IMAP id (imap:\u2026)");
-var BATCH_IDS_SCHEMA = external_exports.array(MESSAGE_ID_SCHEMA).min(1, "At least one message ID is required").max(100, "Cannot process more than 100 messages in a single batch");
 var BATCH_SOURCE_MAILBOX_SCHEMA = external_exports.string().optional().describe(
   "Mailbox the numeric ids were listed from (e.g. 'INBOX'). Pins each id to that mailbox \u2014 strongly recommended, since one numeric id can match in several mailboxes. Works on its own: without sourceAccount it means that mailbox in the default account. Ignored for imap: ids."
 );
@@ -84412,29 +84437,6 @@ var FLAG_COLOR_INDEX = {
 };
 var FLAG_COLOR_SCHEMA = external_exports.enum(["red", "orange", "yellow", "green", "blue", "purple", "gray", "grey"]).optional().describe(
   "Optional flag color (Apple Mail palette: red, orange, yellow, green, blue, purple, gray \u2014 'grey' accepted). Omit for Mail's default flag. The color is applied on both routes: AppleScript sets the flag index, and IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads \u2014 so a smart mailbox keyed on flag color matches either way."
-);
-var DATE_FILTER_SCHEMA = external_exports.string().regex(
-  /^[a-zA-Z0-9 ,/\-:]+$/,
-  "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
-).refine((val) => !isNaN(new Date(val).getTime()), {
-  message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')"
-}).optional();
-var ATTACHMENTS_SCHEMA = external_exports.array(
-  external_exports.union([
-    external_exports.string().describe("Absolute path to an existing file"),
-    external_exports.object({
-      filename: external_exports.string().min(1).max(255).describe("Filename to give the attachment"),
-      contentBase64: external_exports.string().min(1).max(
-        MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS,
-        "Inline attachment exceeds the 25 MiB decoded size limit"
-      ).refine(
-        isInlineAttachmentBase64WithinLimit,
-        "Inline attachment exceeds the 25 MiB decoded size limit"
-      ).describe("Base64-encoded file content (maximum 25 MiB decoded)")
-    })
-  ])
-).max(20, "Cannot attach more than 20 files").optional().describe(
-  "Files to attach: absolute paths (e.g. '/Users/me/report.pdf') and/or inline {filename, contentBase64} objects up to 25 MiB decoded each."
 );
 var MESSAGE_ROW_SCHEMA = external_exports.object({}).passthrough();
 var LIST_OUTPUT_SCHEMA = {

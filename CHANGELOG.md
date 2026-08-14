@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [2.10.22] - 2026-08-14
+
+### Internal
+
+- **Shared validation schemas.** The message-id, batch-id, date-filter, and
+  attachment schemas now live in one imported module used by both the MCP
+  tool registrations and security tests, preventing test-only copies from
+  drifting away from the public validation contract.
+
 ## [2.10.21] - 2026-08-14
 
 ### Fixed
