@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [2.10.26] - 2026-08-14
+
+### Security
+
+- **Attachment saves now fail closed against destination races and expose files only to the owner.**
+  Both the AppleScript and MIME fallback paths stage bytes in a private temporary
+  directory, commit with exclusive creation, and enforce mode `0600` on the final
+  file. An existing destination is never overwritten, and staging artifacts are
+  cleaned up on success or failure.
+
 ## [2.10.25] - 2026-08-14
 
 ### Fixed
