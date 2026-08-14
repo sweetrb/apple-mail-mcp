@@ -34,6 +34,7 @@ import {
   __setPoolConnect,
   __resetPool,
   dropAllPools,
+  buildImapConnectionOptions,
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
@@ -195,7 +196,24 @@ describe("resolveImapConfig", () => {
     expect(c.host).toBe("imap.gmail.com");
     expect(c.port).toBe(993);
     expect(c.secure).toBe(true);
+    expect(c.allowPlaintext).toBe(false);
     expect(c.pass).toBe("pw");
+  });
+  it("requires explicit opt-in before allowing plaintext IMAP", () => {
+    const c = resolveImapConfig({
+      [IMAP_ENV.user]: "rob@example.com",
+      [IMAP_ENV.password]: "pw",
+      [IMAP_ENV.port]: "143",
+      [IMAP_ENV.allowPlaintext]: "1",
+    });
+    expect(c.secure).toBe(false);
+    expect(c.allowPlaintext).toBe(true);
+    // Opportunistic (undefined), not `false`: the opt-out means "reach a server
+    // that cannot do TLS", not "never encrypt even when the server offers it".
+    expect(buildImapConnectionOptions(c)).toMatchObject({
+      secure: false,
+      doSTARTTLS: undefined,
+    });
   });
   it("throws an actionable error when no password is available", () => {
     expect(() => resolveImapConfig({ [IMAP_ENV.user]: "rob@example.com" })).toThrow(
@@ -1339,5 +1357,50 @@ describe("connection pooling (#50 / A3)", () => {
       { config: cfg, connect: async () => make() }
     );
     expect(logouts).toBe(2); // injected path logs out each call (no pooling)
+  });
+});
+
+describe("mail transport TLS policy", () => {
+  it("requires STARTTLS for non-implicit IMAP connections", () => {
+    expect(buildImapConnectionOptions({ ...cfg, secure: false })).toMatchObject({
+      secure: false,
+      doSTARTTLS: true,
+    });
+    expect(buildImapConnectionOptions(cfg)).toMatchObject({
+      secure: true,
+      doSTARTTLS: undefined,
+    });
+    expect(
+      buildImapConnectionOptions({ ...cfg, secure: false, allowPlaintext: true })
+    ).toMatchObject({
+      secure: false,
+      doSTARTTLS: undefined,
+    });
+  });
+});
+
+describe("plaintext escape hatch does not disable an offered STARTTLS upgrade", () => {
+  const base = { host: "mail.example.com", port: 143, user: "u", pass: "p" };
+
+  it("requires STARTTLS when the escape hatch is off", () => {
+    expect(
+      buildImapConnectionOptions({ ...base, secure: false, allowPlaintext: false }).doSTARTTLS
+    ).toBe(true);
+  });
+
+  it("falls back to opportunistic (undefined), never false, when the escape hatch is on", () => {
+    const opts = buildImapConnectionOptions({ ...base, secure: false, allowPlaintext: true });
+    // `false` means "never STARTTLS even if advertised" — strictly weaker than the
+    // pre-2.10.28 behaviour, where the option was absent and ImapFlow upgraded
+    // opportunistically. The opt-out must not downgrade a server that still offers TLS.
+    expect(opts.doSTARTTLS).not.toBe(false);
+    expect(opts.doSTARTTLS).toBeUndefined();
+  });
+
+  it("never asks for STARTTLS on an implicit-TLS connection", () => {
+    expect(
+      buildImapConnectionOptions({ ...base, port: 993, secure: true, allowPlaintext: false })
+        .doSTARTTLS
+    ).toBeUndefined();
   });
 });

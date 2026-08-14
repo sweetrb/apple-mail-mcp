@@ -19,6 +19,7 @@
  *   APPLE_MAIL_MCP_IMAP_HOST      (default imap.gmail.com)
  *   APPLE_MAIL_MCP_IMAP_PORT      (default 993, implicit TLS)
  *   APPLE_MAIL_MCP_IMAP_PASSWORD  (else Keychain via the two vars below)
+ *   APPLE_MAIL_MCP_IMAP_ALLOW_PLAINTEXT (explicitly allow a non-TLS connection; default off)
  *   APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE / _KEYCHAIN_ACCOUNT
  *   APPLE_MAIL_MCP_IMAP_ACCOUNTS  (JSON array; the multi-account form — see
  *                                  listImapAccountSpecs. Sufficient on its own)
@@ -39,6 +40,7 @@ export const IMAP_ENV = {
   password: "APPLE_MAIL_MCP_IMAP_PASSWORD",
   keychainService: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE",
   keychainAccount: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT",
+  allowPlaintext: "APPLE_MAIL_MCP_IMAP_ALLOW_PLAINTEXT",
   // C2 multi-account: JSON array of additional accounts, e.g.
   // [{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]
   accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS",
@@ -48,6 +50,8 @@ export interface ImapConfig {
   host: string;
   port: number;
   secure: boolean;
+  /** Deliberate insecure escape hatch; false/undefined requires STARTTLS. */
+  allowPlaintext?: boolean;
   user: string;
   pass: string;
   accountLabel: string;
@@ -237,6 +241,10 @@ interface ImapAccountSpec {
   keychainAccount?: string;
 }
 
+function isTruthySetting(value: string | undefined): boolean {
+  return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
+}
+
 /**
  * True when `selector` names this account. Callers may select by the account
  * label, by any alias folded in during dedupe, or by the login address.
@@ -351,7 +359,7 @@ function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccount
   return specs;
 }
 
-function specToConfig(spec: ImapAccountSpec): ImapConfig {
+function specToConfig(spec: ImapAccountSpec, allowPlaintext = false): ImapConfig {
   if (!Number.isInteger(spec.port) || spec.port <= 0) {
     throw new Error(`Invalid IMAP port for account "${spec.accountLabel}": "${spec.port}".`);
   }
@@ -369,6 +377,7 @@ function specToConfig(spec: ImapAccountSpec): ImapConfig {
     host: spec.host,
     port: spec.port,
     secure: spec.port === 993,
+    allowPlaintext,
     user: spec.user,
     pass,
     accountLabel: spec.accountLabel,
@@ -418,9 +427,10 @@ export function listImapAccountLabels(env: NodeJS.ProcessEnv = process.env): str
  */
 export function resolveImapConfigs(env: NodeJS.ProcessEnv = process.env): ImapConfig[] {
   const out: ImapConfig[] = [];
+  const allowPlaintext = isTruthySetting(env[IMAP_ENV.allowPlaintext]);
   for (const spec of listImapAccountSpecs(env)) {
     try {
-      out.push(specToConfig(spec));
+      out.push(specToConfig(spec, allowPlaintext));
     } catch (e) {
       console.error(`Skipping IMAP account "${spec.accountLabel}": ${String(e)}`);
     }
@@ -454,17 +464,35 @@ export function resolveImapConfig(
   } else {
     spec = specs[0];
   }
-  return specToConfig(spec);
+  return specToConfig(spec, isTruthySetting(env[IMAP_ENV.allowPlaintext]));
 }
 
-const defaultConnect: ImapConnect = async (cfg) => {
-  const client = new ImapFlow({
+/** Build transport options with STARTTLS required unless explicitly opted out. */
+export function buildImapConnectionOptions(cfg: ImapConfig) {
+  return {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    // ImapFlow reads this as a tri-state, and the distinction matters:
+    //   true      -> require STARTTLS; fail if the server does not offer it
+    //   false     -> NEVER STARTTLS, even if the server advertises it
+    //   undefined -> opportunistic upgrade (ImapFlow's documented default)
+    //
+    // secure=true already has implicit TLS, so there is no upgrade to negotiate.
+    // Without the escape hatch the upgrade is required. WITH it we must fall back
+    // to `undefined`, not `false`: the escape hatch means "let me reach a server
+    // that cannot do TLS", not "never encrypt". Sending `false` suppressed the
+    // upgrade even against servers still offering it, so enabling the opt-out for
+    // one broken account silently downgraded every other plaintext-port account
+    // below what it already negotiated before this option existed.
+    doSTARTTLS: cfg.secure || cfg.allowPlaintext ? undefined : true,
     auth: { user: cfg.user, pass: cfg.pass },
-    logger: false,
-  });
+    logger: false as const,
+  };
+}
+
+const defaultConnect: ImapConnect = async (cfg) => {
+  const client = new ImapFlow(buildImapConnectionOptions(cfg));
   // ImapFlow is an EventEmitter: once connect() resolves, a later socket error
   // on this pooled, long-lived client (idle Gmail/iCloud timeout, server BYE,
   // network drop) emits 'error'. With no listener that is an *uncaught*
@@ -472,7 +500,18 @@ const defaultConnect: ImapConnect = async (cfg) => {
   // the error is swallowed; the pool's liveness probe reconnects on next use.
   // Same defect class as defaultIdleConnect in imapIdle.ts.
   client.on("error", () => {});
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (error) {
+    if (!cfg.secure && !cfg.allowPlaintext) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `IMAP connection failed: ${detail}. STARTTLS is required for non-implicit TLS; ` +
+          `to explicitly allow plaintext (not recommended), set ${IMAP_ENV.allowPlaintext}=1.`
+      );
+    }
+    throw error;
+  }
   return client as unknown as ImapClientLike;
 };
 

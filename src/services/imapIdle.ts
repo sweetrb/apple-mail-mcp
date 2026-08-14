@@ -11,7 +11,7 @@
  * @module services/imapIdle
  */
 import { ImapFlow } from "imapflow";
-import type { ImapConfig } from "@/services/imapClient.js";
+import { buildImapConnectionOptions, IMAP_ENV, type ImapConfig } from "@/services/imapClient.js";
 
 /** Minimal event-capable client surface the watcher needs (testable). */
 export interface IdleClient {
@@ -31,20 +31,25 @@ export interface NewMailEvent {
 }
 
 const defaultIdleConnect: IdleConnect = async (cfg) => {
-  const client = new ImapFlow({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    auth: { user: cfg.user, pass: cfg.pass },
-    logger: false,
-  });
+  const client = new ImapFlow(buildImapConnectionOptions(cfg));
   // ImapFlow is an EventEmitter: an 'error' with no listener (e.g. a socket
   // ETIMEOUT during connect, before watch() attaches its handler) is an
   // *uncaught* exception that crashes the whole MCP server. Attach a listener
   // before connect() so a connection error rejects the promise instead — the
   // caller (watch) catches that and schedules a reconnect.
   client.on("error", () => {});
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (error) {
+    if (!cfg.secure && !cfg.allowPlaintext) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `IMAP IDLE connection failed: ${detail}. STARTTLS is required for non-implicit TLS; ` +
+          `to explicitly allow plaintext (not recommended), set ${IMAP_ENV.allowPlaintext}=1.`
+      );
+    }
+    throw error;
+  }
   return client as unknown as IdleClient;
 };
 
