@@ -1359,22 +1359,22 @@ async function resolveTrashPath(client: ImapClientLike): Promise<string> {
 
 /**
  * Trash a set of UIDs from the currently-selected `srcPath`: move them to the
- * account's Trash mailbox (recoverable). If the messages are *already* in Trash,
- * expunge them instead (the "empty from Trash" case). Returns the resolved
- * destination and whether it expunged.
+ * account's Trash mailbox (recoverable). Messages already in Trash are refused
+ * rather than expunged, because this tool's delete contract is recoverable-only.
  */
 async function trashUids(
   client: ImapClientLike,
   uids: number[],
   srcPath: string
-): Promise<{ dest: string; expunged: boolean }> {
+): Promise<{ dest: string }> {
   const dest = await resolveTrashPath(client);
   if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
-    await client.messageDelete(uids, { uid: true });
-    return { dest, expunged: true };
+    throw new Error(
+      `Refusing to permanently delete messages already in Trash ("${srcPath}"). Delete operations are recoverable-only.`
+    );
   }
   await client.messageMove(uids, dest, { uid: true });
-  return { dest, expunged: false };
+  return { dest };
 }
 
 export async function imapDeleteMessageById(
@@ -1385,12 +1385,10 @@ export async function imapDeleteMessageById(
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     try {
-      const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
+      const { dest } = await trashUids(client, [ref.uid], ref.path);
       return {
         success: true,
-        info: expunged
-          ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.`
-          : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`,
+        info: `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`,
       };
     } catch (e) {
       return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };

@@ -27,6 +27,7 @@ import {
   imapListAttachments,
   imapFetchAttachment,
   imapBatchMarkRead,
+  imapBatchDelete,
   imapBatchMove,
   imapThread,
   listImapAccountLabels,
@@ -751,15 +752,29 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     expect(rec.moved).toEqual([[1], "Deleted Messages"]);
   });
 
-  it("delete from within Trash permanently expunges (empty-from-Trash)", async () => {
+  it("refuses to permanently delete a message already in Trash", async () => {
     const rec: MsgRec = {};
     const trashId = encodeImapId("iCloud", "[Gmail]/Trash", 1);
     const r = await imapDeleteMessageById(trashId, {
       config: cfg,
       connect: async () => makeMsgClient(rec),
     });
-    expect(r.success).toBe(true);
-    expect(rec.deleted).toEqual([1]);
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/recoverable-only/i);
+    expect(rec.deleted).toBeUndefined();
+    expect(rec.moved).toBeUndefined();
+  });
+
+  it("reports a recoverability failure for a batch already in Trash", async () => {
+    const rec: MsgRec = {};
+    const trashId = encodeImapId("iCloud", "[Gmail]/Trash", 1);
+    const r = await imapBatchDelete([trashId], {
+      config: cfg,
+      connect: async () => makeMsgClient(rec),
+    });
+    expect(r).toMatchObject({ success: 0, failed: 1 });
+    expect(r.errors.join(" ")).toMatch(/recoverable-only/i);
+    expect(rec.deleted).toBeUndefined();
     expect(rec.moved).toBeUndefined();
   });
 

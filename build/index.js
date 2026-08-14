@@ -83417,21 +83417,22 @@ async function resolveTrashPath(client) {
 async function trashUids(client, uids, srcPath) {
   const dest = await resolveTrashPath(client);
   if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
-    await client.messageDelete(uids, { uid: true });
-    return { dest, expunged: true };
+    throw new Error(
+      `Refusing to permanently delete messages already in Trash ("${srcPath}"). Delete operations are recoverable-only.`
+    );
   }
   await client.messageMove(uids, dest, { uid: true });
-  return { dest, expunged: false };
+  return { dest };
 }
 async function imapDeleteMessageById(id, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     try {
-      const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
+      const { dest } = await trashUids(client, [ref.uid], ref.path);
       return {
         success: true,
-        info: expunged ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.` : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`
+        info: `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`
       };
     } catch (e) {
       return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
