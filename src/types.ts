@@ -542,7 +542,7 @@ export interface RuleSpec {
   actions?: RuleActions;
   /** true (default) = all conditions must match; false = any. */
   matchAll?: boolean;
-  /** Whether the rule is enabled on creation (default true). */
+  /** Whether the rule is enabled on creation (default false). */
   enabled?: boolean;
 }
 

@@ -82068,7 +82068,7 @@ end tell`;
     if (!actionStmts.length) {
       return { success: false, error: "A rule needs at least one action." };
     }
-    const enabled = opts.enabled !== false;
+    const enabled = opts.enabled === true;
     const matchAll = opts.matchAll !== false;
     const script = buildAppLevelScript(`
       try
@@ -86249,7 +86249,7 @@ registerTool(
         "At least one action is required (markRead, markFlagged, delete, or moveTo)"
       ),
       matchAll: external_exports.boolean().default(true),
-      enabled: external_exports.boolean().default(true)
+      enabled: external_exports.boolean().default(false).describe("Enable immediately; defaults to false so the rule must be reviewed first")
     },
     outputSchema: {
       name: external_exports.string().optional(),
