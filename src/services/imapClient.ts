@@ -473,12 +473,19 @@ export function buildImapConnectionOptions(cfg: ImapConfig) {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
-    // secure=true starts with implicit TLS, so there is no STARTTLS upgrade to
-    // negotiate on that connection.
-    // ImapFlow otherwise treats STARTTLS as opportunistic when secure=false.
-    // The only way to disable this is the deliberate, documented plaintext
-    // escape hatch; the secure default remains fail-closed.
-    doSTARTTLS: !cfg.secure && !cfg.allowPlaintext,
+    // ImapFlow reads this as a tri-state, and the distinction matters:
+    //   true      -> require STARTTLS; fail if the server does not offer it
+    //   false     -> NEVER STARTTLS, even if the server advertises it
+    //   undefined -> opportunistic upgrade (ImapFlow's documented default)
+    //
+    // secure=true already has implicit TLS, so there is no upgrade to negotiate.
+    // Without the escape hatch the upgrade is required. WITH it we must fall back
+    // to `undefined`, not `false`: the escape hatch means "let me reach a server
+    // that cannot do TLS", not "never encrypt". Sending `false` suppressed the
+    // upgrade even against servers still offering it, so enabling the opt-out for
+    // one broken account silently downgraded every other plaintext-port account
+    // below what it already negotiated before this option existed.
+    doSTARTTLS: cfg.secure || cfg.allowPlaintext ? undefined : true,
     auth: { user: cfg.user, pass: cfg.pass },
     logger: false as const,
   };

@@ -208,9 +208,11 @@ describe("resolveImapConfig", () => {
     });
     expect(c.secure).toBe(false);
     expect(c.allowPlaintext).toBe(true);
+    // Opportunistic (undefined), not `false`: the opt-out means "reach a server
+    // that cannot do TLS", not "never encrypt even when the server offers it".
     expect(buildImapConnectionOptions(c)).toMatchObject({
       secure: false,
-      doSTARTTLS: false,
+      doSTARTTLS: undefined,
     });
   });
   it("throws an actionable error when no password is available", () => {
@@ -1366,13 +1368,39 @@ describe("mail transport TLS policy", () => {
     });
     expect(buildImapConnectionOptions(cfg)).toMatchObject({
       secure: true,
-      doSTARTTLS: false,
+      doSTARTTLS: undefined,
     });
     expect(
       buildImapConnectionOptions({ ...cfg, secure: false, allowPlaintext: true })
     ).toMatchObject({
       secure: false,
-      doSTARTTLS: false,
+      doSTARTTLS: undefined,
     });
+  });
+});
+
+describe("plaintext escape hatch does not disable an offered STARTTLS upgrade", () => {
+  const base = { host: "mail.example.com", port: 143, user: "u", pass: "p" };
+
+  it("requires STARTTLS when the escape hatch is off", () => {
+    expect(
+      buildImapConnectionOptions({ ...base, secure: false, allowPlaintext: false }).doSTARTTLS
+    ).toBe(true);
+  });
+
+  it("falls back to opportunistic (undefined), never false, when the escape hatch is on", () => {
+    const opts = buildImapConnectionOptions({ ...base, secure: false, allowPlaintext: true });
+    // `false` means "never STARTTLS even if advertised" — strictly weaker than the
+    // pre-2.10.28 behaviour, where the option was absent and ImapFlow upgraded
+    // opportunistically. The opt-out must not downgrade a server that still offers TLS.
+    expect(opts.doSTARTTLS).not.toBe(false);
+    expect(opts.doSTARTTLS).toBeUndefined();
+  });
+
+  it("never asks for STARTTLS on an implicit-TLS connection", () => {
+    expect(
+      buildImapConnectionOptions({ ...base, port: 993, secure: true, allowPlaintext: false })
+        .doSTARTTLS
+    ).toBeUndefined();
   });
 });
