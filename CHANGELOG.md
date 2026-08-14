@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+## [2.10.30] - 2026-08-14
+
+### Fixed
+
+- **A destructive operation that reports success while observably doing nothing now
+  warns.** The `under` reconciliation status is suppressed by design, because an
+  account that flags `\Deleted` without removing the message never drops the source
+  count — but that argument is about the _shape_ of the account, not about every
+  reading, and it was hiding a real false-ok. Reported on iCloud against 2.10.17
+  (#155): four ids, all `status: "ok"`, `expected: 4`, `observed: 0`, and a collateral
+  snapshot that read the mailbox successfully and showed nothing had left it.
+  `under` still does not warn in general; it warns only when `observed` is exactly 0,
+  `expected` is positive, the collateral snapshot succeeded, and nothing disappeared —
+  the one combination a working flag-only account cannot produce. A _partial_ under is
+  still silent, since that is where flag-only and partial failure genuinely look alike.
+  The warning names both live hypotheses (a silent no-op vs. stale counts) and says to
+  check the destination to tell them apart. Thanks to @scottstern0325 for running the
+  audit log and separating what was seen from what was not.
+
 ## [2.10.29] - 2026-08-14
 
 ### Security
