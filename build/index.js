@@ -2991,7 +2991,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve2.call(this, root, ref);
+      let _sch = resolve3.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3018,7 +3018,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve2(root, ref) {
+    function resolve3(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3649,7 +3649,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve2(baseURI, relativeURI, options) {
+    function resolve3(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const { parsed: baseParsed, malformedAuthorityOrPort: baseMalformed } = parseWithStatus(baseURI, schemelessOptions);
       const { parsed: relativeParsed, malformedAuthorityOrPort: relativeMalformed } = parseWithStatus(relativeURI, schemelessOptions);
@@ -3933,7 +3933,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve2,
+      resolve: resolve3,
       resolveComponent,
       equal,
       serialize,
@@ -6934,7 +6934,7 @@ var require_punycode = __commonJS({
     var damp = 700;
     var initialBias = 72;
     var initialN = 128;
-    var delimiter = "-";
+    var delimiter2 = "-";
     var regexPunycode = /^xn--/;
     var regexNonASCII = /[^\0-\x7F]/;
     var regexSeparators = /[\x2E\u3002\uFF0E\uFF61]/g;
@@ -7025,7 +7025,7 @@ var require_punycode = __commonJS({
       let i = 0;
       let n = initialN;
       let bias = initialBias;
-      let basic = input.lastIndexOf(delimiter);
+      let basic = input.lastIndexOf(delimiter2);
       if (basic < 0) {
         basic = 0;
       }
@@ -7085,7 +7085,7 @@ var require_punycode = __commonJS({
       const basicLength = output.length;
       let handledCPCount = basicLength;
       if (basicLength) {
-        output.push(delimiter);
+        output.push(delimiter2);
       }
       while (handledCPCount < inputLength) {
         let m = maxInt;
@@ -7840,7 +7840,7 @@ var require_shared = __commonJS({
       }
       return Object.keys(ifaces).map((key) => ifaces[key]).reduce((acc, val) => acc.concat(val), []).filter((i) => !i.internal || allowInternal).some((i) => i.family === "IPv" + family || i.family === family);
     };
-    var resolve2 = (family, hostname2, options, callback) => {
+    var resolve3 = (family, hostname2, options, callback) => {
       options = options || {};
       if (!isFamilySupported(family, options.allowInternalNetworkInterfaces)) {
         return callback(null, []);
@@ -7927,13 +7927,13 @@ var require_shared = __commonJS({
       let ipv6Addresses = [];
       let ipv4Error = null;
       let ipv6Error = null;
-      resolve2(4, options.host, options, (err, addresses) => {
+      resolve3(4, options.host, options, (err, addresses) => {
         if (err) {
           ipv4Error = err;
         } else {
           ipv4Addresses = addresses || [];
         }
-        resolve2(6, options.host, options, (err2, addresses2) => {
+        resolve3(6, options.host, options, (err2, addresses2) => {
           if (err2) {
             ipv6Error = err2;
           } else {
@@ -8122,13 +8122,13 @@ var require_shared = __commonJS({
       });
       return response;
     };
-    module.exports.callbackPromise = (resolve3, reject) => function() {
+    module.exports.callbackPromise = (resolve4, reject) => function() {
       const args = Array.from(arguments);
       const err = args.shift();
       if (err) {
         reject(err);
       } else {
-        resolve3(...args);
+        resolve4(...args);
       }
     };
     module.exports.parseDataURI = (uri) => {
@@ -8195,8 +8195,8 @@ var require_shared = __commonJS({
       options = options || {};
       let promise;
       if (!callback) {
-        promise = new Promise((resolve3, reject) => {
-          callback = module.exports.callbackPromise(resolve3, reject);
+        promise = new Promise((resolve4, reject) => {
+          callback = module.exports.callbackPromise(resolve4, reject);
         });
       }
       resolveContentValue(data, key, options, callback);
@@ -11867,8 +11867,8 @@ var require_mime_node = __commonJS({
       build(callback) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve2, reject) => {
-            callback = shared.callbackPromise(resolve2, reject);
+          promise = new Promise((resolve3, reject) => {
+            callback = shared.callbackPromise(resolve3, reject);
           });
         }
         const stream = this.createReadStream();
@@ -14097,8 +14097,8 @@ var require_mailer = __commonJS({
       sendMail(data, callback = null) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve2, reject) => {
-            callback = shared.callbackPromise(resolve2, reject);
+          promise = new Promise((resolve3, reject) => {
+            callback = shared.callbackPromise(resolve3, reject);
           });
         }
         if (typeof this.getSocket === "function") {
@@ -14806,7 +14806,7 @@ var require_smtp_connection = __commonJS({
           const handler = this.customAuth.get(this._authMethod);
           let lastResponse;
           let returned = false;
-          const resolve2 = () => {
+          const resolve3 = () => {
             if (returned) {
               return;
             }
@@ -14840,8 +14840,8 @@ var require_smtp_connection = __commonJS({
             sendCommand: (cmd, done) => {
               let promise;
               if (!done) {
-                promise = new Promise((resolve3, reject2) => {
-                  done = shared.callbackPromise(resolve3, reject2);
+                promise = new Promise((resolve4, reject2) => {
+                  done = shared.callbackPromise(resolve4, reject2);
                 });
               }
               this._responseActions.push((str2) => {
@@ -14866,11 +14866,11 @@ var require_smtp_connection = __commonJS({
               setImmediate(() => this._sendCommand(cmd));
               return promise;
             },
-            resolve: resolve2,
+            resolve: resolve3,
             reject
           });
           if (handlerResponse && typeof handlerResponse.catch === "function") {
-            handlerResponse.then(resolve2).catch(reject);
+            handlerResponse.then(resolve3).catch(reject);
           }
           return;
         }
@@ -17581,8 +17581,8 @@ var require_smtp_pool = __commonJS({
       verify(callback) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve2, reject) => {
-            callback = shared.callbackPromise(resolve2, reject);
+          promise = new Promise((resolve3, reject) => {
+            callback = shared.callbackPromise(resolve3, reject);
           });
         }
         const auth = new PoolResource(this).auth;
@@ -17929,8 +17929,8 @@ var require_smtp_transport = __commonJS({
       verify(callback) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve2, reject) => {
-            callback = shared.callbackPromise(resolve2, reject);
+          promise = new Promise((resolve3, reject) => {
+            callback = shared.callbackPromise(resolve3, reject);
           });
         }
         this.getSocket(this.options, (err, socketOptions) => {
@@ -18583,8 +18583,8 @@ var require_ses_transport = __commonJS({
       verify(callback) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve2, reject) => {
-            callback = shared.callbackPromise(resolve2, reject);
+          promise = new Promise((resolve3, reject) => {
+            callback = shared.callbackPromise(resolve3, reject);
           });
         }
         const cb = (err) => {
@@ -18685,8 +18685,8 @@ var require_nodemailer = __commonJS({
         apiUrl = false;
       }
       if (!callback) {
-        promise = new Promise((resolve2, reject) => {
-          callback = shared.callbackPromise(resolve2, reject);
+        promise = new Promise((resolve3, reject) => {
+          callback = shared.callbackPromise(resolve3, reject);
         });
       }
       if (ETHEREAL_CACHE && testAccount) {
@@ -20751,7 +20751,7 @@ var require_thread_stream = __commonJS({
     var { version: version3 } = require_package2();
     var { EventEmitter } = __require("events");
     var { Worker } = __require("worker_threads");
-    var { join: join6 } = __require("path");
+    var { join: join7 } = __require("path");
     var { pathToFileURL } = __require("url");
     var { wait } = require_wait();
     var {
@@ -20802,7 +20802,7 @@ var require_thread_stream = __commonJS({
     function createWorker(stream, opts) {
       const { filename, workerData } = opts;
       const bundlerOverrides = "__bundlerPathsOverrides" in globalThis ? globalThis.__bundlerPathsOverrides : {};
-      const toExecute = bundlerOverrides["thread-stream-worker"] || join6(__dirname, "lib", "worker.js");
+      const toExecute = bundlerOverrides["thread-stream-worker"] || join7(__dirname, "lib", "worker.js");
       const worker = new Worker(toExecute, {
         ...opts.workerOpts,
         name: opts.workerOpts?.name || "thread-stream",
@@ -21268,9 +21268,9 @@ var require_transport = __commonJS({
   "node_modules/.pnpm/pino@10.3.1/node_modules/pino/lib/transport.js"(exports, module) {
     "use strict";
     var { createRequire: createRequire2 } = __require("module");
-    var { existsSync: existsSync6 } = __require("node:fs");
+    var { existsSync: existsSync5 } = __require("node:fs");
     var getCallers = require_caller();
-    var { join: join6, isAbsolute: isAbsolute3, sep: sep2 } = __require("node:path");
+    var { join: join7, isAbsolute: isAbsolute2, sep: sep3 } = __require("node:path");
     var { fileURLToPath } = __require("node:url");
     var sleep2 = require_atomic_sleep();
     var onExit = require_on_exit_leak_free();
@@ -21342,7 +21342,7 @@ var require_transport = __commonJS({
           return false;
         }
       }
-      return isAbsolute3(path) && !existsSync6(path);
+      return isAbsolute2(path) && !existsSync5(path);
     }
     function stripQuotes(value) {
       const first = value[0];
@@ -21423,7 +21423,7 @@ var require_transport = __commonJS({
         throw new Error("only one of target or targets can be specified");
       }
       if (targets) {
-        target = bundlerOverrides["pino-worker"] || join6(__dirname, "worker.js");
+        target = bundlerOverrides["pino-worker"] || join7(__dirname, "worker.js");
         options.targets = targets.filter((dest) => dest.target).map((dest) => {
           return {
             ...dest,
@@ -21441,7 +21441,7 @@ var require_transport = __commonJS({
           });
         });
       } else if (pipeline) {
-        target = bundlerOverrides["pino-worker"] || join6(__dirname, "worker.js");
+        target = bundlerOverrides["pino-worker"] || join7(__dirname, "worker.js");
         options.pipelines = [pipeline.map((dest) => {
           return {
             ...dest,
@@ -21460,16 +21460,16 @@ var require_transport = __commonJS({
       return buildStream(fixTarget(target), options, worker, sync, name);
       function fixTarget(origin) {
         origin = bundlerOverrides[origin] || origin;
-        if (isAbsolute3(origin) || origin.indexOf("file://") === 0) {
+        if (isAbsolute2(origin) || origin.indexOf("file://") === 0) {
           return origin;
         }
         if (origin === "pino/file") {
-          return join6(__dirname, "..", "file.js");
+          return join7(__dirname, "..", "file.js");
         }
         let fixTarget2;
         for (const filePath of callers) {
           try {
-            const context = filePath === "node:repl" ? process.cwd() + sep2 : filePath;
+            const context = filePath === "node:repl" ? process.cwd() + sep3 : filePath;
             fixTarget2 = createRequire2(context).resolve(origin);
             break;
           } catch (err) {
@@ -22444,7 +22444,7 @@ var require_safe_stable_stringify = __commonJS({
               return circularValue;
             }
             let res = "";
-            let join6 = ",";
+            let join7 = ",";
             const originalIndentation = indentation;
             if (Array.isArray(value)) {
               if (value.length === 0) {
@@ -22458,7 +22458,7 @@ var require_safe_stable_stringify = __commonJS({
                 indentation += spacer;
                 res += `
 ${indentation}`;
-                join6 = `,
+                join7 = `,
 ${indentation}`;
               }
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
@@ -22466,13 +22466,13 @@ ${indentation}`;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyFnReplacer(String(i), value, stack, replacer, spacer, indentation);
                 res += tmp2 !== void 0 ? tmp2 : "null";
-                res += join6;
+                res += join7;
               }
               const tmp = stringifyFnReplacer(String(i), value, stack, replacer, spacer, indentation);
               res += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res += `${join6}"... ${getItemCount(removedKeys)} not stringified"`;
+                res += `${join7}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               if (spacer !== "") {
                 res += `
@@ -22493,7 +22493,7 @@ ${originalIndentation}`;
             let separator = "";
             if (spacer !== "") {
               indentation += spacer;
-              join6 = `,
+              join7 = `,
 ${indentation}`;
               whitespace = " ";
             }
@@ -22507,13 +22507,13 @@ ${indentation}`;
               const tmp = stringifyFnReplacer(key2, value, stack, replacer, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}:${whitespace}${tmp}`;
-                separator = join6;
+                separator = join7;
               }
             }
             if (keyLength > maximumBreadth) {
               const removedKeys = keyLength - maximumBreadth;
               res += `${separator}"...":${whitespace}"${getItemCount(removedKeys)} not stringified"`;
-              separator = join6;
+              separator = join7;
             }
             if (spacer !== "" && separator.length > 1) {
               res = `
@@ -22554,7 +22554,7 @@ ${originalIndentation}`;
             }
             const originalIndentation = indentation;
             let res = "";
-            let join6 = ",";
+            let join7 = ",";
             if (Array.isArray(value)) {
               if (value.length === 0) {
                 return "[]";
@@ -22567,7 +22567,7 @@ ${originalIndentation}`;
                 indentation += spacer;
                 res += `
 ${indentation}`;
-                join6 = `,
+                join7 = `,
 ${indentation}`;
               }
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
@@ -22575,13 +22575,13 @@ ${indentation}`;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyArrayReplacer(String(i), value[i], stack, replacer, spacer, indentation);
                 res += tmp2 !== void 0 ? tmp2 : "null";
-                res += join6;
+                res += join7;
               }
               const tmp = stringifyArrayReplacer(String(i), value[i], stack, replacer, spacer, indentation);
               res += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res += `${join6}"... ${getItemCount(removedKeys)} not stringified"`;
+                res += `${join7}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               if (spacer !== "") {
                 res += `
@@ -22594,7 +22594,7 @@ ${originalIndentation}`;
             let whitespace = "";
             if (spacer !== "") {
               indentation += spacer;
-              join6 = `,
+              join7 = `,
 ${indentation}`;
               whitespace = " ";
             }
@@ -22603,7 +22603,7 @@ ${indentation}`;
               const tmp = stringifyArrayReplacer(key2, value[key2], stack, replacer, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}:${whitespace}${tmp}`;
-                separator = join6;
+                separator = join7;
               }
             }
             if (spacer !== "" && separator.length > 1) {
@@ -22661,20 +22661,20 @@ ${originalIndentation}`;
               indentation += spacer;
               let res2 = `
 ${indentation}`;
-              const join7 = `,
+              const join8 = `,
 ${indentation}`;
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
               let i = 0;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyIndent(String(i), value[i], stack, spacer, indentation);
                 res2 += tmp2 !== void 0 ? tmp2 : "null";
-                res2 += join7;
+                res2 += join8;
               }
               const tmp = stringifyIndent(String(i), value[i], stack, spacer, indentation);
               res2 += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res2 += `${join7}"... ${getItemCount(removedKeys)} not stringified"`;
+                res2 += `${join8}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               res2 += `
 ${originalIndentation}`;
@@ -22690,16 +22690,16 @@ ${originalIndentation}`;
               return '"[Object]"';
             }
             indentation += spacer;
-            const join6 = `,
+            const join7 = `,
 ${indentation}`;
             let res = "";
             let separator = "";
             let maximumPropertiesToStringify = Math.min(keyLength, maximumBreadth);
             if (isTypedArrayWithEntries(value)) {
-              res += stringifyTypedArray(value, join6, maximumBreadth);
+              res += stringifyTypedArray(value, join7, maximumBreadth);
               keys = keys.slice(value.length);
               maximumPropertiesToStringify -= value.length;
-              separator = join6;
+              separator = join7;
             }
             if (deterministic) {
               keys = sort(keys, comparator);
@@ -22710,13 +22710,13 @@ ${indentation}`;
               const tmp = stringifyIndent(key2, value[key2], stack, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}: ${tmp}`;
-                separator = join6;
+                separator = join7;
               }
             }
             if (keyLength > maximumBreadth) {
               const removedKeys = keyLength - maximumBreadth;
               res += `${separator}"...": "${getItemCount(removedKeys)} not stringified"`;
-              separator = join6;
+              separator = join7;
             }
             if (separator !== "") {
               res = `
@@ -48716,9 +48716,9 @@ var require_imap_stream = __commonJS({
                   }
                   if (payload.length) {
                     let trailingAfterLine = lineStart < chunk.length || this.inputQueue.length > 0;
-                    await new Promise((resolve2) => {
-                      this.pendingPush = resolve2;
-                      this.push({ payload, literals, next: resolve2, trailingAfterLine });
+                    await new Promise((resolve3) => {
+                      this.pendingPush = resolve3;
+                      this.push({ payload, literals, next: resolve3, trailingAfterLine });
                     });
                     this.pendingPush = null;
                     if (this.destroyed) {
@@ -48773,7 +48773,7 @@ var require_imap_stream = __commonJS({
           this.releaseInput(data);
           processedCount++;
           if (processedCount % 10 === 0) {
-            await new Promise((resolve2) => setImmediate(resolve2));
+            await new Promise((resolve3) => setImmediate(resolve3));
           }
         }
       }
@@ -48835,9 +48835,9 @@ var require_imap_stream = __commonJS({
         this.literalBuffer = [];
         this.literals = [];
         if (typeof this.pendingPush === "function") {
-          const resolve2 = this.pendingPush;
+          const resolve3 = this.pendingPush;
           this.pendingPush = null;
-          resolve2();
+          resolve3();
         }
         this.releaseInput(this.activeInput);
         this.activeInput = null;
@@ -53678,11 +53678,11 @@ var require_socksclient = __commonJS({
     "use strict";
     var __awaiter = exports && exports.__awaiter || function(thisArg, _arguments, P, generator) {
       function adopt(value) {
-        return value instanceof P ? value : new P(function(resolve2) {
-          resolve2(value);
+        return value instanceof P ? value : new P(function(resolve3) {
+          resolve3(value);
         });
       }
-      return new (P || (P = Promise))(function(resolve2, reject) {
+      return new (P || (P = Promise))(function(resolve3, reject) {
         function fulfilled(value) {
           try {
             step(generator.next(value));
@@ -53698,7 +53698,7 @@ var require_socksclient = __commonJS({
           }
         }
         function step(result) {
-          result.done ? resolve2(result.value) : adopt(result.value).then(fulfilled, rejected);
+          result.done ? resolve3(result.value) : adopt(result.value).then(fulfilled, rejected);
         }
         step((generator = generator.apply(thisArg, _arguments || [])).next());
       });
@@ -53732,13 +53732,13 @@ var require_socksclient = __commonJS({
        * @returns { Promise }
        */
       static createConnection(options, callback) {
-        return new Promise((resolve2, reject) => {
+        return new Promise((resolve3, reject) => {
           try {
             (0, helpers_1.validateSocksClientOptions)(options, ["connect"]);
           } catch (err) {
             if (typeof callback === "function") {
               callback(err);
-              return resolve2(err);
+              return resolve3(err);
             } else {
               return reject(err);
             }
@@ -53749,16 +53749,16 @@ var require_socksclient = __commonJS({
             client.removeAllListeners();
             if (typeof callback === "function") {
               callback(null, info);
-              resolve2(info);
+              resolve3(info);
             } else {
-              resolve2(info);
+              resolve3(info);
             }
           });
           client.once("error", (err) => {
             client.removeAllListeners();
             if (typeof callback === "function") {
               callback(err);
-              resolve2(err);
+              resolve3(err);
             } else {
               reject(err);
             }
@@ -53775,13 +53775,13 @@ var require_socksclient = __commonJS({
        * @returns { Promise }
        */
       static createConnectionChain(options, callback) {
-        return new Promise((resolve2, reject) => __awaiter(this, void 0, void 0, function* () {
+        return new Promise((resolve3, reject) => __awaiter(this, void 0, void 0, function* () {
           try {
             (0, helpers_1.validateSocksClientChainOptions)(options);
           } catch (err) {
             if (typeof callback === "function") {
               callback(err);
-              return resolve2(err);
+              return resolve3(err);
             } else {
               return reject(err);
             }
@@ -53807,14 +53807,14 @@ var require_socksclient = __commonJS({
             }
             if (typeof callback === "function") {
               callback(null, { socket: sock });
-              resolve2({ socket: sock });
+              resolve3({ socket: sock });
             } else {
-              resolve2({ socket: sock });
+              resolve3({ socket: sock });
             }
           } catch (err) {
             if (typeof callback === "function") {
               callback(err);
-              resolve2(err);
+              resolve3(err);
             } else {
               reject(err);
             }
@@ -54446,7 +54446,7 @@ var require_connection_deadline = __commonJS({
         try {
           return await Promise.race([
             promise,
-            new Promise((resolve2, reject) => {
+            new Promise((resolve3, reject) => {
               timer = setTimeout(() => reject(this.error()), this.remaining());
             })
           ]);
@@ -54526,7 +54526,7 @@ var require_proxy_connection = __commonJS({
         throw deadline.error();
       }
       let socket = null;
-      return await new Promise((resolve2, reject) => {
+      return await new Promise((resolve3, reject) => {
         let settled = false;
         let timer = null;
         let headers = "";
@@ -54578,7 +54578,7 @@ var require_proxy_connection = __commonJS({
         function succeed() {
           settled = true;
           cleanup();
-          resolve2(socket);
+          resolve3(socket);
         }
         function onEarlyClose() {
           fail(proxyError("Proxy closed the connection before the tunnel was established", "EPROXY"));
@@ -56129,12 +56129,12 @@ var require_namespace = __commonJS({
         return;
       }
       if (!hasCapability(connection, "NAMESPACE")) {
-        let { prefix, delimiter } = await getListPrefix(connection);
-        if (delimiter && prefix && prefix.charAt(prefix.length - 1) !== delimiter) {
-          prefix += delimiter;
+        let { prefix, delimiter: delimiter2 } = await getListPrefix(connection);
+        if (delimiter2 && prefix && prefix.charAt(prefix.length - 1) !== delimiter2) {
+          prefix += delimiter2;
         }
         let map = {
-          personal: [{ prefix: prefix || "", delimiter }],
+          personal: [{ prefix: prefix || "", delimiter: delimiter2 }],
           other: false,
           shared: false
         };
@@ -56217,11 +56217,11 @@ var require_namespace = __commonJS({
         )
       ).map((entry) => {
         let prefix = entry[0].value;
-        let delimiter = entry[1] === null ? null : entry[1].value;
-        if (delimiter && prefix && prefix.charAt(prefix.length - 1) !== delimiter) {
-          prefix += delimiter;
+        let delimiter2 = entry[1] === null ? null : entry[1].value;
+        if (delimiter2 && prefix && prefix.charAt(prefix.length - 1) !== delimiter2) {
+          prefix += delimiter2;
         }
-        return { prefix, delimiter };
+        return { prefix, delimiter: delimiter2 };
       });
     }
   }
@@ -57942,12 +57942,12 @@ var require_fetch2 = __commonJS({
                 messages.count++;
                 let formatted = await formatMessageResponse(untagged, mailbox);
                 if (typeof options.onUntaggedFetch === "function") {
-                  await new Promise((resolve2, reject) => {
+                  await new Promise((resolve3, reject) => {
                     options.onUntaggedFetch(formatted, (err) => {
                       if (err) {
                         reject(err);
                       } else {
-                        resolve2();
+                        resolve3();
                       }
                     });
                   });
@@ -57972,7 +57972,7 @@ var require_fetch2 = __commonJS({
               retryCount,
               delayMs: delay
             });
-            await new Promise((resolve2) => setTimeout(resolve2, delay));
+            await new Promise((resolve3) => setTimeout(resolve3, delay));
             retryCount++;
             continue;
           }
@@ -59302,14 +59302,14 @@ var require_idle = __commonJS({
               connection.preCheck = false;
             }
             while (preCheckWaitQueue.length) {
-              let { resolve: resolve2 } = preCheckWaitQueue.shift();
-              resolve2();
+              let { resolve: resolve3 } = preCheckWaitQueue.shift();
+              resolve3();
             }
           }
         };
         let connectionPreCheck = () => {
-          let handler = new Promise((resolve2, reject) => {
-            preCheckWaitQueue.push({ resolve: resolve2, reject });
+          let handler = new Promise((resolve3, reject) => {
+            preCheckWaitQueue.push({ resolve: resolve3, reject });
           });
           connection.log.trace({
             msg: "Requesting IDLE break",
@@ -59358,8 +59358,8 @@ var require_idle = __commonJS({
           connection.preCheck = false;
         }
         while (preCheckWaitQueue.length) {
-          let { resolve: resolve2 } = preCheckWaitQueue.shift();
-          resolve2();
+          let { resolve: resolve3 } = preCheckWaitQueue.shift();
+          resolve3();
         }
       }
     }
@@ -59407,7 +59407,7 @@ var require_idle = __commonJS({
       let interval = maxIdleTime ? Math.min(NOOP_INTERVAL, maxIdleTime) : NOOP_INTERVAL;
       let releaseIdling = claimIdling(connection);
       try {
-        await new Promise((resolve2) => {
+        await new Promise((resolve3) => {
           const cancel = () => {
             if (session.cancelled) {
               return;
@@ -59415,7 +59415,7 @@ var require_idle = __commonJS({
             session.cancelled = true;
             clearTimeout(session.timer);
             session.timer = null;
-            resolve2();
+            resolve3();
           };
           session.preCheck = async () => {
             connection.log.debug({ src: "c", msg: `breaking NOOP loop`, cid: connection.id });
@@ -60114,8 +60114,8 @@ var require_imap_flow = __commonJS({
         }
         let tag = (++this.tagCounter).toString(16).toUpperCase();
         options = options || {};
-        let promise = new Promise((resolve2, reject) => {
-          this.requestTagMap.set(tag, { command, attributes, options, resolve: resolve2, reject });
+        let promise = new Promise((resolve3, reject) => {
+          this.requestTagMap.set(tag, { command, attributes, options, resolve: resolve3, reject });
           this.requestQueue.push({ tag, command, attributes, options });
           this.trySend().catch((err) => this.log.warn({ err, cid: this.id }));
         });
@@ -60230,7 +60230,7 @@ var require_imap_flow = __commonJS({
           }
           processedCount++;
           if (processedCount % 10 === 0) {
-            await new Promise((resolve2) => setImmediate(resolve2));
+            await new Promise((resolve3) => setImmediate(resolve3));
           }
         }
       }
@@ -60385,7 +60385,7 @@ var require_imap_flow = __commonJS({
         switch ((parsed.command || "").toUpperCase()) {
           case "OK":
           case "BYE":
-            await new Promise((resolve2) => request.resolve({ response: parsed, next: resolve2, hasTrailingData }));
+            await new Promise((resolve3) => request.resolve({ response: parsed, next: resolve3, hasTrailingData }));
             break;
           case "NO":
           case "BAD": {
@@ -60403,7 +60403,7 @@ var require_imap_flow = __commonJS({
               err.responseText = txt;
               if (err.responseStatus === "NO" && txt.includes("Some of the requested messages no longer exist")) {
                 this.log.warn({ msg: "Partial FETCH response", cid: this.id, err });
-                await new Promise((resolve2) => request.resolve({ response: parsed, next: resolve2 }));
+                await new Promise((resolve3) => request.resolve({ response: parsed, next: resolve3 }));
                 break;
               }
               let throttleDelay = false;
@@ -60421,9 +60421,9 @@ var require_imap_flow = __commonJS({
                   delayResponse = 5 * 60 * 1e3;
                 }
                 this.log.warn({ msg: "Throttling detected", cid: this.id, throttleDelay, delayResponse, err });
-                let aborted2 = await new Promise((resolve2) => {
-                  this._throttleAbort = resolve2;
-                  this._throttleTimer = setTimeout(() => resolve2(false), delayResponse);
+                let aborted2 = await new Promise((resolve3) => {
+                  this._throttleAbort = resolve3;
+                  this._throttleTimer = setTimeout(() => resolve3(false), delayResponse);
                   unrefTimer(this._throttleTimer);
                 });
                 this._throttleTimer = null;
@@ -60635,7 +60635,7 @@ var require_imap_flow = __commonJS({
               }
               processedChunks++;
               if (processedChunks % 100 === 0) {
-                await new Promise((resolve2) => setImmediate(resolve2));
+                await new Promise((resolve3) => setImmediate(resolve3));
                 if (!this.writeSocket) {
                   break;
                 }
@@ -60712,7 +60712,7 @@ var require_imap_flow = __commonJS({
         if (injectedTail && injectedTail.length) {
           throw failSTARTTLSInjection();
         }
-        let upgraded = await new Promise((resolve2, reject) => {
+        let upgraded = await new Promise((resolve3, reject) => {
           let socketPlain = this.socket;
           let opts = Object.assign(
             {
@@ -60743,7 +60743,7 @@ var require_imap_flow = __commonJS({
               this.closeAfter();
               return reject(err);
             }
-            resolve2(result);
+            resolve3(result);
           };
           this._upgradeReject = settle2;
           socketPlain.once("error", settle2);
@@ -60857,10 +60857,10 @@ var require_imap_flow = __commonJS({
         }
         this.startSession().then(() => {
           if (typeof this.initialResolve === "function") {
-            let resolve2 = this.initialResolve;
+            let resolve3 = this.initialResolve;
             this.initialResolve = false;
             this.initialReject = false;
-            return resolve2();
+            return resolve3();
           }
         }).catch((err) => {
           this.log.error({ err, cid: this.id });
@@ -61140,7 +61140,7 @@ var require_imap_flow = __commonJS({
             throw error2;
           }
         }
-        let connectPromise = new Promise((resolve2, reject) => {
+        let connectPromise = new Promise((resolve3, reject) => {
           this.connectTimeout = setTimeout(() => {
             let err = deadline.error();
             this.log.error({ err, cid: this.id });
@@ -61190,7 +61190,7 @@ var require_imap_flow = __commonJS({
               this.setSocketHandlers();
               this.setEventHandlers();
               this.socket.pipe(this.streamer);
-              this.initialResolve = resolve2;
+              this.initialResolve = resolve3;
               this.initialReject = reject;
             } catch (ex) {
               reject(ex);
@@ -62169,17 +62169,17 @@ var require_imap_flow = __commonJS({
         let aborted2 = false;
         let push = false;
         let rowQueue = [];
-        let getNext = () => new Promise((resolve2, reject) => {
+        let getNext = () => new Promise((resolve3, reject) => {
           let check2 = () => {
             if (rowQueue.length) {
               let entry = rowQueue.shift();
               if (entry.err) {
                 return reject(entry.err);
               }
-              return resolve2(entry.value);
+              return resolve3(entry.value);
             }
             if (finished) {
-              return resolve2(null);
+              return resolve3(null);
             }
             push = () => {
               push = false;
@@ -62539,7 +62539,7 @@ var require_imap_flow = __commonJS({
             }
             if (writeChunk(chunk2) === false) {
               try {
-                await new Promise((resolve2, reject) => {
+                await new Promise((resolve3, reject) => {
                   let resolved = false;
                   const finish = (err) => {
                     if (resolved) return;
@@ -62550,7 +62550,7 @@ var require_imap_flow = __commonJS({
                     if (err) {
                       reject(err);
                     } else {
-                      resolve2();
+                      resolve3();
                     }
                   };
                   stream.once("drain", () => finish());
@@ -62788,10 +62788,10 @@ var require_imap_flow = __commonJS({
             }
             processedCount++;
             if (processedCount % 5 === 0) {
-              await new Promise((resolve3) => setImmediate(resolve3));
+              await new Promise((resolve4) => setImmediate(resolve4));
             }
             const lock = this.locks.shift();
-            const { resolve: resolve2, reject, path, options, lockId } = lock;
+            const { resolve: resolve3, reject, path, options, lockId } = lock;
             if (lock.acquireTimer) {
               clearTimeout(lock.acquireTimer);
               lock.acquireTimer = null;
@@ -62859,7 +62859,7 @@ var require_imap_flow = __commonJS({
               });
               this.currentLock = lock;
               armHeldTimer();
-              resolve2({ path, release });
+              resolve3({ path, release });
               break;
             }
             try {
@@ -62873,7 +62873,7 @@ var require_imap_flow = __commonJS({
               });
               this.currentLock = lock;
               armHeldTimer();
-              resolve2({ path, release });
+              resolve3({ path, release });
               break;
             } catch (err) {
               if (err.responseStatus === "NO") {
@@ -62941,8 +62941,8 @@ var require_imap_flow = __commonJS({
             ...this.currentLock.options?.description && { description: this.currentLock.options?.description }
           } : null
         });
-        let lockPromise = new Promise((resolve2, reject) => {
-          let lockEntry = { resolve: resolve2, reject, path, options, lockId };
+        let lockPromise = new Promise((resolve3, reject) => {
+          let lockEntry = { resolve: resolve3, reject, path, options, lockId };
           this.locks.push(lockEntry);
           if (Number(options.acquireTimeout) > 0) {
             lockEntry.acquireTimer = setTimeout(() => {
@@ -75140,7 +75140,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
+        await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -75157,7 +75157,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -75235,7 +75235,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve2(parseResult.data);
+            resolve3(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -75496,12 +75496,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve2, interval);
+      const timeoutId = setTimeout(resolve3, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -76814,7 +76814,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
+      await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -77502,12 +77502,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve2();
+        resolve3();
       } else {
-        this._stdout.once("drain", resolve2);
+        this._stdout.once("drain", resolve3);
       }
     });
   }
@@ -77527,11 +77527,11 @@ import {
   renameSync,
   mkdtempSync as mkdtempSync2,
   rmSync as rmSync2,
-  realpathSync,
+  realpathSync as realpathSync2,
   lstatSync
 } from "fs";
-import { isAbsolute, resolve, sep, join as join4 } from "path";
-import { homedir as homedir3 } from "os";
+import { resolve as resolve2, sep as sep2, join as join5 } from "path";
+import { homedir as homedir4 } from "os";
 import { randomUUID } from "crypto";
 
 // src/utils/applescript.ts
@@ -78054,8 +78054,8 @@ var TemplateStore = class {
 
 // src/utils/attachmentMaterialize.ts
 import { writeFileSync as writeFileSync2, rmSync, mkdtempSync } from "fs";
-import { join as join2 } from "path";
-import { tmpdir } from "os";
+import { join as join3 } from "path";
+import { tmpdir as tmpdir2 } from "os";
 
 // src/utils/attachmentLimits.ts
 var MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -78081,6 +78081,66 @@ function decodeInlineAttachment(contentBase64) {
   return content;
 }
 
+// src/utils/attachmentReadPolicy.ts
+import { realpathSync, statSync } from "fs";
+import { homedir as homedir2, tmpdir } from "os";
+import { delimiter, isAbsolute, join as join2, resolve, sep } from "path";
+var ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
+var DEFAULT_ATTACHMENT_READ_ROOTS = [
+  join2(homedir2(), "Desktop"),
+  join2(homedir2(), "Documents"),
+  join2(homedir2(), "Downloads"),
+  tmpdir(),
+  "/tmp",
+  "/private/tmp"
+];
+function isWithinRoot(candidate, root) {
+  return candidate === root || candidate.startsWith(root + sep);
+}
+function configuredRoots(env) {
+  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
+  const requested = raw === void 0 ? DEFAULT_ATTACHMENT_READ_ROOTS : raw.split(delimiter).map((root) => root.trim()).filter(Boolean);
+  for (const root of requested) {
+    if (!isAbsolute(root)) {
+      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
+    }
+  }
+  const resolved = [];
+  for (const root of requested) {
+    try {
+      const canonical = realpathSync(resolve(root));
+      if (!resolved.includes(canonical)) resolved.push(canonical);
+    } catch {
+    }
+  }
+  return resolved;
+}
+function resolveAttachmentReadPath(filePath, env = process.env) {
+  if (!isAbsolute(filePath)) {
+    throw new Error(`Attachment path must be absolute: "${filePath}"`);
+  }
+  let canonical;
+  try {
+    canonical = realpathSync(filePath);
+  } catch {
+    throw new Error(`Attachment file not found: "${filePath}"`);
+  }
+  try {
+    if (!statSync(canonical).isFile()) {
+      throw new Error(`Attachment path is not a regular file: "${filePath}"`);
+    }
+  } catch (error2) {
+    if (error2 instanceof Error && error2.message.includes("not a regular file")) throw error2;
+    throw new Error(`Attachment file not found: "${filePath}"`);
+  }
+  if (!configuredRoots(env).some((root) => isWithinRoot(canonical, root))) {
+    throw new Error(
+      `Attachment path is outside the allowed read roots: "${filePath}". Use Desktop, Documents, Downloads, or a temporary directory, or configure ${ATTACHMENT_READ_ROOTS_ENV}.`
+    );
+  }
+  return canonical;
+}
+
 // src/utils/attachmentMaterialize.ts
 function materializeAttachments(attachments) {
   if (!attachments || attachments.length === 0) {
@@ -78090,13 +78150,13 @@ function materializeAttachments(attachments) {
   let paths;
   try {
     paths = attachments.map((a) => {
-      if (typeof a === "string") return a;
+      if (typeof a === "string") return resolveAttachmentReadPath(a);
       if (!a.filename || !a.contentBase64) {
         throw new Error("Inline attachment requires both filename and contentBase64.");
       }
-      if (!dir) dir = mkdtempSync(join2(tmpdir(), "amcp-att-"));
+      if (!dir) dir = mkdtempSync(join3(tmpdir2(), "amcp-att-"));
       const safeName = a.filename.replace(/[/\\]/g, "_");
-      const p = join2(dir, safeName);
+      const p = join3(dir, safeName);
       writeFileSync2(p, decodeInlineAttachment(a.contentBase64));
       return p;
     });
@@ -78114,8 +78174,8 @@ function materializeAttachments(attachments) {
 
 // src/utils/contactsDb.ts
 import { existsSync as existsSync2, readdirSync } from "fs";
-import { join as join3 } from "path";
-import { homedir as homedir2 } from "os";
+import { join as join4 } from "path";
+import { homedir as homedir3 } from "os";
 function loadSqlite() {
   try {
     const mod = __require("node:sqlite");
@@ -78134,11 +78194,11 @@ function loadSqlite() {
   }
 }
 function resolveContactsDbPaths(baseDir) {
-  const root = baseDir ?? join3(homedir2(), "Library", "Application Support", "AddressBook");
+  const root = baseDir ?? join4(homedir3(), "Library", "Application Support", "AddressBook");
   const paths = [];
-  const topLevel = join3(root, "AddressBook-v22.abcddb");
+  const topLevel = join4(root, "AddressBook-v22.abcddb");
   if (existsSync2(topLevel)) paths.push(topLevel);
-  const sourcesDir = join3(root, "Sources");
+  const sourcesDir = join4(root, "Sources");
   if (existsSync2(sourcesDir)) {
     let entries = [];
     try {
@@ -78147,7 +78207,7 @@ function resolveContactsDbPaths(baseDir) {
       entries = [];
     }
     for (const entry of entries) {
-      const candidate = join3(sourcesDir, entry, "AddressBook-v22.abcddb");
+      const candidate = join4(sourcesDir, entry, "AddressBook-v22.abcddb");
       if (existsSync2(candidate)) paths.push(candidate);
     }
   }
@@ -78356,24 +78416,24 @@ function splitSearchDiagnostics(output, account) {
   }
   return { payload, diagnostics };
 }
-var ALLOWED_SAVE_ROOTS = [homedir3(), "/tmp", "/private/tmp", "/Volumes"];
+var ALLOWED_SAVE_ROOTS = [homedir4(), "/tmp", "/private/tmp", "/Volumes"];
 function isPathWithinAllowedRoots(resolvedPath) {
   return ALLOWED_SAVE_ROOTS.some((root) => {
-    const base = root.endsWith(sep) ? root.slice(0, -1) : root;
-    return resolvedPath === base || resolvedPath.startsWith(base + sep);
+    const base = root.endsWith(sep2) ? root.slice(0, -1) : root;
+    return resolvedPath === base || resolvedPath.startsWith(base + sep2);
   });
 }
 function resolveAttachmentSaveTarget(savePath, attachmentName) {
   let saveDirectory;
   try {
-    saveDirectory = realpathSync(resolve(savePath));
+    saveDirectory = realpathSync2(resolve2(savePath));
   } catch {
     throw new Error(`Save directory "${savePath}" does not exist`);
   }
   if (!isPathWithinAllowedRoots(saveDirectory)) {
     throw new Error(`Save path "${savePath}" is outside allowed directories`);
   }
-  const savedPath = resolve(saveDirectory, attachmentName);
+  const savedPath = resolve2(saveDirectory, attachmentName);
   if (!isPathWithinAllowedRoots(savedPath)) {
     throw new Error(`Output path "${savedPath}" is outside allowed directories`);
   }
@@ -78422,16 +78482,9 @@ function escapeForAppleScriptBody(text) {
 }
 function buildAttachmentCommands(attachments) {
   if (!attachments || attachments.length === 0) return "";
-  for (const filePath of attachments) {
-    if (!isAbsolute(filePath)) {
-      throw new Error(`Attachment path must be absolute: "${filePath}"`);
-    }
-    if (!existsSync3(filePath)) {
-      throw new Error(`Attachment file not found: "${filePath}"`);
-    }
-  }
+  const readablePaths = attachments.map((filePath) => resolveAttachmentReadPath(filePath));
   let commands = "";
-  for (const filePath of attachments) {
+  for (const filePath of readablePaths) {
     const safePath = escapeForAppleScript(filePath);
     commands += `make new attachment with properties {file name:POSIX file "${safePath}"} at after the last paragraph
 `;
@@ -81169,12 +81222,12 @@ ${this.errorEmit("              ")}
     const safeName = escapeForAppleScript(attachmentName);
     let temporaryDirectory;
     try {
-      temporaryDirectory = mkdtempSync2(join4(target.saveDirectory, ".apple-mail-mcp-"));
+      temporaryDirectory = mkdtempSync2(join5(target.saveDirectory, ".apple-mail-mcp-"));
     } catch (error2) {
       console.error(`Failed to create attachment staging directory: ${error2}`);
       return false;
     }
-    const temporaryPath = join4(temporaryDirectory, "attachment");
+    const temporaryPath = join5(temporaryDirectory, "attachment");
     const safeTemporaryPath = escapeForAppleScript(temporaryPath);
     const cleanupTemporaryDirectory = () => {
       try {
@@ -81234,8 +81287,8 @@ ${this.errorEmit("              ")}
     }
     let mimeTemporaryDirectory;
     try {
-      mimeTemporaryDirectory = mkdtempSync2(join4(target.saveDirectory, ".apple-mail-mcp-"));
-      const mimeTemporaryPath = join4(mimeTemporaryDirectory, "attachment");
+      mimeTemporaryDirectory = mkdtempSync2(join5(target.saveDirectory, ".apple-mail-mcp-"));
+      const mimeTemporaryPath = join5(mimeTemporaryDirectory, "attachment");
       writeFileSync3(mimeTemporaryPath, attachment.data, { flag: "wx", mode: 384 });
       copyFileSync(mimeTemporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
       chmodSync(target.savedPath, 384);
@@ -81261,7 +81314,7 @@ ${this.errorEmit("              ")}
     let dir = null;
     try {
       dir = mkdtempSync2("/private/tmp/amcp-fetch-");
-      const dest = join4(dir, attachmentName.replace(/[/\\]/g, "_"));
+      const dest = join5(dir, attachmentName.replace(/[/\\]/g, "_"));
       const ok = this.saveAttachment(id, attachmentName, dir);
       if (!ok) {
         return {
@@ -81489,12 +81542,12 @@ ${this.errorEmit("              ")}
   // gives full control over criteria without UI/GUI scripting.
   // ===========================================================================
   findSyncedSmartPlist() {
-    const base = join4(homedir3(), "Library", "Mail");
+    const base = join5(homedir4(), "Library", "Mail");
     try {
       const versions = readdirSync2(base).filter((d) => d.startsWith("V"));
       versions.sort().reverse();
       for (const v of versions) {
-        const p = join4(base, v, "MailData", "SyncedSmartMailboxes.plist");
+        const p = join5(base, v, "MailData", "SyncedSmartMailboxes.plist");
         if (existsSync3(p)) return p;
       }
     } catch {
@@ -82440,8 +82493,6 @@ import { join as joinPath } from "path";
 // src/services/smtpMailer.ts
 var import_nodemailer = __toESM(require_nodemailer(), 1);
 import { execFileSync } from "child_process";
-import { isAbsolute as isAbsolute2 } from "path";
-import { existsSync as existsSync4 } from "fs";
 var SMTP_ENV = {
   host: "APPLE_MAIL_MCP_SMTP_HOST",
   port: "APPLE_MAIL_MCP_SMTP_PORT",
@@ -82523,9 +82574,7 @@ function buildAttachments(attachments) {
   if (!attachments || attachments.length === 0) return void 0;
   return attachments.map((a) => {
     if (typeof a === "string") {
-      if (!isAbsolute2(a)) throw new Error(`Attachment path must be absolute: "${a}"`);
-      if (!existsSync4(a)) throw new Error(`Attachment file not found: "${a}"`);
-      return { path: a };
+      return { path: resolveAttachmentReadPath(a) };
     }
     if (!a.filename || !a.contentBase64) {
       throw new Error("Inline attachment requires both filename and contentBase64.");
@@ -83784,7 +83833,7 @@ function createSerialGate(settleMs = 50) {
 }
 function settle(ms) {
   if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve2) => setTimeout(resolve2, ms));
+  return new Promise((resolve3) => setTimeout(resolve3, ms));
 }
 
 // src/tools/respond.ts
@@ -84390,18 +84439,18 @@ var ImapIdleWatcher = class {
 };
 
 // src/services/fileConfig.ts
-import { existsSync as existsSync5, readFileSync as readFileSync3 } from "fs";
-import { join as join5 } from "path";
-import { homedir as homedir4 } from "os";
+import { existsSync as existsSync4, readFileSync as readFileSync3 } from "fs";
+import { join as join6 } from "path";
+import { homedir as homedir5 } from "os";
 function fileConfigPath(env = process.env) {
   const override = env.APPLE_MAIL_MCP_CONFIG_FILE;
   if (override && override.trim()) return override.trim();
-  return join5(homedir4(), "Library", "Application Support", "apple-mail-mcp", "config.json");
+  return join6(homedir5(), "Library", "Application Support", "apple-mail-mcp", "config.json");
 }
 function loadFileConfig(env = process.env, path = fileConfigPath(env)) {
   const applied = [];
   try {
-    if (!existsSync5(path)) return applied;
+    if (!existsSync4(path)) return applied;
     const parsed = JSON.parse(readFileSync3(path, "utf8"));
     if (!parsed || typeof parsed !== "object") return applied;
     for (const [k, v] of Object.entries(parsed)) {
@@ -84832,11 +84881,11 @@ Do not use when: you don't yet have an id (use search-messages or list-messages 
       // structuredContent matches the AppleScript branch's shape.
       structuredFromResult: (r) => {
         if (!r.info) return void 0;
-        const sep2 = r.info.indexOf("\n\n");
+        const sep3 = r.info.indexOf("\n\n");
         return {
           id,
           subject: subjectFromGetMessage(r.info),
-          body: sep2 >= 0 ? r.info.slice(sep2 + 2) : r.info,
+          body: sep3 >= 0 ? r.info.slice(sep3 + 2) : r.info,
           isHtml: preferHtml === true,
           rfcMessageId: extractRfcMessageIdFromSource(r.info)
         };

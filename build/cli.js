@@ -48,7 +48,7 @@ var require_punycode = __commonJS({
     var damp = 700;
     var initialBias = 72;
     var initialN = 128;
-    var delimiter = "-";
+    var delimiter2 = "-";
     var regexPunycode = /^xn--/;
     var regexNonASCII = /[^\0-\x7F]/;
     var regexSeparators = /[\x2E\u3002\uFF0E\uFF61]/g;
@@ -139,7 +139,7 @@ var require_punycode = __commonJS({
       let i = 0;
       let n = initialN;
       let bias = initialBias;
-      let basic = input.lastIndexOf(delimiter);
+      let basic = input.lastIndexOf(delimiter2);
       if (basic < 0) {
         basic = 0;
       }
@@ -199,7 +199,7 @@ var require_punycode = __commonJS({
       const basicLength = output.length;
       let handledCPCount = basicLength;
       if (basicLength) {
-        output.push(delimiter);
+        output.push(delimiter2);
       }
       while (handledCPCount < inputLength) {
         let m = maxInt;
@@ -954,7 +954,7 @@ var require_shared = __commonJS({
       }
       return Object.keys(ifaces).map((key) => ifaces[key]).reduce((acc, val) => acc.concat(val), []).filter((i) => !i.internal || allowInternal).some((i) => i.family === "IPv" + family || i.family === family);
     };
-    var resolve = (family, hostname, options, callback) => {
+    var resolve2 = (family, hostname, options, callback) => {
       options = options || {};
       if (!isFamilySupported(family, options.allowInternalNetworkInterfaces)) {
         return callback(null, []);
@@ -1041,13 +1041,13 @@ var require_shared = __commonJS({
       let ipv6Addresses = [];
       let ipv4Error = null;
       let ipv6Error = null;
-      resolve(4, options.host, options, (err, addresses) => {
+      resolve2(4, options.host, options, (err, addresses) => {
         if (err) {
           ipv4Error = err;
         } else {
           ipv4Addresses = addresses || [];
         }
-        resolve(6, options.host, options, (err2, addresses2) => {
+        resolve2(6, options.host, options, (err2, addresses2) => {
           if (err2) {
             ipv6Error = err2;
           } else {
@@ -1236,13 +1236,13 @@ var require_shared = __commonJS({
       });
       return response;
     };
-    module.exports.callbackPromise = (resolve2, reject) => function() {
+    module.exports.callbackPromise = (resolve3, reject) => function() {
       const args = Array.from(arguments);
       const err = args.shift();
       if (err) {
         reject(err);
       } else {
-        resolve2(...args);
+        resolve3(...args);
       }
     };
     module.exports.parseDataURI = (uri) => {
@@ -1309,8 +1309,8 @@ var require_shared = __commonJS({
       options = options || {};
       let promise;
       if (!callback) {
-        promise = new Promise((resolve2, reject) => {
-          callback = module.exports.callbackPromise(resolve2, reject);
+        promise = new Promise((resolve3, reject) => {
+          callback = module.exports.callbackPromise(resolve3, reject);
         });
       }
       resolveContentValue(data, key, options, callback);
@@ -4981,8 +4981,8 @@ var require_mime_node = __commonJS({
       build(callback) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve, reject) => {
-            callback = shared.callbackPromise(resolve, reject);
+          promise = new Promise((resolve2, reject) => {
+            callback = shared.callbackPromise(resolve2, reject);
           });
         }
         const stream = this.createReadStream();
@@ -7211,8 +7211,8 @@ var require_mailer = __commonJS({
       sendMail(data, callback = null) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve, reject) => {
-            callback = shared.callbackPromise(resolve, reject);
+          promise = new Promise((resolve2, reject) => {
+            callback = shared.callbackPromise(resolve2, reject);
           });
         }
         if (typeof this.getSocket === "function") {
@@ -7920,7 +7920,7 @@ var require_smtp_connection = __commonJS({
           const handler = this.customAuth.get(this._authMethod);
           let lastResponse;
           let returned = false;
-          const resolve = () => {
+          const resolve2 = () => {
             if (returned) {
               return;
             }
@@ -7954,8 +7954,8 @@ var require_smtp_connection = __commonJS({
             sendCommand: (cmd, done) => {
               let promise;
               if (!done) {
-                promise = new Promise((resolve2, reject2) => {
-                  done = shared.callbackPromise(resolve2, reject2);
+                promise = new Promise((resolve3, reject2) => {
+                  done = shared.callbackPromise(resolve3, reject2);
                 });
               }
               this._responseActions.push((str) => {
@@ -7980,11 +7980,11 @@ var require_smtp_connection = __commonJS({
               setImmediate(() => this._sendCommand(cmd));
               return promise;
             },
-            resolve,
+            resolve: resolve2,
             reject
           });
           if (handlerResponse && typeof handlerResponse.catch === "function") {
-            handlerResponse.then(resolve).catch(reject);
+            handlerResponse.then(resolve2).catch(reject);
           }
           return;
         }
@@ -10695,8 +10695,8 @@ var require_smtp_pool = __commonJS({
       verify(callback) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve, reject) => {
-            callback = shared.callbackPromise(resolve, reject);
+          promise = new Promise((resolve2, reject) => {
+            callback = shared.callbackPromise(resolve2, reject);
           });
         }
         const auth = new PoolResource(this).auth;
@@ -11043,8 +11043,8 @@ var require_smtp_transport = __commonJS({
       verify(callback) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve, reject) => {
-            callback = shared.callbackPromise(resolve, reject);
+          promise = new Promise((resolve2, reject) => {
+            callback = shared.callbackPromise(resolve2, reject);
           });
         }
         this.getSocket(this.options, (err, socketOptions) => {
@@ -11697,8 +11697,8 @@ var require_ses_transport = __commonJS({
       verify(callback) {
         let promise;
         if (!callback) {
-          promise = new Promise((resolve, reject) => {
-            callback = shared.callbackPromise(resolve, reject);
+          promise = new Promise((resolve2, reject) => {
+            callback = shared.callbackPromise(resolve2, reject);
           });
         }
         const cb = (err) => {
@@ -11799,8 +11799,8 @@ var require_nodemailer = __commonJS({
         apiUrl = false;
       }
       if (!callback) {
-        promise = new Promise((resolve, reject) => {
-          callback = shared.callbackPromise(resolve, reject);
+        promise = new Promise((resolve2, reject) => {
+          callback = shared.callbackPromise(resolve2, reject);
         });
       }
       if (ETHEREAL_CACHE && testAccount) {
@@ -11877,15 +11877,13 @@ var require_nodemailer = __commonJS({
 });
 
 // src/cli.ts
-import { readFileSync, realpathSync } from "fs";
+import { readFileSync, realpathSync as realpathSync2 } from "fs";
 import { fileURLToPath } from "url";
 import { parseArgs } from "util";
 
 // src/services/smtpMailer.ts
 var import_nodemailer = __toESM(require_nodemailer(), 1);
 import { execFileSync } from "child_process";
-import { isAbsolute } from "path";
-import { existsSync } from "fs";
 
 // src/utils/attachmentLimits.ts
 var MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -11908,6 +11906,66 @@ function decodeInlineAttachment(contentBase64) {
     throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
   }
   return content;
+}
+
+// src/utils/attachmentReadPolicy.ts
+import { realpathSync, statSync } from "fs";
+import { homedir, tmpdir } from "os";
+import { delimiter, isAbsolute, join, resolve, sep } from "path";
+var ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
+var DEFAULT_ATTACHMENT_READ_ROOTS = [
+  join(homedir(), "Desktop"),
+  join(homedir(), "Documents"),
+  join(homedir(), "Downloads"),
+  tmpdir(),
+  "/tmp",
+  "/private/tmp"
+];
+function isWithinRoot(candidate, root) {
+  return candidate === root || candidate.startsWith(root + sep);
+}
+function configuredRoots(env) {
+  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
+  const requested = raw === void 0 ? DEFAULT_ATTACHMENT_READ_ROOTS : raw.split(delimiter).map((root) => root.trim()).filter(Boolean);
+  for (const root of requested) {
+    if (!isAbsolute(root)) {
+      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
+    }
+  }
+  const resolved = [];
+  for (const root of requested) {
+    try {
+      const canonical = realpathSync(resolve(root));
+      if (!resolved.includes(canonical)) resolved.push(canonical);
+    } catch {
+    }
+  }
+  return resolved;
+}
+function resolveAttachmentReadPath(filePath, env = process.env) {
+  if (!isAbsolute(filePath)) {
+    throw new Error(`Attachment path must be absolute: "${filePath}"`);
+  }
+  let canonical;
+  try {
+    canonical = realpathSync(filePath);
+  } catch {
+    throw new Error(`Attachment file not found: "${filePath}"`);
+  }
+  try {
+    if (!statSync(canonical).isFile()) {
+      throw new Error(`Attachment path is not a regular file: "${filePath}"`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("not a regular file")) throw error;
+    throw new Error(`Attachment file not found: "${filePath}"`);
+  }
+  if (!configuredRoots(env).some((root) => isWithinRoot(canonical, root))) {
+    throw new Error(
+      `Attachment path is outside the allowed read roots: "${filePath}". Use Desktop, Documents, Downloads, or a temporary directory, or configure ${ATTACHMENT_READ_ROOTS_ENV}.`
+    );
+  }
+  return canonical;
 }
 
 // src/utils/docsUrls.ts
@@ -11986,9 +12044,7 @@ function buildAttachments(attachments) {
   if (!attachments || attachments.length === 0) return void 0;
   return attachments.map((a) => {
     if (typeof a === "string") {
-      if (!isAbsolute(a)) throw new Error(`Attachment path must be absolute: "${a}"`);
-      if (!existsSync(a)) throw new Error(`Attachment file not found: "${a}"`);
-      return { path: a };
+      return { path: resolveAttachmentReadPath(a) };
     }
     if (!a.filename || !a.contentBase64) {
       throw new Error("Inline attachment requires both filename and contentBase64.");
@@ -12171,7 +12227,7 @@ async function runCli(argv, deps = {}) {
 function isInvokedDirectly() {
   if (typeof process === "undefined" || !process.argv?.[1]) return false;
   try {
-    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+    return realpathSync2(process.argv[1]) === fileURLToPath(import.meta.url);
   } catch {
     return false;
   }

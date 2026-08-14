@@ -35,7 +35,7 @@ afterEach(() => {
   h.savePath = "";
 });
 
-describe("saveAttachment path boundary", () => {
+describe("attachment path boundaries", () => {
   it("rejects an allowed-root symlink that resolves outside the allowed roots", () => {
     const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
     cleanup.push(root);
@@ -57,6 +57,7 @@ describe("saveAttachment path boundary", () => {
     expect(h.calls).toBe(0);
   });
 
+<<<<<<< HEAD
   it("rejects an existing regular-file destination", () => {
     const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
     cleanup.push(root);
@@ -67,6 +68,22 @@ describe("saveAttachment path boundary", () => {
     expect(h.calls).toBe(0);
   });
 
+||||||| parent of 3dcdbf1 (fix: constrain outbound attachment reads)
+=======
+  it("rejects an outbound attachment outside the default read roots", () => {
+    const root = mkdtempSync(join(homedir(), ".apple-mail-mcp-test-"));
+    cleanup.push(root);
+    const file = join(root, "private.txt");
+    writeFileSync(file, "private");
+
+    const mgr = new AppleMailManager();
+    expect(() =>
+      mgr.sendEmail(["to@example.com"], "subject", "body", undefined, undefined, undefined, [file])
+    ).toThrow(/outside the allowed read roots/);
+    expect(h.calls).toBe(0);
+  });
+
+>>>>>>> 3dcdbf1 (fix: constrain outbound attachment reads)
   it("uses a temporary directory when fetching attachment bytes", () => {
     const mgr = new AppleMailManager();
     const save = vi.spyOn(mgr, "saveAttachment").mockImplementation((_id, name, directory) => {

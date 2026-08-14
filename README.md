@@ -311,7 +311,7 @@ Send a new email immediately.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Mail.app account label, or an email-form SMTP From override. An SMTP override must match `APPLE_MAIL_MCP_SMTP_USER`, `APPLE_MAIL_MCP_SMTP_FROM`, or an address in `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` |
-| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths (e.g., `"/Users/me/report.pdf"`) and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
+| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths inside the configured read roots (e.g., `"/Users/me/Documents/report.pdf"`) and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 | `transport` | `"applescript"` \| `"smtp"` | No | Send transport. If omitted, **SMTP is used automatically when configured** (otherwise AppleScript). Pass `"smtp"` to require clean MIME, or `"applescript"` to force the Mail.app path — see [SMTP transport](#smtp-transport) |
 
 **Example:**
@@ -665,7 +665,7 @@ Save an email to Drafts without sending.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Account for draft |
-| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
+| `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths inside the configured read roots and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 
 **Returns:** Confirmation that draft was created.
 
@@ -1604,6 +1604,12 @@ The entrypoint is written as:
 - **Permission required** - macOS will prompt for automation permission on first use.
 - **No credential storage** - The server doesn't store any passwords or authentication tokens.
 - **Email safety** - Use `create-draft` to review emails before sending.
+- **Attachment read boundary** - Outbound file attachments are restricted to
+  `Desktop`, `Documents`, `Downloads`, and temporary directories by default.
+  Set `APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS` to a colon-separated list of
+  explicit absolute roots when a deliberate additional location is required.
+  Paths are canonicalized before use, so symlinks that escape those roots are
+  rejected. Inline base64 attachments are unaffected.
 
 ---
 
@@ -1613,7 +1619,7 @@ The entrypoint is written as:
 |------------|--------|
 | macOS only | Apple Mail and AppleScript are macOS-specific |
 | MCP `send-email` is plain-text | The `send-email` tool sends plain text (reading HTML content is supported). To send HTML, use the bundled `apple-mail-send` CLI with `--html-body-file` (sends `multipart/alternative` via SMTP) |
-| Attachments require absolute paths | File attachments must use full absolute paths (e.g., `/Users/me/file.pdf`) |
+| Attachment read path restrictions | Outbound file attachments must use full absolute paths inside the default `Desktop`, `Documents`, `Downloads`, or temporary roots. Set `APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS` to an explicit colon-separated absolute-root allowlist for other locations; symlink escapes are rejected. |
 | Smart mailboxes need Mail quit | Smart mailboxes are supported (see [Smart Mailbox Operations](#smart-mailbox-operations-intelligente-postfächer)), but `create-`/`delete-smart-mailbox` edit `SyncedSmartMailboxes.plist` directly — a running Mail may not show a new one until relaunched, and can overwrite plist edits it didn't make. Quit Mail first. Reading them needs Full Disk Access for the Node runtime |
 | Very large mailboxes not searchable *via AppleScript* | Apple Mail's AppleScript bridge times out on mailboxes with tens of thousands of messages, so unscoped `search-messages` skips mailboxes above `APPLE_MAIL_MAX_SEARCH_MAILBOX` (default 5000) and reports them as a partial result. Scope with `mailbox` + a date window — or configure the [IMAP backend](#imap-backend--opt-in), which searches these server-side in well under a second. ([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24)) |
 | Can't delete/rename server-side mailboxes or mutate drafts *via AppleScript* | Mail.app's AppleScript bridge can only `delete`/`rename` **local "On My Mac"** mailboxes and cannot delete/move drafts — it throws `AppleEvent handler failed` for IMAP/Gmail/Workspace/iCloud/Exchange mailboxes (the GUI can do it). Without IMAP configured, `delete-mailbox`/`rename-mailbox`/`delete-message`/`move-message` return a clear "do it in Mail.app directly" error instead of a generic failure. With the [IMAP backend](#imap-backend--opt-in) configured for the account, these operations run via IMAP and succeed. ([#42](https://github.com/sweetrb/apple-mail-mcp/issues/42)) |

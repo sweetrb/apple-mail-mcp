@@ -3,7 +3,8 @@
  *
  * The AppleScript send/draft path attaches files by POSIX path, so inline
  * base64 content is written to a throwaway temp dir first and cleaned up after
- * the operation. Plain string entries (existing absolute paths) pass through.
+ * the operation. Plain string entries are canonicalized and checked against
+ * the outbound attachment read policy.
  *
  * @module utils/attachmentMaterialize
  */
@@ -12,6 +13,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import type { AttachmentInput } from "@/types.js";
 import { decodeInlineAttachment } from "@/utils/attachmentLimits.js";
+import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
 
 export interface MaterializedAttachments {
   /** Absolute file paths ready to hand to the AppleScript attachment builder. */
@@ -28,7 +30,7 @@ export function materializeAttachments(attachments?: AttachmentInput[]): Materia
   let paths: string[];
   try {
     paths = attachments.map((a) => {
-      if (typeof a === "string") return a;
+      if (typeof a === "string") return resolveAttachmentReadPath(a);
       if (!a.filename || !a.contentBase64) {
         throw new Error("Inline attachment requires both filename and contentBase64.");
       }

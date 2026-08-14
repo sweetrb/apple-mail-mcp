@@ -18,10 +18,9 @@
 
 import nodemailer from "nodemailer";
 import { execFileSync } from "child_process";
-import { isAbsolute } from "path";
-import { existsSync } from "fs";
 import type { AttachmentInput } from "@/types.js";
 import { decodeInlineAttachment } from "@/utils/attachmentLimits.js";
+import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 
 /** Options for an SMTP send, mirroring the AppleScript send-email surface. */
@@ -34,7 +33,7 @@ export interface SmtpSendOptions {
   bcc?: string[];
   /** Overrides the configured From address (must be allowed by the SMTP server). */
   from?: string;
-  /** Files to attach: absolute paths and/or inline base64 content (B4). */
+  /** Files to attach: allowlisted absolute paths and/or inline base64 content (B4). */
   attachments?: AttachmentInput[];
   /**
    * Optional HTML body. When provided, the message is sent as
@@ -225,16 +224,15 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
 }
 
 /**
- * Validates attachment paths the same way the AppleScript path does: absolute
- * and existing. Returns nodemailer attachment descriptors.
+ * Validates attachment paths the same way the AppleScript path does: absolute,
+ * existing, regular, and inside an allowed read root. Returns nodemailer
+ * attachment descriptors.
  */
 function buildAttachments(attachments?: AttachmentInput[]) {
   if (!attachments || attachments.length === 0) return undefined;
   return attachments.map((a) => {
     if (typeof a === "string") {
-      if (!isAbsolute(a)) throw new Error(`Attachment path must be absolute: "${a}"`);
-      if (!existsSync(a)) throw new Error(`Attachment file not found: "${a}"`);
-      return { path: a };
+      return { path: resolveAttachmentReadPath(a) };
     }
     if (!a.filename || !a.contentBase64) {
       throw new Error("Inline attachment requires both filename and contentBase64.");

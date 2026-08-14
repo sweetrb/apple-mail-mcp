@@ -7,6 +7,9 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import {
   resolveSmtpConfig,
   sendViaSmtp,
@@ -292,6 +295,27 @@ describe("sendViaSmtp", () => {
     );
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/must be absolute/);
+  });
+
+  it("rejects an existing attachment outside the default read roots", async () => {
+    const dir = mkdtempSync(join(homedir(), ".apple-mail-mcp-read-test-"));
+    try {
+      const file = join(dir, "private.txt");
+      writeFileSync(file, "private");
+      const createTransport = vi.fn().mockReturnValue({ sendMail: vi.fn(), close: vi.fn() });
+
+      const r = await sendViaSmtp(
+        { to: ["b@example.com"], subject: "s", body: "b", attachments: [file] },
+        testConfig,
+        createTransport as never
+      );
+
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/outside the allowed read roots/);
+      expect(createTransport).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("uses the per-call from override when provided", async () => {

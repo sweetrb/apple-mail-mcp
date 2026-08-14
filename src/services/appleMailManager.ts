@@ -29,7 +29,7 @@ import {
   realpathSync,
   lstatSync,
 } from "fs";
-import { isAbsolute, resolve, sep, join } from "path";
+import { resolve, sep, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { executeAppleScript } from "@/utils/applescript.js";
@@ -37,6 +37,7 @@ import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { TemplateStore } from "@/services/templateStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
+import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
 import { searchContactsDb } from "@/utils/contactsDb.js";
 import {
   isAuditEnabled,
@@ -461,22 +462,15 @@ export function escapeForAppleScriptBody(text: string): string {
 /**
  * Validates attachment file paths and builds AppleScript commands to attach them.
  *
- * @param attachments - Absolute file paths to attach
+ * @param attachments - Absolute file paths in the configured read roots
  * @returns AppleScript commands to add attachments, or empty string if none
- * @throws Error if any path is not absolute or does not exist
+ * @throws Error if any path is not absolute, readable, regular, or allowlisted
  */
 function buildAttachmentCommands(attachments?: string[]): string {
   if (!attachments || attachments.length === 0) return "";
-  for (const filePath of attachments) {
-    if (!isAbsolute(filePath)) {
-      throw new Error(`Attachment path must be absolute: "${filePath}"`);
-    }
-    if (!existsSync(filePath)) {
-      throw new Error(`Attachment file not found: "${filePath}"`);
-    }
-  }
+  const readablePaths = attachments.map((filePath) => resolveAttachmentReadPath(filePath));
   let commands = "";
-  for (const filePath of attachments) {
+  for (const filePath of readablePaths) {
     const safePath = escapeForAppleScript(filePath);
     commands += `make new attachment with properties {file name:POSIX file "${safePath}"} at after the last paragraph\n`;
   }
@@ -2734,7 +2728,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
 
     // Inline (base64) attachments are written to temp files first (B4), then
-    // cleaned up after the send. Plain paths pass through unchanged.
+    // cleaned up after the send. Plain paths are canonicalized and checked
+    // against the attachment read policy first.
     const mat = materializeAttachments(attachments);
     try {
       return this.sendEmailWithPaths(
