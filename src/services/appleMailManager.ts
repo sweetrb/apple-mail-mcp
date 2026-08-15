@@ -43,6 +43,8 @@ import {
   isAuditEnabled,
   auditSubjectsEnabled,
   auditSnapshotMax,
+  auditSnapshotChunk,
+  SNAPSHOT_SLICE_ATTEMPTS,
   AUDIT_SNAPSHOT_MAX_ENV,
   type CountDelta,
   type AuditPreImage,
@@ -1105,10 +1107,24 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * into a SNAP record — the before/after pair the collateral diff subtracts.
    *
    * Empty string when the audit log is off or the snapshot is disabled, so the
-   * whole layer costs literally nothing by default. The two property reads are
-   * BULK (`id of messages of mb`, `message id of messages of mb`) — two Apple
-   * Events for the whole mailbox rather than two per message — and the joining
-   * is pure in-memory AppleScript.
+   * whole layer costs literally nothing by default. The property reads are BULK
+   * (`id of messages i thru j of mb`) — two Apple Events per SLICE rather than
+   * two per message — and the joining is pure in-memory AppleScript.
+   *
+   * ## Why it is sliced rather than one whole-mailbox read (#176)
+   *
+   * This used to be a single `id of messages of mb` pair. When Mail declined
+   * that request the entire snapshot came back `unavailable`, and the cost of
+   * the request grows with the mailbox — so the one mechanism that can attribute
+   * an unrequested departure was least reliable exactly when the batch and the
+   * mailbox, and therefore the blast radius, were largest. That correlation was
+   * the defect, not any individual failure.
+   *
+   * Now the mailbox is read in `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK`-sized
+   * slices; each slice is retried once on its own; and a slice that still will
+   * not read costs only its own range. The unreadable ranges are emitted in
+   * their own field, so the diff can report a PARTIAL snapshot that names its
+   * own gap instead of an all-or-nothing `unavailable`.
    *
    * Above `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX` messages the snapshot is skipped,
    * and the skip is EMITTED as a record with its reason. A silently skipped
@@ -1131,46 +1147,77 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   ): string {
     const max = auditSnapshotMax();
     if (!isAuditEnabled() || max <= 0) return "";
+    const chunk = auditSnapshotChunk();
     return `
         set _sStatus to "ok"
         set _sPayload to ""
-        set _sIds to {}
-        set _sMids to {}
+        set _sMiss to ""
+        set _sPairs to {}
+        set _sChunk to ${chunk}
         if ${countVar} < 0 then
           set _sStatus to "unavailable"
         else if ${countVar} > ${max} then
           set _sStatus to "skipped"
           set _sPayload to "mailbox holds " & (${countVar} as string) & " messages, above ${AUDIT_SNAPSHOT_MAX_ENV}=${max}"
         else
-          try
-            set _sIds to (id of messages of ${mbVar})
-            set _sMids to (message id of messages of ${mbVar})
-          on error
-            set _sStatus to "unavailable"
-          end try
-          if _sStatus is "ok" then
-            if (count of _sIds) is not (count of _sMids) then
+          set _sLo to 1
+          repeat while _sLo <= ${countVar}
+            set _sHi to _sLo + _sChunk - 1
+            if _sHi > ${countVar} then set _sHi to ${countVar}
+            set _sGot to false
+            repeat with _sTry from 1 to ${SNAPSHOT_SLICE_ATTEMPTS}
+              set _sIds to {}
+              set _sMids to {}
+              -- A slice is staged into _sBuf and merged only once it has been
+              -- read IN FULL. Appending as we go would leave a slice that threw
+              -- halfway both partially recorded AND marked unread, and the
+              -- retry would then record its messages a second time.
+              set _sBuf to {}
+              try
+                set _sIds to (id of messages _sLo thru _sHi of ${mbVar})
+                set _sMids to (message id of messages _sLo thru _sHi of ${mbVar})
+                if (class of _sIds) is not list then set _sIds to {_sIds}
+                if (class of _sMids) is not list then set _sMids to {_sMids}
+                if (count of _sIds) is (count of _sMids) then
+                  repeat with _q from 1 to (count of _sIds)
+                    set _sOne to ""
+                    try
+                      set _zSnapMid to ((item _q of _sMids) as string)${this.sanitizeFragment("_zSnapMid", "                      ")}
+                      set _sOne to ((item _q of _sIds) as string) & "${SNAP_PAIR}" & _zSnapMid
+                    on error
+                      set _sOne to ((item _q of _sIds) as string) & "${SNAP_PAIR}"
+                    end try
+                    set end of _sBuf to _sOne
+                  end repeat
+                  set _sGot to true
+                end if
+              end try
+              if _sGot then
+                repeat with _sB in _sBuf
+                  set end of _sPairs to (contents of _sB)
+                end repeat
+                exit repeat
+              end if
+            end repeat
+            if not _sGot then
+              if _sMiss is not "" then set _sMiss to _sMiss & ","
+              set _sMiss to _sMiss & (_sLo as string) & "-" & (_sHi as string)
+            end if
+            set _sLo to _sHi + 1
+          end repeat
+          if _sMiss is not "" then
+            if (count of _sPairs) is 0 then
               set _sStatus to "unavailable"
             else
-              set _sPairs to {}
-              repeat with _q from 1 to (count of _sIds)
-                set _sOne to ""
-                try
-                  set _zSnapMid to ((item _q of _sMids) as string)${this.sanitizeFragment("_zSnapMid", "                  ")}
-                  set _sOne to ((item _q of _sIds) as string) & "${SNAP_PAIR}" & _zSnapMid
-                on error
-                  set _sOne to ((item _q of _sIds) as string) & "${SNAP_PAIR}"
-                end try
-                set end of _sPairs to _sOne
-              end repeat
-              set _sTid to AppleScript's text item delimiters
-              set AppleScript's text item delimiters to "${SNAP_ITEM}"
-              set _sPayload to _sPairs as string
-              set AppleScript's text item delimiters to _sTid
+              set _sStatus to "partial"
             end if
           end if
+          set _sTid to AppleScript's text item delimiters
+          set AppleScript's text item delimiters to "${SNAP_ITEM}"
+          set _sPayload to _sPairs as string
+          set AppleScript's text item delimiters to _sTid
         end if
-        set _out to _out & "${SNAP_TAG}${FIELD_SEP}" & ${acctExpr} & "${FIELD_SEP}" & ${mbExpr} & "${FIELD_SEP}${phase}${FIELD_SEP}" & _sStatus & "${FIELD_SEP}" & _sPayload & "${RECORD_SEP}"`;
+        set _out to _out & "${SNAP_TAG}${FIELD_SEP}" & ${acctExpr} & "${FIELD_SEP}" & ${mbExpr} & "${FIELD_SEP}${phase}${FIELD_SEP}" & _sStatus & "${FIELD_SEP}" & _sPayload & "${FIELD_SEP}" & _sMiss & "${RECORD_SEP}"`;
   }
 
   /**
@@ -1235,6 +1282,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       phase: "before" | "after";
       status: string;
       payload: string;
+      /** 1-based position ranges this phase could not read ("251-500,900-1000"). */
+      miss: string;
     }[];
   } {
     const byId = new Map<string, BatchOperationResult>();
@@ -1257,6 +1306,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       phase: "before" | "after";
       status: string;
       payload: string;
+      miss: string;
     }[] = [];
 
     for (const rec of output.split(RECORD_SEP)) {
@@ -1281,6 +1331,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           phase: f[3] === "after" ? "after" : "before",
           status: f[4] ?? "",
           payload: f[5] ?? "",
+          miss: f[6] ?? "",
         });
         continue;
       }
@@ -1480,8 +1531,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         });
         continue;
       }
-      if (b.status !== "ok" || a.status !== "ok") {
-        const bad = b.status !== "ok" ? b : a;
+      // "skipped"/"unavailable" is terminal for the pair: nothing usable to
+      // diff. "partial" is NOT — it carries real entries plus a named gap.
+      const dead = (s: (typeof parsed.snaps)[number]): boolean =>
+        s.status !== "ok" && s.status !== "partial";
+      if (dead(b) || dead(a)) {
+        const bad = dead(b) ? b : a;
         collateral.push({
           account: g.account,
           mailbox: g.mailbox,
@@ -1505,13 +1560,45 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const unrequested = disappeared.filter(
         (e) => !requestedNumericIds.has(canonicalNumericId(e.id))
       );
+      // Each half of the diff is gated on the completeness of the snapshot that
+      // could REFUTE it, not on both (#176). A hole in `after` means a message
+      // absent from it may merely be unread, so `disappeared` would name
+      // innocent messages as collateral — the fabricated finding this layer must
+      // never produce. A hole in `before` only undercounts it, and symmetrically
+      // poisons `appeared`.
+      const holes = [b, a]
+        .filter((s) => s.miss !== "")
+        .map((s) => ({ phase: s.phase, ranges: s.miss }));
+      if (holes.length === 0) {
+        collateral.push({
+          account: g.account,
+          mailbox: g.mailbox,
+          snapshot: "ok",
+          disappeared,
+          unrequested,
+          appeared,
+        });
+        continue;
+      }
+      const derivable = [
+        a.miss === "" ? `what left the ${beforeEntries.length} message(s) read before it` : null,
+        b.miss === "" ? "what arrived during it" : null,
+      ].filter((s): s is string => s !== null);
       collateral.push({
         account: g.account,
         mailbox: g.mailbox,
-        snapshot: "ok",
-        disappeared,
-        unrequested,
-        appeared,
+        snapshot: "partial",
+        skipReason:
+          `Mail would not read ${holes.map((h) => `${h.ranges} (${h.phase})`).join(", ")} of ` +
+          `this mailbox, so the snapshot has a hole in it. ` +
+          (derivable.length > 0
+            ? `Still derivable and reported: ${derivable.join(" and ")}. `
+            : `Neither half of the diff is derivable from it. `) +
+          `Anything the unread range could refute is omitted rather than guessed — an absent ` +
+          `field here means "not computable", not "empty".`,
+        unobserved: holes,
+        ...(a.miss === "" ? { disappeared, unrequested } : {}),
+        ...(b.miss === "" ? { appeared } : {}),
       });
     }
 

@@ -1399,6 +1399,7 @@ batch of only `imap:` ids returns no `countDelta` rather than a fabricated one.
 | `APPLE_MAIL_MCP_AUDIT_LOG` | *(off)* | Absolute path to an NDJSON file. Setting it enables the audit log **and** the collateral diff below |
 | `APPLE_MAIL_MCP_AUDIT_SUBJECTS` | `0` | Set `1` to also record message **subjects**. Separate, deliberate second opt-in — see Privacy |
 | `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX` | `2000` | Skip the collateral snapshot for mailboxes larger than this many messages. `0` disables the snapshot entirely |
+| `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK` | `250` | How many messages the collateral snapshot reads from Mail per request. Lower it if Mail declines slices on a very large mailbox |
 
 When set, each destructive operation appends **one JSON object per line**
 containing: timestamp, tool name, server version, the arguments it was called
@@ -1451,12 +1452,45 @@ exceed AppleScript's 2^29 integer range (where Mail hands them back as
 compared in the raw form, a message you explicitly asked to delete would be
 reported here as collateral.
 
-This costs one bulk property read per snapshot and is O(mailbox size), so it is
-bounded by `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX`. When the bound bites, the record
-says so explicitly (`"snapshot": "skipped"` with a reason) rather than omitting
-the field — a silently skipped snapshot would read as "nothing collateral
-happened", which is worse than no snapshot at all. `countDelta` is unaffected by
-the skip and still reconciles the counts.
+This is O(mailbox size), so it is bounded by `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX`.
+When the bound bites, the record says so explicitly (`"snapshot": "skipped"` with
+a reason) rather than omitting the field — a silently skipped snapshot would read
+as "nothing collateral happened", which is worse than no snapshot at all.
+`countDelta` is unaffected by the skip and still reconciles the counts.
+
+#### Partial snapshots on large mailboxes
+
+The mailbox is read in `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK`-sized slices, each
+retried once on its own. It used to be a single whole-mailbox read, which meant
+Mail declining that one request lost the **entire** diff — and the bigger the
+mailbox, the more likely that was. The mechanism that attributes collateral
+damage was therefore least reliable exactly when the blast radius was largest.
+
+When a slice still will not read, the snapshot is reported as `partial` and it
+**names its own gap**:
+
+```json
+{
+  "snapshot": "partial",
+  "unobserved": [{ "phase": "after", "ranges": "251-500" }],
+  "appeared": [],
+  "skipReason": "Mail would not read 251-500 (after) of this mailbox, so the snapshot has a hole in it. …"
+}
+```
+
+Each half of the diff is withheld when the snapshot that could **refute** it has
+a hole, because a wrong name here is worse than a missing one:
+
+| Hole in | `disappeared` / `unrequested` | `appeared` |
+|---------|-------------------------------|------------|
+| neither (`"ok"`) | reported | reported |
+| `before` | reported (an undercount — a message never read before cannot be missed after) | withheld |
+| `after` | **withheld** — a message absent from a partial `after` may merely be unread, and naming it would present an innocent message as evidence of data loss | reported |
+| both | withheld | withheld |
+
+**An absent field means "not computable", never "empty".** Check
+`"snapshot": "ok"` before reading `disappeared` as a clean bill of health — the
+false-ok warning does exactly that, so a `partial` snapshot never triggers it.
 
 ### Privacy, and what the file costs you
 

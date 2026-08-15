@@ -60,9 +60,17 @@ export const AUDIT_LOG_ENV = "APPLE_MAIL_MCP_AUDIT_LOG";
 export const AUDIT_SUBJECTS_ENV = "APPLE_MAIL_MCP_AUDIT_SUBJECTS";
 /** Ceiling on the collateral snapshot, in messages per mailbox. `0` disables it. */
 export const AUDIT_SNAPSHOT_MAX_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX";
+/** How many messages the snapshot reads from Mail in ONE request. */
+export const AUDIT_SNAPSHOT_CHUNK_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK";
 
 /** Default collateral-snapshot ceiling (messages per mailbox). */
 export const DEFAULT_SNAPSHOT_MAX = 2000;
+
+/** Default snapshot slice size (messages per Apple Event round trip). */
+export const DEFAULT_SNAPSHOT_CHUNK = 250;
+
+/** How many times one slice is attempted before it is recorded as unobserved. */
+export const SNAPSHOT_SLICE_ATTEMPTS = 2;
 
 /** Truthy-string test shared with the rest of the server's env knobs. */
 function isOn(raw: string | undefined): boolean {
@@ -95,6 +103,28 @@ export function auditSnapshotMax(): number {
   if (raw === undefined || raw === "") return DEFAULT_SNAPSHOT_MAX;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_SNAPSHOT_MAX;
+  return Math.floor(n);
+}
+
+/**
+ * Snapshot slice size: how many messages are read from Mail per request.
+ *
+ * The snapshot used to issue ONE whole-mailbox read (`id of messages of mb`).
+ * That is the cheapest possible shape when it works, and it is also the shape
+ * that fails outright when Mail declines — which it does more often the bigger
+ * the mailbox is. So the one mechanism that can attribute collateral damage was
+ * least reliable exactly when the blast radius was largest (#176). Reading in
+ * bounded slices trades a few more Apple Events for a request size that stays
+ * constant as the mailbox grows, and lets a failure cost one slice instead of
+ * the whole snapshot.
+ *
+ * Clamped to at least 1 — a zero or negative slice would loop forever.
+ */
+export function auditSnapshotChunk(): number {
+  const raw = process.env[AUDIT_SNAPSHOT_CHUNK_ENV]?.trim();
+  if (raw === undefined || raw === "") return DEFAULT_SNAPSHOT_CHUNK;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_SNAPSHOT_CHUNK;
   return Math.floor(n);
 }
 
@@ -175,21 +205,59 @@ export interface CollateralDiff {
   account: string;
   mailbox: string;
   /**
-   * `ok` — both snapshots were taken and diffed.
+   * `ok` — both snapshots were read in full and diffed.
+   * `partial` — at least one snapshot has a hole: some slices of the mailbox
+   *   could not be read even after a retry. Some of the diff is still sound and
+   *   is reported; the rest is withheld. See `unobserved` and the rules below.
    * `skipped` — deliberately not taken (over the ceiling, or the ids had no
    *   single source mailbox). `skipReason` says which.
-   * `unavailable` — Mail would not produce the snapshot.
+   * `unavailable` — Mail produced no usable snapshot at all.
+   *
+   * ## Why `partial` withholds rather than reports whatever it has (#176)
+   *
+   * A hole in the AFTER snapshot poisons `disappeared`: a message read before
+   * and not read after may have left, or may simply be sitting in the range
+   * that could not be read. Reporting it would put an innocent message's name
+   * in front of someone mid-incident as evidence of data loss — a fabricated
+   * finding, which is worse than the gap it papers over. Symmetrically, a hole
+   * in the BEFORE snapshot poisons `appeared`.
+   *
+   * So each half of the diff is gated on the completeness of the snapshot that
+   * can refute it, not on both:
+   *
+   * - `disappeared` / `unrequested` — present only when the AFTER snapshot is
+   *   complete. A hole in BEFORE only makes them an UNDERCOUNT (a message never
+   *   read before cannot be missed after), which is honest as far as it goes.
+   * - `appeared` — present only when the BEFORE snapshot is complete.
+   *
+   * An absent array therefore means "not computable", never "empty". Consumers
+   * must not read `disappeared?.length ?? 0` as "nothing disappeared" — check
+   * `snapshot === "ok"` first, which is what `falseOkWarning` does.
    */
-  snapshot: "ok" | "skipped" | "unavailable";
+  snapshot: "ok" | "partial" | "skipped" | "unavailable";
   skipReason?: string;
-  /** Messages present before and absent after. */
+  /**
+   * The slices of the mailbox that could not be read, per phase — 1-based
+   * position ranges as Mail indexes them (`"251-500,900-1000"`). Present only
+   * when `snapshot === "partial"`, and this is what makes the gap nameable:
+   * "nothing unrequested left the 400 messages I could see, and I could not see
+   * the other 120" is strictly more useful than no diff at all.
+   */
+  unobserved?: { phase: "before" | "after"; ranges: string }[];
+  /**
+   * Messages present before and absent after. Omitted when the after snapshot
+   * is incomplete — see the `partial` rules above.
+   */
   disappeared?: { id: string; messageId: string }[];
   /**
    * The subset of `disappeared` whose numeric id was NEVER in the caller's id
    * list. A non-empty array here IS the #155 symptom, with names attached.
    */
   unrequested?: { id: string; messageId: string }[];
-  /** Messages absent before and present after (new mail arriving mid-op). */
+  /**
+   * Messages absent before and present after (new mail arriving mid-op).
+   * Omitted when the before snapshot is incomplete.
+   */
   appeared?: { id: string; messageId: string }[];
 }
 
@@ -331,6 +399,12 @@ export function countDeltaWarning(d: CountDelta): string | null {
  * Deliberately narrow: `observed === 0` only. A partial under (3 of 4 removed)
  * stays unwarned, because that is exactly where a flag-only account and a
  * partial failure DO look alike.
+ *
+ * `snapshot === "ok"` also excludes a PARTIAL snapshot (#176), and must keep
+ * doing so. A partial snapshot's `disappeared` is either absent or an
+ * undercount, so "nothing left the mailbox" is precisely the claim it cannot
+ * support — warning off it would fire on a flag-only account whose snapshot
+ * merely had a hole in it.
  */
 export function falseOkWarning(d: CountDelta, collateral?: CollateralDiff): string | null {
   if (d.status !== "under" || d.expected === null) return null;
