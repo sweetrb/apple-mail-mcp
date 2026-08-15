@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Changed
+
+- **Supply-chain soak raised from 1 day to 7 days** (`minimumReleaseAge: 10080` in
+  `pnpm-workspace.yaml`), thanks to [@anupamme](https://github.com/anupamme) in
+  [#174](https://github.com/sweetrb/apple-mail-mcp/pull/174). Development/CI-time policy
+  only -- no shipped bytes change. It is not redundant with Dependabot's existing 7-day
+  cooldown: the cooldown governs what Dependabot *proposes* (direct dependencies), while
+  `minimumReleaseAge` governs what a resolution *installs*, including transitives
+  Dependabot never sees. This repo was the one carrying such an entry -- a 5-day-old
+  transitive `ip-address@10.5.0`, admitted by the 1440 default with the cooldown fully in
+  force. Applied across all four Apple MCP repos so the value cannot drift.
+
 ## [2.10.32] - 2026-08-15
 
 ### Security
