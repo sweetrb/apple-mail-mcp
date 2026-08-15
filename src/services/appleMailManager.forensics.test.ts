@@ -56,6 +56,26 @@ const h = vi.hoisted(() => ({
   errorOn: {} as Record<string, string>,
   /** id → the "account/mailbox, " list Mail builds when an id is ambiguous. */
   ambiguousOn: {} as Record<string, string>,
+  /**
+   * How many messages Mail will answer for in ONE property request. A request
+   * covering more than this is REFUSED — which is #176: the whole-mailbox read
+   * the snapshot used to issue gets less likely to succeed the bigger the
+   * mailbox is, so the one mechanism that can attribute collateral damage was
+   * least reliable exactly when the blast radius was largest. `null` = Mail
+   * answers whatever it is asked.
+   */
+  bulkReadCeiling: null as number | null,
+  /**
+   * Position ranges ("101-200") Mail refuses no matter how often they are
+   * asked for, per phase — a slice that stays unreadable even after the retry.
+   */
+  failSliceAlways: { before: [] as string[], after: [] as string[] },
+  /**
+   * Ranges Mail refuses the FIRST time and answers on a second attempt. If the
+   * generated script does not retry, these come back unread — so the retry
+   * cannot be silently dropped and still pass.
+   */
+  failSliceOnce: [] as string[],
   account: "me@example.com",
   mailboxName: "INBOX",
 }));
@@ -163,6 +183,17 @@ function simulateDestructive(script: string): string {
   const before = h.mailbox.slice();
   let out = "";
 
+  // The slice size and retry budget the generated script asked for. `null` =
+  // the script issues ONE whole-mailbox read, which is what it did before #176.
+  const snapChunk = (() => {
+    const m = /set _sChunk to (\d+)/.exec(script);
+    return m ? Number(m[1]) : null;
+  })();
+  const snapAttempts = (() => {
+    const m = /repeat with _sTry from 1 to (\d+)/.exec(script);
+    return m ? Number(m[1]) : 1;
+  })();
+
   const emitSnapshot = (phase: "before" | "after", state: FakeMsg[]): void => {
     if (snapMax === null) return;
     if (state.length > snapMax) {
@@ -171,10 +202,34 @@ function simulateDestructive(script: string): string {
         `mailbox holds ${state.length} messages, above APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX=${snapMax}${RECORD_SEP}`;
       return;
     }
-    const payload = state
+    // Exactly the requests the script issues: one whole-mailbox read when it
+    // names no chunk size, otherwise consecutive slices of that size.
+    const slices: [number, number][] = [];
+    if (snapChunk === null) {
+      if (state.length > 0) slices.push([1, state.length]);
+    } else {
+      for (let lo = 1; lo <= state.length; lo += snapChunk) {
+        slices.push([lo, Math.min(lo + snapChunk - 1, state.length)]);
+      }
+    }
+    const observed: FakeMsg[] = [];
+    const missed: string[] = [];
+    for (const [lo, hi] of slices) {
+      const range = `${lo}-${hi}`;
+      const tooBig = h.bulkReadCeiling !== null && hi - lo + 1 > h.bulkReadCeiling;
+      const always = h.failSliceAlways[phase].includes(range);
+      // Answered on a retry — only if the script actually retries.
+      const transient = h.failSliceOnce.includes(range) && snapAttempts < 2;
+      if (tooBig || always || transient) missed.push(range);
+      else observed.push(...state.slice(lo - 1, hi));
+    }
+    const status = missed.length === 0 ? "ok" : observed.length === 0 ? "unavailable" : "partial";
+    const payload = observed
       .map((m) => `${asMailWouldRenderId(m.id)}${SNAP_PAIR}${asMailWouldEmit("_zSnapMid", m.mid)}`)
       .join(SNAP_ITEM);
-    out += `${SNAP_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${phase}${FIELD_SEP}ok${FIELD_SEP}${payload}${RECORD_SEP}`;
+    out +=
+      `${SNAP_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${phase}${FIELD_SEP}${status}` +
+      `${FIELD_SEP}${payload}${FIELD_SEP}${missed.join(",")}${RECORD_SEP}`;
   };
 
   emitSnapshot("before", before);
@@ -225,6 +280,7 @@ import {
   AUDIT_LOG_ENV,
   AUDIT_SUBJECTS_ENV,
   AUDIT_SNAPSHOT_MAX_ENV,
+  AUDIT_SNAPSHOT_CHUNK_ENV,
   reconciliationWarnings,
   writeDestructiveAudit,
   falseOkWarning,
@@ -256,10 +312,14 @@ beforeEach(() => {
   h.flagOnlyDelete = false;
   h.errorOn = {};
   h.ambiguousOn = {};
+  h.bulkReadCeiling = null;
+  h.failSliceAlways = { before: [], after: [] };
+  h.failSliceOnce = [];
   tmp = mkdtempSync(join(tmpdir(), "amcp-audit-"));
   delete process.env[AUDIT_LOG_ENV];
   delete process.env[AUDIT_SUBJECTS_ENV];
   delete process.env[AUDIT_SNAPSHOT_MAX_ENV];
+  delete process.env[AUDIT_SNAPSHOT_CHUNK_ENV];
   seed(SAMPLE);
 });
 
@@ -267,6 +327,7 @@ afterEach(() => {
   delete process.env[AUDIT_LOG_ENV];
   delete process.env[AUDIT_SUBJECTS_ENV];
   delete process.env[AUDIT_SNAPSHOT_MAX_ENV];
+  delete process.env[AUDIT_SNAPSHOT_CHUNK_ENV];
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -802,6 +863,166 @@ describe("collateral identification (opt-in, gated on the audit log)", () => {
     mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
     expect(h.calls[1]).not.toContain(SNAP_TAG);
     expect(mgr.consumeLastForensics()!.collateral).toEqual([]);
+  });
+
+  // =========================================================================
+  // #176 — the snapshot must not give up on a big mailbox
+  //
+  // Before this, the snapshot issued ONE whole-mailbox read. When Mail declined
+  // it the whole diff came back `unavailable`, and declining gets more likely
+  // the bigger the mailbox is — so the only mechanism that can attribute an
+  // unrequested departure was least reliable exactly when the batch and the
+  // blast radius were largest. That correlation is the defect.
+  //
+  // `h.bulkReadCeiling` is what makes these tests real: the simulator refuses
+  // any request covering more messages than Mail will answer for, so a script
+  // that still asks for the whole mailbox gets `unavailable` and these fail.
+  // =========================================================================
+  describe("large mailboxes (#176)", () => {
+    /** A mailbox of `n` messages, ids ascending from 90000. */
+    const many = (n: number): FakeMsg[] =>
+      Array.from({ length: n }, (_, i) => ({
+        id: String(90000 + i),
+        mid: `m${i}@example.com`,
+        subject: `Message ${i}`,
+      }));
+
+    it("still names collateral on a mailbox too big for one whole-mailbox read", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
+      seed(many(600));
+      h.bulkReadCeiling = 250; // Mail will not answer for 600 at once
+      h.collateral = ["90500"]; // a message the caller never named leaves
+      mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
+      const report = mgr.consumeLastForensics()!;
+      const [c] = report.collateral;
+      // Every slice fits under the ceiling, so the snapshot is COMPLETE — the
+      // pre-#176 code asked for all 600 at once and got "unavailable" here.
+      expect(c.snapshot).toBe("ok");
+      expect(c.unrequested).toEqual([{ id: "90500", messageId: "m500@example.com" }]);
+      expect(reconciliationWarnings(report)).toHaveLength(1);
+    });
+
+    it("reads the mailbox in bounded slices rather than all at once", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
+      seed(many(600));
+      mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
+      const script = h.calls.find((s) => s.includes("delete _msg"))!;
+      expect(script).toContain("id of messages _sLo thru _sHi of _tmb");
+      expect(script).toContain("set _sChunk to 100");
+      // The unbounded form is what #176 is about; it must be gone.
+      expect(script).not.toContain("id of messages of _tmb");
+      // Structural, because the mock cannot simulate an AppleScript raising
+      // PART WAY through a slice: entries are staged into _sBuf and merged only
+      // after the slice completes. Appending straight into _sPairs would leave a
+      // half-read slice both recorded AND marked unread, so the retry would
+      // record its messages twice.
+      expect(script).toContain("set end of _sBuf to _sOne");
+      expect(script).not.toContain("set end of _sPairs to _sOne");
+    });
+
+    it("retries a slice that fails once, and loses nothing", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
+      seed(many(250));
+      // The ceiling is what stops this passing on the un-sliced code: a single
+      // 250-message read is refused outright there, so the retry has to sit on
+      // top of slicing to mean anything.
+      h.bulkReadCeiling = 150;
+      h.failSliceOnce = ["101-200"]; // answered on the second attempt only
+      h.collateral = ["90150"]; // inside the flaky slice
+      mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
+      const [c] = mgr.consumeLastForensics()!.collateral;
+      expect(c.snapshot).toBe("ok");
+      expect(c.unrequested).toEqual([{ id: "90150", messageId: "m150@example.com" }]);
+    });
+
+    it("reports a PARTIAL snapshot naming its gap instead of giving up", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
+      seed(many(250));
+      // One slice stays unreadable in both phases. 150 of 250 messages are
+      // still observed, and that is worth reporting.
+      h.failSliceAlways = { before: ["101-200"], after: ["101-200"] };
+      mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
+      const [c] = mgr.consumeLastForensics()!.collateral;
+      expect(c.snapshot).toBe("partial");
+      expect(c.unobserved).toEqual([
+        { phase: "before", ranges: "101-200" },
+        { phase: "after", ranges: "101-200" },
+      ]);
+      expect(c.skipReason).toContain("101-200");
+      // Neither half is derivable: both snapshots have a hole, so a message
+      // missing from `after` may merely be unread. Naming it would fabricate a
+      // collateral finding — the one thing this layer must never do.
+      expect(c.disappeared).toBeUndefined();
+      expect(c.unrequested).toBeUndefined();
+      expect(c.appeared).toBeUndefined();
+    });
+
+    it("still reports what left when only the BEFORE snapshot has a hole", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
+      seed(many(250));
+      h.failSliceAlways = { before: ["101-200"], after: [] };
+      h.collateral = ["90050"]; // in a range BEFORE could read
+      mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
+      const [c] = mgr.consumeLastForensics()!.collateral;
+      expect(c.snapshot).toBe("partial");
+      // `after` is complete, so nothing read before can be hiding in it: what
+      // is missing really left. An undercount, not a fabrication.
+      expect(c.unrequested).toEqual([{ id: "90050", messageId: "m50@example.com" }]);
+      // `appeared` is the half BEFORE's hole poisons, so it is withheld.
+      expect(c.appeared).toBeUndefined();
+      expect(c.unobserved).toEqual([{ phase: "before", ranges: "101-200" }]);
+    });
+
+    it("withholds what left when only the AFTER snapshot has a hole", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
+      seed(many(250));
+      h.failSliceAlways = { before: [], after: ["101-200"] };
+      mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
+      const [c] = mgr.consumeLastForensics()!.collateral;
+      expect(c.snapshot).toBe("partial");
+      // ~100 messages were read before and not after purely because that range
+      // could not be re-read. Reporting them as gone would name innocent
+      // messages as evidence of data loss.
+      expect(c.disappeared).toBeUndefined();
+      expect(c.unrequested).toBeUndefined();
+      expect(c.appeared).toEqual([]);
+    });
+
+    it("falls back to unavailable when no slice reads at all", () => {
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
+      seed(many(250));
+      h.bulkReadCeiling = 10; // even a slice is too big
+      mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
+      const [c] = mgr.consumeLastForensics()!.collateral;
+      // Reached by way of the sliced path — every slice was attempted and
+      // refused — not because the script never tried to slice at all.
+      expect(h.calls.find((s) => s.includes("delete _msg"))).toContain("set _sChunk to 100");
+      expect(c.snapshot).toBe("unavailable");
+      expect(c.disappeared).toBeUndefined();
+      expect(c.unobserved).toBeUndefined();
+    });
+
+    it("never lets a partial snapshot raise the false-ok warning", () => {
+      // A flag-only account whose snapshot merely had a hole must not be told
+      // its delete silently did nothing.
+      process.env[AUDIT_LOG_ENV] = auditFile();
+      process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
+      seed(many(250));
+      h.flagOnlyDelete = true; // reports ok, nothing leaves the mailbox
+      h.failSliceAlways = { before: [], after: ["101-200"] };
+      mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
+      const report = mgr.consumeLastForensics()!;
+      expect(report.countDeltas[0]).toMatchObject({ observed: 0, expected: 1, status: "under" });
+      expect(report.collateral[0].snapshot).toBe("partial");
+      expect(reconciliationWarnings(report)).toEqual([]);
+    });
   });
 });
 

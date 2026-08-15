@@ -1,7 +1,42 @@
 ## [Unreleased]
 
+## [2.10.33] - 2026-08-15
+
+### Fixed
+
+- **The collateral snapshot no longer gives up on a large mailbox**
+  ([#176](https://github.com/sweetrb/apple-mail-mcp/issues/176)). It used to issue one
+  whole-mailbox property read; when Mail declined it, the entire diff came back
+  `"snapshot": "unavailable"` and an unrequested departure became un-attributable. The
+  cost of that request grows with the mailbox, so the one mechanism that can attribute
+  collateral damage was **least** reliable exactly when the batch and the blast radius
+  were largest — that correlation was the defect, not any individual failure. Reported by
+  [@scottstern0325](https://github.com/scottstern0325) on a 29-id batch, during which an
+  Amazon shipment notice they had never named left INBOX and could not be attributed.
+
+  The mailbox is now read in `APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK`-sized slices (default
+  250), each retried once on its own, so a refusal costs one slice instead of the whole
+  snapshot.
+
+### Added
+
+- **`"snapshot": "partial"` — a diff that names its own gap.** When a slice still will not
+  read, the record reports what it *could* observe plus an `unobserved` list of the
+  unreadable position ranges per phase, instead of the old all-or-nothing `unavailable`.
+  "Nothing unrequested left the 400 messages I could see, and I could not see the other
+  120" is strictly more useful than no diff, and honest about the hole.
+- **`APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK`** (default `250`) — messages read per request.
+
 ### Changed
 
+- **Each half of the collateral diff is now gated on the snapshot that could refute it.**
+  `disappeared` / `unrequested` are reported only when the **after** snapshot is complete;
+  `appeared` only when the **before** snapshot is. A message absent from a partial `after`
+  may merely be unread, so naming it would put an innocent message in front of someone
+  mid-incident as evidence of data loss — a fabricated finding is worse than a stated gap.
+  **An absent field now means "not computable", not "empty"**; check `"snapshot": "ok"`
+  before reading `disappeared` as a clean result. The false-ok warning already required
+  `"ok"`, so a `partial` snapshot cannot raise it.
 - **Supply-chain soak raised from 1 day to 7 days** (`minimumReleaseAge: 10080` in
   `pnpm-workspace.yaml`), thanks to [@anupamme](https://github.com/anupamme) in
   [#174](https://github.com/sweetrb/apple-mail-mcp/pull/174). Development/CI-time policy
