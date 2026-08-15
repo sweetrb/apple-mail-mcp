@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+## [2.10.32] - 2026-08-15
+
+### Security
+
+- **`nodemailer` 9.0.4 → 9.0.5 — header-injection hardening on the outbound path.**
+  Upstream keeps control characters out of header values and msg-id headers, encodes
+  DEL in header parameters, escapes specials in `List-*` header comments, normalizes an
+  address parsed out of a string so the header and the envelope agree, and stops a
+  header-key callback and the DKIM tags from injecting. This is the library that builds
+  every message `send-email` hands to SMTP, and it is inlined into the committed bundle.
+- **`imapflow` 1.6.5 → 1.6.6 — hardened parsing of untrusted IMAP server response
+  values.** Every direct-IMAP read path parses those values, and the library is likewise
+  inlined into the committed bundle. Continues the hardening line whose 1.6.4
+  command-injection fix shipped in 2.10.11.
+
+### Changed
+
+- Lockfile regenerated from a fresh resolution, which also drops a duplicate
+  `ip-address@10.5.0` in favour of the `10.4.0` already present. No source change; the
+  committed bundle is rebuilt against the new resolution.
+
 ## [2.10.31] - 2026-08-14
 
 ### Fixed
