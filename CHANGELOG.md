@@ -27,6 +27,16 @@
   120" is strictly more useful than no diff, and honest about the hole.
 - **`APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK`** (default `250`) — messages read per request.
 
+### Documentation
+
+- **`fetch-attachment`'s description no longer claims it works "without touching disk".**
+  On the AppleScript path Mail writes the attachment into a private temp directory, which
+  is read back and deleted — no file is left behind, but the operation is not disk-free.
+  The description now says that, and states that the tool needs **no Full Disk Access**
+  (Mail performs the write under the Automation grant; this server never reads the mail
+  store). Prompted by a review of the Hermes catalog entry that inferred an FDA
+  requirement from the silence.
+
 ### Changed
 
 - **Each half of the collateral diff is now gated on the snapshot that could refute it.**
