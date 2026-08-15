@@ -6922,9 +6922,9 @@ var require_dist = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/punycode/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/punycode/index.js
 var require_punycode = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/punycode/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/punycode/index.js"(exports, module) {
     "use strict";
     var maxInt = 2147483647;
     var base = 36;
@@ -7164,9 +7164,9 @@ var require_punycode = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/shared/url.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/shared/url.js
 var require_url = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/shared/url.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/shared/url.js"(exports, module) {
     "use strict";
     var urllib = __require("url");
     var punycode = require_punycode();
@@ -7253,9 +7253,9 @@ var require_url = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/fetch/cookies.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/fetch/cookies.js
 var require_cookies = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/fetch/cookies.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/fetch/cookies.js"(exports, module) {
     "use strict";
     var urllib = require_url();
     var SESSION_TIMEOUT = 1800;
@@ -7461,12 +7461,12 @@ var require_cookies = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/package.json
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/package.json
 var require_package = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/package.json"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/package.json"(exports, module) {
     module.exports = {
       name: "nodemailer",
-      version: "9.0.4",
+      version: "9.0.5",
       description: "Easy as cake e-mail sending from your Node.js applications",
       main: "lib/nodemailer.js",
       scripts: {
@@ -7493,12 +7493,12 @@ var require_package = __commonJS({
       },
       homepage: "https://nodemailer.com/",
       devDependencies: {
-        "@aws-sdk/client-sesv2": "3.1096.0",
+        "@aws-sdk/client-sesv2": "3.1104.0",
         bunyan: "1.8.15",
         c8: "12.0.0",
         eslint: "10.8.0",
         "eslint-config-prettier": "10.1.8",
-        globals: "17.8.0",
+        globals: "17.9.0",
         libbase64: "1.3.0",
         libmime: "5.4.1",
         libqp: "2.1.1",
@@ -7514,9 +7514,9 @@ var require_package = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/errors.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/errors.js
 var require_errors2 = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/errors.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/errors.js"(exports, module) {
     "use strict";
     var ERROR_CODES = {
       // Connection errors
@@ -7555,9 +7555,9 @@ var require_errors2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/fetch/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/fetch/index.js
 var require_fetch = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/fetch/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/fetch/index.js"(exports, module) {
     "use strict";
     var http = __require("http");
     var https = __require("https");
@@ -7807,9 +7807,9 @@ var require_fetch = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/shared/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/shared/index.js
 var require_shared = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/shared/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/shared/index.js"(exports, module) {
     "use strict";
     var urllib = require_url();
     var util2 = __require("util");
@@ -8350,9 +8350,9 @@ var require_shared = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-funcs/mime-types.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-funcs/mime-types.js
 var require_mime_types = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-funcs/mime-types.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-funcs/mime-types.js"(exports, module) {
     "use strict";
     var path = __require("path");
     var defaultMimeType = "application/octet-stream";
@@ -10454,9 +10454,9 @@ var require_mime_types = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/base64/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/base64/index.js
 var require_base64 = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/base64/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/base64/index.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     function encode(buffer) {
@@ -10553,9 +10553,9 @@ var require_base64 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/qp/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/qp/index.js
 var require_qp = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/qp/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/qp/index.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var QP_RANGES = [
@@ -10717,9 +10717,9 @@ var require_qp = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-funcs/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-funcs/index.js
 var require_mime_funcs = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-funcs/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-funcs/index.js"(exports, module) {
     "use strict";
     var base642 = require_base64();
     var qp = require_qp();
@@ -10731,7 +10731,8 @@ var require_mime_funcs = __commonJS({
        * When isParam is set the value is destined for a header parameter, so HT, CR and LF
        * are not plaintext either: a header parameter has no way to carry them. HT is a valid
        * fold point, so folding and unfolding a header would rewrite it as a space, and CR/LF
-       * cannot appear in a header value at all. Such values have to go through the rfc2231
+       * cannot appear in a header value at all. DEL is neither a token character nor qtext,
+       * so it can not be carried bare or quoted. Such values have to go through the rfc2231
        * parameter continuation encoding instead, the same way a quote already does.
        *
        * @param {String} value String to be tested
@@ -10739,8 +10740,18 @@ var require_mime_funcs = __commonJS({
        * @returns {Boolean} true if it is a plaintext string
        */
       isPlainText(value, isParam) {
-        const re = isParam ? /[\x00-\x1f"\u0080-\uFFFF]/ : /[\x00-\x08\x0b\x0c\x0e-\x1f\u0080-\uFFFF]/;
+        const re = isParam ? /[\x00-\x1f\x7f"\u0080-\uFFFF]/ : /[\x00-\x08\x0b\x0c\x0e-\x1f\u0080-\uFFFF]/;
         return typeof value === "string" && !re.test(value);
+      },
+      /**
+       * Wraps a value into a quoted-string. Inside one a quote would end the string early
+       * and a backslash would escape whatever follows it, so both go out as quoted-pairs.
+       *
+       * @param {String} value String to be quoted
+       * @returns {String} The value as a quoted-string, quotes included
+       */
+      quoteString(value) {
+        return '"' + (value || "").toString().replace(/["\\]/g, "\\$&") + '"';
       },
       /**
        * Checks if a multi line string containes lines longer than the selected value.
@@ -10856,23 +10867,25 @@ var require_mime_funcs = __commonJS({
        */
       buildHeaderValue(structured) {
         const paramsArray = [];
-        Object.keys(structured.params || {}).forEach((param) => {
-          const value = structured.params[param];
-          if (!this.isPlainText(value, true) || value.length >= 75) {
-            this.buildHeaderParam(param, value, 50).forEach((encodedParam) => {
+        Object.keys(structured.params || {}).forEach((key) => {
+          const value2 = structured.params[key];
+          const param = key.replace(/[\x00-\x1f\x7f]/g, "");
+          if (!this.isPlainText(value2, true) || value2.length >= 75) {
+            this.buildHeaderParam(param, value2, 50).forEach((encodedParam) => {
               if (!/[\s"\\;:/=(),<>@[\]?]|^[-']|'$/.test(encodedParam.value) || encodedParam.key.substr(-1) === "*") {
                 paramsArray.push(encodedParam.key + "=" + encodedParam.value);
               } else {
                 paramsArray.push(encodedParam.key + "=" + JSON.stringify(encodedParam.value));
               }
             });
-          } else if (/[\s'"\\;:/=(),<>@[\]?]|^-/.test(value)) {
-            paramsArray.push(param + "=" + JSON.stringify(value));
+          } else if (/[\s'"\\;:/=(),<>@[\]?]|^-/.test(value2)) {
+            paramsArray.push(param + "=" + JSON.stringify(value2));
           } else {
-            paramsArray.push(param + "=" + value);
+            paramsArray.push(param + "=" + value2);
           }
         });
-        return structured.value + (paramsArray.length ? "; " + paramsArray.join("; ") : "");
+        const value = typeof structured.value === "string" ? structured.value.replace(/[\x00-\x1f\x7f]/g, "") : structured.value;
+        return value + (paramsArray.length ? "; " + paramsArray.join("; ") : "");
       },
       /**
        * Encodes a string or an Buffer to an UTF-8 Parameter Value Continuation encoding (rfc2231)
@@ -10948,7 +10961,7 @@ var require_mime_funcs = __commonJS({
                     encoded
                   });
                   line = "";
-                  startPos = i - 1;
+                  encoded = true;
                 } else {
                   encoded = true;
                   i = startPos;
@@ -11214,10 +11227,21 @@ var require_mime_funcs = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/addressparser/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/addressparser/index.js
 var require_addressparser = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/addressparser/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/addressparser/index.js"(exports, module) {
     "use strict";
+    function _quoteLocalPart(address) {
+      const lastAt = address.lastIndexOf("@");
+      if (lastAt < 0) {
+        return address;
+      }
+      const user = address.substr(0, lastAt);
+      if (/^[^\s"(),:;<>@[\\\]]+$/.test(user) || /^"(?:[^"\\]|\\[\s\S])*"$/.test(user)) {
+        return address;
+      }
+      return '"' + user.replace(/["\\]/g, "\\$&") + '"@' + address.substr(lastAt + 1);
+    }
     function _handleAddress(tokens, depth) {
       let isGroup = false;
       let state = "text";
@@ -11330,6 +11354,7 @@ var require_addressparser = __commonJS({
         if (data.address.length > 1) {
           data.text = data.text.concat(data.address.splice(1));
         }
+        const addressFromQuotedText = !data.address.length && data.textWasQuoted.some((wasQuoted) => wasQuoted);
         data.text = data.text.join(" ");
         data.address = data.address.join(" ");
         const address = {
@@ -11342,6 +11367,9 @@ var require_addressparser = __commonJS({
           } else {
             address.address = "";
           }
+        }
+        if (addressFromQuotedText && address.address) {
+          address.address = _quoteLocalPart(address.address);
         }
         addresses.push(address);
       }
@@ -11506,9 +11534,9 @@ var require_addressparser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/last-newline.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/last-newline.js
 var require_last_newline = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/last-newline.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/last-newline.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LastNewline = class extends Transform {
@@ -11539,9 +11567,9 @@ var require_last_newline = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/le-windows.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/le-windows.js
 var require_le_windows = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/le-windows.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/le-windows.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LeWindows = class extends Transform {
@@ -11581,9 +11609,9 @@ var require_le_windows = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/le-unix.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/le-unix.js
 var require_le_unix = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/le-unix.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/le-unix.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LeUnix = class extends Transform {
@@ -11616,9 +11644,9 @@ var require_le_unix = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/index.js
 var require_mime_node = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mime-node/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/index.js"(exports, module) {
     "use strict";
     var crypto = __require("crypto");
     var fs = __require("fs");
@@ -11635,6 +11663,10 @@ var require_mime_node = __commonJS({
     var LeWindows = require_le_windows();
     var LeUnix = require_le_unix();
     var FORMATTED_HEADERS = ["From", "Sender", "To", "Cc", "Bcc", "Reply-To", "Date", "References"];
+    var ATEXT = "[A-Za-z0-9!#$%&'*+\\-/=?^_`{|}~\\x80-\\uFFFF]";
+    var DOT_ATOM = new RegExp("^" + ATEXT + "+(?:\\." + ATEXT + "+)*$");
+    var QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"$/;
+    var PLAIN_ADDRESS = /^[^\s"(),:;<>@[\\\]]+@[^\s"(),:;<>@[\\\]]+$/;
     var MimeNode = class _MimeNode {
       constructor(contentType, options) {
         this.nodeCounter = 0;
@@ -11989,13 +12021,14 @@ var require_mime_node = __commonJS({
               break;
             case "Content-Type":
               structured = mimeFuncs.parseHeaderValue(value);
+              structured.value = (structured.value || "").toString().replace(/[\x00-\x1f\x7f]/g, "");
               this._handleContentType(structured);
               if (structured.value.match(/^text\/plain\b/) && typeof this.content === "string" && /[\u0080-\uFFFF]/.test(this.content)) {
                 structured.params.charset = "utf-8";
               }
               value = mimeFuncs.buildHeaderValue(structured);
               if (this.filename) {
-                param = /[\x00-\x1f]/.test(this.filename) ? mimeFuncs.encodeWord(this.filename, this._getTextEncoding(this.filename), 52) : this._encodeWords(this.filename);
+                param = /[\x00-\x1f\x7f]/.test(this.filename) ? mimeFuncs.encodeWord(this.filename, this._getTextEncoding(this.filename), 52) : this._encodeWords(this.filename);
                 if (param !== this.filename || /[\s'"\\;:/=(),<>@[\]?]|^-/.test(param)) {
                   param = JSON.stringify(param);
                 }
@@ -12014,8 +12047,9 @@ var require_mime_node = __commonJS({
           }
           if (typeof this.normalizeHeaderKey === "function") {
             const normalized = this.normalizeHeaderKey(key, value);
-            if (normalized && typeof normalized === "string" && normalized.length) {
-              key = normalized;
+            const cleaned = typeof normalized === "string" ? normalized.replace(/[\x00-\x1f\x7f]/g, "") : "";
+            if (cleaned) {
+              key = cleaned;
             }
           }
           headers.push(mimeFuncs.foldLines(key + ": " + value, 76));
@@ -12216,7 +12250,7 @@ var require_mime_node = __commonJS({
         };
         if (envelope.from) {
           list = [];
-          this._convertAddresses(this._parseAddresses(envelope.from), list);
+          this._convertAddresses(this._parseEnvelopeAddresses(envelope.from), list);
           list = list.filter((address) => address && address.address);
           if (list.length && list[0]) {
             this._envelope.from = list[0].address;
@@ -12224,7 +12258,7 @@ var require_mime_node = __commonJS({
         }
         ["to", "cc", "bcc"].forEach((key) => {
           if (envelope[key]) {
-            this._convertAddresses(this._parseAddresses(envelope[key]), this._envelope.to);
+            this._convertAddresses(this._parseEnvelopeAddresses(envelope[key]), this._envelope.to);
           }
         });
         this._envelope.to = this._envelope.to.map((to) => to.address).filter((address) => address);
@@ -12379,13 +12413,57 @@ var require_mime_node = __commonJS({
           [],
           [].concat(addresses).map((address) => {
             if (address && address.address) {
-              address.address = this._normalizeAddress(address.address);
-              address.name = address.name || "";
-              return [address];
+              const normalized = this._normalizeAddress(address.address);
+              if (normalized === address.address && typeof address.name === "string") {
+                return [address];
+              }
+              const copy = Object.assign({}, address);
+              copy.address = normalized;
+              copy.name = address.name || "";
+              return [copy];
             }
-            return addressparser(address);
+            return this._normalizeParsedAddresses(addressparser(address));
           })
         );
+      }
+      /**
+       * Normalizes the addresses of a freshly parsed address list, groups included.
+       *
+       * Everything this method returns carries a normalized address, whether it arrived as an
+       * object or was parsed out of a header value. Without this the two shapes disagree, and
+       * a consumer reading the parsed form back is handed the ambiguous
+       * 'user@evil.com@good.com' that the header and the envelope no longer carry.
+       *
+       * @param {Array} parsed An array of address objects, as returned by addressparser
+       * @return {Array} The same array, with every address normalized
+       */
+      _normalizeParsedAddresses(parsed) {
+        parsed.forEach((entry) => {
+          if (entry.address) {
+            entry.address = this._normalizeAddress(entry.address);
+          } else if (entry.group) {
+            this._normalizeParsedAddresses(entry.group);
+          }
+        });
+        return parsed;
+      }
+      /**
+       * Parses the addresses of an explicitly set envelope.
+       *
+       * An envelope value is an addr-spec and never a display name, so a bare local username
+       * such as 'root' is the address here. Header parsing has to read the same value as a
+       * display name, as a value with no '@' in it can not be an addr-spec in a header.
+       *
+       * @param {Mixed} addresses Addresses to be parsed
+       * @return {Array} An array of address objects
+       */
+      _parseEnvelopeAddresses(addresses) {
+        return this._parseAddresses(addresses).map((entry) => {
+          if (entry.address || entry.group || !entry.name || /[\s@]/.test(entry.name)) {
+            return entry;
+          }
+          return { address: this._normalizeAddress(entry.name), name: "" };
+        });
       }
       /**
        * Normalizes a header key, uses Camel-Case form, except for uppercase MIME-
@@ -12394,7 +12472,7 @@ var require_mime_node = __commonJS({
        * @return {String} key in Camel-Case form
        */
       _normalizeHeaderKey(key) {
-        key = (key || "").toString().replace(/\r?\n|\r/g, " ").trim().toLowerCase().replace(/^X-SMTPAPI$|^(MIME|DKIM|ARC|BIMI)\b|^[a-z]|-(SPF|FBL|ID|MD5)$|-[a-z]/gi, (c) => c.toUpperCase()).replace(/^Content-Features$/i, "Content-features");
+        key = (key || "").toString().replace(/\r?\n|\r/g, " ").replace(/[\x00-\x1f\x7f]/g, "").trim().toLowerCase().replace(/^X-SMTPAPI$|^(MIME|DKIM|ARC|BIMI)\b|^[a-z]|-(SPF|FBL|ID|MD5)$|-[a-z]/gi, (c) => c.toUpperCase()).replace(/^Content-Features$/i, "Content-features");
         return key;
       }
       /**
@@ -12441,7 +12519,7 @@ var require_mime_node = __commonJS({
           case "Message-ID":
           case "In-Reply-To":
           case "Content-Id":
-            value = (value || "").toString().replace(/\r?\n|\r/g, " ");
+            value = (value || "").toString().replace(/\r?\n|\r/g, " ").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
             if (value.charAt(0) !== "<") {
               value = "<" + value;
             }
@@ -12454,7 +12532,7 @@ var require_mime_node = __commonJS({
             value = [].concat.apply(
               [],
               [].concat(value || "").map((elm) => {
-                elm = (elm || "").toString().replace(/\r?\n|\r/g, " ").trim();
+                elm = (elm || "").toString().replace(/\r?\n|\r/g, " ").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").trim();
                 return elm.replace(/<[^>]*>/g, (str2) => str2.replace(/\s/g, "")).split(/\s+/);
               })
             ).map((elm) => {
@@ -12472,13 +12550,13 @@ var require_mime_node = __commonJS({
               return value.toUTCString().replace(/GMT/, "+0000");
             }
             value = (value || "").toString().replace(/\r?\n|\r/g, " ");
-            return this._encodeWords(value);
+            return this._encodeHeaderText(value);
           case "Content-Type":
           case "Content-Disposition":
             return (value || "").toString().replace(/\r?\n|\r/g, " ");
           default:
             value = (value || "").toString().replace(/\r?\n|\r/g, " ");
-            return this._encodeWords(value);
+            return this._encodeHeaderText(value);
         }
       }
       /**
@@ -12495,7 +12573,7 @@ var require_mime_node = __commonJS({
           if (address.address) {
             address.address = this._normalizeAddress(address.address);
             if (!address.name) {
-              values.push(address.address.indexOf(" ") >= 0 ? `<${address.address}>` : `${address.address}`);
+              values.push(PLAIN_ADDRESS.test(address.address) ? address.address : `<${address.address}>`);
             } else {
               values.push(`${this._encodeAddressName(address.name)} <${address.address}>`);
             }
@@ -12516,12 +12594,15 @@ var require_mime_node = __commonJS({
        * @return {String} address string
        */
       _normalizeAddress(address) {
-        address = (address || "").toString().replace(/[\x00-\x1F<>]+/g, " ").trim();
-        const lastAt = address.lastIndexOf("@");
-        if (lastAt < 0) {
+        address = (address || "").toString().replace(/[\x00-\x1F\x7F<>]+/g, " ").trim();
+        if (!address) {
           return address;
         }
-        let user = address.substr(0, lastAt);
+        const lastAt = address.lastIndexOf("@");
+        if (lastAt < 0) {
+          return this._normalizeLocalPart(address);
+        }
+        const user = address.substr(0, lastAt);
         const domain = address.substr(lastAt + 1);
         let encodedDomain = domain;
         try {
@@ -12532,15 +12613,25 @@ var require_mime_node = __commonJS({
           }
         } catch (_err) {
         }
-        if (user.indexOf(" ") >= 0) {
-          if (user.charAt(0) !== '"') {
-            user = '"' + user;
-          }
-          if (user.substr(-1) !== '"') {
-            user = user + '"';
-          }
+        return `${this._normalizeLocalPart(user)}@${encodedDomain}`;
+      }
+      /**
+       * Normalizes the local part of an address into a form that can be emitted as is.
+       *
+       * A local part is either a dot-atom or a quoted-string, anything else is not a valid
+       * addr-spec. The quotes of a quoted local part get lost along the way, and a bare
+       * 'user@evil.com@good.com' leaves it to the receiver which '@' splits the domain off,
+       * while the split here is always at the last one. So whatever is not already one of
+       * the two valid forms goes back out as a quoted-string.
+       *
+       * @param {String} user Local part of an address
+       * @return {String} Local part as a dot-atom or as a quoted-string
+       */
+      _normalizeLocalPart(user) {
+        if (DOT_ATOM.test(user) || QUOTED_STRING.test(user)) {
+          return user;
         }
-        return `${user}@${encodedDomain}`;
+        return mimeFuncs.quoteString(user);
       }
       /**
        * If needed, mime encodes the name part
@@ -12551,12 +12642,26 @@ var require_mime_node = __commonJS({
       _encodeAddressName(name) {
         if (!/^[\w ]*$/.test(name)) {
           if (/^[\x20-\x7e]*$/.test(name)) {
-            return '"' + name.replace(/([\\"])/g, "\\$1") + '"';
+            return mimeFuncs.quoteString(name);
           } else {
             return mimeFuncs.encodeWord(name, this._getTextEncoding(name), 52);
           }
         }
         return name;
+      }
+      /**
+       * Encodes an unstructured header value. Such a value can only carry VCHAR and WSP, so a
+       * control char or DEL has to be forced into the mime encoded word that a non-ascii value
+       * would get anyway. HT stays as it is, it is valid folding whitespace here.
+       *
+       * @param {String} value Header value to encode
+       * @returns {String} Mime word encoded string if needed
+       */
+      _encodeHeaderText(value) {
+        return /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value) ? mimeFuncs.encodeWord(value, this._getTextEncoding(value), 52) : (
+          // encodeWords only encodes if needed, otherwise the original string is returned
+          this._encodeWords(value)
+        );
       }
       /**
        * If needed, mime encodes the name part
@@ -12608,9 +12713,9 @@ var require_mime_node = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mail-composer/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mail-composer/index.js
 var require_mail_composer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mail-composer/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mail-composer/index.js"(exports, module) {
     "use strict";
     var MimeNode = require_mime_node();
     var mimeFuncs = require_mime_funcs();
@@ -13095,9 +13200,9 @@ var require_mail_composer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/message-parser.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/message-parser.js
 var require_message_parser = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/message-parser.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/message-parser.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var MessageParser = class extends Transform {
@@ -13224,9 +13329,9 @@ var require_message_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/relaxed-body.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/relaxed-body.js
 var require_relaxed_body = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/relaxed-body.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/relaxed-body.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var crypto = __require("crypto");
@@ -13333,9 +13438,9 @@ var require_relaxed_body = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/sign.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/sign.js
 var require_sign = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/sign.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/sign.js"(exports, module) {
     "use strict";
     var punycode = require_punycode();
     var mimeFuncs = require_mime_funcs();
@@ -13359,15 +13464,16 @@ var require_sign = __commonJS({
     };
     module.exports.relaxedHeaders = relaxedHeaders;
     function generateDKIMHeader(domainName, keySelector, fieldNames, hashAlgo, bodyHash) {
+      const cleanTagValue = (value) => (value || "").toString().replace(/[\x00-\x1f\x7f;=]/g, "");
       const dkim = [
         "v=1",
         "a=rsa-" + hashAlgo,
         "c=relaxed/relaxed",
-        "d=" + punycode.toASCII(domainName),
+        "d=" + punycode.toASCII(cleanTagValue(domainName)),
         "q=dns/txt",
-        "s=" + keySelector,
+        "s=" + cleanTagValue(keySelector),
         "bh=" + bodyHash,
-        "h=" + fieldNames
+        "h=" + cleanTagValue(fieldNames)
       ].join("; ");
       return mimeFuncs.foldLines("DKIM-Signature: " + dkim, 76) + ";\r\n b=";
     }
@@ -13406,9 +13512,9 @@ var require_sign = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/index.js
 var require_dkim = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/dkim/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/index.js"(exports, module) {
     "use strict";
     var MessageParser = require_message_parser();
     var RelaxedBody = require_relaxed_body();
@@ -13601,9 +13707,9 @@ var require_dkim = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js
 var require_http_proxy_client = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js"(exports, module) {
     "use strict";
     var net = __require("net");
     var tls = __require("tls");
@@ -13717,9 +13823,9 @@ var require_http_proxy_client = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mailer/mail-message.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mailer/mail-message.js
 var require_mail_message = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mailer/mail-message.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mailer/mail-message.js"(exports, module) {
     "use strict";
     var shared = require_shared();
     var MimeNode = require_mime_node();
@@ -13836,7 +13942,7 @@ var require_mail_message = __commonJS({
         setImmediate(() => resolveNext());
       }
       normalize(callback) {
-        const envelope = this.data.envelope || this.message.getEnvelope();
+        const envelope = this.message.getEnvelope();
         const messageId = this.message.messageId();
         this.resolveAll((err, data) => {
           if (err) {
@@ -13946,19 +14052,13 @@ var require_mail_message = __commonJS({
                 };
               }
               if (value2 && value2.url) {
-                if (key.toLowerCase().trim() === "id") {
-                  let comment2 = (value2.comment || "").toString().replace(/\r?\n|\r/g, " ");
-                  if (mimeFuncs.isPlainText(comment2)) {
-                    comment2 = '"' + comment2 + '"';
-                  } else {
-                    comment2 = mimeFuncs.encodeWord(comment2);
-                  }
-                  return (value2.comment ? comment2 + " " : "") + this._formatListUrl(value2.url).replace(/^<[^:]+:\/{0,2}/, "<");
-                }
                 let comment = (value2.comment || "").toString().replace(/\r?\n|\r/g, " ");
-                if (!mimeFuncs.isPlainText(comment)) {
-                  comment = mimeFuncs.encodeWord(comment);
+                const needsEncoding = !mimeFuncs.isPlainText(comment) || /\x7f/.test(comment);
+                if (key.toLowerCase().trim() === "id") {
+                  comment = needsEncoding ? mimeFuncs.encodeWord(comment) : mimeFuncs.quoteString(comment);
+                  return (value2.comment ? comment + " " : "") + this._formatListUrl(value2.url).replace(/^<[^:]+:\/{0,2}/, "<");
                 }
+                comment = needsEncoding ? mimeFuncs.encodeWord(comment) : comment.replace(/[()\\]/g, "\\$&");
                 return this._formatListUrl(value2.url) + (value2.comment ? " (" + comment + ")" : "");
               }
               return "";
@@ -13967,7 +14067,7 @@ var require_mail_message = __commonJS({
         }));
       }
       _formatListUrl(url) {
-        url = url.replace(/[\s<]+|[\s>]+/g, "");
+        url = url.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").replace(/[\s<]+|[\s>]+/g, "");
         if (/^(https?|mailto|ftp):/.test(url)) {
           return "<" + url + ">";
         }
@@ -13981,9 +14081,9 @@ var require_mail_message = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mailer/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mailer/index.js
 var require_mailer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/mailer/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mailer/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var shared = require_shared();
@@ -14372,9 +14472,9 @@ var require_mailer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/data-stream.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/data-stream.js
 var require_data_stream = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/data-stream.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/data-stream.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var DataStream = class extends Transform {
@@ -14459,9 +14559,9 @@ var require_data_stream = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/index.js
 var require_smtp_connection = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-connection/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/index.js"(exports, module) {
     "use strict";
     var packageInfo = require_package();
     var { EventEmitter } = __require("events");
@@ -15960,9 +16060,9 @@ var require_smtp_connection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/xoauth2/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/xoauth2/index.js
 var require_xoauth2 = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/xoauth2/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/xoauth2/index.js"(exports, module) {
     "use strict";
     var { Stream } = __require("stream");
     var nmfetch = require_fetch();
@@ -16320,9 +16420,9 @@ var require_xoauth2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-pool/pool-resource.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-pool/pool-resource.js
 var require_pool_resource = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-pool/pool-resource.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-pool/pool-resource.js"(exports, module) {
     "use strict";
     var SMTPConnection = require_smtp_connection();
     var assign = require_shared().assign;
@@ -16541,9 +16641,9 @@ var require_pool_resource = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/well-known/services.json
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/well-known/services.json
 var require_services = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/well-known/services.json"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/well-known/services.json"(exports, module) {
     module.exports = {
       "1und1": {
         description: "1&1 Mail (German hosting provider)",
@@ -17093,9 +17193,9 @@ var require_services = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/well-known/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/well-known/index.js
 var require_well_known = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/well-known/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/well-known/index.js"(exports, module) {
     "use strict";
     var services = require_services();
     var normalized = {};
@@ -17129,9 +17229,9 @@ var require_well_known = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-pool/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-pool/index.js
 var require_smtp_pool = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-pool/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-pool/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var PoolResource = require_pool_resource();
@@ -17668,9 +17768,9 @@ var require_smtp_pool = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-transport/index.js
 var require_smtp_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/smtp-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-transport/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var SMTPConnection = require_smtp_connection();
@@ -18037,9 +18137,9 @@ var require_smtp_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/sendmail-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/sendmail-transport/index.js
 var require_sendmail_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/sendmail-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/sendmail-transport/index.js"(exports, module) {
     "use strict";
     var { spawn } = __require("child_process");
     var packageData = require_package();
@@ -18079,10 +18179,10 @@ var require_sendmail_transport = __commonJS({
        */
       send(mail, done) {
         mail.message.keepBcc = true;
-        const envelope = mail.data.envelope || mail.message.getEnvelope();
+        const envelope = mail.message.getEnvelope();
         const messageId = mail.message.messageId();
         let returned;
-        const hasInvalidAddresses = [].concat(envelope.from || []).concat(envelope.to || []).some((addr) => /^-/.test(addr));
+        const hasInvalidAddresses = [].concat(envelope.from || []).concat(envelope.to || []).some((addr) => /^"?-/.test(addr));
         if (hasInvalidAddresses) {
           const err = new Error("Can not send mail. Invalid envelope addresses.");
           err.code = errors.ESENDMAIL;
@@ -18213,9 +18313,9 @@ var require_sendmail_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/stream-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/stream-transport/index.js
 var require_stream_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/stream-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/stream-transport/index.js"(exports, module) {
     "use strict";
     var packageData = require_package();
     var shared = require_shared();
@@ -18240,7 +18340,7 @@ var require_stream_transport = __commonJS({
        */
       send(mail, done) {
         mail.message.keepBcc = true;
-        const envelope = mail.data.envelope || mail.message.getEnvelope();
+        const envelope = mail.message.getEnvelope();
         const messageId = mail.message.messageId();
         const recipients = [].concat(envelope.to || []);
         if (recipients.length > 3) {
@@ -18334,9 +18434,9 @@ var require_stream_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/json-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/json-transport/index.js
 var require_json_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/json-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/json-transport/index.js"(exports, module) {
     "use strict";
     var packageData = require_package();
     var shared = require_shared();
@@ -18358,7 +18458,7 @@ var require_json_transport = __commonJS({
        */
       send(mail, done) {
         mail.message.keepBcc = true;
-        const envelope = mail.data.envelope || mail.message.getEnvelope();
+        const envelope = mail.message.getEnvelope();
         const messageId = mail.message.messageId();
         const recipients = [].concat(envelope.to || []);
         if (recipients.length > 3) {
@@ -18403,9 +18503,9 @@ var require_json_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/ses-transport/index.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/ses-transport/index.js
 var require_ses_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/ses-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/ses-transport/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var packageData = require_package();
@@ -18452,7 +18552,7 @@ var require_ses_transport = __commonJS({
           const mimeNode = new MimeNode("text/plain");
           fromHeader = mimeNode._convertAddresses(mimeNode._parseAddresses(fromHeader.value));
         }
-        const envelope = mail.data.envelope || mail.message.getEnvelope();
+        const envelope = mail.message.getEnvelope();
         const messageId = mail.message.messageId();
         const recipients = [].concat(envelope.to || []);
         if (recipients.length > 3) {
@@ -18622,9 +18722,9 @@ var require_ses_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/nodemailer.js
+// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/nodemailer.js
 var require_nodemailer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.4/node_modules/nodemailer/lib/nodemailer.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/nodemailer.js"(exports, module) {
     "use strict";
     var Mailer = require_mailer();
     var shared = require_shared();
@@ -23242,9 +23342,9 @@ var require_pino = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/logger.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/logger.js
 var require_logger = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/logger.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/logger.js"(exports, module) {
     "use strict";
     var logger = require_pino()();
     logger.level = "trace";
@@ -43476,9 +43576,9 @@ var require_src = __commonJS({
   }
 });
 
-// node_modules/.pnpm/libmime@5.4.1/node_modules/libmime/lib/charsets.js
+// node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/charsets.js
 var require_charsets = __commonJS({
-  "node_modules/.pnpm/libmime@5.4.1/node_modules/libmime/lib/charsets.js"(exports, module) {
+  "node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/charsets.js"(exports, module) {
     "use strict";
     module.exports = {
       "866": "IBM866",
@@ -43691,9 +43791,9 @@ var require_charsets = __commonJS({
   }
 });
 
-// node_modules/.pnpm/libmime@5.4.1/node_modules/libmime/lib/charset.js
+// node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/charset.js
 var require_charset = __commonJS({
-  "node_modules/.pnpm/libmime@5.4.1/node_modules/libmime/lib/charset.js"(exports, module) {
+  "node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/charset.js"(exports, module) {
     "use strict";
     var { Buffer: Buffer2 } = __require("node:buffer");
     var iconv = require_lib();
@@ -44170,9 +44270,9 @@ var require_libqp = __commonJS({
   }
 });
 
-// node_modules/.pnpm/libmime@5.4.1/node_modules/libmime/lib/mimetypes.js
+// node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/mimetypes.js
 var require_mimetypes = __commonJS({
-  "node_modules/.pnpm/libmime@5.4.1/node_modules/libmime/lib/mimetypes.js"(exports, module) {
+  "node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/mimetypes.js"(exports, module) {
     "use strict";
     module.exports = {
       list: {
@@ -46221,9 +46321,9 @@ var require_mimetypes = __commonJS({
   }
 });
 
-// node_modules/.pnpm/libmime@5.4.1/node_modules/libmime/lib/libmime.js
+// node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/libmime.js
 var require_libmime = __commonJS({
-  "node_modules/.pnpm/libmime@5.4.1/node_modules/libmime/lib/libmime.js"(exports, module) {
+  "node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/libmime.js"(exports, module) {
     "use strict";
     var { Buffer: Buffer2 } = __require("node:buffer");
     var libcharset = require_charset();
@@ -46232,6 +46332,20 @@ var require_libmime = __commonJS({
     var mimetypes = require_mimetypes();
     var STAGE_KEY = 4097;
     var STAGE_VALUE = 4098;
+    var setOwnProperty = (obj, key, value) => {
+      if (key === "__proto__") {
+        Object.defineProperty(obj, key, {
+          value,
+          writable: true,
+          enumerable: true,
+          configurable: true
+        });
+      } else {
+        obj[key] = value;
+      }
+    };
+    var hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+    var isWSP = (chr) => chr === " " || chr === "	" || chr === "\r" || chr === "\n" || chr === "\f" || chr === "\v";
     var Libmime = class {
       constructor(config2) {
         this.config = config2 || {};
@@ -46512,20 +46626,26 @@ var require_libmime = __commonJS({
        * header might have its own rules (eg. formatted email addresses and such)
        *
        * @param {String} headers Headers string
-       * @return {Object} An object of headers, where header keys are object keys. NB! Several values with the same key make up an Array
+       * @return {Object} An object of headers, where header keys are object keys and every value is an Array of the values for that key
        */
       decodeHeaders(headers) {
         let lines = headers.split(/\r?\n|\r/), headersObj = {}, header, i, len;
-        for (i = lines.length - 1; i >= 0; i--) {
-          if (i && lines[i].match(/^\s/)) {
+        let headersPos = 0;
+        while (headersPos < lines.length && lines[headersPos] === "") {
+          headersPos++;
+        }
+        let bodyPos = lines.indexOf("", headersPos);
+        lines = lines.slice(headersPos, bodyPos >= 0 ? bodyPos : lines.length);
+        for (i = lines.length - 1; i > 0; i--) {
+          if (/^[ \t]/.test(lines[i])) {
             lines[i - 1] += "\r\n" + lines[i];
             lines.splice(i, 1);
           }
         }
         for (i = 0, len = lines.length; i < len; i++) {
           header = this.decodeHeader(lines[i]);
-          if (!headersObj[header.key]) {
-            headersObj[header.key] = [header.value];
+          if (!hasOwn(headersObj, header.key)) {
+            setOwnProperty(headersObj, header.key, [header.value]);
           } else {
             headersObj[header.key].push(header.value);
           }
@@ -46563,7 +46683,7 @@ var require_libmime = __commonJS({
        * Parses a header value with key=value arguments into a structured
        * object.
        *
-       *   parseHeaderValue('content-type: text/plain; CHARSET='UTF-8'') ->
+       *   parseHeaderValue('text/plain; CHARSET=UTF-8') ->
        *   {
        *     'value': 'text/plain',
        *     'params': {
@@ -46581,101 +46701,109 @@ var require_libmime = __commonJS({
         };
         let key = false;
         let value = "";
+        let valueEnd = 0;
         let stage = STAGE_VALUE;
         let quote = false;
         let escaped = false;
         let chr;
+        let commit = () => {
+          let collected = value.substring(0, valueEnd);
+          value = "";
+          valueEnd = 0;
+          if (stage === STAGE_KEY) {
+            if (collected) {
+              setOwnProperty(response.params, collected.toLowerCase(), "");
+            }
+          } else if (key === false) {
+            response.value = collected;
+          } else {
+            setOwnProperty(response.params, key, collected);
+          }
+        };
         for (let i = 0, len = str2.length; i < len; i++) {
           chr = str2.charAt(i);
           switch (stage) {
             case STAGE_KEY:
               if (chr === "=") {
-                key = value.trim().toLowerCase();
-                stage = STAGE_VALUE;
+                key = value.substring(0, valueEnd).toLowerCase();
                 value = "";
-                break;
+                valueEnd = 0;
+                stage = STAGE_VALUE;
+              } else if (chr === ";") {
+                commit();
+              } else if (isWSP(chr)) {
+                if (value.length) {
+                  value += chr;
+                }
+              } else {
+                value += chr;
+                valueEnd = value.length;
               }
-              value += chr;
               break;
             case STAGE_VALUE:
               if (escaped) {
                 value += chr;
+                valueEnd = value.length;
               } else if (chr === "\\") {
                 escaped = true;
                 continue;
-              } else if (quote && chr === quote) {
-                quote = false;
-              } else if (!quote && chr === '"') {
-                quote = chr;
+              } else if (chr === '"') {
+                quote = !quote;
               } else if (!quote && chr === ";") {
-                if (key === false) {
-                  response.value = value.trim();
-                } else {
-                  response.params[key] = value.trim();
-                }
+                commit();
                 stage = STAGE_KEY;
-                value = "";
+              } else if (!quote && isWSP(chr)) {
+                if (value.length) {
+                  value += chr;
+                }
               } else {
                 value += chr;
+                valueEnd = value.length;
               }
               escaped = false;
               break;
           }
         }
-        value = value.trim();
-        if (stage === STAGE_VALUE) {
-          if (key === false) {
-            response.value = value;
-          } else {
-            response.params[key] = value;
-          }
-        } else if (value) {
-          response.params[value.toLowerCase()] = "";
-        }
-        Object.keys(response.params).forEach((key2) => {
-          let actualKey;
-          let nr;
-          let value2;
+        commit();
+        let continuations = /* @__PURE__ */ new Map();
+        for (let key2 of Object.keys(response.params)) {
           let match = key2.match(/\*((\d+)\*?)?$/);
           if (!match) {
-            return;
+            continue;
           }
-          actualKey = key2.substr(0, match.index).toLowerCase();
-          nr = Number(match[2]) || 0;
-          if (!response.params[actualKey] || typeof response.params[actualKey] !== "object") {
-            response.params[actualKey] = {
+          let actualKey = key2.substr(0, match.index).toLowerCase();
+          let nr = Number(match[2]) || 0;
+          let value2 = response.params[key2];
+          delete response.params[key2];
+          let continuation = continuations.get(actualKey);
+          if (!continuation) {
+            continuation = {
               charset: false,
               values: []
             };
+            continuations.set(actualKey, continuation);
           }
-          value2 = response.params[key2];
           if (nr === 0 && match[0].charAt(match[0].length - 1) === "*" && (match = value2.match(/^([^']*)'[^']*'(.*)$/))) {
-            response.params[actualKey].charset = match[1] || "utf-8";
+            continuation.charset = match[1] || "utf-8";
             value2 = match[2];
           }
-          response.params[actualKey].values.push({ nr, value: value2 });
-          delete response.params[key2];
-        });
-        Object.keys(response.params).forEach((key2) => {
-          let value2;
-          if (response.params[key2] && Array.isArray(response.params[key2].values)) {
-            value2 = response.params[key2].values.sort((a, b) => a.nr - b.nr).map((val) => val && val.value || "").join("");
-            if (response.params[key2].charset) {
-              response.params[key2] = this.decodeWords(
-                "=?" + response.params[key2].charset + "?Q?" + value2.replace(/[=?_\s]/g, (s) => {
-                  let c = s.charCodeAt(0).toString(16);
-                  if (s === " ") {
-                    return "_";
-                  } else {
-                    return "%" + (c.length < 2 ? "0" : "") + c;
-                  }
-                }).replace(/%/g, "=") + "?="
-              );
-            } else {
-              response.params[key2] = this.decodeWords(value2);
-            }
+          continuation.values.push({ nr, value: value2 });
+        }
+        for (let [key2, continuation] of continuations) {
+          let value2 = continuation.values.sort((a, b) => a.nr - b.nr).map((val) => val.value).join("");
+          if (!continuation.charset) {
+            setOwnProperty(response.params, key2, this.decodeWords(value2));
+            continue;
           }
-        });
+          let qpValue = value2.replace(/[=_\s]/g, (s) => {
+            if (s === " ") {
+              return "_";
+            }
+            let c = s.charCodeAt(0).toString(16);
+            return "%" + (c.length < 2 ? "0" : "") + c;
+          }).replace(/%/g, "=");
+          setOwnProperty(response.params, key2, this.decodeWord(continuation.charset, "Q", qpValue));
+        }
         return response;
       }
       /**
@@ -46696,7 +46824,10 @@ var require_libmime = __commonJS({
        */
       buildHeaderParam(key, data, maxLength, fromCharset) {
         let list = [];
-        let encodedStr = typeof data === "string" ? data : this.decode(data, fromCharset);
+        if (typeof data !== "string" && !Buffer2.isBuffer(data)) {
+          data = data === null || data === void 0 ? "" : data.toString();
+        }
+        let encodedStr = typeof data === "string" ? data : libcharset.decode(data, fromCharset);
         let encodedStrArr;
         let chr, ord;
         let line;
@@ -46805,7 +46936,7 @@ var require_libmime = __commonJS({
        */
       detectExtension(mimeType) {
         mimeType = (mimeType || "").toString().toLowerCase().replace(/\s/g, "");
-        if (!(mimeType in mimetypes.list)) {
+        if (!hasOwn(mimetypes.list, mimeType)) {
           return "bin";
         }
         if (typeof mimetypes.list[mimeType] === "string") {
@@ -46828,7 +46959,7 @@ var require_libmime = __commonJS({
        */
       detectMimeType(extension) {
         extension = (extension || "").toString().toLowerCase().replace(/\s/g, "").replace(/^\./g, "").split(".").pop();
-        if (!(extension in mimetypes.extensions)) {
+        if (!hasOwn(mimetypes.extensions, extension)) {
           return "application/octet-stream";
         }
         if (typeof mimetypes.extensions[extension] === "string") {
@@ -46915,16 +47046,10 @@ var require_libmime = __commonJS({
       }
       encodeURICharComponent(chr) {
         let res = "";
-        let ord = chr.charCodeAt(0).toString(16).toUpperCase();
-        if (ord.length % 2) {
-          ord = "0" + ord;
-        }
-        if (ord.length > 2) {
-          for (let i = 0, len = ord.length / 2; i < len; i++) {
-            res += "%" + ord.substr(i, 2);
-          }
-        } else {
-          res += "%" + ord;
+        let buf = Buffer2.from(chr, "utf-8");
+        for (let i = 0, len = buf.length; i < len; i++) {
+          let ord = buf[i].toString(16).toUpperCase();
+          res += "%" + (ord.length < 2 ? "0" : "") + ord;
         }
         return res;
       }
@@ -46943,9 +47068,9 @@ var require_libmime = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/headers.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/headers.js
 var require_headers = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/headers.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/headers.js"(exports, module) {
     "use strict";
     var libmime = require_libmime();
     var Libmime = (
@@ -47048,7 +47173,7 @@ var require_headers = __commonJS({
           value = Buffer.from(value);
         }
         value = value.toString("binary");
-        this.addFormatted(key, this.libmime.foldLines(key + ": " + value.replace(/\r?\n/g, ""), 76, false), index);
+        this.addFormatted(key, this.libmime.foldLines(key + ": " + value.replace(/[\r\n]/g, ""), 76, false), index);
       }
       /**
        * @param {string} key
@@ -47068,6 +47193,10 @@ var require_headers = __commonJS({
         }
         if (typeof line !== "string") {
           line = line.toString("binary");
+        }
+        line = this._normalizeInsertedLine(line);
+        if (!line) {
+          return;
         }
         let header = {
           key: this._normalizeHeader(key),
@@ -47135,7 +47264,10 @@ var require_headers = __commonJS({
         this.add(keyName, value, index);
       }
       /**
-       * @param {string | false} [lineEnd]
+       * Serializes the headers. Unmodified headers are returned byte for byte as they
+       * were received, otherwise every line is rebuilt with `lineEnd` line endings.
+       *
+       * @param {string | false} [lineEnd] Line ending to use, defaults to CRLF.
        * @returns {Buffer}
        */
       build(lineEnd) {
@@ -47146,11 +47278,11 @@ var require_headers = __commonJS({
           this._parseHeaders();
         }
         let lines = this._getLines();
-        lineEnd = lineEnd || "\r\n";
-        let headers = lines.map((line) => this._buildHeaderLine(line.line.replace(/\r?\n/g, lineEnd))).reduce(
+        const ending = lineEnd || "\r\n";
+        let headers = lines.map((line) => this._normalizeLineBreaks(line.line, ending)).filter((line) => line !== "").map((line) => this._buildHeaderLine(line)).reduce(
           (joined, line, idx) => {
             if (idx) {
-              joined.push(Buffer.from(lineEnd, "binary"));
+              joined.push(Buffer.from(ending, "binary"));
             }
             joined.push(line);
             return joined;
@@ -47158,12 +47290,12 @@ var require_headers = __commonJS({
           /** @type {Buffer[]} */
           []
         );
-        headers.push(Buffer.from(lineEnd + lineEnd, "binary"));
+        headers.push(Buffer.from(ending + ending, "binary"));
         if (this.mbox) {
-          headers.unshift(Buffer.from(this.mbox + lineEnd, "binary"));
+          headers.unshift(Buffer.from(this.mbox + ending, "binary"));
         }
         if (this.http) {
-          headers.unshift(Buffer.from(this.http + lineEnd, "binary"));
+          headers.unshift(Buffer.from(this.http + ending, "binary"));
         }
         return Buffer.concat(headers);
       }
@@ -47173,6 +47305,53 @@ var require_headers = __commonJS({
        */
       _normalizeHeader(key) {
         return (key || "").toLowerCase().trim();
+      }
+      /**
+       * Rewrites the line breaks of a header line so that the line can only ever parse
+       * back as the single header it was reported as. A line break followed by whitespace
+       * is folding and becomes `lineEnd`, every other line break would start a new header
+       * line and is dropped.
+       *
+       * A bare <CR> is never a line break for _parseHeaders, so promoting one here would
+       * emit a header line that was never reported as parsed.
+       *
+       * @param {string} line Header line to normalize.
+       * @param {string} lineEnd Line ending to fold with.
+       * @returns {string} Line with only folding line breaks left.
+       */
+      _normalizeLineBreaks(line, lineEnd) {
+        return line.replace(/^[\r\n]+/, "").replace(/\r\n|\r|\n/g, (match, offset, source) => match !== "\r" && this._isFoldingChar(source.charAt(offset + match.length)) ? lineEnd : "");
+      }
+      /**
+       * Prepares a caller supplied line for insertion. On top of the line break rules an
+       * inserted line has to stand on its own: a leading fold or indent would attach it to
+       * whichever header happens to precede it, and a leading line break would close the
+       * header block outright.
+       *
+       * Lines that were parsed out of a message keep their leading whitespace instead, so
+       * that rebuilding can never turn an indented continuation into a header of its own.
+       *
+       * An inserted line is normalized twice, here with CRLF and again in build() with the
+       * line ending the caller asked for. That is only sound because _normalizeLineBreaks is
+       * idempotent over its own output: the folds this pass emits are still recognized as
+       * folds by the next one. Any change to how a fold is represented has to keep that true.
+       *
+       * @param {string} line Formatted header line supplied by the caller.
+       * @returns {string} Line that inserts as exactly one header, or an empty string.
+       */
+      _normalizeInsertedLine(line) {
+        return this._normalizeLineBreaks(line.replace(/^[\r\n \t]+/, ""), "\r\n");
+      }
+      /**
+       * Tells whether a character continues the previous header line rather than
+       * starting a new one. Used by both the parser and the builder so that the two
+       * can not disagree on what folding is.
+       *
+       * @param {string} chr Character that follows a line break.
+       * @returns {boolean} True if the line break is folding.
+       */
+      _isFoldingChar(chr) {
+        return chr === " " || chr === "	";
       }
       /**
        * @returns {HeaderLine[]}
@@ -47198,8 +47377,7 @@ var require_headers = __commonJS({
             /** @type {string} */
             lines[i]
           );
-          let chr = currentLine.charAt(0);
-          if (i && (chr === " " || chr === "	")) {
+          if (i && this._isFoldingChar(currentLine.charAt(0))) {
             lines[i - 1] = /** @type {string} */
             lines[i - 1] + "\r\n" + currentLine;
             lines.splice(i, 1);
@@ -47249,9 +47427,9 @@ var require_headers = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/mime-node.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/mime-node.js
 var require_mime_node2 = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/mime-node.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/mime-node.js"(exports, module) {
     "use strict";
     var Headers = require_headers();
     var libmime = require_libmime();
@@ -47273,6 +47451,7 @@ var require_mime_node2 = __commonJS({
         this.root = !parentNode;
         this.parentNode = parentNode;
         this._parentBoundary = this.parentNode && this.parentNode._boundary;
+        this._parentBoundaryOwner = this.parentNode || false;
         this._headersLines = [];
         this._headerlen = 0;
         this._parsedContentType = false;
@@ -47547,16 +47726,40 @@ var require_mime_node2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/message-splitter.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/message-splitter.js
 var require_message_splitter = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/message-splitter.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/message-splitter.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var MimeNode = require_mime_node2();
     var MAX_HEAD_SIZE = 1 * 1024 * 1024;
     var MAX_CHILD_NODES = 1e3;
+    var MAX_PENDING_LINE_SIZE = 64 * 1024;
+    var MAX_PENDING_LINE_CHUNKS = 1024;
+    var BOUNDARY_LINE_SUFFIX = 2 + 2 + 2;
+    var BOUNDARY_LINE_OVERHEAD = BOUNDARY_LINE_SUFFIX + 2;
     var HEAD = 1;
     var BODY = 2;
+    function maxLenError(message) {
+      let err = (
+        /** @type {Error & {code: string}} */
+        new Error(message)
+      );
+      err.code = "EMAXLEN";
+      return err;
+    }
+    function trimBodyLineEnd(group, chunk, start, end) {
+      if (group.type !== "body" || !group.node || !group.node.parentNode) {
+        return end;
+      }
+      if (end > start && chunk[end - 1] === 10) {
+        end--;
+        if (end > start && chunk[end - 1] === 13) {
+          end--;
+        }
+      }
+      return end;
+    }
     var MessageSplitter = class extends Transform {
       /**
        * @param {SplitterOptions} [config]
@@ -47570,15 +47773,46 @@ var require_message_splitter = __commonJS({
         this.config = config2 || {};
         this.maxHeadSize = this.config.maxHeadSize || MAX_HEAD_SIZE;
         this.maxChildNodes = this.config.maxChildNodes || MAX_CHILD_NODES;
-        this.tree = [];
         this.nodeCounter = 0;
         this.node = /** @type {MimeNodeType} */
         /** @type {unknown} */
         null;
+        this.inEpilogue = false;
         this.newNode();
-        this.tree.push(this.node);
-        this.line = false;
+        this.lineChunks = [];
+        this.lineLength = 0;
         this.hasFailed = false;
+        this.pendingLineTruncated = false;
+      }
+      /**
+       * Appends unterminated trailing data to the pending line.
+       *
+       * @param {Buffer} chunk Data that follows the last line break of a write.
+       * @returns {void}
+       */
+      appendPendingLine(chunk) {
+        if (!chunk.length) {
+          return;
+        }
+        this.lineChunks.push(chunk);
+        this.lineLength += chunk.length;
+        if (this.lineChunks.length >= MAX_PENDING_LINE_CHUNKS) {
+          this.lineChunks = [Buffer.concat(this.lineChunks, this.lineLength)];
+        }
+      }
+      /**
+       * Returns the pending line as a single buffer and clears the pending state.
+       *
+       * @returns {Buffer | false} Pending line contents or false if there was none.
+       */
+      takePendingLine() {
+        if (!this.lineLength) {
+          return false;
+        }
+        let line = this.lineChunks.length === 1 ? this.lineChunks[0] : Buffer.concat(this.lineChunks, this.lineLength);
+        this.lineChunks = [];
+        this.lineLength = 0;
+        return line;
       }
       /**
        * @param {Buffer} chunk
@@ -47592,7 +47826,7 @@ var require_message_splitter = __commonJS({
         let group = {
           type: "none"
         };
-        let groupstart = this.line ? -this.line.length : 0;
+        let groupstart = this.lineLength ? -this.lineLength : 0;
         let groupend = 0;
         let checkTrailingLinebreak = (data) => {
           if (data.type === "body" && data.node.parentNode && data.value && data.value.length) {
@@ -47604,9 +47838,8 @@ var require_message_splitter = __commonJS({
                 groupstart--;
                 groupend--;
                 pos--;
-                if (groupstart < 0 && !this.line) {
-                  this.line = Buffer.allocUnsafe(1);
-                  this.line[0] = 13;
+                if (groupstart < 0 && !this.lineLength) {
+                  this.appendPendingLine(Buffer.from([13]));
                 }
                 data.value = data.value.slice(0, data.value.length - 2);
               } else {
@@ -47635,15 +47868,8 @@ var require_message_splitter = __commonJS({
                 }
                 if (flush) {
                   if (group && group.type !== "none") {
-                    if (group.type === "body" && groupend >= groupstart && group.node && group.node.parentNode) {
-                      if (chunk[groupend - 1] === 10) {
-                        groupend--;
-                        if (groupend >= groupstart && chunk[groupend - 1] === 13) {
-                          groupend--;
-                        }
-                      }
-                    }
-                    if (groupstart !== groupend) {
+                    groupend = trimBodyLineEnd(group, chunk, groupstart, groupend);
+                    if (groupstart < groupend) {
                       group.value = chunk.slice(groupstart, groupend);
                       if (groupend < i && "value" in data) {
                         data.value = chunk.slice(groupend, i);
@@ -47662,14 +47888,7 @@ var require_message_splitter = __commonJS({
                 if (data.type === group.type) {
                   groupend = i;
                 } else {
-                  if (group.type === "body" && groupend >= groupstart && group.node && group.node.parentNode) {
-                    if (chunk[groupend - 1] === 10) {
-                      groupend--;
-                      if (groupend >= groupstart && chunk[groupend - 1] === 13) {
-                        groupend--;
-                      }
-                    }
-                  }
+                  groupend = trimBodyLineEnd(group, chunk, groupstart, groupend);
                   if (group.type !== "none" && group.type !== "node") {
                     if (groupstart !== groupend) {
                       group.value = chunk.slice(groupstart, groupend);
@@ -47702,14 +47921,7 @@ var require_message_splitter = __commonJS({
               });
             }
           }
-          if (pos >= groupstart + 1 && group.type === "body" && group.node && group.node.parentNode) {
-            if (chunk[pos - 1] === 10) {
-              pos--;
-              if (pos >= groupstart && chunk[pos - 1] === 13) {
-                pos--;
-              }
-            }
-          }
+          pos = trimBodyLineEnd(group, chunk, groupstart, pos);
           if (group.type !== "none" && group.type !== "node" && pos > groupstart) {
             group.value = chunk.slice(groupstart, pos);
             if (group.value && group.value.length) {
@@ -47720,11 +47932,12 @@ var require_message_splitter = __commonJS({
             }
           }
           if (pos < chunk.length) {
-            if (this.line) {
-              this.line = Buffer.concat([this.line, chunk.slice(pos)]);
-            } else {
-              this.line = chunk.slice(pos);
-            }
+            this.appendPendingLine(chunk.slice(Math.max(pos, 0)));
+          }
+          let pendingLineError = this.enforcePendingLineLimit();
+          if (pendingLineError) {
+            this.hasFailed = true;
+            return callback(pendingLineError);
           }
           callback();
         };
@@ -47755,7 +47968,7 @@ var require_message_splitter = __commonJS({
        * @returns {1 | 2 | false}
        */
       compareBoundary(line, startpos, boundary) {
-        if (line.length < boundary.length + 3 + startpos || line.length > boundary.length + 6 + startpos) {
+        if (line.length < boundary.length + 3 + startpos || line.length > boundary.length + BOUNDARY_LINE_SUFFIX + startpos) {
           return false;
         }
         for (let i = 0; i < boundary.length; i++) {
@@ -47793,7 +48006,7 @@ var require_message_splitter = __commonJS({
         let startpos = 0;
         if (line.length >= 1 && (line[0] === 13 || line[0] === 10)) {
           startpos++;
-          if (line.length >= 2 && (line[0] === 13 || line[1] === 10)) {
+          if (line.length >= 2 && line[0] === 13 && line[1] === 10) {
             startpos++;
           }
         }
@@ -47801,7 +48014,7 @@ var require_message_splitter = __commonJS({
           return false;
         }
         let boundary;
-        if (this.node._boundary && (boundary = this.compareBoundary(line, startpos, this.node._boundary))) {
+        if (!this.inEpilogue && this.node._boundary && (boundary = this.compareBoundary(line, startpos, this.node._boundary))) {
           return boundary;
         }
         if (this.node._parentBoundary && (boundary = this.compareBoundary(line, startpos, this.node._parentBoundary))) {
@@ -47813,6 +48026,60 @@ var require_message_splitter = __commonJS({
         return false;
       }
       /**
+       * Checks the header bytes collected for the current node against maxHeadSize.
+       *
+       * @param {number} [extra] Bytes that belong to the header block but are not stored yet.
+       * @returns {(Error & {code?: string}) | null} Error object if the limit was exceeded.
+       */
+      checkHeadSize(extra) {
+        if (this.node._headerlen + (extra || 0) > this.maxHeadSize) {
+          return maxLenError("Max header size for a MIME node exceeded");
+        }
+        return null;
+      }
+      /**
+       * Enforces the limits on the pending line so that it can not grow without bound.
+       * A line that is still short enough to become a boundary delimiter is always kept.
+       * Past that length it is a header line and counts against maxHeadSize, or it is
+       * body content, in which case it is pushed out rather than held in memory. Flushing
+       * marks the pending line truncated, so the tail of it is not tested as a delimiter.
+       *
+       * @returns {(Error & {code?: string}) | null} Error object if a limit was exceeded.
+       */
+      enforcePendingLineLimit() {
+        if (!this.lineLength) {
+          return null;
+        }
+        let maxBoundaryLength = Math.max(
+          this.node._boundary ? this.node._boundary.length : 0,
+          this.node._parentBoundary ? this.node._parentBoundary.length : 0
+        );
+        if (this.lineLength <= maxBoundaryLength + BOUNDARY_LINE_OVERHEAD) {
+          return null;
+        }
+        if (this.state === HEAD) {
+          return this.checkHeadSize(this.lineLength);
+        }
+        if (this.lineLength < MAX_PENDING_LINE_SIZE) {
+          return null;
+        }
+        let value = (
+          /** @type {Buffer} */
+          this.takePendingLine()
+        );
+        if (value[value.length - 1] === 13) {
+          this.appendPendingLine(Buffer.from([13]));
+          value = value.slice(0, value.length - 1);
+        }
+        this.push({
+          node: this.node,
+          type: this.node.multipart ? "data" : "body",
+          value
+        });
+        this.pendingLineTruncated = true;
+        return null;
+      }
+      /**
        * @param {Buffer | false} line
        * @param {boolean} final
        * @param {ProcessLineCallback} next
@@ -47820,25 +48087,19 @@ var require_message_splitter = __commonJS({
        */
       processLine(line, final, next) {
         let flush = false;
-        if (this.line && line) {
-          line = Buffer.concat([this.line, line]);
-          this.line = false;
-        } else if (this.line && !line) {
-          line = this.line;
-          this.line = false;
+        let truncatedLine = this.pendingLineTruncated;
+        this.pendingLineTruncated = false;
+        let pending = this.takePendingLine();
+        if (pending) {
+          line = line ? Buffer.concat([pending, line]) : pending;
         }
         if (!line) {
           line = Buffer.alloc(0);
         }
         if (this.nodeCounter > this.maxChildNodes) {
-          let err = (
-            /** @type {Error & {code?: string}} */
-            new Error("Max allowed child nodes exceeded")
-          );
-          err.code = "EMAXLEN";
-          return next(err);
+          return next(maxLenError("Max allowed child nodes exceeded"));
         }
-        let boundary = this.checkBoundary(line);
+        let boundary = truncatedLine ? false : this.checkBoundary(line);
         if (boundary) {
           switch (boundary) {
             case 1:
@@ -47848,25 +48109,23 @@ var require_message_splitter = __commonJS({
             case 2:
               break;
             case 3: {
-              let parentNode = this.node.parentNode;
-              if (parentNode && parentNode.contentType === "message/rfc822") {
-                parentNode = parentNode.parentNode;
-              }
-              this.newNode(parentNode);
+              this.newNode(this.parentMultipartNode());
               flush = true;
               break;
             }
-            case 4:
+            case 4: {
               if (this.node && this.node._headerlen && !this.node.headers) {
                 this.node.parseHeaders();
                 this.push(this.node);
               }
-              if (this.tree.length) {
-                this.node = /** @type {MimeNodeType} */
-                this.tree.pop();
+              let parentNode = this.parentMultipartNode();
+              if (parentNode) {
+                this.node = parentNode;
+                this.inEpilogue = true;
               }
               this.state = BODY;
               break;
+            }
           }
           return next(
             null,
@@ -47881,13 +48140,9 @@ var require_message_splitter = __commonJS({
         switch (this.state) {
           case HEAD: {
             this.node.addHeaderChunk(line);
-            if (this.node._headerlen > this.maxHeadSize) {
-              let err = (
-                /** @type {Error & {code?: string}} */
-                new Error("Max header size for a MIME node exceeded")
-              );
-              err.code = "EMAXLEN";
-              return next(err);
+            let headSizeError = this.checkHeadSize();
+            if (headSizeError) {
+              return next(headSizeError);
             }
             if (final || line.length === 1 && line[0] === 10 || line.length === 2 && line[0] === 13 && line[1] === 10) {
               let currentNode = this.node;
@@ -47897,15 +48152,13 @@ var require_message_splitter = __commonJS({
                 this.newNode(currentNode);
                 if (currentNode.parentNode) {
                   this.node._parentBoundary = currentNode.parentNode._boundary;
+                  this.node._parentBoundaryOwner = currentNode.parentNode;
                 }
               } else {
                 if (currentNode.contentType === "message/rfc822") {
                   currentNode.messageNode = false;
                 }
                 this.state = BODY;
-                if (currentNode.multipart && currentNode._boundary) {
-                  this.tree.push(currentNode);
-                }
               }
               return next(null, currentNode, flush);
             }
@@ -47926,6 +48179,15 @@ var require_message_splitter = __commonJS({
         next(null, false);
       }
       /**
+       * Resolves the multipart node that owns the boundary of the current node, ie. the
+       * node a sibling delimiter or a closing delimiter of _parentBoundary refers to.
+       *
+       * @returns {MimeNodeType | false} Owner of _parentBoundary or false for the root node.
+       */
+      parentMultipartNode() {
+        return this.node._parentBoundaryOwner || false;
+      }
+      /**
        * @param {MimeNodeType | false} [parent]
        * @returns {void}
        */
@@ -47934,15 +48196,16 @@ var require_message_splitter = __commonJS({
         new MimeNode(parent || false, this.config);
         this.state = HEAD;
         this.nodeCounter++;
+        this.inEpilogue = false;
       }
     };
     module.exports = MessageSplitter;
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/message-joiner.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/message-joiner.js
 var require_message_joiner = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/message-joiner.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/message-joiner.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var MessageJoiner = class extends Transform {
@@ -47984,9 +48247,9 @@ var require_message_joiner = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/flowed-decoder.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/flowed-decoder.js
 var require_flowed_decoder = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/flowed-decoder.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/flowed-decoder.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var libmime = require_libmime();
@@ -48042,9 +48305,9 @@ var require_flowed_decoder = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/node-rewriter.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/node-rewriter.js
 var require_node_rewriter = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/node-rewriter.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/node-rewriter.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var FlowedDecoder = require_flowed_decoder();
@@ -48230,9 +48493,9 @@ var require_node_rewriter = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/node-streamer.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/node-streamer.js
 var require_node_streamer = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/node-streamer.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/node-streamer.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var FlowedDecoder = require_flowed_decoder();
@@ -48366,9 +48629,9 @@ var require_node_streamer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/chunked-passthrough.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/chunked-passthrough.js
 var require_chunked_passthrough = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/lib/chunked-passthrough.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/chunked-passthrough.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var ChunkedPassthrough = class extends Transform {
@@ -48414,9 +48677,9 @@ var require_chunked_passthrough = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/index.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/index.js
 var require_mailsplit = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.14/node_modules/@zone-eu/mailsplit/index.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/index.js"(exports, module) {
     "use strict";
     var MessageSplitter = require_message_splitter();
     var MessageJoiner = require_message_joiner();
@@ -48437,16 +48700,20 @@ var require_mailsplit = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/limited-passthrough.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/limited-passthrough.js
 var require_limited_passthrough = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
+    var normalizeByteLimit = (value) => {
+      let bytes = Number(value);
+      return Number.isFinite(bytes) && bytes > 0 ? Math.max(Math.floor(bytes), 1) : Infinity;
+    };
     var LimitedPassthrough = class extends Transform {
       constructor(options) {
         super();
         this.options = options || {};
-        this.maxBytes = this.options.maxBytes || Infinity;
+        this.maxBytes = normalizeByteLimit(this.options.maxBytes);
         this.processed = 0;
         this.limited = false;
       }
@@ -48470,16 +48737,18 @@ var require_limited_passthrough = __commonJS({
       }
     };
     module.exports.LimitedPassthrough = LimitedPassthrough;
+    module.exports.normalizeByteLimit = normalizeByteLimit;
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/limits.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/limits.js
 var require_limits = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
     "use strict";
     var MAX_LITERAL_SIZE = 1024 * 1024 * 1024;
     var MAX_LINE_SIZE = MAX_LITERAL_SIZE;
-    var normalizeLimit = (value, defaultValue) => Number.isInteger(value) && value >= 0 ? value : defaultValue;
+    var MAX_RESPONSE_SIZE = 2 * MAX_LITERAL_SIZE;
+    var normalizeLimit = (value, defaultValue) => (Number.isInteger(value) || value === Infinity) && value >= 0 ? value : defaultValue;
     var createLiteralTooLargeError = (literalSize, maxSize, reason) => {
       const err = new Error(`Literal size ${literalSize} exceeds ${reason || `maximum allowed size of ${maxSize} bytes`}`);
       err.code = "LiteralTooLarge";
@@ -48487,17 +48756,17 @@ var require_limits = __commonJS({
       err.maxSize = maxSize;
       return err;
     };
-    module.exports = { MAX_LITERAL_SIZE, MAX_LINE_SIZE, normalizeLimit, createLiteralTooLargeError };
+    module.exports = { MAX_LITERAL_SIZE, MAX_LINE_SIZE, MAX_RESPONSE_SIZE, normalizeLimit, createLiteralTooLargeError };
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-stream.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-stream.js
 var require_imap_stream = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var logger = require_logger();
-    var { MAX_LITERAL_SIZE, MAX_LINE_SIZE, normalizeLimit, createLiteralTooLargeError } = require_limits();
+    var { MAX_LITERAL_SIZE, MAX_LINE_SIZE, MAX_RESPONSE_SIZE, normalizeLimit, createLiteralTooLargeError } = require_limits();
     var LINE = 1;
     var LITERAL = 2;
     var LF = 10;
@@ -48527,6 +48796,16 @@ var require_imap_stream = __commonJS({
        *   exactly at the limit is accepted. Exceeding it is terminal: the stream is destroyed with a
        *   `LiteralTooLarge` error, the marker line is not emitted, and no byte of the rejected
        *   literal body is parsed as protocol.
+       * @param {number} [options.maxResponseSize] - Maximum allowed total size (in bytes) of a
+       *   single assembled response: every line segment and literal of one response combined.
+       *   Defaults to MAX_RESPONSE_SIZE (2GB), which leaves room above the literal cap for a
+       *   maximum-size literal plus its marker line. The per-line and per-literal caps alone
+       *   cannot stop a server that spreads attacker-controlled bytes across an unbounded
+       *   number of tokens of a single response. Declared literal sizes count when their
+       *   marker is parsed, so an oversized total is rejected before the literal bytes arrive,
+       *   and a line still being assembled counts against whatever budget is left.
+       *   Exceeding the limit is terminal: the stream is destroyed with a `ResponseTooLarge`
+       *   error and no further input is parsed.
        */
       constructor(options) {
         super({
@@ -48543,6 +48822,7 @@ var require_imap_stream = __commonJS({
         this.readBytesCounter = 0;
         this.maxLineLength = normalizeLimit(this.options.maxLineLength, MAX_LINE_SIZE);
         this.maxLiteralSize = normalizeLimit(this.options.maxLiteralSize, MAX_LITERAL_SIZE);
+        this.maxResponseSize = normalizeLimit(this.options.maxResponseSize, MAX_RESPONSE_SIZE);
         this.state = LINE;
         this.literalWaiting = 0;
         this.inputBuffer = [];
@@ -48550,6 +48830,7 @@ var require_imap_stream = __commonJS({
         this.lineBytes = 0;
         this.literalBuffer = [];
         this.literals = [];
+        this.responseBytes = 0;
         this.compress = false;
         this.secureConnection = this.options.secureConnection;
         this.processingInput = false;
@@ -48666,6 +48947,32 @@ var require_imap_stream = __commonJS({
         return this.failStream(err);
       }
       /**
+       * Enforces the configured per-response size cap: the cumulative bytes of every line
+       * segment and declared literal of the response currently being assembled. Counting
+       * declared literal sizes at marker time means an oversized total is rejected before
+       * the literal bytes even arrive. The counter is reset when a response is emitted.
+       *
+       * @param {number} additionalBytes - Bytes the next token would add to the response.
+       * @param {boolean} [peek] - Measure only, without committing the bytes to the counter.
+       *   Used for a line that is still being assembled: its bytes are committed once, when the
+       *   line completes.
+       * @returns {boolean} True if within the limit, false if the stream was failed.
+       */
+      checkResponseSize(additionalBytes, peek) {
+        let total = this.responseBytes + additionalBytes;
+        if (total <= this.maxResponseSize) {
+          if (!peek) {
+            this.responseBytes = total;
+          }
+          return true;
+        }
+        const err = new Error(`Response size ${total} exceeds maximum allowed size of ${this.maxResponseSize} bytes`);
+        err.code = "ResponseTooLarge";
+        err.responseSize = total;
+        err.maxSize = this.maxResponseSize;
+        return this.failStream(err);
+      }
+      /**
        * Processes a single input chunk of raw data. In LINE state, scans for LF-terminated
        * lines and checks for literal markers. In LITERAL state, collects the expected number
        * of literal bytes. When a complete command (with all its literals) is assembled, it is
@@ -48698,6 +49005,9 @@ var require_imap_stream = __commonJS({
                 if (this.destroyed) {
                   return;
                 }
+                if (!this.checkResponseSize(line.length + (isLiteralMarker ? this.literalWaiting : 0))) {
+                  return;
+                }
                 this.inputBuffer.push(line);
                 if (isLiteralMarker) {
                   return await this.processInputChunk(chunk, lineStart);
@@ -48706,6 +49016,7 @@ var require_imap_stream = __commonJS({
                 let literals = this.literals;
                 this.inputBuffer = [];
                 this.literals = [];
+                this.responseBytes = 0;
                 if (payload.length) {
                   if (payload[payload.length - 1] === LF) {
                     let end = payload.length - 1;
@@ -48730,7 +49041,7 @@ var require_imap_stream = __commonJS({
             }
             if (lineStart < chunk.length) {
               let tail = chunk.slice(lineStart);
-              if (!this.checkLineLength(this.lineBytes + tail.length)) {
+              if (!this.checkLineLength(this.lineBytes + tail.length) || !this.checkResponseSize(this.lineBytes + tail.length, true)) {
                 return;
               }
               this.lineBytes += tail.length;
@@ -48834,6 +49145,7 @@ var require_imap_stream = __commonJS({
         this.lineBytes = 0;
         this.literalBuffer = [];
         this.literals = [];
+        this.responseBytes = 0;
         if (typeof this.pendingPush === "function") {
           const resolve3 = this.pendingPush;
           this.pendingPush = null;
@@ -48851,9 +49163,9 @@ var require_imap_stream = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-formal-syntax.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-formal-syntax.js
 var require_imap_formal_syntax = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
     "use strict";
     function expandRange(start, end) {
       let chars = [];
@@ -48997,9 +49309,9 @@ var require_imap_formal_syntax = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/token-parser.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/token-parser.js
 var require_token_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { MAX_LITERAL_SIZE, normalizeLimit, createLiteralTooLargeError } = require_limits();
@@ -49566,9 +49878,9 @@ var require_token_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/parser-instance.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/parser-instance.js
 var require_parser_instance = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { TokenParser } = require_token_parser();
@@ -49762,9 +50074,9 @@ var require_parser_instance = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-parser.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-parser.js
 var require_imap_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { ParserInstance } = require_parser_instance();
@@ -49822,9 +50134,9 @@ var require_imap_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-compiler.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-compiler.js
 var require_imap_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var SEQ_RANGE = /^(\d+|\*)(:(\d+|\*))?$/;
@@ -50012,9 +50324,9 @@ var require_imap_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-handler.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-handler.js
 var require_imap_handler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
     "use strict";
     var parser = require_imap_parser();
     var compiler = require_imap_compiler();
@@ -50025,12 +50337,12 @@ var require_imap_handler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/package.json
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/package.json
 var require_package4 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/package.json"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/package.json"(exports, module) {
     module.exports = {
       name: "imapflow",
-      version: "1.6.5",
+      version: "1.6.6",
       description: "IMAP Client for Node",
       main: "lib/imap-flow.js",
       types: "lib/imap-flow.d.ts",
@@ -50065,7 +50377,7 @@ var require_package4 = __commonJS({
         eslint: "10.8.0",
         "eslint-config-nodemailer": "1.2.0",
         "eslint-config-prettier": "10.1.8",
-        grunt: "1.6.2",
+        grunt: "1.6.3",
         "grunt-cli": "1.5.0",
         "grunt-contrib-nodeunit": "5.0.0",
         "grunt-eslint": "26.0.0",
@@ -50074,11 +50386,11 @@ var require_package4 = __commonJS({
         typescript: "7.0.2"
       },
       dependencies: {
-        "@zone-eu/mailsplit": "5.4.14",
+        "@zone-eu/mailsplit": "5.4.15",
         "encoding-japanese": "2.2.0",
         "iconv-lite": "0.7.3",
         libbase64: "1.3.0",
-        libmime: "5.4.1",
+        libmime: "5.4.2",
         libqp: "2.1.1",
         pino: "10.3.1",
         socks: "2.8.9"
@@ -51454,9 +51766,9 @@ var require_util3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/address-error.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/address-error.js
 var require_address_error = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/address-error.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/address-error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.AddressError = void 0;
@@ -51471,9 +51783,9 @@ var require_address_error = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/common.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/common.js
 var require_common = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/common.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/common.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.isInSubnet = isInSubnet;
@@ -51546,9 +51858,9 @@ var require_common = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v4/constants.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v4/constants.js
 var require_constants3 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v4/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v4/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RE_SUBNET_STRING = exports.RE_ADDRESS = exports.GROUPS = exports.BITS = void 0;
@@ -51559,9 +51871,9 @@ var require_constants3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv4.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv4.js
 var require_ipv4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv4.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv4.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -51889,10 +52201,7 @@ var require_ipv4 = __commonJS({
         return _Address4.fromHex(bigInt.toString(16).padStart(8, "0"));
       }
       /**
-       * Convert a byte array to an Address4 object. Throws `AddressError` unless
-       * given exactly 4 integers from 0 to 255. Signed bytes are rejected, so
-       * this differs from `Address6.fromByteArray`, which folds them; the two
-       * contracts converge on this stricter form in the next major version.
+       * Convert a byte array to an Address4 object.
        *
        * To convert from a Node.js `Buffer`, spread it: `Address4.fromByteArray([...buf])`.
        * @param {Array<number>} bytes - an array of 4 bytes (0-255)
@@ -51903,12 +52212,7 @@ var require_ipv4 = __commonJS({
         return this.fromUnsignedByteArray(bytes);
       }
       /**
-       * Convert an unsigned byte array to an Address4 object. Throws
-       * `AddressError` unless given exactly 4 bytes, and rejects values outside
-       * 0 to 255 when parsing the resulting address.
-       *
-       * To convert from a Node.js `Buffer`, spread it:
-       * `Address4.fromUnsignedByteArray([...buf])`.
+       * Convert an unsigned byte array to an Address4 object
        * @param {Array<number>} bytes - an array of 4 unsigned bytes (0-255)
        * @returns {Address4}
        */
@@ -51938,8 +52242,7 @@ var require_ipv4 = __commonJS({
         return this.binaryZeroPad().slice(start, end);
       }
       /**
-       * Return the reversed in-addr.arpa form of the address, e.g.
-       * `42.2.0.192.in-addr.arpa.` for `192.0.2.42`.
+       * Return the reversed ip6.arpa form of the address
        * @param {Object} options
        * @param {boolean} options.omitSuffix - omit the "in-addr.arpa" suffix
        * @returns {String}
@@ -52014,12 +52317,7 @@ var require_ipv4 = __commonJS({
         return this._binaryZeroPad;
       }
       /**
-       * Groups an IPv4 address for inclusion at the end of an IPv6 address.
-       *
-       * Returns an HTML fragment: each half of the address is wrapped in a
-       * `<span>` carrying the group classes an address-inspector UI hovers on.
-       * The address content is HTML-escaped; anything you concatenate around it
-       * is your responsibility.
+       * Groups an IPv4 address for inclusion at the end of an IPv6 address
        * @returns {String}
        */
       groupForV6() {
@@ -52042,9 +52340,9 @@ var require_ipv4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/constants.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/constants.js
 var require_constants4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RE_URL_WITH_PORT = exports.RE_URL = exports.RE_ZONE_STRING = exports.RE_SUBNET_STRING = exports.RE_BAD_ADDRESS = exports.RE_BAD_CHARACTERS = exports.TYPES = exports.SCOPES = exports.GROUPS = exports.BITS = void 0;
@@ -52099,9 +52397,9 @@ var require_constants4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/helpers.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/helpers.js
 var require_helpers = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/helpers.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/helpers.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.escapeHtml = escapeHtml;
@@ -52138,9 +52436,9 @@ var require_helpers = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/regular-expressions.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/regular-expressions.js
 var require_regular_expressions = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52230,9 +52528,9 @@ var require_regular_expressions = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv6.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv6.js
 var require_ipv6 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv6.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv6.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52397,21 +52695,26 @@ var require_ipv6 = __commonJS({
         let host;
         let port = null;
         let result;
-        let error2;
         const stripped = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
         if (stripped.indexOf("[") !== -1 && stripped.indexOf("]:") !== -1) {
-          error2 = "failed to parse address with port";
           result = constants6.RE_URL_WITH_PORT.exec(stripped);
           if (result === null) {
-            return { error: error2, address: null, port: null };
+            return {
+              error: "failed to parse address with port",
+              address: null,
+              port: null
+            };
           }
           host = result[1];
           port = result[2];
         } else {
-          error2 = "failed to parse address from URL";
           result = constants6.RE_URL.exec(stripped);
           if (result === null) {
-            return { error: error2, address: null, port: null };
+            return {
+              error: "failed to parse address from URL",
+              address: null,
+              port: null
+            };
           }
           host = (_a = result[1]) !== null && _a !== void 0 ? _a : result[2];
         }
@@ -52423,13 +52726,10 @@ var require_ipv6 = __commonJS({
         } else {
           port = null;
         }
-        let address;
-        try {
-          address = new _Address6(host);
-        } catch {
-          return { error: error2, address: null, port: null };
-        }
-        return { address, port };
+        return {
+          address: new _Address6(host),
+          port
+        };
       }
       /**
        * Construct an `Address6` from an address and a hex subnet mask given as
@@ -53365,12 +53665,7 @@ var require_ipv6 = __commonJS({
         return `<a href="${safeHref}">${safeForm}</a>`;
       }
       /**
-       * Groups an address.
-       *
-       * Returns an HTML fragment: each group is wrapped in a `<span>` carrying
-       * the group classes an address-inspector UI hovers on. The address content
-       * is HTML-escaped; anything you concatenate around it is your
-       * responsibility.
+       * Groups an address
        * @returns {String}
        */
       group() {
@@ -53467,9 +53762,9 @@ var require_ipv6 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ip-address.js
+// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ip-address.js
 var require_ip_address = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ip-address.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ip-address.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -54376,9 +54671,9 @@ var require_build = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/connection-deadline.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/connection-deadline.js
 var require_connection_deadline = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
     "use strict";
     var CONNECT_TIMEOUT = 90 * 1e3;
     var ConnectionDeadline = class {
@@ -54459,9 +54754,9 @@ var require_connection_deadline = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/proxy-connection.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/proxy-connection.js
 var require_proxy_connection = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
     "use strict";
     var { SocksClient } = require_build();
     var dns = __require("dns").promises;
@@ -54738,9 +55033,9 @@ var require_proxy_connection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/charsets.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/charsets.js
 var require_charsets2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/charsets.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/charsets.js"(exports, module) {
     "use strict";
     var CHARACTER_SETS = [
       "US-ASCII",
@@ -55017,27 +55312,38 @@ var require_charsets2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/jp-decoder.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/jp-decoder.js
 var require_jp_decoder = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var encodingJapanese = require_src();
+    var { normalizeByteLimit } = require_limited_passthrough();
     var JPDecoder = class extends Transform {
-      constructor(charset) {
+      constructor(charset, maxBytes) {
         super();
         this.charset = charset;
         this.chunks = [];
         this.chunklen = 0;
+        this.maxBytes = normalizeByteLimit(maxBytes);
+        this.limited = false;
       }
-      // Buffer all incoming chunks; no decoding happens here because Japanese charsets
-      // require the complete input for accurate conversion.
+      // Buffer all incoming chunks (up to maxBytes); no decoding happens here because
+      // Japanese charsets require the complete input for accurate conversion.
       _transform(chunk, encoding, done) {
         if (typeof chunk === "string") {
           chunk = Buffer.from(chunk, encoding);
         }
-        this.chunks.push(chunk);
-        this.chunklen += chunk.length;
+        if (this.chunklen + chunk.length > this.maxBytes) {
+          chunk = chunk.slice(0, Math.max(0, this.maxBytes - this.chunklen));
+        }
+        if (chunk.length) {
+          this.chunks.push(chunk);
+          this.chunklen += chunk.length;
+        }
+        if (this.chunklen >= this.maxBytes) {
+          this.limited = true;
+        }
         done();
       }
       // Perform the actual charset conversion once all input has been received.
@@ -55072,9 +55378,9 @@ var require_jp_decoder = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/tools.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/tools.js
 var require_tools2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/tools.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/tools.js"(exports, module) {
     "use strict";
     var libmime = require_libmime();
     var { resolveCharset } = require_charsets2();
@@ -55084,6 +55390,9 @@ var require_tools2 = __commonJS({
     var iconv = require_lib();
     var FLAG_COLORS = ["red", "orange", "yellow", "green", "blue", "purple", "grey"];
     var EXPANDED_RANGE_LIMIT = 16777216;
+    var MAX_UINT32_DIGITS = 10;
+    var MAX_NUMBER64_DIGITS = 19;
+    var UNSAFE_OBJECT_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
     var IMAP4REV2_FOLDED_CAPABILITIES = /* @__PURE__ */ new Set([
       "ENABLE",
       "ESEARCH",
@@ -55272,7 +55581,7 @@ var require_tools2 = __commonJS({
         let map = /* @__PURE__ */ new Map();
         if (list && Array.isArray(list)) {
           list.forEach((val) => {
-            if (typeof val.value !== "string") {
+            if (!val || typeof val.value !== "string") {
               return;
             }
             let capability = val.value.toUpperCase().trim();
@@ -55286,8 +55595,7 @@ var require_tools2 = __commonJS({
             }
             if (capability.startsWith("APPENDLIMIT=")) {
               let splitPos = capability.indexOf("=");
-              let appendLimit = Number(capability.substr(splitPos + 1)) || 0;
-              map.set("APPENDLIMIT", appendLimit);
+              map.set("APPENDLIMIT", tools.parseUintValue(capability.substr(splitPos + 1)) || 0);
               return;
             }
             map.set(capability, true);
@@ -55457,7 +55765,7 @@ var require_tools2 = __commonJS({
        */
       async formatMessageResponse(untagged, mailbox) {
         let map = {};
-        map.seq = Number(untagged.command);
+        map.seq = tools.parseUintValue(untagged.command, MAX_UINT32_DIGITS) || void 0;
         let key;
         let attributes = untagged.attributes && untagged.attributes[1] || [];
         for (let i = 0, len = attributes.length; i < len; i++) {
@@ -55490,29 +55798,30 @@ var require_tools2 = __commonJS({
               return attribute2.value;
             }
           };
-          let getArray = (attribute2) => {
-            if (Array.isArray(attribute2)) {
-              return attribute2.map((entry) => entry && typeof entry.value === "string" ? entry.value : false).filter((entry) => entry);
-            }
-            return [];
-          };
+          let getArray = (attribute2) => tools.getStringList(attribute2);
+          let getUint = (attribute2, maxDigits) => tools.parseUintValue(getString(attribute2), maxDigits);
           switch (key) {
             case "body[]":
             case "binary[]":
               map.source = getBuffer(attribute);
               break;
             case "uid":
-              map.uid = Number(getString(attribute));
+              map.uid = getUint(attribute, MAX_UINT32_DIGITS) || void 0;
               if (map.uid && (!mailbox.uidNext || mailbox.uidNext <= map.uid)) {
                 mailbox.uidNext = map.uid + 1;
               }
               break;
-            case "modseq":
-              map.modseq = BigInt(getArray(attribute)[0]);
+            case "modseq": {
+              let modseq = tools.parseBigIntValue(getArray(attribute)[0]);
+              if (modseq === false) {
+                break;
+              }
+              map.modseq = modseq;
               if (map.modseq && (!mailbox.highestModseq || mailbox.highestModseq < map.modseq)) {
                 mailbox.highestModseq = map.modseq;
               }
               break;
+            }
             case "emailid":
               map.emailId = getArray(attribute)[0];
               break;
@@ -55529,7 +55838,7 @@ var require_tools2 = __commonJS({
               map.labels = new Set(getArray(attribute));
               break;
             case "rfc822.size":
-              map.size = Number(getString(attribute)) || 0;
+              map.size = getUint(attribute) || 0;
               break;
             case "flags":
               map.flags = new Set(getArray(attribute));
@@ -55628,6 +55937,9 @@ var require_tools2 = __commonJS({
         };
         let processAddresses = function(list) {
           return [].concat(list || []).map((addr) => {
+            if (!addr) {
+              return false;
+            }
             let address = (getStrValue(addr[2]) || "") + "@" + (getStrValue(addr[3]) || "");
             if (address === "@") {
               address = "";
@@ -55636,7 +55948,7 @@ var require_tools2 = __commonJS({
               name: tools.processName(libmime.decodeWords(getStrValue(addr[0]))),
               address
             };
-          }).filter((addr) => addr.name || addr.address);
+          }).filter((addr) => addr && (addr.name || addr.address));
         }, envelope = {};
         if (entry[0] && entry[0].value) {
           let date3 = new Date(getStrValue(entry[0]));
@@ -55687,7 +55999,9 @@ var require_tools2 = __commonJS({
         let params = {};
         [].concat(arr || []).forEach((val, j) => {
           if (j % 2) {
-            params[key] = libmime.decodeWords((val && val.value || "").toString());
+            if (!tools.isUnsafeKey(key)) {
+              params[key] = libmime.decodeWords((val && val.value || "").toString());
+            }
           } else {
             key = (val && val.value || "").toString().toLowerCase();
           }
@@ -55708,6 +56022,10 @@ var require_tools2 = __commonJS({
           }
           actualKey = key2.substr(0, match.index).toLowerCase();
           nr = Number(match[2]) || 0;
+          if (tools.isUnsafeKey(actualKey)) {
+            delete params[key2];
+            return;
+          }
           if (!params[actualKey] || typeof params[actualKey] !== "object") {
             params[actualKey] = {
               charset: false,
@@ -55952,60 +56270,148 @@ var require_tools2 = __commonJS({
         return Number.isSafeInteger(value) && value > 0 && value <= 4294967295;
       },
       /**
+       * Checks that an untrusted response value is a pure decimal digit run no longer than
+       * the given bound.
+       *
+       * `!isNaN(value)` is not usable for this: it also passes '1e5', ' 12 ', '0x10' and
+       * 'Infinity'. BigInt() throws on all of them and Number() silently returns a value the
+       * grammar never allowed, so both are wrong in a response handler that is only trying to
+       * read one field. The length bound is checked before the pattern so an arbitrarily long
+       * digit run is rejected without any conversion work.
+       *
+       * @param {*} value - Raw value from the response.
+       * @param {Number} maxDigits - Maximum number of digits accepted.
+       * @returns {Boolean} True if the value is a decimal string within the bound.
+       */
+      isDecimalString(value, maxDigits) {
+        return typeof value === "string" && value.length > 0 && value.length <= maxDigits && /^[0-9]+$/.test(value);
+      },
+      /**
+       * Checks whether a server-supplied string is unsafe to use as a key on a plain object.
+       * Assigning "__proto__" writes through the prototype setter instead of creating an own
+       * property, and reading "constructor" or "prototype" resolves to an inherited member.
+       *
+       * @param {*} key - Candidate key from a server response.
+       * @returns {Boolean} True if the key must not be used.
+       */
+      isUnsafeKey(key) {
+        return UNSAFE_OBJECT_KEYS.has(key);
+      },
+      /**
+       * Reads a parsed attribute list of atoms or strings (a flag list, a capability list) into
+       * an array of strings. Any element can be a parsed NIL, and the list itself can be NIL,
+       * so both levels are guarded here rather than at each call site.
+       *
+       * @param {*} list - Parsed attribute list from a response.
+       * @returns {String[]} The string values, in order, with unusable entries dropped.
+       */
+      getStringList(list) {
+        if (!Array.isArray(list)) {
+          return [];
+        }
+        return list.map((entry) => entry && typeof entry.value === "string" ? entry.value : false).filter((entry) => entry);
+      },
+      /**
+       * Parses an untrusted decimal value from a server response into a BigInt.
+       *
+       * @param {*} value - Raw value from the response.
+       * @param {Number} [maxDigits=MAX_NUMBER64_DIGITS] - Maximum number of digits accepted.
+       * @returns {BigInt|false} The parsed value, or false when it is not usable.
+       */
+      parseBigIntValue(value, maxDigits) {
+        if (!tools.isDecimalString(value, maxDigits || MAX_NUMBER64_DIGITS)) {
+          return false;
+        }
+        return BigInt(value);
+      },
+      /**
+       * Parses an untrusted decimal value from a server response into a Number. Values beyond
+       * the safe integer range are rejected rather than rounded: a silently rounded count or
+       * UID corrupts every range computation derived from it.
+       *
+       * @param {*} value - Raw value from the response.
+       * @param {Number} [maxDigits=MAX_NUMBER64_DIGITS] - Maximum number of digits accepted.
+       * @returns {Number|false} The parsed value, or false when it is not usable.
+       */
+      parseUintValue(value, maxDigits) {
+        if (!tools.isDecimalString(value, maxDigits || MAX_NUMBER64_DIGITS)) {
+          return false;
+        }
+        let num = Number(value);
+        return Number.isSafeInteger(num) ? num : false;
+      },
+      /**
        * Expands an IMAP sequence range string (e.g. "1:3,5,7:9") into an array of numbers.
        *
        * Entries with endpoints that are not valid nz-numbers are skipped - the input
        * may come from an untrusted server, and 'Infinity' or similar garbage would
-       * otherwise loop without bound. A single range is expanded to at most
-       * EXPANDED_RANGE_LIMIT entries: legitimate responses never reach the limit
-       * (the mailbox would need that many messages), while a hostile range like
-       * 1:4294967295 is cut off instead of exhausting memory.
+       * otherwise loop without bound. The whole set is expanded to at most
+       * EXPANDED_RANGE_LIMIT entries in total: legitimate responses never reach the limit
+       * (the mailbox would need that many messages), while hostile input is cut off
+       * instead of exhausting memory. The total is capped, not just each range -
+       * otherwise "1:16777216,1:16777216,..." would multiply the per-range bound by an
+       * unbounded number of ranges.
        *
        * @param {String} range - IMAP sequence range string
        * @returns {Number[]} Array of expanded sequence numbers
        */
       expandRange(range) {
-        return range.split(",").flatMap((entry) => {
+        let result = [];
+        if (typeof range !== "string") {
+          return result;
+        }
+        for (let entry of range.split(",")) {
+          if (result.length >= EXPANDED_RANGE_LIMIT) {
+            break;
+          }
           entry = entry.trim();
           let colon = entry.indexOf(":");
           if (colon < 0) {
             let value = Number(entry);
-            return tools.isValidSequenceValue(value) ? value : [];
+            if (tools.isValidSequenceValue(value)) {
+              result.push(value);
+            }
+            continue;
           }
           let first = Number(entry.substr(0, colon));
           let second = Number(entry.substr(colon + 1));
           if (!tools.isValidSequenceValue(first) || !tools.isValidSequenceValue(second)) {
-            return [];
+            continue;
           }
           if (first === second) {
-            return first;
+            result.push(first);
+            continue;
           }
-          let list = [];
+          let remaining = EXPANDED_RANGE_LIMIT - result.length;
           if (first < second) {
-            let last = Math.min(second, first + EXPANDED_RANGE_LIMIT - 1);
+            let last = Math.min(second, first + remaining - 1);
             for (let i = first; i <= last; i++) {
-              list.push(i);
+              result.push(i);
             }
           } else {
-            let last = Math.max(second, first - EXPANDED_RANGE_LIMIT + 1);
+            let last = Math.max(second, first - remaining + 1);
             for (let i = first; i >= last; i--) {
-              list.push(i);
+              result.push(i);
             }
           }
-          return list;
-        });
+        }
+        return result;
       },
       /**
        * Returns a stream decoder for the given charset. Uses a special Japanese
        * charset decoder for JIS/ISO-2022-JP, otherwise delegates to iconv-lite.
        *
        * @param {String} [charset='ascii'] - Character set name
+       * @param {Number} [maxBytes] - Bound for the bytes the decoder may buffer. Only
+       *   relevant for the Japanese decoder, which must buffer its whole input before
+       *   it can decode: without the bound a server could defeat a caller's maxBytes
+       *   download limit simply by labelling the part with a Japanese charset.
        * @returns {Object} A stream decoder (Transform stream) for the charset
        */
-      getDecoder(charset) {
+      getDecoder(charset, maxBytes) {
         charset = (charset || "ascii").toString().trim().toLowerCase();
         if (/^jis|^iso-?2022-?jp|^euc-?jp/.test(charset)) {
-          return new JPDecoder(charset);
+          return new JPDecoder(charset, maxBytes);
         }
         return iconv.decodeStream(charset);
       },
@@ -56043,12 +56449,14 @@ var require_tools2 = __commonJS({
       }
     };
     module.exports = tools;
+    module.exports.EXPANDED_RANGE_LIMIT = EXPANDED_RANGE_LIMIT;
+    module.exports.MAX_UINT32_DIGITS = MAX_UINT32_DIGITS;
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/id.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/id.js
 var require_id2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/id.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/id.js"(exports, module) {
     "use strict";
     var { formatDateTime } = require_tools2();
     module.exports = async (connection, clientInfo) => {
@@ -56098,9 +56506,9 @@ var require_id2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/capability.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/capability.js
 var require_capability = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.capabilities.size && !connection.expectCapabilityUpdate) {
@@ -56119,11 +56527,11 @@ var require_capability = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/namespace.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/namespace.js
 var require_namespace = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
     "use strict";
-    var { hasCapability } = require_tools2();
+    var { hasCapability, getStringList } = require_tools2();
     module.exports = async (connection) => {
       if (![connection.states.AUTHENTICATED, connection.states.SELECTED].includes(connection.state)) {
         return;
@@ -56189,7 +56597,7 @@ var require_namespace = __commonJS({
               if (!untagged.attributes || !untagged.attributes.length) {
                 return;
               }
-              map.flags = new Set(untagged.attributes[0].map((entry) => entry.value));
+              map.flags = new Set(getStringList(untagged.attributes[0]));
               map.delimiter = untagged.attributes[1] && untagged.attributes[1].value;
               map.prefix = untagged.attributes[2] && untagged.attributes[2].value || "";
               if (map.delimiter && map.prefix.charAt(0) === map.delimiter) {
@@ -56227,9 +56635,9 @@ var require_namespace = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/login.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/login.js
 var require_login = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/login.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/login.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     module.exports = async (connection, username, password) => {
@@ -56258,9 +56666,9 @@ var require_login = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/logout.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/logout.js
 var require_logout = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state === connection.states.LOGOUT) {
@@ -56292,9 +56700,9 @@ var require_logout = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/starttls.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/starttls.js
 var require_starttls = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("STARTTLS") || connection.secureConnection) {
@@ -56314,9 +56722,54 @@ var require_starttls = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/special-use.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/status-fields.js
+var require_status_fields = __commonJS({
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/status-fields.js"(exports, module) {
+    "use strict";
+    var { parseBigIntValue, parseUintValue, MAX_UINT32_DIGITS } = require_tools2();
+    var uint32 = (value) => parseUintValue(value, MAX_UINT32_DIGITS);
+    var STATUS_FIELDS = {
+      MESSAGES: { key: "messages", parser: uint32 },
+      RECENT: { key: "recent", parser: uint32 },
+      UIDNEXT: { key: "uidNext", parser: uint32 },
+      // Nominally 32-bit, but stored as a BigInt precisely so a server that exceeds that still
+      // round-trips, so the wider bound applies
+      UIDVALIDITY: { key: "uidValidity", parser: (value) => parseBigIntValue(value) },
+      UNSEEN: { key: "unseen", parser: uint32 },
+      HIGHESTMODSEQ: { key: "highestModseq", parser: (value) => parseBigIntValue(value) },
+      // IMAP4rev2 additions (RFC 9051): total mailbox size in octets (number64, exact as a JS
+      // number up to 2^53-1) and count of messages carrying the \Deleted flag
+      SIZE: { key: "size", parser: (value) => parseUintValue(value) },
+      DELETED: { key: "deleted", parser: uint32 }
+    };
+    var parseStatusList = (list, onField) => {
+      let name;
+      list.forEach((entry, i) => {
+        if (i % 2 === 0) {
+          name = entry && typeof entry.value === "string" ? entry.value : false;
+          return;
+        }
+        if (!name || !entry) {
+          return;
+        }
+        const field = STATUS_FIELDS[name.toUpperCase()];
+        if (!field) {
+          return;
+        }
+        const value = field.parser(entry.value);
+        if (value === false) {
+          return;
+        }
+        onField(field.key, value);
+      });
+    };
+    module.exports = { parseStatusList };
+  }
+});
+
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/special-use.js
 var require_special_use = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/special-use.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/special-use.js"(exports, module) {
     "use strict";
     var GENERIC_TOKENS = new Set(
       [
@@ -57193,11 +57646,21 @@ var require_special_use = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/list.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/list.js
 var require_list = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/list.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/list.js"(exports, module) {
     "use strict";
-    var { decodePath, encodePath, normalizePath, enhanceCommandError, hasCapability, isRev2Active, buildStatusQueryAttributes } = require_tools2();
+    var {
+      decodePath,
+      encodePath,
+      normalizePath,
+      enhanceCommandError,
+      hasCapability,
+      isRev2Active,
+      buildStatusQueryAttributes,
+      getStringList
+    } = require_tools2();
+    var { parseStatusList } = require_status_fields();
     var { specialUse } = require_special_use();
     module.exports = async (connection, reference, mailbox, options) => {
       options = options || {};
@@ -57249,7 +57712,7 @@ var require_list = __commonJS({
             entry.subscribed = true;
           }
         };
-        let specialUseHints = {};
+        let specialUseHints = /* @__PURE__ */ Object.create(null);
         if (options.specialUseHints && typeof options.specialUseHints === "object") {
           for (let type of Object.keys(options.specialUseHints)) {
             if (["sent", "junk", "trash", "drafts", "archive"].includes(type) && options.specialUseHints[type] && typeof options.specialUseHints[type] === "string") {
@@ -57274,7 +57737,7 @@ var require_list = __commonJS({
                   // Decode from modified UTF-7 wire format and normalize the path
                   path: normalizePath(connection, decodePath(connection, untagged.attributes[2] && untagged.attributes[2].value || "")),
                   pathAsListed: untagged.attributes[2] && untagged.attributes[2].value || "",
-                  flags: new Set(untagged.attributes[0].map((entry2) => entry2.value)),
+                  flags: new Set(getStringList(untagged.attributes[0])),
                   delimiter: untagged.attributes[1] && untagged.attributes[1].value,
                   listed: true
                 };
@@ -57314,36 +57777,9 @@ var require_list = __commonJS({
                 if (!statusList || !statusPath) {
                   return;
                 }
-                const STATUS_FIELD_MAP = {
-                  MESSAGES: { key: "messages", parser: Number },
-                  RECENT: { key: "recent", parser: Number },
-                  UIDNEXT: { key: "uidNext", parser: Number },
-                  UIDVALIDITY: { key: "uidValidity", parser: BigInt },
-                  UNSEEN: { key: "unseen", parser: Number },
-                  HIGHESTMODSEQ: { key: "highestModseq", parser: BigInt },
-                  // IMAP4rev2 additions (RFC 9051): mailbox size and \Deleted count
-                  SIZE: { key: "size", parser: Number },
-                  DELETED: { key: "deleted", parser: Number }
-                };
-                let key;
                 let map = { path: statusPath };
-                statusList.forEach((entry, i) => {
-                  if (i % 2 === 0) {
-                    key = entry && typeof entry.value === "string" ? entry.value : false;
-                    return;
-                  }
-                  if (!key || !entry || typeof entry.value !== "string") {
-                    return;
-                  }
-                  const fieldConfig = STATUS_FIELD_MAP[key.toUpperCase()];
-                  if (!fieldConfig) {
-                    return;
-                  }
-                  const value = !isNaN(entry.value) ? fieldConfig.parser(entry.value) : false;
-                  if (value === false) {
-                    return;
-                  }
-                  map[fieldConfig.key] = value;
+                parseStatusList(statusList, (key, value) => {
+                  map[key] = value;
                 });
                 statusMap.set(statusPath, map);
               }
@@ -57460,7 +57896,7 @@ var require_list = __commonJS({
                 let entry = {
                   path: normalizePath(connection, decodePath(connection, untagged.attributes[2] && untagged.attributes[2].value || "")),
                   pathAsListed: untagged.attributes[2] && untagged.attributes[2].value || "",
-                  flags: new Set(untagged.attributes[0].map((entry2) => entry2.value)),
+                  flags: new Set(getStringList(untagged.attributes[0])),
                   delimiter: untagged.attributes[1] && untagged.attributes[1].value,
                   subscribed: true
                 };
@@ -57557,9 +57993,9 @@ var require_list = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/enable.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/enable.js
 var require_enable = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
     "use strict";
     var { hasCapability } = require_tools2();
     module.exports = async (connection, extensionList) => {
@@ -57606,11 +58042,46 @@ var require_enable = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/select.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/select.js
 var require_select = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/select.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/select.js"(exports, module) {
     "use strict";
-    var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
+    var { encodePath, normalizePath, enhanceCommandError, parseBigIntValue, parseUintValue, getStringList, MAX_UINT32_DIGITS } = require_tools2();
+    var VALUED_RESPONSE_CODES = Object.assign(/* @__PURE__ */ Object.create(null), {
+      // CONDSTORE (RFC 7162): highest mod-sequence value for the mailbox, used for incremental
+      // sync. Stored as a BigInt since modseq values can exceed Number.MAX_SAFE_INTEGER.
+      //
+      // A value that is not a bounded digit run is dropped rather than stored raw: every consumer
+      // compares highestModseq relationally, and a relational compare against a non-numeric string
+      // is false in both directions, so the value could never advance and delta sync would stop.
+      highestmodseq: { key: "highestModseq", parse: (value) => parseBigIntValue(value) },
+      // Unique identifier validity. If this changes between sessions, all previously cached UIDs
+      // are invalid and the client must re-sync from scratch. Nominally 32-bit, but stored as a
+      // BigInt precisely so a server that exceeds that still round-trips, hence the wider bound.
+      uidvalidity: { key: "uidValidity", parse: (value) => parseBigIntValue(value) },
+      // The next UID to be assigned in this mailbox, useful for detecting new arrivals. A huge
+      // digit run would coerce to Infinity and corrupt every later UID range computation.
+      uidnext: { key: "uidNext", parse: (value) => parseUintValue(value, MAX_UINT32_DIGITS) },
+      // Sequence number of the first unseen message (RFC 3501 section 7.1). Not a count of unseen
+      // messages - use mailboxStatus() with {unseen: true} for that.
+      unseen: { key: "unseen", parse: (value) => parseUintValue(value, MAX_UINT32_DIGITS) },
+      // APPENDLIMIT (RFC 7889): largest message size in octets the server accepts for APPEND into
+      // this mailbox. Spelled all lowercase, unlike the camelCase fields around it, because that is
+      // the name this object has always exposed.
+      appendlimit: { key: "appendlimit", parse: (value) => parseUintValue(value) },
+      // OBJECTID (RFC 8474): server-assigned mailbox identifier that survives renames. Sent as a
+      // parenthesized list, but servers in the wild send it bare too.
+      mailboxid: {
+        key: "mailboxId",
+        parse: (value) => Array.isArray(value) ? value.length > 0 && value[0] : typeof value === "string" && value
+      },
+      // Flags the client may change permanently on messages in this mailbox, including \* if the
+      // server allows custom flags. Only the parenthesized form carries flags, and a malformed
+      // value must leave permanentFlags unset rather than set an empty Set: canUseFlag() reads
+      // unset as permissive and empty as deny-all, so an empty Set would turn every later flag
+      // update into a silent no-op for the rest of the session.
+      permanentflags: { key: "permanentFlags", parse: (value) => Array.isArray(value) && new Set(value) }
+    });
     module.exports = async (connection, path, options) => {
       if (![connection.states.AUTHENTICATED, connection.states.SELECTED].includes(connection.state)) {
         return;
@@ -57667,68 +58138,24 @@ var require_select = __commonJS({
                 return;
               }
               let section2 = !untagged.attributes[0].value && untagged.attributes[0].section;
-              if (section2 && section2.length > 1 && section2[0].type === "ATOM" && typeof section2[0].value === "string") {
+              if (section2 && section2.length > 1 && section2[0] && section2[0].type === "ATOM" && typeof section2[0].value === "string") {
                 let key = section2[0].value.toLowerCase();
                 let value;
-                if (typeof section2[1].value === "string") {
+                if (section2[1] && typeof section2[1].value === "string") {
                   value = section2[1].value;
                 } else if (Array.isArray(section2[1])) {
-                  value = section2[1].map((entry) => typeof entry.value === "string" ? entry.value : false).filter((entry) => entry);
+                  value = getStringList(section2[1]);
                 }
-                switch (key) {
-                  // CONDSTORE (RFC 7162): highest mod-sequence value for the mailbox.
-                  // Used for incremental sync -- clients compare against their cached
-                  // value to detect changes. Stored as BigInt since modseq values
-                  // can exceed Number.MAX_SAFE_INTEGER.
-                  case "highestmodseq":
-                    key = "highestModseq";
-                    if (/^[0-9]+$/.test(value)) {
-                      value = BigInt(value);
-                    }
-                    break;
-                  // OBJECTID (RFC 8474): server-assigned unique mailbox identifier.
-                  // Unlike path, this ID survives renames. Value comes as a
-                  // parenthesized list, so extract the first (only) element.
-                  case "mailboxid":
-                    key = "mailboxId";
-                    if (Array.isArray(value) && value.length) {
-                      value = value[0];
-                    }
-                    break;
-                  // Flags that the client can change permanently on messages in
-                  // this mailbox. Includes \* if the server allows custom flags.
-                  case "permanentflags":
-                    key = "permanentFlags";
-                    value = new Set(value);
-                    break;
-                  // The next UID that will be assigned to a new message in this
-                  // mailbox. Useful for detecting new arrivals.
-                  case "uidnext":
-                    key = "uidNext";
-                    value = Number(value);
-                    break;
-                  // Unique identifier validity value. If this changes between
-                  // sessions, all previously cached UIDs are invalid and the
-                  // client must re-sync from scratch.
-                  case "uidvalidity":
-                    key = "uidValidity";
-                    if (/^[0-9]+$/.test(value)) {
-                      value = BigInt(value);
-                    }
-                    break;
+                let field = VALUED_RESPONSE_CODES[key];
+                if (field) {
+                  let parsed = field.parse(value);
+                  if (parsed !== false) {
+                    map[field.key] = parsed;
+                  }
                 }
-                map[key] = value;
               }
-              if (section2 && section2.length === 1 && section2[0].type === "ATOM" && typeof section2[0].value === "string") {
-                let key = section2[0].value.toLowerCase();
-                switch (key) {
-                  // NOMODSEQ means the mailbox does not support mod-sequences.
-                  // CONDSTORE/QRESYNC features are unavailable for this mailbox.
-                  case "nomodseq":
-                    key = "noModseq";
-                    map[key] = true;
-                    break;
-                }
+              if (section2 && section2.length === 1 && section2[0] && section2[0].type === "ATOM" && section2[0].value?.toUpperCase() === "NOMODSEQ") {
+                map.noModseq = true;
               }
             },
             // Untagged FLAGS response lists all flags defined for this mailbox
@@ -57737,14 +58164,13 @@ var require_select = __commonJS({
               if (!untagged.attributes || !untagged.attributes.length || !Array.isArray(untagged.attributes[0])) {
                 return;
               }
-              let flags = untagged.attributes[0].map((flag) => typeof flag.value === "string" ? flag.value : false).filter((flag) => flag);
-              map.flags = new Set(flags);
+              map.flags = new Set(getStringList(untagged.attributes[0]));
             },
             // Untagged EXISTS response: "* <count> EXISTS" tells us the total number
             // of messages in the mailbox. The count is in the command field (numeric prefix).
             EXISTS: async (untagged) => {
-              let num = Number(untagged.command);
-              if (isNaN(num)) {
+              let num = parseUintValue(untagged.command, MAX_UINT32_DIGITS);
+              if (num === false) {
                 return false;
               }
               map.exists = num;
@@ -57762,8 +58188,9 @@ var require_select = __commonJS({
             }
           }
         });
-        let section = !response.response.attributes[0].value && response.response.attributes[0].section;
-        if (section && section.length && section[0].type === "ATOM" && typeof section[0].value === "string") {
+        let okAttributes = response.response && response.response.attributes || [];
+        let section = okAttributes[0] && !okAttributes[0].value && okAttributes[0].section;
+        if (section && section.length && section[0] && section[0].type === "ATOM" && typeof section[0].value === "string") {
           map.readOnly = section[0].value.toUpperCase() === "READ-ONLY";
         }
         if (map.qresync && (options.uidValidity !== map.uidValidity || !map.highestModseq || map.noModseq)) {
@@ -57800,9 +58227,9 @@ var require_select = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/fetch.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/fetch.js
 var require_fetch2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
     "use strict";
     var { formatMessageResponse, isRev2Active } = require_tools2();
     module.exports = async (connection, range, query, options) => {
@@ -57972,7 +58399,10 @@ var require_fetch2 = __commonJS({
               retryCount,
               delayMs: delay
             });
-            await new Promise((resolve3) => setTimeout(resolve3, delay));
+            let aborted2 = await connection.throttleWait(delay);
+            if (aborted2) {
+              throw connection.createNoConnectionError(connection.byeReason);
+            }
             retryCount++;
             continue;
           }
@@ -57984,9 +58414,9 @@ var require_fetch2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/create.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/create.js
 var require_create = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/create.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/create.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, getStatusCode, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58043,9 +58473,9 @@ var require_create = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/delete.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/delete.js
 var require_delete = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58073,9 +58503,9 @@ var require_delete = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/rename.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/rename.js
 var require_rename = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path, newPath) => {
@@ -58108,9 +58538,9 @@ var require_rename = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/close.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/close.js
 var require_close = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/close.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/close.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state !== connection.states.SELECTED) {
@@ -58136,9 +58566,9 @@ var require_close = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/subscribe.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/subscribe.js
 var require_subscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58160,9 +58590,9 @@ var require_subscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/unsubscribe.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/unsubscribe.js
 var require_unsubscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58184,9 +58614,9 @@ var require_unsubscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/store.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/store.js
 var require_store = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/store.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/store.js"(exports, module) {
     "use strict";
     var { formatFlag, canUseFlag, enhanceCommandError } = require_tools2();
     module.exports = async (connection, range, flags, options) => {
@@ -58248,9 +58678,9 @@ var require_store = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/search-compiler.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/search-compiler.js
 var require_search_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
     "use strict";
     var { formatDate, formatFlag, canUseFlag, isDate, isRev2Active } = require_tools2();
     var setBoolOpt = (attributes, term, value) => {
@@ -58574,11 +59004,19 @@ var require_search_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/search.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/search.js
 var require_search = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/search.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/search.js"(exports, module) {
     "use strict";
-    var { enhanceCommandError, hasCapability, isValidSequenceValue } = require_tools2();
+    var {
+      enhanceCommandError,
+      hasCapability,
+      isValidSequenceValue,
+      parseBigIntValue,
+      parseUintValue,
+      MAX_UINT32_DIGITS,
+      EXPANDED_RANGE_LIMIT
+    } = require_tools2();
     var { searchCompiler } = require_search_compiler();
     var stripEsearchPrefix = (attrs) => {
       let start = 0;
@@ -58601,24 +59039,26 @@ var require_search = __commonJS({
           continue;
         }
         switch (key) {
+          // COUNT is a plain message count; MIN and MAX are sequence numbers or UIDs. All
+          // three are bounded decimal runs - isNaN() would also admit '1e400' (Infinity)
           case "COUNT": {
-            const n = Number(attrs[++i]?.value);
-            if (!isNaN(n)) result.count = n;
+            const n = parseUintValue(attrs[++i]?.value, MAX_UINT32_DIGITS);
+            if (n !== false) result.count = n;
             break;
           }
           case "MIN": {
-            const n = Number(attrs[++i]?.value);
-            if (!isNaN(n)) result.min = n;
+            const n = parseUintValue(attrs[++i]?.value, MAX_UINT32_DIGITS);
+            if (n !== false) result.min = n;
             break;
           }
           case "MAX": {
-            const n = Number(attrs[++i]?.value);
-            if (!isNaN(n)) result.max = n;
+            const n = parseUintValue(attrs[++i]?.value, MAX_UINT32_DIGITS);
+            if (n !== false) result.max = n;
             break;
           }
           case "MODSEQ": {
-            const value = attrs[++i]?.value;
-            if (typeof value === "string" && /^\d+$/.test(value)) result.modseq = BigInt(value);
+            const modseq = parseBigIntValue(attrs[++i]?.value);
+            if (modseq !== false) result.modseq = modseq;
             break;
           }
           case "ALL": {
@@ -58699,11 +59139,28 @@ var require_search = __commonJS({
           untagged: {
             SEARCH: async (untagged) => {
               if (untagged && untagged.attributes && untagged.attributes.length) {
-                untagged.attributes.forEach((attribute) => {
-                  if (attribute && attribute.value && typeof attribute.value === "string" && !isNaN(attribute.value)) {
-                    results.add(Number(attribute.value));
+                let truncated = false;
+                let discarded = false;
+                for (let attribute of untagged.attributes) {
+                  if (results.size >= EXPANDED_RANGE_LIMIT) {
+                    truncated = true;
+                    break;
                   }
-                });
+                  let value = attribute && typeof attribute.value === "string" ? Number(attribute.value) : NaN;
+                  if (!isValidSequenceValue(value)) {
+                    discarded = true;
+                    continue;
+                  }
+                  results.add(value);
+                }
+                if (truncated || discarded) {
+                  connection.log.warn({
+                    msg: "Invalid entries in the SEARCH result",
+                    truncated,
+                    discarded,
+                    cid: connection.id
+                  });
+                }
               }
             },
             // IMAP4rev2 servers answer even a plain SEARCH with an untagged
@@ -58716,7 +59173,7 @@ var require_search = __commonJS({
               let parsed = parseEsearchResponse(stripEsearchPrefix(untagged.attributes));
               if (parsed.all) {
                 let existsCount = () => connection.mailbox && connection.mailbox.exists || 0;
-                let overBudget = () => results.size >= existsCount();
+                let overBudget = () => results.size >= existsCount() || results.size >= EXPANDED_RANGE_LIMIT;
                 let resolveId = (part) => part === "*" ? options.uid ? 0 : existsCount() : Number(part);
                 let truncated = false;
                 let discarded = false;
@@ -58774,9 +59231,9 @@ var require_search = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/noop.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/noop.js
 var require_noop = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       try {
@@ -58791,11 +59248,11 @@ var require_noop = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/expunge.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/expunge.js
 var require_expunge = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
     "use strict";
-    var { enhanceCommandError, hasCapability } = require_tools2();
+    var { enhanceCommandError, hasCapability, parseBigIntValue } = require_tools2();
     module.exports = async (connection, range, options) => {
       if (connection.state !== connection.states.SELECTED || !range) {
         return;
@@ -58811,7 +59268,7 @@ var require_expunge = __commonJS({
         let section = response.response.attributes && response.response.attributes[0] && response.response.attributes[0].section;
         let responseCode = section && section.length && section[0] && typeof section[0].value === "string" ? section[0].value : "";
         if (responseCode.toUpperCase() === "HIGHESTMODSEQ") {
-          let highestModseq = section[1] && typeof section[1].value === "string" && !isNaN(section[1].value) ? BigInt(section[1].value) : false;
+          let highestModseq = parseBigIntValue(section[1] && section[1].value);
           if (highestModseq && (!connection.mailbox.highestModseq || highestModseq > connection.mailbox.highestModseq)) {
             connection.mailbox.highestModseq = highestModseq;
           }
@@ -58827,11 +59284,22 @@ var require_expunge = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/append.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/append.js
 var require_append = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/append.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/append.js"(exports, module) {
     "use strict";
-    var { formatFlag, canUseFlag, formatDateTime, normalizePath, encodePath, comparePaths, enhanceCommandError } = require_tools2();
+    var {
+      formatFlag,
+      canUseFlag,
+      formatDateTime,
+      normalizePath,
+      encodePath,
+      comparePaths,
+      enhanceCommandError,
+      parseBigIntValue,
+      parseUintValue,
+      MAX_UINT32_DIGITS
+    } = require_tools2();
     module.exports = async (connection, destination, content, flags, idate) => {
       if (![connection.states.AUTHENTICATED, connection.states.SELECTED].includes(connection.state) || !destination) {
         return;
@@ -58868,7 +59336,11 @@ var require_append = __commonJS({
         map.path = connection.mailbox.path;
       }
       const handleExistsUpdate = (untagged) => {
-        map.seq = Number(untagged.command);
+        let seq = parseUintValue(untagged.command, MAX_UINT32_DIGITS);
+        if (seq === false) {
+          return;
+        }
+        map.seq = seq;
         if (expectExists) {
           let prevCount = connection.mailbox.exists;
           if (map.seq !== prevCount) {
@@ -58891,8 +59363,8 @@ var require_append = __commonJS({
         if (section && section.length) {
           let responseCode = section[0] && typeof section[0].value === "string" ? section[0].value : "";
           if (responseCode.toUpperCase() === "APPENDUID") {
-            let uidValidity = section[1] && typeof section[1].value === "string" && !isNaN(section[1].value) ? BigInt(section[1].value) : false;
-            let uid = section[2] && typeof section[2].value === "string" && !isNaN(section[2].value) ? Number(section[2].value) : false;
+            let uidValidity = parseBigIntValue(section[1] && section[1].value, MAX_UINT32_DIGITS);
+            let uid = parseUintValue(section[2] && section[2].value, MAX_UINT32_DIGITS);
             if (uidValidity !== false) {
               map.uidValidity = uidValidity;
             }
@@ -58929,11 +59401,27 @@ var require_append = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/status.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/status.js
 var require_status = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/status.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/status.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, buildStatusQueryAttributes, isRev2Active } = require_tools2();
+    var { parseStatusList } = require_status_fields();
+    var MAILBOX_UPDATERS = {
+      messages: (value, connection, path) => {
+        let prevCount = connection.mailbox.exists;
+        if (prevCount !== value) {
+          connection.mailbox.exists = value;
+          connection.emit("exists", { path, count: value, prevCount });
+        }
+      },
+      uidNext: (value, connection) => {
+        connection.mailbox.uidNext = value;
+      },
+      highestModseq: (value, connection) => {
+        connection.mailbox.highestModseq = value;
+      }
+    };
     module.exports = async (connection, path, query) => {
       if (![connection.states.AUTHENTICATED, connection.states.SELECTED].includes(connection.state) || !path) {
         return false;
@@ -58960,61 +59448,10 @@ var require_status = __commonJS({
               if (!list) {
                 return;
               }
-              const STATUS_FIELD_MAP = {
-                MESSAGES: {
-                  key: "messages",
-                  parser: Number,
-                  updateMailbox: (val, conn) => {
-                    let prevCount = conn.mailbox.exists;
-                    if (prevCount !== val) {
-                      conn.mailbox.exists = val;
-                      conn.emit("exists", { path, count: val, prevCount });
-                    }
-                  }
-                },
-                RECENT: { key: "recent", parser: Number },
-                UIDNEXT: {
-                  key: "uidNext",
-                  parser: Number,
-                  updateMailbox: (val, conn) => {
-                    conn.mailbox.uidNext = val;
-                  }
-                },
-                UIDVALIDITY: { key: "uidValidity", parser: BigInt },
-                UNSEEN: { key: "unseen", parser: Number },
-                HIGHESTMODSEQ: {
-                  key: "highestModseq",
-                  parser: BigInt,
-                  updateMailbox: (val, conn) => {
-                    conn.mailbox.highestModseq = val;
-                  }
-                },
-                // IMAP4rev2 additions (RFC 9051): total mailbox size in octets
-                // (number64, exact as a JS number up to 2^53-1) and count of
-                // messages with the \Deleted flag
-                SIZE: { key: "size", parser: Number },
-                DELETED: { key: "deleted", parser: Number }
-              };
-              let key;
-              list.forEach((entry, i) => {
-                if (i % 2 === 0) {
-                  key = entry && typeof entry.value === "string" ? entry.value : false;
-                  return;
-                }
-                if (!key || !entry || typeof entry.value !== "string") {
-                  return;
-                }
-                const fieldConfig = STATUS_FIELD_MAP[key.toUpperCase()];
-                if (!fieldConfig) {
-                  return;
-                }
-                const value = !isNaN(entry.value) ? fieldConfig.parser(entry.value) : false;
-                if (value === false) {
-                  return;
-                }
-                map[fieldConfig.key] = value;
-                if (updateCurrent && fieldConfig.updateMailbox) {
-                  fieldConfig.updateMailbox(value, connection);
+              parseStatusList(list, (key, value) => {
+                map[key] = value;
+                if (updateCurrent && MAILBOX_UPDATERS[key]) {
+                  MAILBOX_UPDATERS[key](value, connection, path);
                 }
               });
             }
@@ -59042,18 +59479,18 @@ var require_status = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/copyuid-parser.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/copyuid-parser.js
 var require_copyuid_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
     "use strict";
-    var { expandRange } = require_tools2();
+    var { expandRange, parseBigIntValue } = require_tools2();
     function parseCopyUid(response, map) {
       let section = response.attributes && response.attributes[0] && response.attributes[0].section;
       let responseCode = section && section.length && section[0] && typeof section[0].value === "string" ? section[0].value : "";
       if (responseCode !== "COPYUID") {
         return;
       }
-      let uidValidity = section[1] && typeof section[1].value === "string" && !isNaN(section[1].value) ? BigInt(section[1].value) : false;
+      let uidValidity = parseBigIntValue(section[1] && section[1].value);
       if (uidValidity !== false) {
         map.uidValidity = uidValidity;
       }
@@ -59067,9 +59504,9 @@ var require_copyuid_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/copy.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/copy.js
 var require_copy = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -59099,9 +59536,9 @@ var require_copy = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/move.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/move.js
 var require_move = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/move.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/move.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError, hasCapability } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -59142,9 +59579,9 @@ var require_move = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/compress.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/compress.js
 var require_compress = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("COMPRESS=DEFLATE") || connection._inflate) {
@@ -59171,11 +59608,11 @@ var require_compress = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/quota.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/quota.js
 var require_quota = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
     "use strict";
-    var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
+    var { encodePath, normalizePath, enhanceCommandError, parseUintValue, isUnsafeKey } = require_tools2();
     module.exports = async (connection, path) => {
       if (![connection.states.AUTHENTICATED, connection.states.SELECTED].includes(connection.state) || !path) {
         return;
@@ -59200,8 +59637,11 @@ var require_quota = __commonJS({
           if (!key) {
             return;
           }
-          let value = attribute && typeof attribute.value === "string" && !isNaN(attribute.value) ? Number(attribute.value) : false;
+          let value = parseUintValue(attribute && attribute.value);
           if (value === false) {
+            return;
+          }
+          if (isUnsafeKey(key) || key === "path" || key === "quotaroot") {
             return;
           }
           if (!map[key]) {
@@ -59259,9 +59699,9 @@ var require_quota = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/idle.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/idle.js
 var require_idle = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
     "use strict";
     var { hasCapability, unrefTimer } = require_tools2();
     var NOOP_INTERVAL = 2 * 60 * 1e3;
@@ -59486,9 +59926,9 @@ var require_idle = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/authenticate.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/authenticate.js
 var require_authenticate = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     async function handleAuthError(err, errorResponse2) {
@@ -59622,9 +60062,9 @@ var require_authenticate = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/imap-commands.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/imap-commands.js
 var require_imap_commands = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
     "use strict";
     module.exports = /* @__PURE__ */ new Map([
       ["ID", require_id2()],
@@ -59659,9 +60099,9 @@ var require_imap_commands = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/imap-flow.js
+// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/imap-flow.js
 var require_imap_flow = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.5/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
     "use strict";
     var tls = __require("tls");
     var net = __require("net");
@@ -59671,7 +60111,7 @@ var require_imap_flow = __commonJS({
     var libmime = require_libmime();
     var zlib = __require("zlib");
     var { Headers } = require_mailsplit();
-    var { LimitedPassthrough } = require_limited_passthrough();
+    var { LimitedPassthrough, normalizeByteLimit } = require_limited_passthrough();
     var { ImapStream } = require_imap_stream();
     var { parser, compiler } = require_imap_handler();
     var packageInfo = require_package4();
@@ -59693,7 +60133,11 @@ var require_imap_flow = __commonJS({
       AuthenticationFailure,
       getColorFlags,
       hasCapability,
-      unrefTimer
+      unrefTimer,
+      parseUintValue,
+      isUnsafeKey,
+      getStringList,
+      MAX_UINT32_DIGITS
     } = require_tools2();
     var imapCommands = require_imap_commands();
     var noop = () => {
@@ -59701,6 +60145,7 @@ var require_imap_flow = __commonJS({
     var GREETING_TIMEOUT = 16 * 1e3;
     var UPGRADE_TIMEOUT = 10 * 1e3;
     var SOCKET_TIMEOUT = 5 * 60 * 1e3;
+    var MAX_THROTTLE_DELAY = 5 * 60 * 1e3;
     var HELD_LOCK_WARN_MS = 30 * 60 * 1e3;
     var states = {
       NOT_AUTHENTICATED: 1,
@@ -59881,13 +60326,13 @@ var require_imap_flow = __commonJS({
           logRaw: this.logRaw,
           secureConnection: this.secureConnection,
           maxLineLength: this.options.maxLineLength,
-          maxLiteralSize: this.options.maxLiteralSize
+          maxLiteralSize: this.options.maxLiteralSize,
+          maxResponseSize: this.options.maxResponseSize
         });
         this.reading = false;
         this.socket = false;
         this.writeSocket = false;
-        this._throttleTimer = null;
-        this._throttleAbort = null;
+        this._throttleWaits = /* @__PURE__ */ new Set();
         this._upgradeReject = null;
         this.isClosed = false;
         this.states = states;
@@ -60207,6 +60652,30 @@ var require_imap_flow = __commonJS({
           request.reject(err);
         }
       }
+      /**
+       * Waits out a throttle back-off.
+       *
+       * The delay is capped at MAX_THROTTLE_DELAY because it can come straight from a server hint
+       * (a Microsoft 365 "Suggested Backoff Time", say) and an uncapped hint would park the caller
+       * for weeks. The timer is unref'd and tracked so it can never outlive the client: a bare
+       * setTimeout here keeps a short-lived process alive for the full delay after close(), and
+       * leaves the caller waiting on a connection that is already gone.
+       *
+       * @param {Number} delay - Requested delay in milliseconds.
+       * @returns {Promise<Boolean>} True if close() aborted the wait, false on normal expiry.
+       */
+      async throttleWait(delay) {
+        delay = Math.min(Math.max(Number(delay) || 0, 0), MAX_THROTTLE_DELAY);
+        return await new Promise((resolve3) => {
+          let entry = { resolve: resolve3 };
+          entry.timer = setTimeout(() => {
+            this._throttleWaits.delete(entry);
+            resolve3(false);
+          }, delay);
+          unrefTimer(entry.timer);
+          this._throttleWaits.add(entry);
+        });
+      }
       async reader() {
         let data;
         let processedCount = 0;
@@ -60273,7 +60742,7 @@ var require_imap_flow = __commonJS({
         try {
           parsed = await parser(data.payload, { literals: data.literals });
         } catch (err) {
-          this.log.error({ src: "s", msg: data.payload.toString(), err, cid: this.id });
+          this.log.error({ src: "s", msg: data.payload.toString("latin1", 0, 1024), payloadBytes: data.payload.length, err, cid: this.id });
           this.rejectUnparsedCompletion(data.payload, err);
           return true;
         }
@@ -60315,7 +60784,7 @@ var require_imap_flow = __commonJS({
           return true;
         }
         let section = parsed.attributes && parsed.attributes.length && parsed.attributes[0] && !parsed.attributes[0].value && parsed.attributes[0].section;
-        if (section && section.length && section[0].type === "ATOM" && typeof section[0].value === "string") {
+        if (section && section.length && section[0] && section[0].type === "ATOM" && typeof section[0].value === "string") {
           let sectionHandler = this.getSectionHandler(section[0].value.toUpperCase().trim());
           if (sectionHandler) {
             try {
@@ -60416,18 +60885,9 @@ var require_imap_flow = __commonJS({
               if (throttleDelay) {
                 err.code = "ETHROTTLE";
                 err.throttleReset = throttleDelay;
-                let delayResponse = throttleDelay;
-                if (delayResponse > 5 * 60 * 1e3) {
-                  delayResponse = 5 * 60 * 1e3;
-                }
+                let delayResponse = Math.min(throttleDelay, MAX_THROTTLE_DELAY);
                 this.log.warn({ msg: "Throttling detected", cid: this.id, throttleDelay, delayResponse, err });
-                let aborted2 = await new Promise((resolve3) => {
-                  this._throttleAbort = resolve3;
-                  this._throttleTimer = setTimeout(() => resolve3(false), delayResponse);
-                  unrefTimer(this._throttleTimer);
-                });
-                this._throttleTimer = null;
-                this._throttleAbort = null;
+                let aborted2 = await this.throttleWait(delayResponse);
                 if (aborted2) {
                   request.reject(this.createNoConnectionError(this.byeReason));
                   break;
@@ -60717,6 +61177,12 @@ var require_imap_flow = __commonJS({
           let opts = Object.assign(
             {
               socket: this.socket,
+              // host is required even though the socket is already connected: without
+              // it, a connection made to an IP literal (servername=false) has its
+              // certificate verified against Node's fallback name "localhost" instead
+              // of the IP - accepting any "localhost" certificate for any IP-hosted
+              // server, and rejecting legitimate IP-SAN certificates.
+              host: this.host,
               servername: this.servername,
               port: this.port
             },
@@ -60929,10 +61395,13 @@ var require_imap_flow = __commonJS({
         if (!this.mailbox) {
           return;
         }
-        if (!untagged || !untagged.command || isNaN(untagged.command)) {
+        if (!untagged) {
           return;
         }
-        let count = Number(untagged.command);
+        let count = parseUintValue(untagged.command, MAX_UINT32_DIGITS);
+        if (count === false) {
+          return;
+        }
         if (count === this.mailbox.exists) {
           return;
         }
@@ -60948,10 +61417,10 @@ var require_imap_flow = __commonJS({
         if (!this.mailbox) {
           return;
         }
-        if (!untagged || !untagged.command || isNaN(untagged.command)) {
+        if (!untagged) {
           return;
         }
-        let seq = Number(untagged.command);
+        let seq = parseUintValue(untagged.command, MAX_UINT32_DIGITS);
         if (seq && seq <= this.mailbox.exists) {
           this.mailbox.exists--;
           let payload = {
@@ -60977,8 +61446,11 @@ var require_imap_flow = __commonJS({
         }
         let tags = [];
         let uids = false;
+        if (!untagged.attributes || !untagged.attributes.length) {
+          return;
+        }
         if (untagged.attributes.length > 1 && Array.isArray(untagged.attributes[0])) {
-          tags = untagged.attributes[0].map((entry) => typeof entry.value === "string" ? entry.value.toUpperCase() : false).filter((value) => value);
+          tags = getStringList(untagged.attributes[0]).map((value) => value.toUpperCase());
           untagged.attributes.shift();
         }
         if (untagged.attributes[0] && typeof untagged.attributes[0].value === "string") {
@@ -61266,12 +61738,11 @@ var require_imap_flow = __commonJS({
           clearTimeout(this.upgradeTimeout);
           clearTimeout(this.connectTimeout);
           clearTimeout(this.greetingTimeout);
-          clearTimeout(this._throttleTimer);
-          this._throttleTimer = null;
-          if (typeof this._throttleAbort === "function") {
-            this._throttleAbort(true);
-            this._throttleAbort = null;
+          for (let entry of this._throttleWaits) {
+            clearTimeout(entry.timer);
+            entry.resolve(true);
           }
+          this._throttleWaits.clear();
           this.usable = false;
           this._idleSession = null;
           this.idling = false;
@@ -62352,7 +62823,7 @@ var require_imap_flow = __commonJS({
         let hasMore = true;
         let processed = 0;
         let chunkSize = Number(options.chunkSize) || 64 * 1024;
-        let maxBytes = Number(options.maxBytes) || Infinity;
+        let maxBytes = normalizeByteLimit(options.maxBytes);
         let uid = false;
         if (part === "1") {
           let response2 = await this.fetchOne(range, { uid: true, bodyStructure: true }, options);
@@ -62486,37 +62957,35 @@ var require_imap_flow = __commonJS({
           default:
             output = stream = new PassThrough();
         }
+        let limiters = [];
+        let isLimited = () => limiters.some((entry) => entry.limited);
+        let pipeStage = (stage) => {
+          output.on("error", (err) => {
+            stage.emit("error", err);
+          });
+          output = output.pipe(stage);
+          return stage;
+        };
         let isTextNode = ["text/html", "text/plain", "text/x-amp-html"].includes(meta.contentType) || part === "1" && !meta.contentType;
         if ((!meta.disposition || meta.disposition === "inline") && isTextNode) {
           if (meta.flowed) {
-            let flowDecoder = new FlowedDecoder({
-              delSp: meta.delSp
-            });
-            output.on("error", (err) => {
-              flowDecoder.emit("error", err);
-            });
-            output = output.pipe(flowDecoder);
+            limiters.push(pipeStage(new LimitedPassthrough({ maxBytes })));
+            pipeStage(new FlowedDecoder({ delSp: meta.delSp }));
           }
           if (meta.charset && !["ascii", "usascii", "utf8"].includes(meta.charset.toLowerCase().replace(/[^a-z0-9]+/g, ""))) {
             try {
-              let decoder = getDecoder(meta.charset);
+              let decoder = getDecoder(meta.charset, maxBytes);
               decoder.on("error", (err) => {
                 this.log.warn({ err, charset: meta.charset, cid: this.id });
               });
-              output.on("error", (err) => {
-                decoder.emit("error", err);
-              });
-              output = output.pipe(decoder);
+              limiters.push(pipeStage(decoder));
               meta.charset = "utf-8";
             } catch {
             }
           }
         }
-        let limiter = new LimitedPassthrough({ maxBytes });
-        output.on("error", (err) => {
-          limiter.emit("error", err);
-        });
-        output = output.pipe(limiter);
+        let limiter = pipeStage(new LimitedPassthrough({ maxBytes }));
+        limiters.push(limiter);
         const cleanup = () => {
           fetchAborted = true;
           if (stream && !stream.destroyed) {
@@ -62526,13 +62995,13 @@ var require_imap_flow = __commonJS({
         output.once("error", cleanup);
         output.once("close", cleanup);
         let writeChunk = (chunk2) => {
-          if (limiter.limited || fetchAborted || stream.destroyed) {
+          if (isLimited() || fetchAborted || stream.destroyed) {
             return true;
           }
           return stream.write(chunk2);
         };
         let fetchAllParts = async () => {
-          while (hasMore && !limiter.limited && !fetchAborted) {
+          while (hasMore && !isLimited() && !fetchAborted) {
             let { chunk: chunk2 } = await getNextPart();
             if (!chunk2 || fetchAborted) {
               break;
@@ -62652,6 +63121,9 @@ var require_imap_flow = __commonJS({
         let data = {};
         for (let [part, content] of response.bodyParts) {
           let keyParts = part.split(".mime");
+          if (isUnsafeKey(keyParts[0])) {
+            continue;
+          }
           if (keyParts.length === 1) {
             let key = keyParts[0];
             if (!data[key]) {
@@ -62704,7 +63176,8 @@ var require_imap_flow = __commonJS({
           }
         }
         for (let part of Object.keys(data)) {
-          let meta = data[part].meta;
+          let meta = data[part].meta || {};
+          data[part].meta = meta;
           let clientEncoding = response.binaryParts && response.binaryParts.has(part) ? false : meta.encoding;
           switch (clientEncoding) {
             case "base64":
