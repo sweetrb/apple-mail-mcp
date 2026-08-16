@@ -84652,6 +84652,25 @@ function withErrorHandling(handler, errorPrefix) {
   };
 }
 
+// src/tools/mailboxListing.ts
+var LOCAL_STORE_NAMES = ["on my mac", "on my computer", "local", "local folders"];
+function isLocalStoreName(name) {
+  return LOCAL_STORE_NAMES.includes(name.trim().toLowerCase());
+}
+function unlistableStoreError(account, error2, knownAccounts) {
+  const scope = account ? ` for "${account}"` : "";
+  const parts = [`Could not list mailboxes${scope}: ${error2 ?? "Mail declined the request"}`];
+  if (knownAccounts.length > 0) {
+    parts.push(`Accounts on this Mac: ${knownAccounts.join(", ")}.`);
+  }
+  if (account && isLocalStoreName(account)) {
+    parts.push(
+      `"${account}" is Mail's LOCAL store, not an account \u2014 its mailboxes are not children of any account, so they cannot be reached with an \`account\` argument. Enumerating them is not yet supported.`
+    );
+  }
+  return parts.join("\n\n");
+}
+
 // src/tools/batchResults.ts
 async function hybridBatchCounts(ids, appleFn, imapFn) {
   const distinctIds = [...new Set(ids)];
@@ -86693,13 +86712,17 @@ ${r.base64}`,
 registerTool(
   "list-mailboxes",
   {
-    description: "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).",
+    description: "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count. A source that could not be read is NAMED \u2014 the result carries `partial: true` + `failedAccounts` and the list is a floor, not the complete set \u2014 and a listing Mail refused outright (e.g. an account that does not exist) returns an ERROR naming the accounts that do exist, never an empty list.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).\nNote: Mail's local \"On My Mac\" mailboxes are not part of any account and are not currently enumerated by this tool.",
     inputSchema: {
       account: external_exports.string().optional().describe("Account to list mailboxes from")
     },
     outputSchema: {
       mailboxes: external_exports.array(external_exports.object({}).passthrough()).optional(),
-      count: external_exports.number().optional()
+      count: external_exports.number().optional(),
+      // Declared explicitly: the SDK stamps additionalProperties:false on a bare
+      // zod shape, so an undeclared key makes the CLIENT reject the result.
+      partial: external_exports.boolean().optional(),
+      failedAccounts: external_exports.array(external_exports.string()).optional()
     }
   },
   withErrorHandling(async ({ account }) => {
@@ -86721,6 +86744,7 @@ ${list2}`, structured3);
       }
       const configs = resolveImapConfigs();
       const rows = [];
+      const failedAccounts = [];
       for (const config2 of configs) {
         try {
           const boxes = await imapListMailboxes({ config: config2 });
@@ -86734,11 +86758,18 @@ ${list2}`, structured3);
           }
         } catch (e) {
           console.error(`IMAP list-mailboxes failed for "${config2.accountLabel}": ${String(e)}`);
+          failedAccounts.push(config2.accountLabel);
         }
       }
       const { appleScriptOnly } = partitionAccountsForCounts(mailManager.listAccounts(), configs);
       for (const acct of appleScriptOnly) {
-        for (const mb of mailManager.listMailboxes(acct.name)) {
+        const checked = mailManager.listMailboxesChecked(acct.name);
+        if (checked.failed) {
+          console.error(`list-mailboxes failed for "${acct.name}": ${checked.error}`);
+          failedAccounts.push(acct.name);
+          continue;
+        }
+        for (const mb of checked.mailboxes) {
           rows.push({
             name: `${acct.name}/${mb.name}`,
             account: acct.name,
@@ -86747,13 +86778,34 @@ ${list2}`, structured3);
           });
         }
       }
-      const structured2 = { mailboxes: rows, count: rows.length };
-      if (rows.length === 0) return successResponse("No mailboxes found", structured2);
+      const partial2 = failedAccounts.length > 0;
+      const structured2 = {
+        mailboxes: rows,
+        count: rows.length,
+        ...partial2 ? { partial: partial2, failedAccounts } : {}
+      };
+      const caveat = partial2 ? `
+
+PARTIAL \u2014 could not read: ${failedAccounts.join(", ")}. This list is incomplete.` : "";
+      if (rows.length === 0) {
+        return partial2 ? errorResponse(
+          `Could not list mailboxes from any source. Failed: ${failedAccounts.join(", ")}.`
+        ) : successResponse("No mailboxes found", structured2);
+      }
       const list = rows.map((b) => `  - ${b.name} (${b.unreadCount} unread)`).join("\n");
       return successResponse(`Found ${rows.length} mailbox(es):
-${list}`, structured2);
+${list}${caveat}`, structured2);
     }
-    const mailboxes = mailManager.listMailboxes(account);
+    const { mailboxes, failed, error: error2 } = mailManager.listMailboxesChecked(account);
+    if (failed) {
+      return errorResponse(
+        unlistableStoreError(
+          account,
+          error2,
+          mailManager.listAccounts().map((a) => a.name)
+        )
+      );
+    }
     const structured = { mailboxes, count: mailboxes.length };
     if (mailboxes.length === 0) {
       return successResponse("No mailboxes found", structured);

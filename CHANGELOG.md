@@ -1,5 +1,37 @@
 ## [Unreleased]
 
+## [2.13.2] - 2026-08-16
+
+Partial progress on #183 — the half that needs no new AppleScript. **#183 stays
+open**: local "On My Mac" mailboxes are still not enumerated. What changes is
+that the server no longer *implies they do not exist*.
+
+### Fixed
+
+- **`list-mailboxes` reported a refused listing as an empty one.** `listMailboxes`
+  returns `[]` both when an account genuinely holds no mailboxes and when Mail
+  REFUSED the request — asking for something that is not an account raises
+  `Can't get account "X"` — and the tool called the unchecked variant, so both
+  came back as `{"mailboxes":[],"count":0}` and a successful "No mailboxes
+  found".
+
+  That told the caller the opposite of the truth, and it is the same
+  absent-vs-empty distinction enforced everywhere else here (an absent
+  collateral array means "not computable", never "empty"). A refused listing now
+  returns an **error** naming the accounts that do exist.
+
+  Asking for `account="On My Mac"` additionally explains that Mail's local store
+  is not an account at all — its mailboxes are not children of any account, so
+  no `account` argument can reach them — instead of implying the store is empty.
+
+- **The unscoped fan-out silently dropped sources it could not read.** An IMAP
+  account whose LIST threw, or an AppleScript account Mail refused, was logged to
+  stderr and omitted, leaving a short list that looked complete. Those are now
+  named: the result carries `partial: true` + `failedAccounts`, the text says the
+  list is incomplete, and a fan-out where *every* source failed is an error
+  rather than "No mailboxes found". Matches the contract `get-mail-stats` and
+  `get-unread-count` already follow.
+
 ## [2.13.1] - 2026-08-16
 
 Closes #179 — a regression introduced by the snapshot chunking in #177 (2.10.33).
