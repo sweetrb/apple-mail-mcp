@@ -1,5 +1,52 @@
 ## [Unreleased]
 
+## [2.13.1] - 2026-08-16
+
+Closes #179 — a regression introduced by the snapshot chunking in #177 (2.10.33).
+v2.10.32 read `id of messages of mb` unbounded; the chunking fix added
+`repeat while _sLo <= _ca`, and that bound is the count.
+
+### Fixed
+
+- **A lagging mailbox count could make the collateral snapshot name messages
+  that never moved.** `snapshotFragment` bounds its enumeration by the count
+  Mail just reported. #155 established that the count can lag the mailbox, and
+  the two are read as consecutive Apple Events in one script with nothing
+  between them — they are co-stale, not independent instruments. When the count
+  read **low**, every position past the bound was **never requested**, and only
+  a *failed* slice enters `_sMiss`, so an unrequested tail left no trace: the
+  status stayed `ok` and the record claimed a complete observation.
+
+  Those messages were then present in `before`, absent from `after`, and landed
+  in `disappeared` — and, if the caller never named them, in `unrequested`,
+  which the audit log documents as *"IS the #155 symptom, with names attached"*.
+  That is precisely the fabricated finding the #176 contract promises is
+  impossible: an innocent message put in front of someone mid-incident as
+  evidence of data loss.
+
+  The snapshot now probes exactly **one** position past the bound. One rather
+  than a slice, because an out-of-range *range* raises as a whole, so an
+  over-requested slice cannot distinguish "nothing there" from "the count was
+  low by more than a chunk". A message found there means the count was low; the
+  unread tail is recorded as a hole, which makes the snapshot `partial` under
+  the **existing** rules and withholds exactly the halves a truncation would
+  poison. No new status and no new gating.
+
+  The probe cannot fire spuriously: when the count is accurate the probed
+  position does not exist, and a specifier that *clamps* instead of raising
+  hands back an id this enumeration already recorded, which is ignored. Whether
+  Mail's `messages i thru j` clamps or raises is still not established across
+  backends, so both are handled rather than assumed.
+
+### Internal
+
+- The forensics simulator now derives its slice range from the **count the
+  generated script emitted** rather than from the fake mailbox's real length,
+  and models an out-of-range slice raising (with a knob for the clamping
+  semantics). Without this the bug above was not expressible in a test at all —
+  a guard for it would have passed vacuously against broken code, the same trap
+  the retracted `falseOkWarning` fell into.
+
 ## [2.13.0] - 2026-08-16
 
 Second and final change for #181, and the one that closes it. 2.12.0 stopped a
