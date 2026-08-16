@@ -283,6 +283,23 @@ export interface CollateralDiff {
    * fixed, treat a `disappeared` entry as a lead, not a proof.
    */
   snapshot: "ok" | "partial" | "skipped" | "unavailable";
+  /**
+   * Present only when Mail's message COUNT for this mailbox read **high** and
+   * the snapshot had to measure the true length instead (#187).
+   *
+   * This is direct evidence of the count staleness #155 is about, from the one
+   * place that can observe it for free: an out-of-range range raises, so a
+   * count that over-reports makes its slices fail. Before 2.14.1 that silently
+   * collapsed the snapshot to `unavailable` with no holes and no warning —
+   * switching the collateral instrument off in exactly the stale direction the
+   * field reports.
+   *
+   * `measuredLength` is how many messages the mailbox actually held. Compare it
+   * with the `countDelta` entry's `before`/`after` for the same mailbox to see
+   * how far the count lagged. Absent means the count's last position was
+   * readable, i.e. no evidence it was high — never "the count was correct".
+   */
+  countStale?: { phase: "before" | "after"; measuredLength: number }[];
   skipReason?: string;
   /**
    * The slices of the mailbox that could not be read, per phase — 1-based

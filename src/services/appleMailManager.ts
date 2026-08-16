@@ -1246,16 +1246,61 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         set _sMiss to ""
         set _sPairs to {}
         set _sChunk to ${chunk}
+        -- The mailbox's MEASURED length, emitted only when it disagrees with the
+        -- count (#187). -1 = "not measured", which is the normal case: the probe
+        -- only runs a binary search when the count's last position is unreadable.
+        -- Initialised here, not in the else-branch, or the skipped/unavailable
+        -- paths would reference an unbound variable when emitting.
+        set _sTrue to -1
         if ${countVar} < 0 then
           set _sStatus to "unavailable"
         else if ${countVar} > ${max} then
           set _sStatus to "skipped"
           set _sPayload to "mailbox holds " & (${countVar} as string) & " messages, above ${AUDIT_SNAPSHOT_MAX_ENV}=${max}"
         else
+          -- #187: the count can read HIGH, and an out-of-range range RAISES as
+          -- a whole rather than clamping. On a mailbox smaller than one chunk
+          -- there is only ONE slice, so a high count made it fail entirely:
+          -- _sPairs stayed empty, the status collapsed to "unavailable", and
+          -- the record carried no holes and no warning. The collateral
+          -- instrument switched itself off in exactly the stale direction #155
+          -- evidences, silently.
+          --
+          -- So establish a bound that actually EXISTS before slicing. If the
+          -- last position the count claims is readable, the count is not high
+          -- and this costs one probe. Otherwise binary-search the true end,
+          -- which is O(log n) probes and also MEASURES how stale the count is.
+          set _sBound to ${countVar}
+          if _sBound > 0 then
+            set _sEndOk to false
+            try
+              get id of message _sBound of ${mbVar}
+              set _sEndOk to true
+            end try
+            if not _sEndOk then
+              set _sLoB to 0
+              set _sHiB to _sBound
+              repeat while (_sHiB - _sLoB) > 1
+                set _sMid to (_sLoB + _sHiB) div 2
+                set _sMidOk to false
+                try
+                  get id of message _sMid of ${mbVar}
+                  set _sMidOk to true
+                end try
+                if _sMidOk then
+                  set _sLoB to _sMid
+                else
+                  set _sHiB to _sMid
+                end if
+              end repeat
+              set _sBound to _sLoB
+              set _sTrue to _sLoB
+            end if
+          end if
           set _sLo to 1
-          repeat while _sLo <= ${countVar}
+          repeat while _sLo <= _sBound
             set _sHi to _sLo + _sChunk - 1
-            if _sHi > ${countVar} then set _sHi to ${countVar}
+            if _sHi > _sBound then set _sHi to _sBound
             set _sGot to false
             repeat with _sTry from 1 to ${SNAPSHOT_SLICE_ATTEMPTS}
               set _sIds to {}
@@ -1313,7 +1358,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           -- PARTIAL under the existing rules and withholds the halves a
           -- truncation would poison.
           try
-            set _sOverId to ((id of message (${countVar} + 1) of ${mbVar}) as string)
+            set _sOverId to ((id of message (_sBound + 1) of ${mbVar}) as string)
             -- A specifier that CLAMPS rather than raising hands back the LAST
             -- message instead of failing. That is not evidence of a truncation,
             -- so only an id this enumeration did not already record counts.
@@ -1323,7 +1368,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end repeat
             if not _sSeen then
               if _sMiss is not "" then set _sMiss to _sMiss & ","
-              set _sMiss to _sMiss & ((${countVar} + 1) as string) & "-end"
+              set _sMiss to _sMiss & ((_sBound + 1) as string) & "-end"
             end if
           end try
           if _sMiss is not "" then
@@ -1338,7 +1383,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           set _sPayload to _sPairs as string
           set AppleScript's text item delimiters to _sTid
         end if
-        set _out to _out & "${SNAP_TAG}${FIELD_SEP}" & ${acctExpr} & "${FIELD_SEP}" & ${mbExpr} & "${FIELD_SEP}${phase}${FIELD_SEP}" & _sStatus & "${FIELD_SEP}" & _sPayload & "${FIELD_SEP}" & _sMiss & "${RECORD_SEP}"`;
+        set _out to _out & "${SNAP_TAG}${FIELD_SEP}" & ${acctExpr} & "${FIELD_SEP}" & ${mbExpr} & "${FIELD_SEP}${phase}${FIELD_SEP}" & _sStatus & "${FIELD_SEP}" & _sPayload & "${FIELD_SEP}" & _sMiss & "${FIELD_SEP}" & (_sTrue as string) & "${RECORD_SEP}"`;
   }
 
   /**
@@ -1405,6 +1450,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       payload: string;
       /** 1-based position ranges this phase could not read ("251-500,900-1000"). */
       miss: string;
+      /** #187: the mailbox's MEASURED length, present only when it disagreed
+       *  with the count Mail reported — i.e. the count read HIGH. */
+      measuredLength?: number;
     }[];
   } {
     const byId = new Map<string, BatchOperationResult>();
@@ -1428,6 +1476,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       status: string;
       payload: string;
       miss: string;
+      measuredLength?: number;
     }[] = [];
 
     for (const rec of output.split(RECORD_SEP)) {
@@ -1446,6 +1495,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         continue;
       }
       if (f[0] === SNAP_TAG) {
+        // f[7] (#187) is the mailbox's MEASURED length, emitted only when it
+        // disagreed with the count; -1 or absent means "not measured". Absent
+        // is the normal case for a record written before 2.14.1.
+        const measured = f[7] !== undefined && f[7] !== "" ? Number(f[7]) : -1;
         snaps.push({
           account: f[1] ?? "",
           mailbox: f[2] ?? "",
@@ -1453,6 +1506,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           status: f[4] ?? "",
           payload: f[5] ?? "",
           miss: f[6] ?? "",
+          ...(Number.isFinite(measured) && measured >= 0 ? { measuredLength: measured } : {}),
         });
         continue;
       }
@@ -1703,6 +1757,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       // innocent messages as collateral — the fabricated finding this layer must
       // never produce. A hole in `before` only undercounts it, and symmetrically
       // poisons `appeared`.
+      // #187: when Mail's count read HIGH, the snapshot measured the mailbox's
+      // true length instead of letting the over-request collapse it. Surface that
+      // measurement — it is DIRECT evidence of the count staleness #155 is about,
+      // and discarding it would repeat the mistake of measuring and saying nothing.
+      const countStale = [b, a]
+        .filter((s) => s.measuredLength !== undefined)
+        .map((s) => ({ phase: s.phase, measuredLength: s.measuredLength as number }));
       const holes = [b, a]
         .filter((s) => s.miss !== "")
         .map((s) => ({ phase: s.phase, ranges: s.miss }));
@@ -1714,6 +1775,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           disappeared,
           unrequested,
           appeared,
+          ...(countStale.length ? { countStale } : {}),
         });
         continue;
       }
@@ -1725,6 +1787,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         account: g.account,
         mailbox: g.mailbox,
         snapshot: "partial",
+        ...(countStale.length ? { countStale } : {}),
         skipReason:
           `Mail would not read ${holes.map((h) => `${h.ranges} (${h.phase})`).join(", ")} of ` +
           `this mailbox, so the snapshot has a hole in it. ` +

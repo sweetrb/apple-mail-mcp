@@ -1,5 +1,57 @@
 ## [Unreleased]
 
+## [2.14.1] - 2026-08-16
+
+Closes #187 — the stale-**HIGH** counterpart to #179, and the direction #155
+actually evidences.
+
+### Fixed
+
+- **A mailbox count that read high could silently switch the collateral
+  snapshot off.** An out-of-range AppleScript range **raises as a whole** rather
+  than clamping, so a count that over-reports makes its slices fail. On a
+  mailbox smaller than one chunk (default 250) there is only **one** slice: it
+  covered everything, it raised, `_sPairs` ended up empty, and the status
+  collapsed to `unavailable` — with no holes recorded and no warning.
+
+  Every reading in #155 is an undercount of what left, i.e. an after-count
+  *higher* than the mailbox truly holds. So the one mechanism that can name an
+  unrequested departure was disabling itself precisely in the scenario it exists
+  for, and saying nothing while it did. Regression from #177 (2.10.33);
+  v2.10.32 read the mailbox unbounded and could not over-request.
+
+  The snapshot now establishes a bound that actually **exists** before slicing.
+  If the count's last position is readable the count is not high and this costs
+  exactly **one** probe. Otherwise it binary-searches the true end — `O(log n)`,
+  measured live at 7–9 probes for counts overstated by 3 to 253.
+
+### Added
+
+- **`countStale` on the collateral diff — the staleness is now measured, not
+  just survived.** When the clamp fires, the mailbox's true length is reported
+  alongside the count that disagreed with it:
+
+  ```json
+  { "countStale": [{ "phase": "after", "measuredLength": 4 }] }
+  ```
+
+  Compare it with the same mailbox's `countDelta` `before`/`after` to see how
+  far the count lagged. This is direct evidence of the #155 staleness from the
+  one place that can observe it for free. It is **absent** when the count's last
+  position was readable — that means "no evidence it was high", never "the count
+  was correct".
+
+### Internal
+
+- The forensics simulator models the clamp (gated on the generated script
+  actually containing it, like every other capability there), so a script
+  without the clamp still reproduces the old collapse and the guards cannot pass
+  vacuously.
+- The #179 overrun probe is now bounded by the **clamped** bound rather than the
+  raw count — otherwise, after a high count was clamped down, it would probe
+  into the void and could re-raise the very truncation flag the clamp had just
+  disproved.
+
 ## [2.14.0] - 2026-08-16
 
 Mail's local "On My Mac" mailboxes are visible for the first time. This is the
