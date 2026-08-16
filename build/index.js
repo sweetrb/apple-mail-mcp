@@ -78828,6 +78828,14 @@ function auditSnapshotChunk() {
   if (!Number.isFinite(n) || n < 1) return DEFAULT_SNAPSHOT_CHUNK;
   return Math.floor(n);
 }
+function classifyCountStatus(readable, expected, observed) {
+  if (!readable) return { status: "unknown", unknownReason: "count-unreadable" };
+  if (expected === null) return { status: "unknown", unknownReason: "no-expectation" };
+  if (observed === expected) return { status: "match" };
+  if ((observed ?? 0) > expected) return { status: "over" };
+  if (observed === 0) return { status: "unknown", unknownReason: "count-did-not-move" };
+  return { status: "unknown", unknownReason: "count-partial" };
+}
 function writeAuditRecord(record2) {
   const path = auditLogPath();
   if (!path) return;
@@ -79771,25 +79779,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const readable = m.before >= 0 && m.after >= 0;
       const observed = readable ? m.before - m.after : null;
       const note = noteFor(m.account, m.mailbox);
-      let status;
-      let unknownReason;
-      if (!readable) {
-        status = "unknown";
-        unknownReason = "count-unreadable";
-      } else if (m.expected === null) {
-        status = "unknown";
-        unknownReason = "no-expectation";
-      } else if (observed === m.expected) {
-        status = "match";
-      } else if ((observed ?? 0) > m.expected) {
-        status = "over";
-      } else if (observed === 0) {
-        status = "unknown";
-        unknownReason = "count-did-not-move";
-      } else {
-        status = "unknown";
-        unknownReason = "count-partial";
-      }
+      const { status, unknownReason } = classifyCountStatus(readable, m.expected, observed);
       return {
         account: m.account,
         mailbox: m.mailbox,
@@ -84475,7 +84465,15 @@ async function imapFetchAttachment(id, attachmentName, deps = {}) {
     }
   });
 }
-async function imapBatch(ids, deps, op) {
+async function mailboxCount(client, path) {
+  try {
+    const st = await client.status(path, { messages: true });
+    return typeof st.messages === "number" ? st.messages : null;
+  } catch {
+    return null;
+  }
+}
+async function imapBatch(ids, deps, op, opts = {}) {
   const groups = /* @__PURE__ */ new Map();
   const errors = [];
   let failed = 0;
@@ -84492,15 +84490,39 @@ async function imapBatch(ids, deps, op) {
     groups.set(key, g);
   }
   let success = 0;
+  const countDelta = [];
   for (const g of groups.values()) {
     try {
       await useClient(depsForAccount(g.account, deps), async (client) => {
+        const before = opts.reconcile ? await mailboxCount(client, g.path) : null;
         const lock = await client.getMailboxLock(g.path);
         try {
           await op(client, g.uids, g.path);
         } finally {
           lock.release();
         }
+        if (!opts.reconcile) return;
+        const after = await mailboxCount(client, g.path);
+        const readable = before !== null && after !== null;
+        const observed = readable ? before - after : null;
+        const { status, unknownReason } = classifyCountStatus(readable, g.uids.length, observed);
+        countDelta.push({
+          account: g.account,
+          mailbox: g.path,
+          before,
+          after,
+          expected: g.uids.length,
+          observed,
+          status,
+          ...unknownReason ? { unknownReason } : {},
+          ...unknownReason === "count-unreadable" ? { note: "The server did not answer STATUS for this mailbox" } : {},
+          ...unknownReason === "count-did-not-move" ? {
+            note: `The mailbox count did not move. On a label store (Gmail) a message can stay visible in an all-mail view after being moved out of a label, so this is not by itself evidence the operation failed \u2014 check the destination.`
+          } : {},
+          ...unknownReason === "count-partial" ? {
+            note: `Fewer messages left than were operated on. \`observed\` is a LOWER BOUND on what left, not a count of what left \u2014 a concurrent delivery to this mailbox masks departures one-for-one.`
+          } : {}
+        });
       });
       success += g.uids.length;
     } catch (e) {
@@ -84508,7 +84530,7 @@ async function imapBatch(ids, deps, op) {
       errors.push(`${g.path}: ${errText(e)}`);
     }
   }
-  return { success, failed, errors };
+  return { success, failed, errors, ...countDelta.length ? { countDelta } : {} };
 }
 var imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
   assertMutated(
@@ -84543,17 +84565,27 @@ var imapBatchUnflag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) =
     `IMAP unflag of ${uids.length} message(s)`
   );
 });
-var imapBatchDelete = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids, path) => {
-  await trashUids(c, uids, path);
-});
+var imapBatchDelete = (ids, deps = {}) => imapBatch(
+  ids,
+  deps,
+  async (c, uids, path) => {
+    await trashUids(c, uids, path);
+  },
+  { reconcile: true }
+);
 function imapBatchMove(ids, destMailbox, deps = {}) {
-  return imapBatch(ids, deps, async (c, uids) => {
-    const dest = await findMailboxPathOrThrow(c, destMailbox) ?? resolveMailboxPath(destMailbox, "list");
-    assertMutated(
-      await c.messageMove(uids, dest, { uid: true }),
-      `IMAP move of ${uids.length} message(s) to "${dest}"`
-    );
-  });
+  return imapBatch(
+    ids,
+    deps,
+    async (c, uids) => {
+      const dest = await findMailboxPathOrThrow(c, destMailbox) ?? resolveMailboxPath(destMailbox, "list");
+      assertMutated(
+        await c.messageMove(uids, dest, { uid: true }),
+        `IMAP move of ${uids.length} message(s) to "${dest}"`
+      );
+    },
+    { reconcile: true }
+  );
 }
 function senderName(from) {
   const a = from?.[0];
@@ -84752,13 +84784,15 @@ async function hybridBatchCounts(ids, appleFn, imapFn) {
     fail += res.length - s;
     errors.push(...res.filter((r) => !r.success && r.error).map((r) => r.error));
   }
+  let countDelta;
   if (imapIds.length > 0) {
     const r = await imapFn(imapIds);
     success += r.success;
     fail += r.failed;
     errors.push(...r.errors);
+    if (r.countDelta?.length) countDelta = r.countDelta;
   }
-  return { success, fail, errors };
+  return { success, fail, errors, ...countDelta ? { countDelta } : {} };
 }
 function distinctErrors(errors) {
   return [...new Set(errors.filter(Boolean))];
@@ -84797,6 +84831,10 @@ ${warnings.join("\n")}` : "";
 function toManagerScope(args) {
   return { account: args.sourceAccount, mailbox: args.sourceMailbox };
 }
+function mergeCountDeltas(apple, imap) {
+  const all = [...apple ?? [], ...imap ?? []];
+  return all.length ? { countDelta: all } : {};
+}
 async function runBatchDelete(deps, args) {
   const { ids, sourceMailbox, sourceAccount } = args;
   let forensics = { warnings: [] };
@@ -84820,7 +84858,10 @@ async function runBatchDelete(deps, args) {
       allFailed: (n) => `Failed to delete all ${n} message(s)`,
       partial: (ok, failed) => `Deleted ${ok} message(s), ${failed} failed`
     },
-    forensics.countDelta ? { countDelta: forensics.countDelta } : {},
+    // #181: merge both backends' reconciliation. An AppleScript-only batch is
+    // unchanged; an IMAP-only one now reports a delta where it previously
+    // reported nothing; a mixed batch reports both, per source mailbox.
+    mergeCountDeltas(forensics.countDelta, counts.countDelta),
     forensics.warnings
   );
 }
@@ -84854,7 +84895,10 @@ async function runBatchMove(deps, args) {
       allFailed: (n) => `Failed to move all ${n} message(s)`,
       partial: (ok, failed) => `Moved ${ok} message(s) to "${mailbox}", ${failed} failed`
     },
-    { mailbox, ...forensics.countDelta ? { countDelta: forensics.countDelta } : {} },
+    {
+      mailbox,
+      ...mergeCountDeltas(forensics.countDelta, counts.countDelta)
+    },
     forensics.warnings
   );
 }

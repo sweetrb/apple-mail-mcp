@@ -1844,3 +1844,122 @@ describe("#181 three-valued verification of accepted IMAP mutations", () => {
     expect(r.verification).toMatchObject({ why: expect.stringMatching(/still present/) });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #181: the IMAP path reports what it did to each source mailbox, in the SAME
+// countDelta shape as the AppleScript path. Before this it reported nothing,
+// and its absence read as "no information" rather than "unverified" — the
+// asymmetry the issue was filed for. The numbers come from the server's own
+// STATUS, so unlike Mail's count they are not subject to the #155 lag.
+// ---------------------------------------------------------------------------
+describe("#181 IMAP batch operations reconcile the source mailbox count", () => {
+  const IDS = [encodeImapId("acct", "INBOX", 5), encodeImapId("acct", "INBOX", 6)];
+
+  /** A client whose STATUS drops by `drop` after the mutation runs. */
+  function countingClient(drop: number, extra: Partial<ImapClientLike> = {}): ImapClientLike {
+    let mutated = false;
+    return {
+      ...makeClient([], {}),
+      list: async () => [
+        { path: "Archive", name: "Archive" },
+        { path: "Trash", name: "Trash", specialUse: "\\Trash" },
+      ],
+      status: async (path: string) => ({ path, messages: mutated ? 10 - drop : 10 }),
+      messageMove: async () => {
+        mutated = true;
+        return { path: "INBOX", destination: "Archive" };
+      },
+      ...extra,
+    };
+  }
+
+  it("reports a clean move as `match`", async () => {
+    const r = await imapBatchMove(IDS, "Archive", {
+      config: cfg,
+      connect: async () => countingClient(2),
+    });
+    expect(r.countDelta).toEqual([
+      {
+        account: "acct",
+        mailbox: "INBOX",
+        before: 10,
+        after: 8,
+        expected: 2,
+        observed: 2,
+        status: "match",
+      },
+    ]);
+  });
+
+  it("reports MORE leaving than were asked for as `over` — the one real alarm", async () => {
+    const r = await imapBatchMove(IDS, "Archive", {
+      config: cfg,
+      connect: async () => countingClient(5),
+    });
+    expect(r.countDelta?.[0]).toMatchObject({ expected: 2, observed: 5, status: "over" });
+  });
+
+  it("a count that did not move is `unknown`, and does NOT claim failure", async () => {
+    const r = await imapBatchMove(IDS, "Archive", {
+      config: cfg,
+      connect: async () => countingClient(0),
+    });
+    expect(r.countDelta?.[0]).toMatchObject({
+      status: "unknown",
+      unknownReason: "count-did-not-move",
+    });
+    // A Gmail label store legitimately produces this, so it must not send the
+    // reader hunting a failure — but it must mention checking the destination.
+    expect(r.countDelta?.[0].note).toMatch(/all-mail view/i);
+  });
+
+  it("a short-but-nonzero drop is `count-partial`, distinct from did-not-move", async () => {
+    const r = await imapBatchMove(IDS, "Archive", {
+      config: cfg,
+      connect: async () => countingClient(1),
+    });
+    expect(r.countDelta?.[0]).toMatchObject({
+      expected: 2,
+      observed: 1,
+      status: "unknown",
+      unknownReason: "count-partial",
+    });
+    expect(r.countDelta?.[0].note).toMatch(/LOWER BOUND/);
+  });
+
+  it("an unreadable STATUS is `count-unreadable`, never a silent zero", async () => {
+    const client = countingClient(2, {
+      status: async () => {
+        throw new Error("STATUS refused");
+      },
+    });
+    const r = await imapBatchMove(IDS, "Archive", { config: cfg, connect: async () => client });
+    expect(r.countDelta?.[0]).toMatchObject({
+      before: null,
+      after: null,
+      observed: null,
+      status: "unknown",
+      unknownReason: "count-unreadable",
+    });
+  });
+
+  it("batch delete reconciles too", async () => {
+    const r = await imapBatchDelete(IDS, { config: cfg, connect: async () => countingClient(2) });
+    expect(r.countDelta?.[0]).toMatchObject({ expected: 2, observed: 2, status: "match" });
+  });
+
+  // The guard against manufacturing an alarm: these change no count, so a
+  // countDelta of expected:2 / observed:0 would read as a failed operation.
+  it("mark-read and flag report NO countDelta — they change no count", async () => {
+    const read = await imapBatchMarkRead(IDS, {
+      config: cfg,
+      connect: async () => countingClient(0),
+    });
+    expect(read.countDelta).toBeUndefined();
+    const unflag = await imapBatchUnflag(IDS, {
+      config: cfg,
+      connect: async () => countingClient(0),
+    });
+    expect(unflag.countDelta).toBeUndefined();
+  });
+});

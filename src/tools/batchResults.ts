@@ -10,6 +10,7 @@
  * @module tools/batchResults
  */
 import { successResponse, errorResponse, type ToolResponse } from "@/tools/respond.js";
+import type { CountDelta } from "@/services/auditLog.js";
 import type { ImapBatchResult } from "@/services/imapClient.js";
 
 /**
@@ -29,7 +30,7 @@ export async function hybridBatchCounts(
   ids: string[],
   appleFn: (numericIds: string[]) => { success: boolean; error?: string }[],
   imapFn: (imapIds: string[]) => Promise<ImapBatchResult>
-): Promise<{ success: number; fail: number; errors: string[] }> {
+): Promise<{ success: number; fail: number; errors: string[]; countDelta?: CountDelta[] }> {
   const distinctIds = [...new Set(ids)];
   const imapIds = distinctIds.filter((i) => i.startsWith("imap:"));
   const numericIds = distinctIds.filter((i) => !i.startsWith("imap:"));
@@ -45,13 +46,19 @@ export async function hybridBatchCounts(
     // refused as ambiguous (#152) showed up only as an anonymous failure count.
     errors.push(...res.filter((r) => !r.success && r.error).map((r) => r.error as string));
   }
+  // #181: the IMAP path now reconciles too, so a mixed batch reports what each
+  // backend did to each source mailbox in ONE structure. Kept separate from the
+  // AppleScript deltas by mailbox, never summed — they measure different stores
+  // with different instruments (server STATUS vs Mail's own count).
+  let countDelta: CountDelta[] | undefined;
   if (imapIds.length > 0) {
     const r = await imapFn(imapIds);
     success += r.success;
     fail += r.failed;
     errors.push(...r.errors);
+    if (r.countDelta?.length) countDelta = r.countDelta;
   }
-  return { success, fail, errors };
+  return { success, fail, errors, ...(countDelta ? { countDelta } : {}) };
 }
 
 /** The distinct, non-empty failure reasons, in first-seen order. */

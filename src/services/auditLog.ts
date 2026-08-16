@@ -162,6 +162,38 @@ export function auditSnapshotChunk(): number {
  * The vocabulary is deleted rather than deprecated so the compiler enumerates
  * every consumer; a dead status string gets re-implemented by the next author.
  */
+/**
+ * Classify a count delta into the four disjoint "nothing to assert" cases plus
+ * the two findings. ONE implementation, shared by both backends. (#181)
+ *
+ * The AppleScript path grew this branching for #155; the IMAP path had no
+ * reconciliation at all. Giving IMAP its own copy would let the two drift, and
+ * these categories are load-bearing — `count-did-not-move` deliberately does
+ * NOT tell the reader to check a destination (on a flag-only store nothing was
+ * moved, so an empty Trash would read as failure), while `count-partial` does.
+ * Getting that backwards is the retracted `under` warning all over again.
+ *
+ * Note `observed` is a LOWER BOUND on what left, not a count of what left — see
+ * the #155 retraction on `CountDelta`.
+ */
+export function classifyCountStatus(
+  readable: boolean,
+  expected: number | null,
+  observed: number | null
+): { status: CountDelta["status"]; unknownReason?: CountDelta["unknownReason"] } {
+  if (!readable) return { status: "unknown", unknownReason: "count-unreadable" };
+  if (expected === null) return { status: "unknown", unknownReason: "no-expectation" };
+  if (observed === expected) return { status: "match" };
+  if ((observed ?? 0) > expected) return { status: "over" };
+  // The count did not move at all. On a store that flags deletions instead of
+  // removing them this is the ORDINARY reading for an operation that fully
+  // succeeded, so it must keep saying so.
+  if (observed === 0) return { status: "unknown", unknownReason: "count-did-not-move" };
+  // It moved, but short. A flag-only store cannot produce this, which is the
+  // whole reason it is worth telling apart from the case above.
+  return { status: "unknown", unknownReason: "count-partial" };
+}
+
 export interface CountDelta {
   /** Account holding the affected mailbox ("" when Mail would not say). */
   account: string;

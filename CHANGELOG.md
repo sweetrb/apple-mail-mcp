@@ -1,5 +1,45 @@
 ## [Unreleased]
 
+## [2.15.0] - 2026-08-16
+
+The last piece of #181's suggested direction: both backends now report the same
+reconciliation structure.
+
+### Added
+
+- **`countDelta` on the IMAP batch path.** `batch-delete-messages` and
+  `batch-move-messages` previously returned no reconciliation at all for
+  `imap:` ids, and that absence read as "no information" rather than
+  "unverified" — the asymmetry #181 was filed about. They now report the same
+  `countDelta` shape as the AppleScript path: `before`, `after`, `expected`,
+  `observed`, `status`, and a reason when the status is `unknown`.
+
+  The numbers come from the server's own `STATUS`, so unlike Mail's count they
+  are **not** subject to the lag #155 is about — a `match` on this path means
+  more than it does on the other.
+
+  A mixed batch reports an entry per source mailbox from whichever backend
+  handled it. Entries are **concatenated, never summed**: the two measure
+  different stores with different instruments, and collapsing them would average
+  a trustworthy reading with an untrustworthy one and hide which was which.
+
+  Only operations that actually remove messages from their source reconcile.
+  `batch-mark-as-read` and the flag tools change no count, so emitting
+  `expected: N, observed: 0` for them would manufacture an alarm — they report
+  no `countDelta`, and a guard pins that.
+
+### Changed
+
+- The four-way `unknown` classification (`count-unreadable`, `no-expectation`,
+  `count-did-not-move`, `count-partial`) is now **one shared function** used by
+  both backends. Giving IMAP its own copy would let the two drift, and these
+  categories are load-bearing: `count-did-not-move` deliberately does not send
+  the reader hunting a destination, while `count-partial` does. Getting that
+  backwards is the retracted `under` warning all over again.
+
+  No behaviour change on the AppleScript path — the branching is identical, just
+  relocated.
+
 ## [2.14.1] - 2026-08-16
 
 Closes #187 — the stale-**HIGH** counterpart to #179, and the direction #155

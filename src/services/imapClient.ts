@@ -30,6 +30,7 @@ import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
+import { classifyCountStatus, type CountDelta } from "@/services/auditLog.js";
 import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
 
 export const IMAP_ENV = {
@@ -1813,12 +1814,37 @@ export interface ImapBatchResult {
   success: number;
   failed: number;
   errors: string[];
+  /**
+   * What the operation actually did to each SOURCE mailbox. (#181)
+   *
+   * Present only for operations that remove messages from their source — the
+   * batch move and delete — because those are the ones where "how many left"
+   * is a meaningful question. Marking read or flagging changes no count, and
+   * emitting `expected: N, observed: 0` for them would manufacture an alarm.
+   *
+   * Same shape and the same classification as the AppleScript path, so a caller
+   * reads one structure regardless of backend. Unlike that path, the numbers
+   * come from the server's own `STATUS`, so they are not subject to the
+   * Mail.app count lag #155 is about.
+   */
+  countDelta?: CountDelta[];
+}
+
+/** Server-side message count, or null when STATUS would not answer. */
+async function mailboxCount(client: ImapClientLike, path: string): Promise<number | null> {
+  try {
+    const st = await client.status(path, { messages: true });
+    return typeof st.messages === "number" ? st.messages : null;
+  } catch {
+    return null;
+  }
 }
 
 async function imapBatch(
   ids: string[],
   deps: ImapDeps,
-  op: (client: ImapClientLike, uids: number[], path: string) => Promise<void>
+  op: (client: ImapClientLike, uids: number[], path: string) => Promise<void>,
+  opts: { reconcile?: boolean } = {}
 ): Promise<ImapBatchResult> {
   const groups = new Map<string, { account: string; path: string; uids: number[] }>();
   const errors: string[] = [];
@@ -1836,15 +1862,53 @@ async function imapBatch(
     groups.set(key, g);
   }
   let success = 0;
+  const countDelta: CountDelta[] = [];
   for (const g of groups.values()) {
     try {
       await useClient(depsForAccount(g.account, deps), async (client) => {
+        // STATUS is taken OUTSIDE the mailbox lock and before/after the op, so
+        // the reading is the server's own and not this connection's cached view.
+        const before = opts.reconcile ? await mailboxCount(client, g.path) : null;
         const lock = await client.getMailboxLock(g.path);
         try {
           await op(client, g.uids, g.path);
         } finally {
           lock.release();
         }
+        if (!opts.reconcile) return;
+        const after = await mailboxCount(client, g.path);
+        const readable = before !== null && after !== null;
+        const observed = readable ? before - after : null;
+        const { status, unknownReason } = classifyCountStatus(readable, g.uids.length, observed);
+        countDelta.push({
+          account: g.account,
+          mailbox: g.path,
+          before,
+          after,
+          expected: g.uids.length,
+          observed,
+          status,
+          ...(unknownReason ? { unknownReason } : {}),
+          ...(unknownReason === "count-unreadable"
+            ? { note: "The server did not answer STATUS for this mailbox" }
+            : {}),
+          ...(unknownReason === "count-did-not-move"
+            ? {
+                note:
+                  `The mailbox count did not move. On a label store (Gmail) a message can stay ` +
+                  `visible in an all-mail view after being moved out of a label, so this is not ` +
+                  `by itself evidence the operation failed — check the destination.`,
+              }
+            : {}),
+          ...(unknownReason === "count-partial"
+            ? {
+                note:
+                  `Fewer messages left than were operated on. \`observed\` is a LOWER BOUND on ` +
+                  `what left, not a count of what left — a concurrent delivery to this mailbox ` +
+                  `masks departures one-for-one.`,
+              }
+            : {}),
+        });
       });
       success += g.uids.length;
     } catch (e) {
@@ -1852,7 +1916,7 @@ async function imapBatch(
       errors.push(`${g.path}: ${errText(e)}`);
     }
   }
-  return { success, failed, errors };
+  return { success, failed, errors, ...(countDelta.length ? { countDelta } : {}) };
 }
 
 // Every op below routes its imapflow result through `assertMutated`: a throw is
@@ -1905,24 +1969,34 @@ export const imapBatchUnflag = (ids: string[], deps: ImapDeps = {}): Promise<Ima
     );
   });
 export const imapBatchDelete = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
-  imapBatch(ids, deps, async (c, uids, path) => {
-    await trashUids(c, uids, path);
-  });
+  imapBatch(
+    ids,
+    deps,
+    async (c, uids, path) => {
+      await trashUids(c, uids, path);
+    },
+    { reconcile: true }
+  );
 export function imapBatchMove(
   ids: string[],
   destMailbox: string,
   deps: ImapDeps = {}
 ): Promise<ImapBatchResult> {
-  return imapBatch(ids, deps, async (c, uids) => {
-    // #137: throws on an ambiguous destination; imapBatch records it per group
-    // as a failure rather than moving the batch somewhere the caller didn't name.
-    const dest =
-      (await findMailboxPathOrThrow(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
-    assertMutated(
-      await c.messageMove(uids, dest, { uid: true }),
-      `IMAP move of ${uids.length} message(s) to "${dest}"`
-    );
-  });
+  return imapBatch(
+    ids,
+    deps,
+    async (c, uids) => {
+      // #137: throws on an ambiguous destination; imapBatch records it per group
+      // as a failure rather than moving the batch somewhere the caller didn't name.
+      const dest =
+        (await findMailboxPathOrThrow(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
+      assertMutated(
+        await c.messageMove(uids, dest, { uid: true }),
+        `IMAP move of ${uids.length} message(s) to "${dest}"`
+      );
+    },
+    { reconcile: true }
+  );
 }
 
 // ===========================================================================
