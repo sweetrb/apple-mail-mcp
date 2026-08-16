@@ -212,6 +212,13 @@ function simulateDestructive(script: string): string {
   })();
   /** Whether the script probes one position past the count bound (#179). */
   const probesPastBound = script.includes("set _sOverId to");
+  /**
+   * Whether the script establishes a bound that actually EXISTS before slicing,
+   * binary-searching the true length when the count's last position is
+   * unreadable (#187). Answered by script shape like every other capability
+   * here, so a script WITHOUT the clamp still reproduces the old collapse.
+   */
+  const clampsHighCount = script.includes("set _sBound to");
 
   /**
    * `reportedCount` is the count the generated script just put in `_cb`/`_ca`
@@ -244,15 +251,27 @@ function simulateDestructive(script: string): string {
         `mailbox holds ${reportedCount} messages, above APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX=${snapMax}${RECORD_SEP}`;
       return;
     }
+    // #187: the script establishes a bound that EXISTS before slicing. If the
+    // count's last position is unreadable it binary-searches the true length
+    // and slices to that instead, so a stale-HIGH count no longer makes the
+    // only slice of a small mailbox raise and collapse the whole snapshot.
+    // `measured` is emitted only when the clamp actually fired.
+    let bound = reportedCount;
+    let measured = -1;
+    if (clampsHighCount && reportedCount > state.length) {
+      bound = state.length;
+      measured = state.length;
+    }
+
     // Exactly the requests the script issues: one whole-mailbox read when it
     // names no chunk size, otherwise consecutive slices of that size — both
     // bounded by the REPORTED count, as the script's own loop is.
     const slices: [number, number][] = [];
     if (snapChunk === null) {
-      if (reportedCount > 0) slices.push([1, reportedCount]);
+      if (bound > 0) slices.push([1, bound]);
     } else {
-      for (let lo = 1; lo <= reportedCount; lo += snapChunk) {
-        slices.push([lo, Math.min(lo + snapChunk - 1, reportedCount)]);
+      for (let lo = 1; lo <= bound; lo += snapChunk) {
+        slices.push([lo, Math.min(lo + snapChunk - 1, bound)]);
       }
     }
     const observed: FakeMsg[] = [];
@@ -278,12 +297,12 @@ function simulateDestructive(script: string): string {
     // issues it — the simulator serves the requests the script makes, so this
     // stays absent (and the truncation stays invisible) against a script
     // without the probe.
-    if (probesPastBound && state.length > reportedCount) {
-      const probed = state[reportedCount];
+    if (probesPastBound && state.length > bound) {
+      const probed = state[bound];
       // The script only counts an id it has not already recorded, so a clamping
       // specifier handing back the last message is not read as a truncation.
       const already = observed.some((m) => m.id === probed.id);
-      if (!already) missed.push(`${reportedCount + 1}-end`);
+      if (!already) missed.push(`${bound + 1}-end`);
     }
     const status = missed.length === 0 ? "ok" : observed.length === 0 ? "unavailable" : "partial";
     const payload = observed
@@ -291,7 +310,7 @@ function simulateDestructive(script: string): string {
       .join(SNAP_ITEM);
     out +=
       `${SNAP_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${phase}${FIELD_SEP}${status}` +
-      `${FIELD_SEP}${payload}${FIELD_SEP}${missed.join(",")}${RECORD_SEP}`;
+      `${FIELD_SEP}${payload}${FIELD_SEP}${missed.join(",")}${FIELD_SEP}${measured}${RECORD_SEP}`;
   };
 
   // The count and the snapshot are consecutive Apple Events in ONE script with
@@ -896,6 +915,51 @@ describe("collateral identification (opt-in, gated on the audit log)", () => {
     expect(c.disappeared ?? []).not.toContainEqual({ id: "75815", messageId: "e@example.com" });
     // "ok" asserts both snapshots were read IN FULL, which is false here.
     expect(c.snapshot).not.toBe("ok");
+  });
+
+  // =========================================================================
+  // #187 — the stale-HIGH counterpart to #179. An out-of-range range RAISES as
+  // a whole, so a count that over-reports makes its slices fail. On a mailbox
+  // smaller than one chunk there is only ONE slice: it covered everything, it
+  // raised, _sPairs ended up empty and the snapshot collapsed to "unavailable"
+  // with NO holes and NO warning. The collateral instrument switched itself off
+  // in exactly the stale direction #155 evidences, silently.
+  // =========================================================================
+  it("survives a stale-HIGH count instead of collapsing to `unavailable`", () => {
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    // 5 messages, one really leaves -> 4 remain, but Mail's count says 7.
+    h.staleAfterCountBy = 3;
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    const report = mgr.consumeLastForensics()!;
+    const [c] = report.collateral;
+
+    // The whole point: the over-request must not disable the instrument.
+    expect(c.snapshot).not.toBe("unavailable");
+    expect(c.snapshot).toBe("ok");
+    // And it still does its actual job — the one requested message is named,
+    // and nothing innocent is.
+    expect(c.disappeared).toEqual([{ id: "75811", messageId: "a@example.com" }]);
+    expect(c.unrequested).toEqual([]);
+  });
+
+  it("REPORTS the measured length when the count read high — evidence, not silence", () => {
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    h.staleAfterCountBy = 3;
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    const [c] = mgr.consumeLastForensics()!.collateral;
+    // 4 messages really remained while the count claimed 7. That gap is direct
+    // evidence of the staleness #155 is about, so it must reach the caller.
+    expect(c.countStale).toEqual([{ phase: "after", measuredLength: 4 }]);
+  });
+
+  it("says NOTHING about count staleness when the count is accurate", () => {
+    // A cry-wolf guard: the measurement is emitted only when the clamp fires.
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    h.staleAfterCountBy = 0;
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    const [c] = mgr.consumeLastForensics()!.collateral;
+    expect(c.snapshot).toBe("ok");
+    expect(c.countStale).toBeUndefined();
   });
 
   it("RECORDS the skip when the mailbox is above the ceiling", () => {
