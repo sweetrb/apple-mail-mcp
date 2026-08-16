@@ -91,6 +91,13 @@ export interface ImapBodyStructure {
   parameters?: Record<string, string>;
   size?: number;
   encoding?: string;
+  /**
+   * Content-ID header, when the part has one. This is what distinguishes an
+   * image the HTML body embeds (`<img src="cid:...">`) from a file the sender
+   * attached — see `collectAttachments`. imapflow has always populated it; it
+   * simply was not declared here.
+   */
+  id?: string;
   childNodes?: ImapBodyStructure[];
 }
 interface ImapMessage {
@@ -581,7 +588,12 @@ function structuredRow(m: ImapMessage, account: string, path: string): Record<st
     flagColorIndex: mailFlagColorIndex(m.flags),
     mailbox: path,
     account,
-    hasAttachments: false,
+    // Derived from BODYSTRUCTURE, which the list/search fetch now requests.
+    // This was hardcoded `false` from 2.2.0 until 2.11.1 — indistinguishable to
+    // a caller from "no attachments", so every IMAP-sourced message claimed to
+    // have none. Falls back to false only when the fetch carried no
+    // BODYSTRUCTURE at all.
+    hasAttachments: bodyStructureHasAttachments(m.bodyStructure),
     // Message-ID (when the envelope carries it) is the strongest cross-/intra-
     // backend dedup key for the multi-account merge (imapMultiAccount.ts). The
     // AppleScript path does not expose it, so cross-backend dedup falls back to
@@ -636,7 +648,10 @@ async function run(
         const byUid = new Map<number, ImapMessage>();
         for await (const msg of client.fetch(
           newest.join(","),
-          { envelope: true, flags: true },
+          // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
+          // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
+          // the fetch (~17%), same single round trip, no extra request.
+          { envelope: true, flags: true, bodyStructure: true },
           { uid: true }
         )) {
           byUid.set(msg.uid, msg);
@@ -1461,13 +1476,36 @@ export interface ImapAttachmentInfo {
   size: number;
 }
 
-/** Walk a BODYSTRUCTURE tree collecting attachment parts (disposition or filename). */
+/**
+ * Walk a BODYSTRUCTURE tree collecting attachment parts.
+ *
+ * ## `inline` does not mean "not an attachment"
+ *
+ * RFC 2183 `inline` means "display this in place if you can" — it says nothing
+ * about whether the part is a file the user attached. **Apple Mail sends
+ * genuine attachments as `inline`**, because it inlines them into the message
+ * flow rather than appending them. Excluding every inline part therefore hid
+ * every attachment sent from Mail.app, and because `fetch-attachment` and
+ * `save-attachment` resolve by name against this same walk, those files were
+ * not merely unlisted — they were unfetchable.
+ *
+ * Measured over 300 real messages: of 27 parts carrying a filename, 4 were
+ * excluded by the old rule. Three were invoice PDFs (inline, no Content-ID) and
+ * one was a signature logo (inline, `image/png`, **with** a Content-ID).
+ *
+ * So the discriminator is the **Content-ID**, not the disposition: a part the
+ * HTML body references as `cid:` is embedded content, and anything else with a
+ * filename is a file. An explicit `attachment` disposition always wins — real
+ * mail carries `attachment` parts that also have a Content-ID, and letting the
+ * Content-ID veto those would trade one silent omission for another.
+ */
 function collectAttachments(node: ImapBodyStructure, out: AttachmentPart[] = []): AttachmentPart[] {
   if (!node) return out;
   const filename = node.dispositionParameters?.filename || node.parameters?.name;
   const disposition = node.disposition?.toLowerCase();
+  const isEmbeddedByReference = disposition === "inline" && !!node.id;
   const isAttachment =
-    !!node.part && (disposition === "attachment" || (!!filename && disposition !== "inline"));
+    !!node.part && (disposition === "attachment" || (!!filename && !isEmbeddedByReference));
   if (isAttachment) {
     out.push({
       part: node.part as string,
@@ -1478,6 +1516,17 @@ function collectAttachments(node: ImapBodyStructure, out: AttachmentPart[] = [])
   }
   for (const child of node.childNodes ?? []) collectAttachments(child, out);
   return out;
+}
+
+/**
+ * Does this message carry at least one attachment part?
+ *
+ * Shares `collectAttachments`' walk deliberately: if the two ever disagreed,
+ * `hasAttachments` would promise a file that `list-attachments` then refuses to
+ * show (or vice versa), which is the shape of bug this pair already had once.
+ */
+export function bodyStructureHasAttachments(node?: ImapBodyStructure): boolean {
+  return !!node && collectAttachments(node).length > 0;
 }
 
 async function streamToBuffer(
@@ -1742,7 +1791,10 @@ export async function imapThread(
         const msgs: ImapMessage[] = [];
         for await (const msg of client.fetch(
           uids.join(","),
-          { envelope: true, flags: true },
+          // Same reason as the list/search fetch: get-thread emits structured
+          // rows too, so it needs BODYSTRUCTURE or its hasAttachments would
+          // silently disagree with the same message seen via search.
+          { envelope: true, flags: true, bodyStructure: true },
           { uid: true }
         )) {
           msgs.push(msg);

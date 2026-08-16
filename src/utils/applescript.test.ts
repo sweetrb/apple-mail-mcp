@@ -7,7 +7,11 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { execSync } from "child_process";
-import { executeAppleScript } from "./applescript.js";
+import {
+  executeAppleScript,
+  isPermissionDenied,
+  PERMISSION_DENIED_MESSAGE,
+} from "./applescript.js";
 
 // Mock the child_process module
 vi.mock("child_process", () => ({
@@ -507,5 +511,35 @@ describe("executeAppleScript", () => {
       expect(result.success).toBe(true);
       expect(mockExecSync).toHaveBeenCalledTimes(4);
     });
+  });
+});
+
+describe("permission-denied classification", () => {
+  // The bug this pins: ERROR_MAPPINGS REPLACES the raw AppleScript text with a
+  // friendly message, and healthCheck then re-tested for the raw substrings the
+  // mapping had just deleted. `isPermError` was therefore never true for a real
+  // TCC denial — `doctor` reported `permissions: ok` while its own detail line
+  // read "Permission denied", and the early `healthy: false` return never ran.
+  it("classifies the RAW AppleScript refusals", () => {
+    expect(isPermissionDenied("Not authorized to send Apple events to Mail. (-1743)")).toBe(true);
+    expect(isPermissionDenied("osascript is not permitted to send keystrokes")).toBe(true);
+    expect(isPermissionDenied("access for assistive devices is denied")).toBe(true);
+  });
+
+  it("classifies the NORMALISED message the mapping produces", () => {
+    // This is what a caller actually receives, and it contains none of the raw
+    // substrings — which is exactly why the old string test could never match.
+    expect(PERMISSION_DENIED_MESSAGE).not.toMatch(/not authorized|not permitted/i);
+    expect(isPermissionDenied(PERMISSION_DENIED_MESSAGE)).toBe(true);
+    expect(isPermissionDenied(`Permission check returned: ${PERMISSION_DENIED_MESSAGE}`)).toBe(
+      true
+    );
+  });
+
+  it("does not fire on unrelated errors", () => {
+    expect(isPermissionDenied(undefined)).toBe(false);
+    expect(isPermissionDenied("")).toBe(false);
+    expect(isPermissionDenied("Mail.app is not responding.")).toBe(false);
+    expect(isPermissionDenied("Message not found")).toBe(false);
   });
 });

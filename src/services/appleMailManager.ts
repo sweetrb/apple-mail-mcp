@@ -32,7 +32,7 @@ import {
 import { resolve, sep, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
-import { executeAppleScript } from "@/utils/applescript.js";
+import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { TemplateStore } from "@/services/templateStore.js";
@@ -5561,7 +5561,7 @@ ${actionStmts.join("\n")}
         message: "Mail.app is accessible",
       });
     } else {
-      const errorHint = mailCheck.error?.includes("not authorized")
+      const errorHint = isPermissionDenied(mailCheck.error)
         ? " (check System Settings > Privacy & Security > Automation)"
         : "";
       checks.push({
@@ -5581,8 +5581,7 @@ ${actionStmts.join("\n")}
         message: "AppleScript automation permissions granted",
       });
     } else {
-      const isPermError =
-        permCheck.error?.includes("not authorized") || permCheck.error?.includes("not permitted");
+      const isPermError = isPermissionDenied(permCheck.error);
       checks.push({
         name: "permissions",
         passed: !isPermError,

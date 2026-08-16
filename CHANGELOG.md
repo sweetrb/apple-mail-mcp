@@ -1,5 +1,54 @@
 ## [Unreleased]
 
+## [2.11.1] - 2026-08-16
+
+Three defects found by an end-to-end regression sweep against real mail. All
+three are long-standing (2.2.0 / the I1 optimization), not regressions from
+2.11.0 — they had simply never been exercised against a message that could
+expose them.
+
+### Fixed
+
+- **Attachments sent from Apple Mail were invisible over IMAP — and unfetchable.**
+  `collectAttachments` treated `Content-Disposition: inline` as "not an
+  attachment". But Mail.app sends genuine file attachments as `inline`, because
+  it inlines them into the message flow rather than appending them. Since
+  `fetch-attachment` and `save-attachment` resolve by filename against the same
+  walk, those files were not merely unlisted — **they could not be retrieved at
+  all**.
+
+  Measured over 300 real messages: of 27 parts carrying a filename, 4 were being
+  excluded — three invoice PDFs (inline, no Content-ID) and one signature logo
+  (inline `image/png`, **with** a Content-ID). So the discriminator is the
+  **Content-ID**, not the disposition: a part the HTML body references as `cid:`
+  is embedded content; anything else with a filename is a file. An explicit
+  `attachment` disposition still always wins, because real mail carries
+  `attachment` parts that also have a Content-ID.
+
+- **`hasAttachments` was hardcoded `false` on every IMAP-sourced message**
+  (since 2.2.0). Indistinguishable to a caller from "no attachments", so an
+  agent deciding whether to call `list-attachments` would always skip. It is now
+  derived from BODYSTRUCTURE, which the list/search/thread fetch requests
+  alongside the envelope — measured at ~390ms → ~465ms for 50 messages (~17%),
+  the same single round trip with no extra request.
+
+- **`doctor` and `health-check` reported `permissions: ok` on a real TCC denial.**
+  `mapError` normalises an Automation refusal to *"Permission denied. Grant
+  automation access…"*, replacing the raw text — and `healthCheck` then
+  classified the failure by re-testing for `"not authorized"` / `"not
+  permitted"`, the very substrings the normalisation had just removed. So
+  `isPermError` was unreachable, the check reported `passed: true` while its own
+  detail line read "Permission denied", and the early `healthy: false` return
+  never fired. The run then fell through to the accounts probe and surfaced *"No
+  Mail accounts found. Set up an account in Mail.app first"* — sending the user
+  to configure accounts they already have, when the real problem was one
+  Automation grant.
+
+  Classification and normalisation now derive from one exported pattern
+  (`isPermissionDenied`, `PERMISSION_DENIED_MESSAGE`) so they cannot drift apart
+  again, and the classifier accepts both the raw and the normalised form.
+
+
 ## [2.11.0] - 2026-08-16
 
 Retraction release. A warning shipped in 2.10.30 was firing on stores that had
