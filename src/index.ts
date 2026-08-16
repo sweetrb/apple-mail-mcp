@@ -85,6 +85,7 @@ import {
   currentCallTiming,
   messageSummary,
 } from "@/tools/respond.js";
+import { unlistableStoreError } from "@/tools/mailboxListing.js";
 import { hybridBatchCounts, batchResponse } from "@/tools/batchResults.js";
 import { runBatchDelete, runBatchMove } from "@/tools/batchMutations.js";
 import {
@@ -1991,13 +1992,17 @@ registerTool(
   "list-mailboxes",
   {
     description:
-      "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).",
+      "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count. A source that could not be read is NAMED — the result carries `partial: true` + `failedAccounts` and the list is a floor, not the complete set — and a listing Mail refused outright (e.g. an account that does not exist) returns an ERROR naming the accounts that do exist, never an empty list.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).\nNote: Mail's local \"On My Mac\" mailboxes are not part of any account and are not currently enumerated by this tool.",
     inputSchema: {
       account: z.string().optional().describe("Account to list mailboxes from"),
     },
     outputSchema: {
       mailboxes: z.array(z.object({}).passthrough()).optional(),
       count: z.number().optional(),
+      // Declared explicitly: the SDK stamps additionalProperties:false on a bare
+      // zod shape, so an undeclared key makes the CLIENT reject the result.
+      partial: z.boolean().optional(),
+      failedAccounts: z.array(z.string()).optional(),
     },
   },
   withErrorHandling(async ({ account }) => {
@@ -2026,6 +2031,10 @@ registerTool(
       const configs = resolveImapConfigs();
       const rows: { name: string; account: string; unreadCount: number; messageCount: number }[] =
         [];
+      // #183: a source that could not be read is NAMED. Dropping it left the
+      // caller with a short list that looked complete — the same absent-vs-empty
+      // confusion, one level up. Matches get-mail-stats' partial/failedAccounts.
+      const failedAccounts: string[] = [];
       for (const config of configs) {
         try {
           const boxes = await imapListMailboxes({ config });
@@ -2041,12 +2050,19 @@ registerTool(
           }
         } catch (e) {
           console.error(`IMAP list-mailboxes failed for "${config.accountLabel}": ${String(e)}`);
+          failedAccounts.push(config.accountLabel);
         }
       }
       // AppleScript for the accounts IMAP doesn't cover (no double-listing).
       const { appleScriptOnly } = partitionAccountsForCounts(mailManager.listAccounts(), configs);
       for (const acct of appleScriptOnly) {
-        for (const mb of mailManager.listMailboxes(acct.name)) {
+        const checked = mailManager.listMailboxesChecked(acct.name);
+        if (checked.failed) {
+          console.error(`list-mailboxes failed for "${acct.name}": ${checked.error}`);
+          failedAccounts.push(acct.name);
+          continue;
+        }
+        for (const mb of checked.mailboxes) {
           rows.push({
             name: `${acct.name}/${mb.name}`,
             account: acct.name,
@@ -2055,13 +2071,45 @@ registerTool(
           });
         }
       }
-      const structured = { mailboxes: rows, count: rows.length };
-      if (rows.length === 0) return successResponse("No mailboxes found", structured);
+      const partial = failedAccounts.length > 0;
+      const structured = {
+        mailboxes: rows,
+        count: rows.length,
+        ...(partial ? { partial, failedAccounts } : {}),
+      };
+      // A partial list is a FLOOR, not an answer — say so rather than letting a
+      // short list read as the complete set.
+      const caveat = partial
+        ? `\n\nPARTIAL — could not read: ${failedAccounts.join(", ")}. This list is incomplete.`
+        : "";
+      if (rows.length === 0) {
+        return partial
+          ? errorResponse(
+              `Could not list mailboxes from any source. Failed: ${failedAccounts.join(", ")}.`
+            )
+          : successResponse("No mailboxes found", structured);
+      }
       const list = rows.map((b) => `  - ${b.name} (${b.unreadCount} unread)`).join("\n");
-      return successResponse(`Found ${rows.length} mailbox(es):\n${list}`, structured);
+      return successResponse(`Found ${rows.length} mailbox(es):\n${list}${caveat}`, structured);
     }
 
-    const mailboxes = mailManager.listMailboxes(account);
+    // #183: read through the CHECKED variant. `listMailboxes` returns `[]` both
+    // when an account genuinely has no mailboxes and when Mail REFUSED the
+    // request — an account that does not exist raises `Can't get account "X"`
+    // — so reporting the empty list as a success made "this store is not
+    // addressable" indistinguishable from "you have no mail". That is the
+    // absent-vs-empty confusion this codebase refuses to make everywhere else
+    // (the collateral diff withholds rather than reports an empty array).
+    const { mailboxes, failed, error } = mailManager.listMailboxesChecked(account);
+    if (failed) {
+      return errorResponse(
+        unlistableStoreError(
+          account,
+          error,
+          mailManager.listAccounts().map((a) => a.name)
+        )
+      );
+    }
     const structured = { mailboxes, count: mailboxes.length };
 
     if (mailboxes.length === 0) {
