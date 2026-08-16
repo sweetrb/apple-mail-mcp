@@ -935,9 +935,23 @@ List all mailboxes for an account.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `account` | string | No | Account to list from |
+| `account` | string | No | Account to list from, or `"On My Mac"` for the local store |
 
-**Returns:** List of mailbox names with message and unread counts.
+**Returns:** List of mailbox names with message and unread counts. A source that
+could not be read is **named** (`partial: true` + `failedAccounts`) rather than
+dropped, and a listing Mail refused outright returns an error naming the accounts
+that do exist — never an empty list.
+
+**Mail's local "On My Mac" mailboxes** are not children of any account — they
+hang off the application — so they are reported under the synthetic account label
+**`On My Mac`**. An unscoped call includes them (listed last); `account="On My
+Mac"` lists only them. `on my computer`, `local` and `local folders` are accepted
+as aliases.
+
+They deliberately do **not** appear in `list-accounts`, which reports real
+accounts only: the local store is a store, not an account. Nothing selects it
+implicitly — omitting `account` still resolves to a real account for every other
+tool.
 
 ---
 

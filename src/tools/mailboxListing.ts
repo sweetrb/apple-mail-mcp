@@ -18,15 +18,14 @@
 
 /**
  * Names for Mail's local store. It is NOT an account — its mailboxes hang off
- * the application, not off any `account` — so no `account` argument can ever
- * reach them, and an empty result is especially misleading for these.
+ * the application, not off any `account`.
+ *
+ * Re-exported from `appleMailManager`, which owns the canonical list because it
+ * is what actually routes a request to the local branch. Two copies would drift,
+ * and the failure mode is silent: a name accepted by one and not the other.
  */
-export const LOCAL_STORE_NAMES = ["on my mac", "on my computer", "local", "local folders"];
-
-/** True when `name` is Mail's local store rather than a real account. */
-export function isLocalStoreName(name: string): boolean {
-  return LOCAL_STORE_NAMES.includes(name.trim().toLowerCase());
-}
+export { isLocalStoreLabel as isLocalStoreName } from "@/services/appleMailManager.js";
+import { isLocalStoreLabel } from "@/services/appleMailManager.js";
 
 /**
  * Explain a refused mailbox listing, naming the accounts that DO exist so the
@@ -42,11 +41,11 @@ export function unlistableStoreError(
   if (knownAccounts.length > 0) {
     parts.push(`Accounts on this Mac: ${knownAccounts.join(", ")}.`);
   }
-  if (account && isLocalStoreName(account)) {
+  if (account && isLocalStoreLabel(account)) {
     parts.push(
-      `"${account}" is Mail's LOCAL store, not an account — its mailboxes are not children of ` +
-        `any account, so they cannot be reached with an \`account\` argument. Enumerating them ` +
-        `is not yet supported.`
+      `"${account}" addresses Mail's LOCAL store, which IS listable — it is read at the ` +
+        `application level rather than through an account, so this failure is not "no such ` +
+        `account". Something went wrong reading the local store itself.`
     );
   }
   return parts.join("\n\n");

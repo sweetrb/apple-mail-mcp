@@ -29,7 +29,11 @@ import {
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { AppleMailManager, resolveAttachmentSaveTarget } from "@/services/appleMailManager.js";
+import {
+  AppleMailManager,
+  resolveAttachmentSaveTarget,
+  LOCAL_STORE_LABEL,
+} from "@/services/appleMailManager.js";
 import { writeFileSync } from "fs";
 import { join as joinPath } from "path";
 import {
@@ -1988,11 +1992,42 @@ registerTool(
 
 // --- list-mailboxes ---
 
+/**
+ * Append Mail's LOCAL ("On My Mac") mailboxes to an unscoped listing. (#183)
+ *
+ * They are not children of any account, so every `accounts` → `mailboxes of
+ * acct` loop is structurally blind to them; this is the only way they appear
+ * without being asked for by name. A failure is NAMED in `failedAccounts`
+ * rather than dropped, for the same reason an unreadable account is: a short
+ * list that looks complete is the bug this tool just stopped shipping.
+ *
+ * Called LAST so a slow local store cannot delay the account results.
+ */
+function appendLocalStoreRows(
+  rows: { name: string; account: string; unreadCount: number; messageCount: number }[],
+  failedAccounts: string[]
+): void {
+  const checked = mailManager.listMailboxesChecked(LOCAL_STORE_LABEL);
+  if (checked.failed) {
+    console.error(`list-mailboxes failed for "${LOCAL_STORE_LABEL}": ${checked.error}`);
+    failedAccounts.push(LOCAL_STORE_LABEL);
+    return;
+  }
+  for (const mb of checked.mailboxes) {
+    rows.push({
+      name: `${LOCAL_STORE_LABEL}/${mb.name}`,
+      account: LOCAL_STORE_LABEL,
+      unreadCount: mb.unreadCount,
+      messageCount: mb.messageCount,
+    });
+  }
+}
+
 registerTool(
   "list-mailboxes",
   {
     description:
-      "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count. A source that could not be read is NAMED — the result carries `partial: true` + `failedAccounts` and the list is a floor, not the complete set — and a listing Mail refused outright (e.g. an account that does not exist) returns an ERROR naming the accounts that do exist, never an empty list.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).\nNote: Mail's local \"On My Mac\" mailboxes are not part of any account and are not currently enumerated by this tool.",
+      'Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox\'s name with its unread (and, for IMAP, total message) count, plus a count. A source that could not be read is NAMED — the result carries `partial: true` + `failedAccounts` and the list is a floor, not the complete set — and a listing Mail refused outright (e.g. an account that does not exist) returns an ERROR naming the accounts that do exist, never an empty list.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).\nNote: Mail\'s local "On My Mac" mailboxes are not part of any account, so they are reported under the synthetic account label "On My Mac" — an unscoped call includes them, and `account: "On My Mac"` lists only them. They will not appear in list-accounts, which reports real accounts only.',
     inputSchema: {
       account: z.string().optional().describe("Account to list mailboxes from"),
     },
@@ -2071,6 +2106,11 @@ registerTool(
           });
         }
       }
+      // #183: Mail's LOCAL store is not an account, so the loops above can
+      // never reach it. Append it under its synthetic label. Ordered LAST so a
+      // slow local store never delays the account results a caller is more
+      // likely to want.
+      appendLocalStoreRows(rows, failedAccounts);
       const partial = failedAccounts.length > 0;
       const structured = {
         mailboxes: rows,
@@ -2110,7 +2150,16 @@ registerTool(
         )
       );
     }
-    const structured = { mailboxes, count: mailboxes.length };
+    // #183: an UNSCOPED call resolves to one default account, which can never
+    // include the local store. Append it so "list my mailboxes" sees On My Mac
+    // on the pure-AppleScript path too, not only when IMAP is configured.
+    const localFailures: string[] = [];
+    if (account === undefined) appendLocalStoreRows(mailboxes, localFailures);
+    const structured = {
+      mailboxes,
+      count: mailboxes.length,
+      ...(localFailures.length ? { partial: true, failedAccounts: localFailures } : {}),
+    };
 
     if (mailboxes.length === 0) {
       return successResponse("No mailboxes found", structured);

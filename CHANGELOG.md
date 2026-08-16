@@ -1,5 +1,53 @@
 ## [Unreleased]
 
+## [2.14.0] - 2026-08-16
+
+Mail's local "On My Mac" mailboxes are visible for the first time. This is the
+enumeration half of #183; 2.13.2 did the "don't lie about it" half.
+
+### Added
+
+- **`list-mailboxes` sees Mail's local store.** Local mailboxes are not children
+  of any `account` — they hang off the application — so every enumeration here,
+  which walked `accounts` → `mailboxes of acct`, was structurally blind to them.
+  A user with mail filed On My Mac had it reported as not existing.
+
+  They are now reported under the synthetic account label **`On My Mac`**. An
+  unscoped `list-mailboxes` includes them (ordered **last**, so a slow local
+  store never delays the account results); `account="On My Mac"` lists only them,
+  with `on my computer` / `local` / `local folders` accepted as aliases.
+
+  They are deliberately **absent from `list-accounts`**, which reports real
+  accounts only — the local store is a store, not an account. And nothing selects
+  it implicitly: `resolveAccount()` is untouched and still can only ever return a
+  real account, so omitting `account` behaves exactly as before for every other
+  tool.
+
+### Notes on the implementation
+
+The behaviour of application-level `mailboxes` was **measured against a live
+Mail.app** rather than assumed (read-only probe, results on #183):
+
+- `account of <an app-level mailbox>` returns `missing value` — it does not raise
+  and does not return a bogus object.
+- `account of <an account mailbox>` correctly names its account, which is what
+  stops the ownership filter mistaking one for a local mailbox and double-listing
+  every account mailbox.
+- App-level `mailboxes` returned **only** the local mailboxes while the accounts
+  separately held 26, i.e. no overlap on this backend. The ownership filter is
+  therefore insurance for backends that might overlap (POP is untested), not the
+  load-bearing mechanism.
+
+The account-scoped code path is **byte-identical** to 2.13.2 — verified by
+diffing the generated AppleScript — so this adds no Apple Events to any existing
+call.
+
+**Still open in #183:** whether application-level `mailboxes` is FLAT over
+nested local folders. Untestable on the probe machine, which has no nested local
+folders (every local mailbox reported `subs=0`). If it is not flat, nested local
+folders remain invisible — the issue partially persists rather than anything
+regressing.
+
 ## [2.13.2] - 2026-08-16
 
 Partial progress on #183 — the half that needs no new AppleScript. **#183 stays
