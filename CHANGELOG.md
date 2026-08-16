@@ -1,5 +1,55 @@
 ## [Unreleased]
 
+## [2.16.0] - 2026-08-16
+
+**Closes #183** and **#193**. 2.14.0 made Mail's local "On My Mac" mailboxes
+visible; this makes the mail inside them reachable.
+
+### Added
+
+- **The local store is addressable, not just listable.** `list-messages`,
+  `search-messages` and by-id reads (`get-message`, and the raw-source path
+  behind reply/forward) all reach local mailboxes now:
+
+  - `list-messages account="On My Mac" mailbox="Import"` returns the messages.
+  - `search-messages account="On My Mac"` searches them.
+  - `get-message id=<n>` resolves a message that lives only in a local mailbox.
+    The unscoped by-id walk gained a local pass, and the scoped fast path
+    understands a recorded local location instead of asking for an account that
+    cannot exist (`first account whose name is "On My Mac"` raises, which would
+    have dropped every local read back to the slow full scan).
+
+  Mailbox-name resolution is local-aware too, so aliases and casing work the
+  same way there as on an account.
+
+  Note the by-id walk collects local hits into the **same** candidate set as
+  account hits. An id present both in an account mailbox and locally is now
+  correctly reported as **ambiguous** rather than silently resolving to the
+  account copy — the same refusal the server already makes across accounts.
+
+### Fixed
+
+- **The mailbox create/delete/rename failure message claimed local mailboxes
+  were exempt, and they are not (#193).** It said *"only local 'On My Mac'
+  mailboxes support this"*. Measured 2026-08-16: `delete` on a genuinely local
+  mailbox raises `-10000` in every form — a bound reference, `delete mailbox
+  "X"`, and via the parent. So a user who had just failed to delete a local
+  mailbox was told local mailboxes are the ones that work.
+
+  `create` **does** succeed, which makes the asymmetry easy to trip over:
+  anything that creates a local mailbox cannot remove it through this server.
+
+  The remedy in the message was always right; only the exemption was wrong. It
+  now names the local store as affected too, and points at the IMAP path for
+  IMAP-configured accounts, which genuinely does work.
+
+### Notes
+
+- Application-level `mailboxes` is **flat** over nested local folders, with leaf
+  names — the last open question on #183, settled by creating a nested local
+  mailbox and observing both it and its parent appear as separate top-level
+  entries. Same shape as `mailboxes of account`, so the design needed no change.
+
 ## [2.15.1] - 2026-08-16
 
 ### Fixed
