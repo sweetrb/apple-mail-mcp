@@ -248,10 +248,21 @@ describe("server-side create/rename guard (BUG B)", () => {
 });
 
 describe("describeMailboxOpError create verb", () => {
-  it("maps a -10000 create failure to the server-side-mailbox explanation", () => {
+  it("maps a -10000 create failure to the scripting-bridge explanation", () => {
     const msg = describeMailboxOpError("create", "AppleEvent handler failed (-10000)");
-    expect(msg).toMatch(/Mail\.app cannot create server-side/);
+    expect(msg).toMatch(/scripting bridge will not create this mailbox/);
     expect(msg).toMatch(/Create it in Mail\.app directly/);
+  });
+
+  // #193: the message used to say "only local On My Mac mailboxes support
+  // this". Measured 2026-08-16, a local mailbox raises -10000 too — so that
+  // clause sent a user who had just failed on a local mailbox looking in
+  // exactly the wrong place. The remedy was right; the exemption was not.
+  it("does NOT claim local On My Mac mailboxes are exempt", () => {
+    const msg = describeMailboxOpError("delete", "AppleEvent handler failed (-10000)");
+    expect(msg).not.toMatch(/only local .* support this/i);
+    expect(msg).toMatch(/local "On My Mac" mailboxes too/);
+    expect(msg).toMatch(/Delete it in Mail\.app directly/);
   });
 
   it("passes through an unrelated create error unchanged", () => {

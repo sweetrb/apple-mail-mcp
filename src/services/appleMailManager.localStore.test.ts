@@ -150,3 +150,50 @@ describe("#183 the local store is addressable as a synthetic account", () => {
     expect(checked.error).toMatch(/-1728/);
   });
 });
+
+describe("#183 the local store is addressable, not just listable", () => {
+  /** The last generated script, which is what actually reaches Mail. */
+  const lastScript = (): string => h.calls[h.calls.length - 1];
+
+  it("list-messages scopes to the local store without a `tell account`", () => {
+    mgr.listMessages("Import", LOCAL_STORE_LABEL, 5);
+    expect(lastScript()).not.toMatch(/tell account/);
+    expect(lastScript()).toMatch(/account of _m\) is missing value/);
+  });
+
+  it("search-messages scopes to the local store the same way", () => {
+    mgr.searchMessages("anything", undefined, LOCAL_STORE_LABEL, 5);
+    expect(lastScript()).not.toMatch(/tell account/);
+    expect(lastScript()).toMatch(/account of _m\) is missing value/);
+  });
+
+  it("the unscoped by-id walk also searches local mailboxes", () => {
+    mgr.getMessageContent("109", false);
+    const walk = h.calls.filter((c) => c.includes("_hits")).pop() ?? "";
+    // Both passes must be present: accounts AND the local store.
+    expect(walk).toMatch(/repeat with acct in accounts/);
+    expect(walk).toMatch(/repeat with mb in _mbs/);
+    // And a local hit is attributed to the synthetic label, not to "".
+    expect(walk).toContain(`"${LOCAL_STORE_LABEL}/"`);
+  });
+
+  it("a recorded LOCAL location does not ask for an account that cannot exist", () => {
+    // `first account whose name is "On My Mac"` raises, which would silently
+    // drop every local by-id read back to the slow full scan.
+    mgr.listMessages("Import", LOCAL_STORE_LABEL, 5); // records the location
+    h.calls.length = 0;
+    mgr.getMessageContent("109", false);
+    const scoped = h.calls.find((c) => c.includes("targetMb")) ?? "";
+    if (scoped) {
+      expect(scoped).not.toMatch(/first account whose name is "On My Mac"/);
+    }
+  });
+
+  // Don't-regress: a real account still takes the account-scoped form.
+  it("a real account still uses `tell account` for list and search", () => {
+    mgr.listMessages("INBOX", "rob@superiortech.io", 5);
+    expect(lastScript()).toMatch(/tell account "rob@superiortech\.io"/);
+    mgr.searchMessages("x", undefined, "rob@superiortech.io", 5);
+    expect(lastScript()).toMatch(/tell account "rob@superiortech\.io"/);
+  });
+});

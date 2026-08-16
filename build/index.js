@@ -78980,7 +78980,7 @@ function describeMailboxOpError(op, raw) {
   const trimmed = (raw || "").trim();
   if (UNSUPPORTED_APPLESCRIPT_OP.test(trimmed)) {
     const verb = op.charAt(0).toUpperCase() + op.slice(1);
-    return `Mail.app cannot ${op} server-side (IMAP / Gmail / Workspace / iCloud / Exchange) mailboxes via AppleScript \u2014 only local "On My Mac" mailboxes support this. ${verb} it in Mail.app directly. (Mail.app error: ${trimmed})`;
+    return `Mail.app's scripting bridge will not ${op} this mailbox. That covers server-side (IMAP / Gmail / Workspace / iCloud / Exchange) mailboxes, and on current macOS it covers local "On My Mac" mailboxes too \u2014 measured 2026-08-16, see #193. ${verb} it in Mail.app directly; for an IMAP-configured account the IMAP path can do it instead. (Mail.app error: ${trimmed})`;
   }
   return trimmed || `Failed to ${op} mailbox`;
 }
@@ -80227,7 +80227,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       }
       return { messages: allMessages.slice(0, limit), diagnostics };
     }
-    const targetAccount = this.resolveAccount(account);
+    const local = isLocalStoreLabel(account);
+    const targetAccount = local ? LOCAL_STORE_LABEL : this.resolveAccount(account);
+    const mbIter = local ? "_mbs" : "mailboxes";
     const searchCondition = buildSearchCondition({ query, from, subject, isRead, isFlagged });
     let dateSetup = "";
     let dateFilter = "";
@@ -80259,7 +80261,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       set _wantNames to ${nameList}
       set msgCount to 0
       set seenIds to {}
-      repeat with mb in mailboxes
+      repeat with mb in ${mbIter}
         if msgCount >= ${limit} then exit repeat
         set mbName to ""
         try
@@ -80304,7 +80306,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       set _skipped to ""
       set _notSearched to ""
       set _startedAt to current date
-      repeat with mb in mailboxes
+      repeat with mb in ${mbIter}
         if msgCount >= ${limit} then exit repeat
         set mbName to ""
         try
@@ -80334,7 +80336,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=" & _skipped & "${DIAG_FIELD_SEP}notSearched=" & _notSearched
     `;
     }
-    const script = buildAccountScopedScript(targetAccount, searchCommand);
+    const script = local ? buildAppLevelScript(`${localMailboxBindingFragment()}${searchCommand}`) : buildAccountScopedScript(targetAccount, searchCommand);
     const result = executeAppleScript(script, { timeoutMs: SEARCH_ACCOUNT_TIMEOUT_MS });
     if (!result.success) {
       console.error(`Failed to search messages in "${targetAccount}": ${result.error}`);
@@ -80445,9 +80447,16 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   scopedByIdScript(account, mailbox, id, innerAction) {
     const resolved = this.resolveMailbox(mailbox, account);
-    return buildAppLevelScript(`
-      try
-        set acct to (first account whose name is "${escapeForAppleScript(account)}")
+    const bind = isLocalStoreLabel(account) ? `${localMailboxBindingFragment()}
+        set targetMb to missing value
+        ignoring case
+          repeat with mb in _mbs
+            if (name of mb) is "${escapeForAppleScript(resolved)}" then
+              set targetMb to mb
+              exit repeat
+            end if
+          end repeat
+        end ignoring` : `set acct to (first account whose name is "${escapeForAppleScript(account)}")
         set targetMb to missing value
         ignoring case
           repeat with mb in mailboxes of acct
@@ -80456,7 +80465,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
               exit repeat
             end if
           end repeat
-        end ignoring
+        end ignoring`;
+    return buildAppLevelScript(`
+      try
+        ${bind}
         if targetMb is not missing value then
           set matchingMsgs to (messages of targetMb whose id is ${Number(id)})
           if (count of matchingMsgs) > 0 then
@@ -80519,6 +80531,19 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
               end if
             end try
           end repeat
+        end repeat
+        -- #183: local mailboxes belong to no account, so the walk above cannot
+        -- reach them. Collect into the SAME _hits/_names, which means an id
+        -- present both in an account and locally is now correctly reported as
+        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
+        repeat with mb in _mbs
+          try
+            set matchingMsgs to (messages of mb whose id is ${Number(id)})
+            if (count of matchingMsgs) > 0 then
+              set end of _hits to item 1 of matchingMsgs
+              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
+            end if
+          end try
         end repeat
         if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
         if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
@@ -80610,6 +80635,19 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end try
           end repeat
         end repeat
+        -- #183: local mailboxes belong to no account, so the walk above cannot
+        -- reach them. Collect into the SAME _hits/_names, which means an id
+        -- present both in an account and locally is now correctly reported as
+        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
+        repeat with mb in _mbs
+          try
+            set matchingMsgs to (messages of mb whose id is ${Number(id)})
+            if (count of matchingMsgs) > 0 then
+              set end of _hits to item 1 of matchingMsgs
+              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
+            end if
+          end try
+        end repeat
         if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
         if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
         if (count of _hits) is 1 then
@@ -80673,10 +80711,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       }
       return { messages: allMessages.slice(0, limit), diagnostics };
     }
-    const targetAccount = this.resolveAccount(account);
+    const local = isLocalStoreLabel(account);
+    const targetAccount = local ? LOCAL_STORE_LABEL : this.resolveAccount(account);
     const safeFrom = from ? escapeForAppleScript(from) : "";
     const fromFilter = from ? `whose sender contains "${safeFrom}"` : "";
     const scanThreshold = getMailboxScanThreshold();
+    const mbIter = local ? "_mbs" : "mailboxes";
     let listCommand;
     if (mailbox) {
       const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
@@ -80691,7 +80731,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       set msgCount to 0
       set skipped to 0
       set seenIds to {}
-      repeat with mb in mailboxes
+      repeat with mb in ${mbIter}
         if msgCount >= ${limit} then exit repeat
         set mbName to ""
         try
@@ -80738,7 +80778,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       set _skipped to ""
       set _notSearched to ""
       set _startedAt to current date
-      repeat with mb in mailboxes
+      repeat with mb in ${mbIter}
         if msgCount >= ${limit} then exit repeat
         set mbName to ""
         try
@@ -80768,7 +80808,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return outputText & "${DIAG_MARKER}timedOut=" & (_timedOut as string) & "${DIAG_FIELD_SEP}skipped=" & _skipped & "${DIAG_FIELD_SEP}notSearched=" & _notSearched
     `;
     }
-    const script = buildAccountScopedScript(targetAccount, listCommand);
+    const script = local ? buildAppLevelScript(`${localMailboxBindingFragment()}${listCommand}`) : buildAccountScopedScript(targetAccount, listCommand);
     const result = executeAppleScript(script, { timeoutMs: SEARCH_ACCOUNT_TIMEOUT_MS });
     if (!result.success) {
       console.error(`Failed to list messages in "${targetAccount}": ${result.error}`);
@@ -82736,16 +82776,14 @@ end tell`;
    * Used internally by the cache; prefer getCachedMailboxNames().
    */
   fetchMailboxNames(account) {
-    const script = buildAccountScopedScript(
-      account,
-      `
+    const body = `
       set mbNames to {}
-      repeat with mb in mailboxes
+      repeat with mb in ${isLocalStoreLabel(account) ? "_mbs" : "mailboxes"}
         set end of mbNames to name of mb
       end repeat
       return mbNames
-    `
-    );
+    `;
+    const script = isLocalStoreLabel(account) ? buildAppLevelScript(`${localMailboxBindingFragment()}${body}`) : buildAccountScopedScript(account, body);
     const result = executeAppleScript(script);
     if (!result.success || !result.output) {
       return [];

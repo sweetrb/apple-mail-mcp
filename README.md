@@ -953,6 +953,11 @@ accounts only: the local store is a store, not an account. Nothing selects it
 implicitly — omitting `account` still resolves to a real account for every other
 tool.
 
+The mail inside them is reachable too: `list-messages` and `search-messages`
+accept `account="On My Mac"`, and `get-message` resolves an id that lives only in
+a local mailbox. An id present **both** in an account mailbox and locally is
+reported as ambiguous rather than silently resolving to the account copy.
+
 ---
 
 #### `get-unread-count`
