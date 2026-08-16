@@ -29,6 +29,8 @@ import {
   bodyStructureHasAttachments,
   imapBatchMarkRead,
   imapBatchMove,
+  imapBatchDelete,
+  imapBatchUnflag,
   imapThread,
   listImapAccountLabels,
   imapHealthCheck,
@@ -1557,5 +1559,115 @@ describe("plaintext escape hatch does not disable an offered STARTTLS upgrade", 
       buildImapConnectionOptions({ ...base, port: 993, secure: true, allowPlaintext: false })
         .doSTARTTLS
     ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #181: imapflow reports a server NO/BAD by RESOLVING to `false`, not by
+// throwing (move.js:55, copy.js:42, store.js:96, expunge.js:55 all
+// catch -> log.warn -> return false). Every one of these cases reported
+// {success: true} before 2.12.0 because the result was discarded and the
+// try/catch could never see the rejection.
+// ---------------------------------------------------------------------------
+describe("#181 IMAP mutations report a rejected command as a failure", () => {
+  const ID = encodeImapId("acct", "INBOX", 5);
+
+  it("move: a rejected MOVE fails loudly instead of reporting success", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      messageMove: async () => false,
+    };
+    const r = await imapMoveMessageById(ID, "Archive", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/rejected the command/i);
+  });
+
+  it("delete: a rejected MOVE-to-Trash fails loudly", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Trash", name: "Trash", specialUse: "\\Trash" }],
+      messageMove: async () => false,
+    };
+    const r = await imapDeleteMessageById(ID, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/rejected the command/i);
+  });
+
+  it("delete-from-Trash: a rejected EXPUNGE fails loudly", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Trash", name: "Trash", specialUse: "\\Trash" }],
+      messageDelete: async () => false,
+    };
+    const r = await imapDeleteMessageById(encodeImapId("acct", "Trash", 5), {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/rejected the command/i);
+  });
+
+  it("batch move: a rejected MOVE counts the whole group as failed, not succeeded", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+      messageMove: async () => false,
+    };
+    const ids = [encodeImapId("acct", "INBOX", 5), encodeImapId("acct", "INBOX", 6)];
+    const r = await imapBatchMove(ids, "Archive", { config: cfg, connect: async () => client });
+    expect(r.success).toBe(0);
+    expect(r.failed).toBe(2);
+    expect(r.errors.join(" ")).toMatch(/rejected the command/i);
+  });
+
+  it("batch mark-read: a rejected STORE counts the group as failed", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      messageFlagsAdd: async () => false,
+    };
+    const r = await imapBatchMarkRead([ID], { config: cfg, connect: async () => client });
+    expect(r.success).toBe(0);
+    expect(r.failed).toBe(1);
+    expect(r.errors.join(" ")).toMatch(/rejected the command/i);
+  });
+
+  it("batch unflag: a rejected STORE counts the group as failed", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      messageFlagsRemove: async () => false,
+    };
+    const r = await imapBatchUnflag([ID], { config: cfg, connect: async () => client });
+    expect(r.success).toBe(0);
+    expect(r.failed).toBe(1);
+  });
+
+  it("batch delete: a rejected MOVE-to-Trash counts the group as failed", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Trash", name: "Trash", specialUse: "\\Trash" }],
+      messageMove: async () => false,
+    };
+    const r = await imapBatchDelete([ID], { config: cfg, connect: async () => client });
+    expect(r.success).toBe(0);
+    expect(r.failed).toBe(1);
+  });
+
+  // Guard against the design killed in review: uidMap/uidValidity are UIDPLUS-only,
+  // so treating their ABSENCE as failure hard-fails every working move on a server
+  // that does not advertise the extension. Only the falsy channel means failure.
+  it("a UIDPLUS-less success (no uidMap) is still a success", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+      messageMove: async () => ({ path: "INBOX", destination: "Archive" }),
+    };
+    const r = await imapMoveMessageById(ID, "Archive", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.success).toBe(true);
   });
 });

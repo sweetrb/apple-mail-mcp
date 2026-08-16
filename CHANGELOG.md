@@ -1,5 +1,41 @@
 ## [Unreleased]
 
+## [2.12.0] - 2026-08-16
+
+First of two changes for #181. This one closes the channel through which a
+rejected IMAP command was reported as a success; the follow-up adds a
+three-valued verdict that distinguishes *verified* from merely *not rejected*.
+
+### Fixed
+
+- **IMAP mutations reported success for commands the server rejected.**
+  imapflow 1.6.6 does not throw when the server answers `NO`/`BAD`: every
+  mutation catches the error, logs a warning, and **resolves to `false`**
+  (`move.js:55`, `copy.js:42`, `store.js:96`, `expunge.js:55`). Nine call sites
+  `await`ed that result and discarded it, so the surrounding `try/catch` was
+  unreachable for the entire class of server rejections and the tool returned
+  `{success: true}` for a move, delete, or flag change that never happened.
+  Affected `move-message`, `delete-message`, and every `batch-*` tool on the
+  IMAP path. All nine now route through a single `assertMutated` gate; batch ops
+  throw, which `imapBatch` already converts into a per-group failure count and
+  error string.
+
+  Reproducer needing no special mailbox state: move a message to a mailbox that
+  does not exist. The server answers `NO [TRYCREATE]`; before this release the
+  tool reported a successful move.
+
+### Changed
+
+- `ImapClientLike.messageMove` is typed `Promise<ImapMoveResult | false>`
+  instead of `Promise<unknown>`. The old signature made the failure channel
+  unreachable through the interface, which is why the type checker could not see
+  this bug. `ImapMoveResult` is exported.
+
+  Note that `uidMap`/`uidValidity` are UIDPLUS-only and their **absence is not a
+  failure signal** — only the falsy channel is. A regression test pins this, so
+  a future change cannot start hard-failing working moves on servers without the
+  extension.
+
 ## [2.11.2] - 2026-08-16
 
 Three defects in `reply-to-message` / `forward-message`, found by exercising the
