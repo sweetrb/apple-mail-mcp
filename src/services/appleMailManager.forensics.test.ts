@@ -52,6 +52,14 @@ const h = vi.hoisted(() => ({
   collateral: [] as string[],
   /** When true, the store "succeeds" without the message leaving the mailbox. */
   flagOnlyDelete: false,
+  /**
+   * Mail's after-COUNT reads this many higher than the mailbox really holds,
+   * while the message list is correct — the #155 staleness as @scottstern0325
+   * measured it (the deletes had happened; the count had not caught up).
+   */
+  staleAfterCountBy: 0,
+  /** Mail refuses to report a count at all: `_cb`/`_ca` stay at -1. */
+  suppressCount: false,
   /** id → the error text Mail raises for it instead of performing the op. */
   errorOn: {} as Record<string, string>,
   /** id → the "account/mailbox, " list Mail builds when an id is ambiguous. */
@@ -270,7 +278,12 @@ function simulateDestructive(script: string): string {
 
   emitSnapshot("after", h.mailbox);
   if (wantsCount) {
-    out += `${RECON_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${before.length}${FIELD_SEP}${h.mailbox.length}${FIELD_SEP}${RECORD_SEP}`;
+    // The count is a SEPARATE instrument from the listing above, and #155 is
+    // exactly the case where they disagree — so the simulator has to be able to
+    // report a stale count over a correct list.
+    const beforeCount = h.suppressCount ? -1 : before.length;
+    const afterCount = h.suppressCount ? -1 : h.mailbox.length + h.staleAfterCountBy;
+    out += `${RECON_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${beforeCount}${FIELD_SEP}${afterCount}${FIELD_SEP}${RECORD_SEP}`;
   }
   return out;
 }
@@ -283,9 +296,6 @@ import {
   AUDIT_SNAPSHOT_CHUNK_ENV,
   reconciliationWarnings,
   writeDestructiveAudit,
-  falseOkWarning,
-  type CountDelta,
-  type CollateralDiff,
 } from "@/services/auditLog.js";
 
 let tmp: string;
@@ -315,6 +325,8 @@ beforeEach(() => {
   h.bulkReadCeiling = null;
   h.failSliceAlways = { before: [], after: [] };
   h.failSliceOnce = [];
+  h.staleAfterCountBy = 0;
+  h.suppressCount = false;
   tmp = mkdtempSync(join(tmpdir(), "amcp-audit-"));
   delete process.env[AUDIT_LOG_ENV];
   delete process.env[AUDIT_SUBJECTS_ENV];
@@ -405,13 +417,23 @@ describe("effect reconciliation (always on, no audit log configured)", () => {
     expect(warnings[0]).toContain("issues/155");
   });
 
-  it("does NOT cry wolf when fewer messages leave than expected", () => {
+  it("does NOT cry wolf when the count does not move", () => {
     // A store that flags deletions instead of removing them — the operation
     // genuinely succeeded and the count did not move. Reported, never warned.
+    // Deliberately run with the audit log ON: the pre-2.11.0 version of this
+    // test ran with it deleted, so it produced no collateral, could not reach
+    // falseOkWarning's gates, and passed for a reason unrelated to its title
+    // while that warning fired on this very shape in the field.
+    process.env[AUDIT_LOG_ENV] = auditFile();
     h.flagOnlyDelete = true;
-    mgr.batchDeleteMessages(["75811", "75812"]);
+    mgr.batchDeleteMessages(["75811", "75812"], { account: h.account, mailbox: h.mailboxName });
     const report = mgr.consumeLastForensics()!;
-    expect(report.countDeltas[0]).toMatchObject({ expected: 2, observed: 0, status: "under" });
+    expect(report.countDeltas[0]).toMatchObject({
+      expected: 2,
+      observed: 0,
+      status: "unknown",
+      unknownReason: "count-did-not-move",
+    });
     expect(report.countDeltas[0].note).toMatch(/flags deletions instead of removing them/);
     expect(reconciliationWarnings(report)).toEqual([]);
   });
@@ -1009,9 +1031,11 @@ describe("collateral identification (opt-in, gated on the audit log)", () => {
       expect(c.unobserved).toBeUndefined();
     });
 
-    it("never lets a partial snapshot raise the false-ok warning", () => {
+    it("raises nothing at all on a partial snapshot over a flat count", () => {
       // A flag-only account whose snapshot merely had a hole must not be told
-      // its delete silently did nothing.
+      // anything is wrong. This used to be about falseOkWarning specifically;
+      // since 2.11.0 that warning is gone, so the assertion is the stronger
+      // one — no warning of any kind, and a status that does not assert.
       process.env[AUDIT_LOG_ENV] = auditFile();
       process.env[AUDIT_SNAPSHOT_CHUNK_ENV] = "100";
       seed(many(250));
@@ -1019,7 +1043,12 @@ describe("collateral identification (opt-in, gated on the audit log)", () => {
       h.failSliceAlways = { before: [], after: ["101-200"] };
       mgr.batchDeleteMessages(["90000"], { account: h.account, mailbox: h.mailboxName });
       const report = mgr.consumeLastForensics()!;
-      expect(report.countDeltas[0]).toMatchObject({ observed: 0, expected: 1, status: "under" });
+      expect(report.countDeltas[0]).toMatchObject({
+        observed: 0,
+        expected: 1,
+        status: "unknown",
+        unknownReason: "count-did-not-move",
+      });
       expect(report.collateral[0].snapshot).toBe("partial");
       expect(reconciliationWarnings(report)).toEqual([]);
     });
@@ -1063,66 +1092,99 @@ describe("#155 acceptance: N ids passed, N+2 messages disappear", () => {
   });
 });
 
-describe("false-ok detection (#155)", () => {
-  const delta = (o: Partial<CountDelta> = {}): CountDelta => ({
-    account: "iCloud",
-    mailbox: "INBOX",
-    before: 29,
-    after: 29,
-    expected: 4,
-    observed: 0,
-    status: "under",
-    ...o,
-  });
-  const clean = (o: Partial<CollateralDiff> = {}): CollateralDiff => ({
-    account: "iCloud",
-    mailbox: "INBOX",
-    snapshot: "ok",
-    disappeared: [],
-    unrequested: [],
-    appeared: [],
-    ...o,
+describe("count staleness — the #155 retraction (2.11.0)", () => {
+  // @scottstern0325 located the messages from two `observed: 0` batches IN
+  // TRASH, matched by `date received` + sender against the audit-log pre-image.
+  // The deletes had happened; Mail's count had not caught up. So a short count
+  // reading is not evidence about the operation, and the warning built on it
+  // (falseOkWarning, 2.10.30) was firing on stores that worked correctly.
+
+  it("does NOT warn a flag-only store that its delete did nothing — WITH the audit log on", () => {
+    // The retraction guard. This is the shape falseOkWarning fired on: count
+    // flat, snapshot readable, nothing disappeared, every id reported ok. The
+    // pre-2.11.0 guard for this ran with the audit log DELETED, so it produced
+    // no collateral and passed for a reason unrelated to its title — it could
+    // never have caught the bug it was named after.
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    h.flagOnlyDelete = true;
+    mgr.batchDeleteMessages(["75811", "75812"], { account: h.account, mailbox: h.mailboxName });
+    const report = mgr.consumeLastForensics()!;
+    const [c] = report.collateral;
+    expect(c.snapshot).toBe("ok");
+    expect(c.disappeared).toEqual([]);
+    expect(reconciliationWarnings(report)).toEqual([]);
   });
 
-  it("warns when everything reported ok but nothing observably happened", () => {
-    // scottstern0325's exact record from #155, on iCloud against 2.10.17.
-    const w = falseOkWarning(delta(), clean());
-    expect(w).toMatch(/Reported success with no observed effect/);
-    expect(w).toContain("issues/155");
-  });
-
-  it("stays silent when the snapshot could not be taken", () => {
-    // The flag-only account and a total no-op are genuinely indistinguishable
-    // here, so warning would cry wolf on ordinary deletes.
-    expect(falseOkWarning(delta(), clean({ snapshot: "unavailable" }))).toBeNull();
-    expect(falseOkWarning(delta(), clean({ snapshot: "skipped" }))).toBeNull();
-    expect(falseOkWarning(delta(), undefined)).toBeNull();
-  });
-
-  it("stays silent when messages did leave the mailbox", () => {
-    expect(
-      falseOkWarning(delta(), clean({ disappeared: [{ id: "1", messageId: "<a@b>" }] }))
-    ).toBeNull();
-  });
-
-  it("stays silent on a PARTIAL under, where flag-only and partial failure look alike", () => {
-    expect(falseOkWarning(delta({ after: 26, observed: 3 }), clean())).toBeNull();
-  });
-
-  it("stays silent on match, over and unknown", () => {
-    expect(falseOkWarning(delta({ status: "match", observed: 4, after: 25 }), clean())).toBeNull();
-    expect(falseOkWarning(delta({ status: "over", observed: 6, after: 23 }), clean())).toBeNull();
-    expect(falseOkWarning(delta({ status: "unknown", expected: null }), clean())).toBeNull();
-  });
-
-  it("is surfaced by reconciliationWarnings alongside the over warning", () => {
-    const warnings = reconciliationWarnings({
-      countDeltas: [delta()],
-      preImages: [],
-      outcomes: [],
-      collateral: [clean()],
+  it("classifies a flat count as count-did-not-move, and says it is ordinary", () => {
+    h.flagOnlyDelete = true;
+    mgr.batchDeleteMessages(["75811", "75812"]);
+    const [d] = mgr.consumeLastForensics()!.countDeltas;
+    expect(d).toMatchObject({
+      expected: 2,
+      observed: 0,
+      status: "unknown",
+      unknownReason: "count-did-not-move",
     });
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/Reported success with no observed effect/);
+    // Must keep reassuring a store that flags deletions, and must NOT send the
+    // reader hunting a destination that does not exist for it.
+    expect(d.note).toMatch(/flags deletions instead of removing them/);
+    expect(d.note).not.toMatch(/date received/);
+    expect(d.note).toMatch(/do not retry/i);
+  });
+
+  it("classifies a short-but-nonzero count as count-partial, a shape flag-only cannot make", () => {
+    // Scott's "expected 16, observed 1" reading. Silent under the old warning
+    // (it required observed === 0) while being the most badly wrong of the four.
+    h.collateral = []; // only the requested ones leave
+    h.flagOnlyDelete = false;
+    seed(SAMPLE);
+    h.staleAfterCountBy = 1; // both left; Mail's count is one behind
+    mgr.batchDeleteMessages(["75811", "75812"]);
+    const [d] = mgr.consumeLastForensics()!.countDeltas;
+    expect(d).toMatchObject({
+      expected: 2,
+      observed: 1,
+      status: "unknown",
+      unknownReason: "count-partial",
+    });
+    expect(d.note).toMatch(/LOWER BOUND/);
+    // The #152 correction: ids renumber on the move, so the pre-image ids are
+    // not a usable key at the destination.
+    expect(d.note).toMatch(/date received/);
+    expect(d.note).toMatch(/renumbered by the move/);
+  });
+
+  it("never reports the retired `under` status", () => {
+    // Deleted rather than deprecated so the compiler enumerates every consumer.
+    for (const flagOnly of [true, false]) {
+      seed(SAMPLE);
+      h.flagOnlyDelete = flagOnly;
+      mgr.batchDeleteMessages(["75811", "75812"]);
+      for (const d of mgr.consumeLastForensics()!.countDeltas) {
+        expect(d.status).not.toBe("under");
+      }
+    }
+  });
+
+  it("still warns on `over` — the one surviving assertion", () => {
+    h.collateral = ["75814", "75815"];
+    mgr.batchDeleteMessages(["75811", "75812"]);
+    const report = mgr.consumeLastForensics()!;
+    expect(report.countDeltas[0].status).toBe("over");
+    expect(reconciliationWarnings(report)).toHaveLength(1);
+  });
+
+  it("keeps count-unreadable distinct, with its own note", () => {
+    h.suppressCount = true;
+    mgr.batchDeleteMessages(["75811"]);
+    const [d] = mgr.consumeLastForensics()!.countDeltas;
+    expect(d).toMatchObject({
+      before: null,
+      after: null,
+      observed: null,
+      status: "unknown",
+      unknownReason: "count-unreadable",
+    });
+    expect(d.note).toMatch(/did not report a message count/);
   });
 });

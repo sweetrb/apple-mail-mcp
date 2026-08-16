@@ -1,5 +1,71 @@
 ## [Unreleased]
 
+## [2.11.0] - 2026-08-16
+
+Retraction release. A warning shipped in 2.10.30 was firing on stores that had
+done exactly what they were asked, and the `under` status it was built on
+asserted something this server cannot know. Both are gone.
+
+### Removed
+
+- **The "reported success with no observed effect" warning** (`falseOkWarning`,
+  added 2.10.30 for [#155](https://github.com/sweetrb/apple-mail-mcp/issues/155)).
+  Its stated discriminator was that the collateral snapshot corroborated the flat
+  count. It does not: the count and the snapshot are consecutive Apple Events in
+  the same script, and the very record that motivated the warning had **both**
+  instruments stale at once — @scottstern0325 has since located those messages in
+  Trash, so they had already left a mailbox the snapshot reported as unchanged.
+  Reproduced directly: a flag-only account with the audit log on, deleting two
+  messages successfully, was told its operation had no observed effect.
+
+  The guard that was supposed to prevent exactly this
+  (`"does NOT cry wolf when fewer messages leave than expected"`) ran with
+  `APPLE_MAIL_MCP_AUDIT_LOG` unset, so it produced no collateral, never reached
+  the warning's gates, and passed for a reason unrelated to its title. It now
+  runs with the audit log on.
+
+- **`status: "under"`.** Removed rather than deprecated so the compiler
+  enumerates every consumer — a dead status string gets re-implemented by the
+  next author. Readings that used to be `under` are now `unknown` with an
+  `unknownReason`.
+
+### Changed
+
+- **`observed` is documented as a LOWER BOUND on how many messages left** — the
+  movement of Mail's *count*, which has been observed lagging a delete it had
+  already performed. It is not "how many messages left", and a short reading is
+  not evidence about your operation. **The per-id outcomes report success; this
+  number does not.**
+
+  The evidence, from @scottstern0325 on iCloud: for two batches reporting
+  `observed: 0` the messages were found in Trash, matched by `date received` +
+  sender against the audit-log pre-image. Four readings — 0 of 4, 0 of 1 (a
+  *single-id* delete), 15 of 16, 14 of 15 — with a shortfall unrelated to batch
+  size.
+
+- **`unknownReason` distinguishes four cases that are not interchangeable**:
+  `count-unreadable`, `no-expectation`, `count-did-not-move`, `count-partial`.
+  A flat count (`count-did-not-move`) keeps its reassurance that this is ordinary
+  on a store which flags deletions instead of removing them, and deliberately
+  does **not** tell the reader to go check a destination — on such a store the
+  message was never moved, and its absence from Trash would read as failure.
+  `count-partial` is the shape a flag-only store cannot produce, so that one can
+  talk about a lag without being wrong on the commonest benign account.
+
+- **Where to look when you do want to confirm a destination**: match by
+  `date received` plus sender, **not** by the numeric ids you passed. Per
+  @scottstern0325, ids are renumbered by the move and do not survive it — the
+  pre-image ids are not a usable key at the destination.
+
+### Documentation
+
+- **The collateral diff's `"snapshot": "ok"` is documented as necessary but not
+  sufficient.** The enumeration is bounded by Mail's message count, so a count
+  reading *low* truncates it silently: the unread tail is never requested, never
+  registers as a failed slice, and the status still says `"ok"`, while messages
+  past the bound look like they disappeared. This narrows the guarantee stated in
+  2.10.33 and is tracked as its own defect.
+
 ## [2.10.33] - 2026-08-15
 
 ### Fixed
