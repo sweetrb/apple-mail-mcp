@@ -821,6 +821,64 @@ function snapshotKey(entry: { id: string; messageId: string }): string {
 }
 
 /**
+ * Cross-check the two halves of the diff for messages that were RENUMBERED
+ * rather than having left. (#155)
+ *
+ * `snapshotKey` is `(numeric id, Message-ID)`. Mail renumbers ids — the reporter
+ * established that pre-image ids do not survive a move to Trash — so a message
+ * that merely got a new id has a different key in each phase and therefore lands
+ * in **both** `disappeared` and `appeared`. Its Message-ID is unchanged in both,
+ * which is what makes it identifiable: the RFC Message-ID is the authoritative
+ * identity here and the numeric id is not.
+ *
+ * A message present in both snapshots under the same Message-ID **demonstrably
+ * did not leave**, so reporting it as `disappeared` — and, if the caller never
+ * named it, as `unrequested` — is a fabricated finding. Removing it is correct
+ * regardless of what ultimately explains #155.
+ *
+ * Two guards stop this inventing pairings of its own:
+ *   • an EMPTY Message-ID matches nothing. The snapshot emits one when Mail
+ *     would not give it up, and treating "unknown" as an identity would pair
+ *     arbitrary messages together.
+ *   • a Message-ID seen more than once on either side is skipped as ambiguous.
+ *     Duplicates are real (a label store shows one message in several views; a
+ *     resend reuses the header), and guessing which of two candidates renumbered
+ *     into which would be exactly the unverified causal story this layer must
+ *     not tell.
+ *
+ * ⚠️ This REPORTS a correlation. It does NOT establish that renumbering is the
+ * mechanism behind #155's unexplained `over` symptom — that remains unproven,
+ * and `runBatchOperation` re-resolving ids after prior mutations argues against
+ * it. Read `renumbered` as "these ids changed", and nothing more.
+ */
+function crossCheckRenumbered(
+  disappeared: { id: string; messageId: string }[],
+  appeared: { id: string; messageId: string }[]
+): { messageId: string; before: string; after: string }[] {
+  const index = (
+    entries: { id: string; messageId: string }[]
+  ): Map<string, { id: string; messageId: string } | null> => {
+    const m = new Map<string, { id: string; messageId: string } | null>();
+    for (const e of entries) {
+      if (!e.messageId) continue;
+      // A second sighting poisons the entry permanently: null = ambiguous.
+      m.set(e.messageId, m.has(e.messageId) ? null : e);
+    }
+    return m;
+  };
+  const gone = index(disappeared);
+  const came = index(appeared);
+  const out: { messageId: string; before: string; after: string }[] = [];
+  for (const [mid, before] of gone) {
+    const after = came.get(mid);
+    if (!before || !after) continue;
+    if (before.id === after.id) continue; // same id: not a renumber
+    out.push({ messageId: mid, before: before.id, after: after.id });
+  }
+  return out;
+}
+
+/**
  * Builds an AppleScript command at the application level.
  */
 function buildAppLevelScript(command: string): string {
@@ -1721,8 +1779,16 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const afterEntries = this.parseSnapshot(a.payload);
       const afterKeys = new Set(afterEntries.map((e) => snapshotKey(e)));
       const beforeKeys = new Set(beforeEntries.map((e) => snapshotKey(e)));
-      const disappeared = beforeEntries.filter((e) => !afterKeys.has(snapshotKey(e)));
-      const appeared = afterEntries.filter((e) => !beforeKeys.has(snapshotKey(e)));
+      const rawDisappeared = beforeEntries.filter((e) => !afterKeys.has(snapshotKey(e)));
+      const rawAppeared = afterEntries.filter((e) => !beforeKeys.has(snapshotKey(e)));
+      // #155: a message Mail merely RENUMBERED is in both halves — same
+      // Message-ID, different numeric id. It did not leave and it did not
+      // arrive, so leaving it in would name an innocent message as collateral
+      // (and, if the caller never asked for it, as `unrequested`).
+      const renumbered = crossCheckRenumbered(rawDisappeared, rawAppeared);
+      const renumberedMids = new Set(renumbered.map((r) => r.messageId));
+      const disappeared = rawDisappeared.filter((e) => !renumberedMids.has(e.messageId));
+      const appeared = rawAppeared.filter((e) => !renumberedMids.has(e.messageId));
       // Both sides are canonical numeric ids: the caller's, canonicalised by the
       // callers of this method, and the snapshot's, canonicalised in
       // parseSnapshot. Comparing an AppleScript "9.99999999E+8" against a
@@ -1755,6 +1821,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           unrequested,
           appeared,
           ...(countStale.length ? { countStale } : {}),
+          ...(renumbered.length ? { renumbered } : {}),
         });
         continue;
       }
@@ -1767,6 +1834,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         mailbox: g.mailbox,
         snapshot: "partial",
         ...(countStale.length ? { countStale } : {}),
+        ...(renumbered.length ? { renumbered } : {}),
         skipReason:
           `Mail would not read ${holes.map((h) => `${h.ranges} (${h.phase})`).join(", ")} of ` +
           `this mailbox, so the snapshot has a hole in it. ` +

@@ -79170,6 +79170,26 @@ var COUNT_PARTIAL_NOTE = `Mail's count moved by less than this operation account
 function snapshotKey(entry) {
   return `${entry.id}\0${entry.messageId}`;
 }
+function crossCheckRenumbered(disappeared, appeared) {
+  const index = (entries) => {
+    const m = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      if (!e.messageId) continue;
+      m.set(e.messageId, m.has(e.messageId) ? null : e);
+    }
+    return m;
+  };
+  const gone = index(disappeared);
+  const came = index(appeared);
+  const out = [];
+  for (const [mid, before] of gone) {
+    const after = came.get(mid);
+    if (!before || !after) continue;
+    if (before.id === after.id) continue;
+    out.push({ messageId: mid, before: before.id, after: after.id });
+  }
+  return out;
+}
 function buildAppLevelScript(command) {
   return `
     tell application "Mail"
@@ -79845,8 +79865,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const afterEntries = this.parseSnapshot(a.payload);
       const afterKeys = new Set(afterEntries.map((e) => snapshotKey(e)));
       const beforeKeys = new Set(beforeEntries.map((e) => snapshotKey(e)));
-      const disappeared = beforeEntries.filter((e) => !afterKeys.has(snapshotKey(e)));
-      const appeared = afterEntries.filter((e) => !beforeKeys.has(snapshotKey(e)));
+      const rawDisappeared = beforeEntries.filter((e) => !afterKeys.has(snapshotKey(e)));
+      const rawAppeared = afterEntries.filter((e) => !beforeKeys.has(snapshotKey(e)));
+      const renumbered = crossCheckRenumbered(rawDisappeared, rawAppeared);
+      const renumberedMids = new Set(renumbered.map((r) => r.messageId));
+      const disappeared = rawDisappeared.filter((e) => !renumberedMids.has(e.messageId));
+      const appeared = rawAppeared.filter((e) => !renumberedMids.has(e.messageId));
       const unrequested = disappeared.filter(
         (e) => !requestedNumericIds.has(canonicalNumericId(e.id))
       );
@@ -79860,7 +79884,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           disappeared,
           unrequested,
           appeared,
-          ...countStale.length ? { countStale } : {}
+          ...countStale.length ? { countStale } : {},
+          ...renumbered.length ? { renumbered } : {}
         });
         continue;
       }
@@ -79873,6 +79898,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         mailbox: g.mailbox,
         snapshot: "partial",
         ...countStale.length ? { countStale } : {},
+        ...renumbered.length ? { renumbered } : {},
         skipReason: `Mail would not read ${holes.map((h) => `${h.ranges} (${h.phase})`).join(", ")} of this mailbox, so the snapshot has a hole in it. ` + (derivable.length > 0 ? `Still derivable and reported: ${derivable.join(" and ")}. ` : `Neither half of the diff is derivable from it. `) + `Anything the unread range could refute is omitted rather than guessed \u2014 an absent field here means "not computable", not "empty".`,
         unobserved: holes,
         ...a.miss === "" ? { disappeared, unrequested } : {},
