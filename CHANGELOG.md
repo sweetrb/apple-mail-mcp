@@ -24,6 +24,19 @@ three-valued verdict that distinguishes *verified* from merely *not rejected*.
   does not exist. The server answers `NO [TRYCREATE]`; before this release the
   tool reported a successful move.
 
+- **`delete-message` silently discarded the message on any server without a
+  Trash mailbox.** Found by the change above: the IMAP integration suite went
+  red the moment rejections stopped being swallowed. When `LIST` showed no
+  `\Trash` special-use and no Trash-named mailbox, `resolveTrashPath` returned
+  the **Gmail default** `[Gmail]/Trash` — a path that does not exist on a
+  non-Gmail server. The MOVE drew `NO [TRYCREATE]`, and the tool reported a
+  successful delete for a message that never moved.
+
+  The Gmail default is now used **only when `LIST` itself fails**, where no
+  better guess exists. When `LIST` succeeds and the account genuinely has no
+  Trash, the mailbox is created and the message moved into it: "recoverable" is
+  the contract these tools document, and a hard delete is never an option.
+
 ### Changed
 
 - `ImapClientLike.messageMove` is typed `Promise<ImapMoveResult | false>`

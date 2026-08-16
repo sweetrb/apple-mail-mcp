@@ -1443,9 +1443,14 @@ export async function imapMoveMessageById(
  * actually trashed Gmail mail*. A move to `[Gmail]/Trash` is what Gmail treats
  * as "trash" (and matches the tools' documented "moves to Trash" contract).
  */
+/** Created only when the account demonstrably has no Trash mailbox at all. */
+const FALLBACK_TRASH_PATH = "Trash";
+
 async function resolveTrashPath(client: ImapClientLike): Promise<string> {
+  let listed = false;
   try {
     const boxes = await client.list();
+    listed = true;
     const special = boxes.find((b) => b.specialUse === "\\Trash");
     if (special) return special.path;
     const named = boxes.find(
@@ -1454,9 +1459,26 @@ async function resolveTrashPath(client: ImapClientLike): Promise<string> {
     );
     if (named) return named.path;
   } catch {
-    // Fall through to the Gmail default if LIST fails.
+    // LIST failed, so we cannot tell what exists — the Gmail default is the
+    // best remaining guess. A wrong guess now fails loudly (#181) instead of
+    // silently discarding the delete.
   }
-  return resolveMailboxPath("trash", "list");
+  if (!listed) return resolveMailboxPath("trash", "list");
+
+  // LIST succeeded and this account has no Trash mailbox of any kind. Returning
+  // the Gmail default here is what made `delete-message` a SILENT NO-OP on every
+  // non-Gmail server without a Trash folder: the MOVE drew `NO [TRYCREATE]`,
+  // imapflow resolved it to `false`, and the discarded result was reported as a
+  // successful delete. Create the mailbox instead — "recoverable" is the
+  // contract these tools document, and a hard delete is never an option.
+  try {
+    const created = await client.mailboxCreate(FALLBACK_TRASH_PATH);
+    return created?.path || FALLBACK_TRASH_PATH;
+  } catch {
+    // Racing another client that just created it is fine; if it genuinely could
+    // not be created, the MOVE below now fails loudly rather than silently.
+    return FALLBACK_TRASH_PATH;
+  }
 }
 
 /**

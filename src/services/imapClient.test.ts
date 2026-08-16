@@ -748,15 +748,60 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
 
   it("delete moves the uid to Trash (recoverable) rather than expunging", async () => {
     // Gmail expunge on [Gmail]/All Mail is a no-op, so delete must MOVE to Trash.
-    // With an empty LIST the mailbox resolves to the [Gmail]/Trash default.
     const rec: MsgRec = {};
-    const r = await imapDeleteMessageById(MID, {
-      config: cfg,
-      connect: async () => makeMsgClient(rec),
-    });
+    const client: ImapClientLike = {
+      ...makeMsgClient(rec),
+      list: async () => [
+        { path: "INBOX", name: "INBOX" },
+        { path: "[Gmail]/Trash", name: "Trash" },
+      ],
+    };
+    const r = await imapDeleteMessageById(MID, { config: cfg, connect: async () => client });
     expect(r.success).toBe(true);
     expect(rec.moved).toEqual([[1], "[Gmail]/Trash"]);
     expect(rec.deleted).toBeUndefined();
+  });
+
+  // #181 fallout: returning the [Gmail]/Trash default for an account that has no
+  // Trash at all is what made delete a silent no-op on non-Gmail servers — the
+  // MOVE drew NO [TRYCREATE] and the discarded result was reported as success.
+  it("delete creates a Trash mailbox when the account genuinely has none", async () => {
+    const rec: MsgRec = {};
+    const created: string[] = [];
+    const client: ImapClientLike = {
+      ...makeMsgClient(rec),
+      list: async () => [{ path: "INBOX", name: "INBOX" }],
+      mailboxCreate: async (path: string) => {
+        created.push(path);
+        return { path, created: true };
+      },
+    };
+    const r = await imapDeleteMessageById(MID, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(true);
+    expect(created).toEqual(["Trash"]);
+    expect(rec.moved).toEqual([[1], "Trash"]);
+    // never the Gmail default, which does not exist on such a server
+    expect(rec.moved?.[1]).not.toBe("[Gmail]/Trash");
+  });
+
+  it("delete falls back to the Gmail default only when LIST itself fails", async () => {
+    const rec: MsgRec = {};
+    const created: string[] = [];
+    const client: ImapClientLike = {
+      ...makeMsgClient(rec),
+      list: async () => {
+        throw new Error("LIST unavailable");
+      },
+      mailboxCreate: async (path: string) => {
+        created.push(path);
+        return { path, created: true };
+      },
+    };
+    const r = await imapDeleteMessageById(MID, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(true);
+    expect(rec.moved).toEqual([[1], "[Gmail]/Trash"]);
+    // must not invent a mailbox on a server we could not enumerate
+    expect(created).toEqual([]);
   });
 
   it("delete resolves the server's \\Trash special-use mailbox", async () => {
@@ -776,10 +821,14 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
   it("delete from within Trash permanently expunges (empty-from-Trash)", async () => {
     const rec: MsgRec = {};
     const trashId = encodeImapId("iCloud", "[Gmail]/Trash", 1);
-    const r = await imapDeleteMessageById(trashId, {
-      config: cfg,
-      connect: async () => makeMsgClient(rec),
-    });
+    const client: ImapClientLike = {
+      ...makeMsgClient(rec),
+      list: async () => [
+        { path: "INBOX", name: "INBOX" },
+        { path: "[Gmail]/Trash", name: "Trash" },
+      ],
+    };
+    const r = await imapDeleteMessageById(trashId, { config: cfg, connect: async () => client });
     expect(r.success).toBe(true);
     expect(rec.deleted).toEqual([1]);
     expect(rec.moved).toBeUndefined();

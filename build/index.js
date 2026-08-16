@@ -84195,9 +84195,12 @@ async function imapMoveMessageById(id, destMailbox, deps = {}) {
     }
   });
 }
+var FALLBACK_TRASH_PATH = "Trash";
 async function resolveTrashPath(client) {
+  let listed = false;
   try {
     const boxes = await client.list();
+    listed = true;
     const special = boxes.find((b) => b.specialUse === "\\Trash");
     if (special) return special.path;
     const named = boxes.find(
@@ -84206,7 +84209,13 @@ async function resolveTrashPath(client) {
     if (named) return named.path;
   } catch {
   }
-  return resolveMailboxPath("trash", "list");
+  if (!listed) return resolveMailboxPath("trash", "list");
+  try {
+    const created = await client.mailboxCreate(FALLBACK_TRASH_PATH);
+    return created?.path || FALLBACK_TRASH_PATH;
+  } catch {
+    return FALLBACK_TRASH_PATH;
+  }
 }
 async function trashUids(client, uids, srcPath) {
   const dest = await resolveTrashPath(client);
