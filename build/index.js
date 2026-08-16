@@ -79129,6 +79129,24 @@ function buildAccountScopedScript(account, command) {
     end tell
   `;
 }
+var LOCAL_STORE_LABEL = "On My Mac";
+var LOCAL_STORE_ALIASES = ["on my mac", "on my computer", "local", "local folders"];
+function isLocalStoreLabel(name) {
+  return name !== void 0 && LOCAL_STORE_ALIASES.includes(name.trim().toLowerCase());
+}
+function localMailboxBindingFragment() {
+  return `
+      set _mbs to {}
+      repeat with _m in mailboxes
+        set _isLoc to false
+        try
+          if (account of _m) is missing value then set _isLoc to true
+        on error
+          set _isLoc to true
+        end try
+        if _isLoc then set end of _mbs to (contents of _m)
+      end repeat`;
+}
 function groupKey(account, mailbox) {
   return `${account}\0${mailbox}`;
 }
@@ -81983,10 +82001,11 @@ ${this.errorEmit("              ")}
    * List all mailboxes for an account.
    */
   listMailboxes(account, options = {}) {
-    const targetAccount = this.resolveAccount(account);
-    const listCommand = `
+    const local = isLocalStoreLabel(account);
+    const targetAccount = local ? LOCAL_STORE_LABEL : this.resolveAccount(account);
+    const listCommand = (iterExpr) => `
       set mailboxList to {}
-      repeat with mb in mailboxes
+      repeat with mb in ${iterExpr}
         set mbName to name of mb
         set mbUnread to unread count of mb
         set mbCount to count of messages of mb
@@ -81995,7 +82014,8 @@ ${this.errorEmit("              ")}
       set AppleScript's text item delimiters to "${RECORD_SEP}"
       return mailboxList as text
     `;
-    const script = buildAccountScopedScript(targetAccount, listCommand);
+    const script = local ? buildAppLevelScript(`${localMailboxBindingFragment()}
+      ${listCommand("_mbs")}`) : buildAccountScopedScript(targetAccount, listCommand("mailboxes"));
     const result = executeAppleScript(script, { timeoutMs: options.timeoutMs ?? 6e4 });
     if (!result.success) {
       console.error(`Failed to list mailboxes: ${result.error}`);
@@ -84653,19 +84673,15 @@ function withErrorHandling(handler, errorPrefix) {
 }
 
 // src/tools/mailboxListing.ts
-var LOCAL_STORE_NAMES = ["on my mac", "on my computer", "local", "local folders"];
-function isLocalStoreName(name) {
-  return LOCAL_STORE_NAMES.includes(name.trim().toLowerCase());
-}
 function unlistableStoreError(account, error2, knownAccounts) {
   const scope = account ? ` for "${account}"` : "";
   const parts = [`Could not list mailboxes${scope}: ${error2 ?? "Mail declined the request"}`];
   if (knownAccounts.length > 0) {
     parts.push(`Accounts on this Mac: ${knownAccounts.join(", ")}.`);
   }
-  if (account && isLocalStoreName(account)) {
+  if (account && isLocalStoreLabel(account)) {
     parts.push(
-      `"${account}" is Mail's LOCAL store, not an account \u2014 its mailboxes are not children of any account, so they cannot be reached with an \`account\` argument. Enumerating them is not yet supported.`
+      `"${account}" addresses Mail's LOCAL store, which IS listable \u2014 it is read at the application level rather than through an account, so this failure is not "no such account". Something went wrong reading the local store itself.`
     );
   }
   return parts.join("\n\n");
@@ -86709,10 +86725,26 @@ ${r.base64}`,
     );
   }, "Error fetching attachment")
 );
+function appendLocalStoreRows(rows, failedAccounts) {
+  const checked = mailManager.listMailboxesChecked(LOCAL_STORE_LABEL);
+  if (checked.failed) {
+    console.error(`list-mailboxes failed for "${LOCAL_STORE_LABEL}": ${checked.error}`);
+    failedAccounts.push(LOCAL_STORE_LABEL);
+    return;
+  }
+  for (const mb of checked.mailboxes) {
+    rows.push({
+      name: `${LOCAL_STORE_LABEL}/${mb.name}`,
+      account: LOCAL_STORE_LABEL,
+      unreadCount: mb.unreadCount,
+      messageCount: mb.messageCount
+    });
+  }
+}
 registerTool(
   "list-mailboxes",
   {
-    description: "Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox's name with its unread (and, for IMAP, total message) count, plus a count. A source that could not be read is NAMED \u2014 the result carries `partial: true` + `failedAccounts` and the list is a floor, not the complete set \u2014 and a listing Mail refused outright (e.g. an account that does not exist) returns an ERROR naming the accounts that do exist, never an empty list.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).\nNote: Mail's local \"On My Mac\" mailboxes are not part of any account and are not currently enumerated by this tool.",
+    description: 'Use when: discovering the mailbox/folder names (and unread/message counts) available in an account, e.g. before moving messages or searching a specific mailbox.\nReturns: each mailbox\'s name with its unread (and, for IMAP, total message) count, plus a count. A source that could not be read is NAMED \u2014 the result carries `partial: true` + `failedAccounts` and the list is a floor, not the complete set \u2014 and a listing Mail refused outright (e.g. an account that does not exist) returns an ERROR naming the accounts that do exist, never an empty list.\nDo not use when: you want the messages inside a mailbox (use list-messages or search-messages) or the list of accounts (use list-accounts).\nNote: Mail\'s local "On My Mac" mailboxes are not part of any account, so they are reported under the synthetic account label "On My Mac" \u2014 an unscoped call includes them, and `account: "On My Mac"` lists only them. They will not appear in list-accounts, which reports real accounts only.',
     inputSchema: {
       account: external_exports.string().optional().describe("Account to list mailboxes from")
     },
@@ -86778,6 +86810,7 @@ ${list2}`, structured3);
           });
         }
       }
+      appendLocalStoreRows(rows, failedAccounts);
       const partial2 = failedAccounts.length > 0;
       const structured2 = {
         mailboxes: rows,
@@ -86806,7 +86839,13 @@ ${list}${caveat}`, structured2);
         )
       );
     }
-    const structured = { mailboxes, count: mailboxes.length };
+    const localFailures = [];
+    if (account === void 0) appendLocalStoreRows(mailboxes, localFailures);
+    const structured = {
+      mailboxes,
+      count: mailboxes.length,
+      ...localFailures.length ? { partial: true, failedAccounts: localFailures } : {}
+    };
     if (mailboxes.length === 0) {
       return successResponse("No mailboxes found", structured);
     }

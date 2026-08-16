@@ -662,6 +662,61 @@ function buildAccountScopedScript(account: string, command: string): string {
   `;
 }
 
+// ---------------------------------------------------------------------------
+// Mail's LOCAL store ("On My Mac") — #183
+//
+// Local mailboxes are NOT children of any `account`; they hang off the
+// application. Every enumeration here walked `accounts` → `mailboxes of acct`,
+// so local mail was invisible: not listable, not searchable, not addressable.
+//
+// Measured against a live Mail.app on 2026-08-16 (read-only probe, results on
+// issue #183) — these are facts, not assumptions:
+//   • `account of <an app-level mailbox>` returns `missing value`. It does not
+//     raise, and does not return a bogus object.
+//   • `account of <an account mailbox>` correctly names its account, so the
+//     ownership filter below cannot mistake one for a local mailbox. That is
+//     what stops it double-listing every account mailbox.
+//   • App-level `mailboxes` returned ONLY the 4 local mailboxes while the
+//     accounts separately held 26 — i.e. no overlap on this backend, so the
+//     filter is insurance (POP is untested), not the load-bearing mechanism.
+//   • Local mailboxes answer `unread count` and `count of messages` normally.
+// ---------------------------------------------------------------------------
+
+/** The synthetic account label the local store is addressed by. */
+export const LOCAL_STORE_LABEL = "On My Mac";
+
+/** Names a caller might reasonably use for the local store. */
+const LOCAL_STORE_ALIASES = ["on my mac", "on my computer", "local", "local folders"];
+
+/** True when `name` addresses Mail's local store rather than a real account. */
+export function isLocalStoreLabel(name: string | undefined): boolean {
+  return name !== undefined && LOCAL_STORE_ALIASES.includes(name.trim().toLowerCase());
+}
+
+/**
+ * Binds `_mbs` to the application-level mailboxes that belong to no account.
+ *
+ * The `try` wrapper is deliberate belt-and-braces: the live probe says
+ * `account of` returns `missing value` here, but a backend that RAISES instead
+ * must also be treated as local rather than aborting the whole enumeration.
+ * A mailbox whose `account` names something is an account mailbox and is
+ * excluded — that exclusion is the only thing standing between this and
+ * double-listing every account mailbox on a backend where the two sets overlap.
+ */
+function localMailboxBindingFragment(): string {
+  return `
+      set _mbs to {}
+      repeat with _m in mailboxes
+        set _isLoc to false
+        try
+          if (account of _m) is missing value then set _isLoc to true
+        on error
+          set _isLoc to true
+        end try
+        if _isLoc then set end of _mbs to (contents of _m)
+      end repeat`;
+}
+
 /**
  * Key for the per-source-mailbox grouping in runBatchOperation.
  *
@@ -4454,11 +4509,19 @@ ${this.errorEmit("              ")}
    * List all mailboxes for an account.
    */
   listMailboxes(account?: string, options: { timeoutMs?: number } = {}): Mailbox[] {
-    const targetAccount = this.resolveAccount(account);
+    // #183: `account="On My Mac"` addresses the LOCAL store, which is not an
+    // account — it has no `tell account` form. Only an EXPLICIT request selects
+    // it; `resolveAccount()` is untouched and still can only ever return a real
+    // account, so nothing implicitly lands in the local store.
+    const local = isLocalStoreLabel(account);
+    const targetAccount = local ? LOCAL_STORE_LABEL : this.resolveAccount(account);
 
-    const listCommand = `
+    // One command text, parameterised only by what it iterates: the account
+    // branch keeps today's bare `mailboxes` (which binds to the account inside
+    // `tell account`), the local branch iterates the ownership-filtered `_mbs`.
+    const listCommand = (iterExpr: string): string => `
       set mailboxList to {}
-      repeat with mb in mailboxes
+      repeat with mb in ${iterExpr}
         set mbName to name of mb
         set mbUnread to unread count of mb
         set mbCount to count of messages of mb
@@ -4468,7 +4531,10 @@ ${this.errorEmit("              ")}
       return mailboxList as text
     `;
 
-    const script = buildAccountScopedScript(targetAccount, listCommand);
+    const script = local
+      ? buildAppLevelScript(`${localMailboxBindingFragment()}
+      ${listCommand("_mbs")}`)
+      : buildAccountScopedScript(targetAccount, listCommand("mailboxes"));
     // Counts every mailbox's message total, so it needs more than the default
     // 30s on accounts with many/large mailboxes; a timeout here silently
     // returned an empty list (audit finding #8). A caller working to an overall
