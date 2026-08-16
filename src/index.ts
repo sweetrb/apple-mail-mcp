@@ -1157,6 +1157,40 @@ function resolveSmtpOrFallback(): SmtpConfig | null {
 }
 
 /** Reply to a message over direct SMTP with RFC 5322 threading headers. */
+/**
+ * Reply and forward drive Mail.app's `reply`/`forward` verbs, which take a
+ * NUMERIC Mail.app id — `findMessageScript` interpolates `Number(id)`, so an
+ * `imap:` id became `whose id is NaN` and simply never matched.
+ *
+ * The id schema accepts both forms, so callers reasonably passed `imap:` ids
+ * (every read tool returns them when IMAP is configured) and got an
+ * unexplained "not found". Rather than reject, resolve: the same RFC
+ * Message-ID lookup `resolve-message-id` uses, done for the caller.
+ */
+async function toNumericMailId(id: string): Promise<{ numericId?: string; error?: string }> {
+  const ref = decodeImapId(id);
+  if (!ref) return { numericId: id }; // already numeric
+
+  const messageId = await imapFetchMessageId(id);
+  if (!messageId) {
+    return {
+      error:
+        `could not read the RFC Message-ID for "${id}" over IMAP, which is what maps it to a ` +
+        `Mail.app id. Pass the numeric id instead (see the resolve-message-id tool).`,
+    };
+  }
+  const numericId = mailManager.findNumericIdByMessageId(messageId, ref.account);
+  if (!numericId) {
+    return {
+      error:
+        `Mail.app has no message with Message-ID <${messageId}> in account "${ref.account}", so ` +
+        `this IMAP message has no numeric id to reply to or forward. It may not have synced to ` +
+        `Mail.app yet.`,
+    };
+  }
+  return { numericId };
+}
+
 async function sendReplyViaSmtp(
   id: string,
   body: string,
@@ -1253,10 +1287,20 @@ registerTool(
       }
     }
 
-    const success = mailManager.replyToMessage(id, body, replyAll, send);
+    const resolvedReply = await toNumericMailId(id);
+    if (!resolvedReply.numericId) {
+      return errorResponse(`Failed to reply to message "${id}": ${resolvedReply.error}`);
+    }
+    const outcome = mailManager.replyToMessage(resolvedReply.numericId, body, replyAll, send);
 
-    if (!success) {
-      return errorResponse(`Failed to reply to message "${id}"`);
+    if (!outcome.success) {
+      // Surface Mail's own reason. An ambiguous id names its candidate
+      // mailboxes and tells the caller to re-list; a bare failure did not.
+      return errorResponse(
+        outcome.error
+          ? `Failed to reply to message "${id}": ${outcome.error}`
+          : `Failed to reply to message "${id}"`
+      );
     }
 
     return successResponse(send ? "Reply sent" : "Reply saved as draft", {
@@ -1308,10 +1352,18 @@ registerTool(
       }
     }
 
-    const success = mailManager.forwardMessage(id, to, body, send);
+    const resolvedFwd = await toNumericMailId(id);
+    if (!resolvedFwd.numericId) {
+      return errorResponse(`Failed to forward message "${id}": ${resolvedFwd.error}`);
+    }
+    const outcome = mailManager.forwardMessage(resolvedFwd.numericId, to, body, send);
 
-    if (!success) {
-      return errorResponse(`Failed to forward message "${id}"`);
+    if (!outcome.success) {
+      return errorResponse(
+        outcome.error
+          ? `Failed to forward message "${id}": ${outcome.error}`
+          : `Failed to forward message "${id}"`
+      );
     }
 
     return successResponse(

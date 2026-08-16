@@ -3099,27 +3099,31 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param send - If true, send immediately; if false, save as draft
    * @returns true if reply created/sent successfully
    */
-  replyToMessage(id: string, body: string, replyAll = false, send = true): boolean {
+  replyToMessage(
+    id: string,
+    body: string,
+    replyAll = false,
+    send = true
+  ): { success: boolean; error?: string } {
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
-    const sendAction = send ? "send theReply" : "";
+    // `save` is NOT optional on the draft path. Without it the script creates
+    // the outgoing message, sets its content and abandons it, leaving Mail.app
+    // holding an unsaved compose window — pre-addressed, pre-filled, one click
+    // from sending — while this method reports success. `send: false` is the
+    // REVIEW-FIRST option, so leaving a live compose window is the one outcome
+    // it must never produce.
+    const finalAction = send ? "send theReply" : "save theReply";
 
     const script = this.findMessageScript(
       id,
       `
           set theReply to reply msg without opening window${replyAllClause}
           set content of theReply to "${safeBody}"
-          ${sendAction}`
+          ${finalAction}`
     );
 
-    const result = executeAppleScript(script, { timeoutMs: 60000 });
-
-    if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to reply to message: ${result.error || result.output}`);
-      return false;
-    }
-
-    return true;
+    return this.runComposeScript(script, "reply to");
   }
 
   /**
@@ -3131,9 +3135,16 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param send - If true, send immediately; if false, save as draft
    * @returns true if forward created/sent successfully
    */
-  forwardMessage(id: string, to: string[], body?: string, send = true): boolean {
+  forwardMessage(
+    id: string,
+    to: string[],
+    body?: string,
+    send = true
+  ): { success: boolean; error?: string } {
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
-    const sendAction = send ? "send theForward" : "";
+    // See replyToMessage: the draft path MUST save, or Mail is left with a live
+    // compose window while this reports success.
+    const finalAction = send ? "send theForward" : "save theForward";
 
     // Build recipient additions
     let recipientCommands = "";
@@ -3147,17 +3158,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           set theForward to forward msg without opening window
           ${recipientCommands}
           ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
-          ${sendAction}`
+          ${finalAction}`
     );
 
-    const result = executeAppleScript(script, { timeoutMs: 60000 });
-
-    if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to forward message: ${result.error || result.output}`);
-      return false;
-    }
-
-    return true;
+    return this.runComposeScript(script, "forward");
   }
 
   /**
@@ -3183,6 +3187,26 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * it immediately, so this is also where the previous operation's forensic
    * report is invalidated — see `beginMutation()`.
    */
+  /**
+   * Run a reply/forward compose script and surface Mail's OWN error text.
+   *
+   * These used to return a bare boolean and log the reason to stderr, so the
+   * tool layer could only say "Failed to reply to message X". That hid the two
+   * failures a caller can actually act on — an id present in several mailboxes
+   * (which names the candidates and tells you to re-list) and a missing id —
+   * behind one indistinguishable message.
+   */
+  private runComposeScript(script: string, verb: string): { success: boolean; error?: string } {
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
+    if (!result.success || result.output.startsWith("error:")) {
+      const raw = result.error || result.output;
+      const error = raw.startsWith("error:") ? raw.slice("error:".length) : raw;
+      console.error(`Failed to ${verb} message: ${error}`);
+      return { success: false, error };
+    }
+    return { success: true };
+  }
+
   private findMessageScript(id: string, operation: string, instrument = false): string {
     this.beginMutation();
     const loc = this.locationFor(id);

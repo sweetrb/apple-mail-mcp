@@ -1,5 +1,42 @@
 ## [Unreleased]
 
+## [2.11.2] - 2026-08-16
+
+Three defects in `reply-to-message` / `forward-message`, found by exercising the
+full tool surface against real mail. The first is a safety fix.
+
+### Fixed
+
+- **`send: false` did not save a draft — it left a live compose window.** The
+  generated AppleScript created the outgoing message and set its content, then
+  stopped: there was no `save`. Mail.app was left holding an unsaved compose
+  window — pre-addressed, pre-filled and one click from sending — while the tool
+  reported `ok: true` and the docs promised "save as draft". During the
+  regression run that window was addressed to a **third party**. `send: false`
+  is the review-before-sending option, so a live compose window is the one
+  outcome it must never produce. Both paths now `save`.
+
+- **`imap:` ids silently never matched.** The id schema accepts them and every
+  read tool returns them when IMAP is configured, but `findMessageScript`
+  interpolates `Number(id)`, so an `imap:` id became `whose id is NaN` and
+  matched nothing — surfacing as an unexplained "not found". Reply and forward
+  now resolve an `imap:` id to its numeric Mail.app id first, via the same RFC
+  Message-ID lookup `resolve-message-id` uses.
+
+- **Failures reported a bare message that hid the reason.** Mail's own error was
+  logged to stderr and replaced with `Failed to reply to message "<id>"`, so a
+  caller could not tell an ambiguous id (which names its candidate mailboxes and
+  says to re-list) from a missing one from a transport error. Both tools now
+  return Mail's text. This mattered most for ids present in several mailboxes —
+  the normal case on a Gmail store, where a message is in INBOX and All Mail at
+  once.
+
+### Changed
+
+- `replyToMessage` / `forwardMessage` return `{ success, error? }` instead of a
+  bare `boolean`, so the reason survives to the tool layer.
+
+
 ## [2.11.1] - 2026-08-16
 
 Three defects found by an end-to-end regression sweep against real mail. All
