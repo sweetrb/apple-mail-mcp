@@ -80955,20 +80955,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   replyToMessage(id, body, replyAll = false, send = true) {
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
-    const sendAction = send ? "send theReply" : "";
+    const finalAction = send ? "send theReply" : "save theReply";
     const script = this.findMessageScript(
       id,
       `
           set theReply to reply msg without opening window${replyAllClause}
           set content of theReply to "${safeBody}"
-          ${sendAction}`
+          ${finalAction}`
     );
-    const result = executeAppleScript(script, { timeoutMs: 6e4 });
-    if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to reply to message: ${result.error || result.output}`);
-      return false;
-    }
-    return true;
+    return this.runComposeScript(script, "reply to");
   }
   /**
    * Forward a message.
@@ -80981,7 +80976,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   forwardMessage(id, to, body, send = true) {
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
-    const sendAction = send ? "send theForward" : "";
+    const finalAction = send ? "send theForward" : "save theForward";
     let recipientCommands = "";
     for (const addr of to) {
       recipientCommands += `make new to recipient at end of to recipients of theForward with properties {address:"${escapeForAppleScript(addr)}"}
@@ -80993,14 +80988,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           set theForward to forward msg without opening window
           ${recipientCommands}
           ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
-          ${sendAction}`
+          ${finalAction}`
     );
-    const result = executeAppleScript(script, { timeoutMs: 6e4 });
-    if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to forward message: ${result.error || result.output}`);
-      return false;
-    }
-    return true;
+    return this.runComposeScript(script, "forward");
   }
   /**
    * Helper to find and operate on a message by ID, scoped to the mailbox the id
@@ -81025,6 +81015,25 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * it immediately, so this is also where the previous operation's forensic
    * report is invalidated — see `beginMutation()`.
    */
+  /**
+   * Run a reply/forward compose script and surface Mail's OWN error text.
+   *
+   * These used to return a bare boolean and log the reason to stderr, so the
+   * tool layer could only say "Failed to reply to message X". That hid the two
+   * failures a caller can actually act on — an id present in several mailboxes
+   * (which names the candidates and tells you to re-list) and a missing id —
+   * behind one indistinguishable message.
+   */
+  runComposeScript(script, verb) {
+    const result = executeAppleScript(script, { timeoutMs: 6e4 });
+    if (!result.success || result.output.startsWith("error:")) {
+      const raw = result.error || result.output;
+      const error2 = raw.startsWith("error:") ? raw.slice("error:".length) : raw;
+      console.error(`Failed to ${verb} message: ${error2}`);
+      return { success: false, error: error2 };
+    }
+    return { success: true };
+  }
   findMessageScript(id, operation, instrument = false) {
     this.beginMutation();
     const loc = this.locationFor(id);
@@ -85940,6 +85949,23 @@ function resolveSmtpOrFallback() {
     return null;
   }
 }
+async function toNumericMailId(id) {
+  const ref = decodeImapId(id);
+  if (!ref) return { numericId: id };
+  const messageId = await imapFetchMessageId(id);
+  if (!messageId) {
+    return {
+      error: `could not read the RFC Message-ID for "${id}" over IMAP, which is what maps it to a Mail.app id. Pass the numeric id instead (see the resolve-message-id tool).`
+    };
+  }
+  const numericId = mailManager.findNumericIdByMessageId(messageId, ref.account);
+  if (!numericId) {
+    return {
+      error: `Mail.app has no message with Message-ID <${messageId}> in account "${ref.account}", so this IMAP message has no numeric id to reply to or forward. It may not have synced to Mail.app yet.`
+    };
+  }
+  return { numericId };
+}
 async function sendReplyViaSmtp(id, body, replyAll) {
   const cfg = resolveSmtpOrFallback();
   if (!cfg) return { sent: false, fallback: true };
@@ -85998,17 +86024,23 @@ registerTool(
   },
   withErrorHandling(async ({ id, body, replyAll, send }) => {
     if (send && isSmtpConfigured()) {
-      const outcome = await sendReplyViaSmtp(id, body, replyAll);
-      if (outcome.sent) {
+      const outcome2 = await sendReplyViaSmtp(id, body, replyAll);
+      if (outcome2.sent) {
         return successResponse("Reply sent", { ok: true, sent: true, id });
       }
-      if (!outcome.fallback) {
-        return errorResponse(`Failed to reply to message "${id}" via SMTP: ${outcome.error}`);
+      if (!outcome2.fallback) {
+        return errorResponse(`Failed to reply to message "${id}" via SMTP: ${outcome2.error}`);
       }
     }
-    const success = mailManager.replyToMessage(id, body, replyAll, send);
-    if (!success) {
-      return errorResponse(`Failed to reply to message "${id}"`);
+    const resolvedReply = await toNumericMailId(id);
+    if (!resolvedReply.numericId) {
+      return errorResponse(`Failed to reply to message "${id}": ${resolvedReply.error}`);
+    }
+    const outcome = mailManager.replyToMessage(resolvedReply.numericId, body, replyAll, send);
+    if (!outcome.success) {
+      return errorResponse(
+        outcome.error ? `Failed to reply to message "${id}": ${outcome.error}` : `Failed to reply to message "${id}"`
+      );
     }
     return successResponse(send ? "Reply sent" : "Reply saved as draft", {
       ok: true,
@@ -86036,8 +86068,8 @@ registerTool(
   },
   withErrorHandling(async ({ id, to, body, send }) => {
     if (send && isSmtpConfigured()) {
-      const outcome = await sendForwardViaSmtp(id, to, body);
-      if (outcome.sent) {
+      const outcome2 = await sendForwardViaSmtp(id, to, body);
+      if (outcome2.sent) {
         return successResponse(`Message forwarded to ${to.join(", ")}`, {
           ok: true,
           sent: true,
@@ -86045,13 +86077,19 @@ registerTool(
           id
         });
       }
-      if (!outcome.fallback) {
-        return errorResponse(`Failed to forward message "${id}" via SMTP: ${outcome.error}`);
+      if (!outcome2.fallback) {
+        return errorResponse(`Failed to forward message "${id}" via SMTP: ${outcome2.error}`);
       }
     }
-    const success = mailManager.forwardMessage(id, to, body, send);
-    if (!success) {
-      return errorResponse(`Failed to forward message "${id}"`);
+    const resolvedFwd = await toNumericMailId(id);
+    if (!resolvedFwd.numericId) {
+      return errorResponse(`Failed to forward message "${id}": ${resolvedFwd.error}`);
+    }
+    const outcome = mailManager.forwardMessage(resolvedFwd.numericId, to, body, send);
+    if (!outcome.success) {
+      return errorResponse(
+        outcome.error ? `Failed to forward message "${id}": ${outcome.error}` : `Failed to forward message "${id}"`
+      );
     }
     return successResponse(
       send ? `Message forwarded to ${to.join(", ")}` : "Forward saved as draft",

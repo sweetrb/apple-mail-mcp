@@ -41,7 +41,7 @@ describe("by-id message identity", () => {
     h.output = "ok";
     mgr.noteMessageLocation("42", "work@example.com", "INBOX");
 
-    expect(mgr.replyToMessage("42", "Reply body", false, false)).toBe(true);
+    expect(mgr.replyToMessage("42", "Reply body", false, false)).toMatchObject({ success: true });
     let script = lastScript();
     expect(script).toContain('if (name of _a) is "work@example.com"');
     expect(script).toContain('if (name of _m) is "INBOX"');
@@ -50,7 +50,9 @@ describe("by-id message identity", () => {
     expect(script).not.toContain("messages of mb whose id is 42");
 
     h.calls.length = 0;
-    expect(mgr.forwardMessage("42", ["recipient@example.com"], undefined, false)).toBe(true);
+    expect(mgr.forwardMessage("42", ["recipient@example.com"], undefined, false)).toMatchObject({
+      success: true,
+    });
     script = lastScript();
     expect(script).toContain("messages of _tmb whose id is 42");
     expect(script).toContain("forward msg without opening window");
@@ -138,5 +140,74 @@ describe("by-id message identity", () => {
       "error:Message not found\r\nFrom: sender@example.com\r\n\r\nbody"
     );
     expect(mgr.consumeLastMessageLookupError()).toBeUndefined();
+  });
+});
+
+describe("reply/forward draft safety", () => {
+  let mgr: AppleMailManager;
+
+  beforeEach(() => {
+    h.calls.length = 0;
+    h.output = "ok";
+    mgr = new AppleMailManager();
+    mgr.noteMessageLocation("42", "work@example.com", "INBOX");
+  });
+
+  // Found by an end-to-end regression run: `send: false` is documented as
+  // "save as draft", but the generated script only created the outgoing
+  // message and set its content — it never saved. Mail.app was left holding an
+  // unsaved compose window, pre-addressed and pre-filled, one click from
+  // sending, while the tool reported ok. During the run that window was
+  // addressed to a THIRD PARTY, which is why this is a safety fix and not a
+  // tidiness one.
+  it("SAVES the draft when send is false, for replies", () => {
+    mgr.replyToMessage("42", "body", false, false);
+    const script = lastScript();
+    expect(script).toContain("save theReply");
+    expect(script).not.toContain("send theReply");
+  });
+
+  it("SAVES the draft when send is false, for forwards", () => {
+    mgr.forwardMessage("42", ["someone@example.com"], "body", false);
+    const script = lastScript();
+    expect(script).toContain("save theForward");
+    expect(script).not.toContain("send theForward");
+  });
+
+  it("still sends, and does not save, when send is true", () => {
+    mgr.replyToMessage("42", "body", false, true);
+    let script = lastScript();
+    expect(script).toContain("send theReply");
+    expect(script).not.toContain("save theReply");
+
+    h.calls.length = 0;
+    mgr.forwardMessage("42", ["someone@example.com"], "body", true);
+    script = lastScript();
+    expect(script).toContain("send theForward");
+    expect(script).not.toContain("save theForward");
+  });
+
+  // The failure this hid: Mail's real reason ("present in more than one
+  // mailbox…", "Message not found") was logged to stderr and replaced with a
+  // bare "Failed to reply to message X", so a caller could not tell an
+  // ambiguous id from a missing one from a transport error.
+  it("returns Mail's actual error text instead of swallowing it", () => {
+    h.output =
+      "error:This message id is present in more than one mailbox (a/INBOX, a/All Mail); list or search that mailbox first";
+    const r = mgr.replyToMessage("42", "body", false, true);
+    expect(r.success).toBe(false);
+    expect(r.error).toContain("present in more than one mailbox");
+
+    const f = mgr.forwardMessage("42", ["x@example.com"], "body", true);
+    expect(f.success).toBe(false);
+    expect(f.error).toContain("present in more than one mailbox");
+  });
+
+  it("reports success as a structured result", () => {
+    h.output = "ok";
+    expect(mgr.replyToMessage("42", "body", false, false)).toMatchObject({ success: true });
+    expect(mgr.forwardMessage("42", ["x@example.com"], "body", false)).toMatchObject({
+      success: true,
+    });
   });
 });
