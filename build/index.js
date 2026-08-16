@@ -78854,17 +78854,8 @@ function countDeltaWarning(d) {
   const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
   return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. Anything else removing mail from this mailbox at the same moment \u2014 a Mail rule, a server-side filter, another client, an IMAP expunge \u2014 reads the same way, so rule that out first. If nothing else was touching it, this is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
 }
-function falseOkWarning(d, collateral) {
-  if (d.status !== "under" || d.expected === null) return null;
-  if (d.observed !== 0 || d.expected <= 0) return null;
-  if (!collateral || collateral.snapshot !== "ok") return null;
-  if ((collateral.disappeared?.length ?? 0) !== 0) return null;
-  const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
-  return `\u26A0\uFE0F Reported success with no observed effect in ${where}: ${d.expected} message(s) were operated on and reported ok, but the mailbox count did not move (${d.before} \u2192 ${d.after}) and the collateral snapshot \u2014 which read this mailbox successfully \u2014 shows no message left it. Either the operation silently did nothing, or Mail's count and listing are both stale and the messages did move. Check the destination (Trash for a delete) before assuming either: if they are there, this is a measurement-timing bug; if they are still in the source mailbox minutes later, the operation failed while reporting success. Please report at https://github.com/sweetrb/apple-mail-mcp/issues/155 with ${AUDIT_LOG_ENV}=/path/to/audit.ndjson set.`;
-}
 function reconciliationWarnings(report) {
-  const collateralFor = (d) => report.collateral.find((c) => c.account === d.account && c.mailbox === d.mailbox);
-  return report.countDeltas.flatMap((d) => [countDeltaWarning(d), falseOkWarning(d, collateralFor(d))]).filter((w) => w !== null);
+  return report.countDeltas.map((d) => countDeltaWarning(d)).filter((w) => w !== null);
 }
 
 // src/services/appleMailManager.ts
@@ -79142,6 +79133,8 @@ function canonicalNumericId(raw) {
   return Number.isFinite(n) ? String(n) : trimmed;
 }
 var SELF_MOVE_NOTE = "Destination is the source mailbox, so no message should leave it. What Mail does to the count when a message is re-filed into the mailbox it already occupies is unspecified, so there is no expected delta to compare against: this mailbox is reported without a comparison and is never warned about.";
+var COUNT_UNMOVED_NOTE = `Mail's count did not move. This is the ordinary reading on a store that flags deletions instead of removing them (Gmail label mailboxes and IMAP accounts with "move deleted messages to Trash" off), where the message stays put and the operation still fully succeeded. It can also mean Mail's count simply had not caught up yet. The per-id outcomes are what report success; this number is not, so do not retry on the strength of it.`;
+var COUNT_PARTIAL_NOTE = `Mail's count moved by less than this operation accounted for. That is a LOWER BOUND on what left, not a count of what left: Mail has been observed reporting a stale count for a delete it had already performed (issue #155), and new mail arriving mid-operation reads the same way. No claim is made either way. To confirm where the messages went, match them at the destination by "date received" plus sender \u2014 NOT by the numeric ids you passed, which are renumbered by the move and do not survive it.`;
 function snapshotKey(entry) {
   return `${entry.id}\0${entry.messageId}`;
 }
@@ -79679,10 +79672,24 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const observed = readable ? m.before - m.after : null;
       const note = noteFor(m.account, m.mailbox);
       let status;
-      if (!readable || m.expected === null) status = "unknown";
-      else if (observed === m.expected) status = "match";
-      else if ((observed ?? 0) > m.expected) status = "over";
-      else status = "under";
+      let unknownReason;
+      if (!readable) {
+        status = "unknown";
+        unknownReason = "count-unreadable";
+      } else if (m.expected === null) {
+        status = "unknown";
+        unknownReason = "no-expectation";
+      } else if (observed === m.expected) {
+        status = "match";
+      } else if ((observed ?? 0) > m.expected) {
+        status = "over";
+      } else if (observed === 0) {
+        status = "unknown";
+        unknownReason = "count-did-not-move";
+      } else {
+        status = "unknown";
+        unknownReason = "count-partial";
+      }
       return {
         account: m.account,
         mailbox: m.mailbox,
@@ -79691,11 +79698,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         expected: m.expected,
         observed,
         status,
+        ...unknownReason ? { unknownReason } : {},
         ...note ? { note } : {},
-        ...status === "unknown" && readable === false ? { note: note ?? "Mail did not report a message count for this mailbox" } : {},
-        ...status === "under" && !note ? {
-          note: "Fewer messages left the mailbox than were operated on. This is normal on a store that flags deletions instead of removing them (and when new mail arrives mid-operation), so it is reported but not warned about."
-        } : {}
+        ...unknownReason === "count-unreadable" ? { note: note ?? "Mail did not report a message count for this mailbox" } : {},
+        ...unknownReason === "count-did-not-move" && !note ? { note: COUNT_UNMOVED_NOTE } : {},
+        ...unknownReason === "count-partial" && !note ? { note: COUNT_PARTIAL_NOTE } : {}
       };
     });
     const preImages = [];
@@ -85303,7 +85310,10 @@ var COUNT_DELTA_OUTPUT_SCHEMA = external_exports.array(
     // `status: "unknown"`, and never with a warning.
     expected: external_exports.number().nullable().optional(),
     observed: external_exports.number().nullable().optional(),
-    status: external_exports.enum(["match", "over", "under", "unknown"]).optional(),
+    status: external_exports.enum(["match", "over", "unknown"]).optional(),
+    // Declared explicitly: the SDK stamps additionalProperties:false on a bare
+    // zod shape, so an undeclared key makes the CLIENT reject the result.
+    unknownReason: external_exports.enum(["count-unreadable", "no-expectation", "count-did-not-move", "count-partial"]).optional(),
     note: external_exports.string().optional()
   })
 ).optional();

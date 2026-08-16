@@ -139,15 +139,28 @@ export function auditSnapshotChunk(): number {
  *               This is the #155 signature and the data-loss direction, but it
  *               is a SIGNAL, not a proof — see `countDeltaWarning`. It is the
  *               only status that raises a warning in the tool response.
- * - `under`   — FEWER left than expected. This has legitimate causes on real
- *               stores (see `note`), so it is reported but never warned about.
- * - `unknown` — no comparison was possible: either the count could not be read
- *               (`before`/`after` null), or the expected delta is not
- *               predictable for this operation (`expected` null — a move whose
- *               destination IS the source mailbox is the one case, see `note`).
- *               Said plainly rather than guessed, and never warned about: a
- *               warning computed against a number nobody can justify is exactly
- *               the false alarm this instrumentation must not produce.
+ * - `unknown` — no comparison this server is willing to assert. `unknownReason`
+ *               says which of four disjoint situations produced it. Never
+ *               warned about: a warning computed against a number nobody can
+ *               justify is exactly the false alarm this must not produce.
+ *
+ * ## Where `under` went (removed 2026-08-16, #155)
+ *
+ * There used to be an `under` status meaning "fewer left than expected", framed
+ * as routine. Field evidence from @scottstern0325 on iCloud retired it: for two
+ * `observed: 0` batches the messages were located **in Trash**, matched by
+ * `date received` + sender against the audit-log pre-image. The deletes had
+ * happened. Mail's count had not caught up.
+ *
+ * So a short reading does not mean fewer messages left. It means **Mail's count
+ * says fewer left**, and that count has been observed lagging a delete it had
+ * already performed. Reporting it as a comparison result dressed the lag up as
+ * a finding. The four readings in that report — 0 of 4, 0 of 1 (a single-id
+ * delete), 15 of 16, and 14 of 15 — differ by amounts unrelated to batch size,
+ * which is what a lag looks like and not what a store-behaviour rule looks like.
+ *
+ * The vocabulary is deleted rather than deprecated so the compiler enumerates
+ * every consumer; a dead status string gets re-implemented by the next author.
  */
 export interface CountDelta {
   /** Account holding the affected mailbox ("" when Mail would not say). */
@@ -164,9 +177,36 @@ export interface CountDelta {
    * always pairs with `status: "unknown"`.
    */
   expected: number | null;
-  /** `before - after`; null when either count is unavailable. */
+  /**
+   * `before - after` — the movement of Mail's COUNT, and a LOWER BOUND on how
+   * many messages left. Null when either count is unavailable.
+   *
+   * Not "how many messages left". Mail has been observed reporting an unchanged
+   * count for a delete it had already performed (#155), so a value below
+   * `expected` is as consistent with a lagging count as with an incomplete
+   * operation, and this server will not claim to know which.
+   */
   observed: number | null;
-  status: "match" | "over" | "under" | "unknown";
+  status: "match" | "over" | "unknown";
+  /**
+   * Which situation produced `status: "unknown"`. Four disjoint cases, kept
+   * separate because they are NOT interchangeable to a reader:
+   *
+   * - `count-unreadable`     — Mail would not report a count at all
+   *                            (`before`/`after` null).
+   * - `no-expectation`       — no expected delta is predictable, so no
+   *                            comparison exists (a move whose destination IS
+   *                            the source mailbox).
+   * - `count-did-not-move`   — the count did not move at all. On a store that
+   *                            flags deletions instead of removing them this is
+   *                            the ORDINARY, CORRECT reading, and the note says
+   *                            so. Do not treat it as a problem signal.
+   * - `count-partial`        — the count moved, but by less than the operation
+   *                            accounted for. A flag-only store cannot produce
+   *                            this (its count does not move at all), which is
+   *                            what makes it worth distinguishing.
+   */
+  unknownReason?: "count-unreadable" | "no-expectation" | "count-did-not-move" | "count-partial";
   /** Why the numbers are what they are, when that needs saying. */
   note?: string;
 }
@@ -232,7 +272,15 @@ export interface CollateralDiff {
    *
    * An absent array therefore means "not computable", never "empty". Consumers
    * must not read `disappeared?.length ?? 0` as "nothing disappeared" — check
-   * `snapshot === "ok"` first, which is what `falseOkWarning` does.
+   * `snapshot === "ok"` first.
+   *
+   * ⚠️ And `snapshot === "ok"` is necessary, not sufficient. The enumeration's
+   * range is bounded by Mail's own message count (see `snapshotFragment`), and
+   * #155 established that count can lag the mutation. A count that reads LOW
+   * truncates the enumeration silently — the unread tail is never requested, so
+   * it never registers as a failed slice — and messages past the bound would
+   * then look like they disappeared. Tracked as its own defect; until it is
+   * fixed, treat a `disappeared` entry as a lead, not a proof.
    */
   snapshot: "ok" | "partial" | "skipped" | "unavailable";
   skipReason?: string;
@@ -373,64 +421,12 @@ export function countDeltaWarning(d: CountDelta): string | null {
 }
 
 /**
- * The one `under` reading that is NOT routine: a total no-op reported as success.
+ * Every warning a report has to raise, in mailbox order.
  *
- * The blanket `under` suppression above is justified by accounts that flag
- * `\Deleted` without removing the message, so the source count never drops. That
- * argument holds for the *shape* of the account, not for every reading — and it
- * suppressed a real defect (#155, reported on iCloud against 2.10.17):
- *
- * ```json
- * {"outcomes":[{"id":"68196","status":"ok"}, ...4 ids all "ok"],
- *  "countDeltas":[{"before":29,"after":29,"expected":4,"observed":0,"status":"under"}],
- *  "collateral":[{"snapshot":"ok","disappeared":[],"unrequested":[],"appeared":[]}]}
- * ```
- *
- * Four successes reported for an operation in which, by this server's own
- * measurement, nothing happened.
- *
- * The discriminator is the collateral snapshot. A flag-only account removes
- * nothing observably — but so does a total no-op, and the two are
- * indistinguishable *only when the snapshot could not be taken*. Here it was
- * taken, it read the mailbox fine, and it says nothing left. Requiring
- * `snapshot === "ok"` and an empty `disappeared` is what keeps this from firing
- * on the ordinary flag-only delete the blanket suppression exists to protect.
- *
- * Deliberately narrow: `observed === 0` only. A partial under (3 of 4 removed)
- * stays unwarned, because that is exactly where a flag-only account and a
- * partial failure DO look alike.
- *
- * `snapshot === "ok"` also excludes a PARTIAL snapshot (#176), and must keep
- * doing so. A partial snapshot's `disappeared` is either absent or an
- * undercount, so "nothing left the mailbox" is precisely the claim it cannot
- * support — warning off it would fire on a flag-only account whose snapshot
- * merely had a hole in it.
+ * `over` is the only surviving assertion. `falseOkWarning` was removed in
+ * 2.11.0 — see the note on `countDeltaWarning` for why its discriminator did
+ * not hold.
  */
-export function falseOkWarning(d: CountDelta, collateral?: CollateralDiff): string | null {
-  if (d.status !== "under" || d.expected === null) return null;
-  if (d.observed !== 0 || d.expected <= 0) return null;
-  if (!collateral || collateral.snapshot !== "ok") return null;
-  if ((collateral.disappeared?.length ?? 0) !== 0) return null;
-
-  const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
-  return (
-    `⚠️ Reported success with no observed effect in ${where}: ${d.expected} message(s) were ` +
-    `operated on and reported ok, but the mailbox count did not move (${d.before} → ${d.after}) ` +
-    `and the collateral snapshot — which read this mailbox successfully — shows no message left ` +
-    `it. Either the operation silently did nothing, or Mail's count and listing are both stale ` +
-    `and the messages did move. Check the destination (Trash for a delete) before assuming ` +
-    `either: if they are there, this is a measurement-timing bug; if they are still in the ` +
-    `source mailbox minutes later, the operation failed while reporting success. Please report ` +
-    `at https://github.com/sweetrb/apple-mail-mcp/issues/155 with ` +
-    `${AUDIT_LOG_ENV}=/path/to/audit.ndjson set.`
-  );
-}
-
-/** Every warning a report has to raise, in mailbox order. */
 export function reconciliationWarnings(report: DestructiveOpReport): string[] {
-  const collateralFor = (d: CountDelta) =>
-    report.collateral.find((c) => c.account === d.account && c.mailbox === d.mailbox);
-  return report.countDeltas
-    .flatMap((d) => [countDeltaWarning(d), falseOkWarning(d, collateralFor(d))])
-    .filter((w): w is string => w !== null);
+  return report.countDeltas.map((d) => countDeltaWarning(d)).filter((w): w is string => w !== null);
 }

@@ -236,7 +236,12 @@ const COUNT_DELTA_OUTPUT_SCHEMA = z
       // `status: "unknown"`, and never with a warning.
       expected: z.number().nullable().optional(),
       observed: z.number().nullable().optional(),
-      status: z.enum(["match", "over", "under", "unknown"]).optional(),
+      status: z.enum(["match", "over", "unknown"]).optional(),
+      // Declared explicitly: the SDK stamps additionalProperties:false on a bare
+      // zod shape, so an undeclared key makes the CLIENT reject the result.
+      unknownReason: z
+        .enum(["count-unreadable", "no-expectation", "count-did-not-move", "count-partial"])
+        .optional(),
       note: z.string().optional(),
     })
   )

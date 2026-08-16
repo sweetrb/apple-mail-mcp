@@ -1319,14 +1319,26 @@ returns the comparison in `structuredContent`:
 }
 ```
 
-`status` is deliberately four-valued rather than a pass/fail flag:
+`status` is deliberately not a pass/fail flag:
 
 | `status` | Meaning | Warns? |
 |----------|---------|--------|
 | `match` | Exactly as many messages left the mailbox as the operation acted on. | No |
 | `over` | **More** left than were operated on. Messages are unaccounted for. | **Yes** |
-| `under` | **Fewer** left than expected. | No |
-| `unknown` | No comparison was possible: either Mail would not report a count (`before`/`after` null) or there is no predictable expectation (`expected` null — see the self-move rule below). | No |
+| `unknown` | No comparison this server is willing to assert. `unknownReason` says which of four situations produced it. | No |
+
+`unknownReason` distinguishes four cases that are *not* interchangeable:
+
+| `unknownReason` | Meaning |
+|-----------------|---------|
+| `count-unreadable` | Mail would not report a count at all (`before`/`after` null). |
+| `no-expectation` | No expectation is predictable, so no comparison exists — a move whose destination **is** the source mailbox. |
+| `count-did-not-move` | The count did not move. On a store that flags deletions instead of removing them this is the **ordinary, correct** reading for an operation that fully succeeded. |
+| `count-partial` | The count moved, but by less than the operation accounted for. A flag-only store cannot produce this, which is why it is worth telling apart. |
+
+> **`under` was removed in 2.11.0.** It used to mean "fewer left than expected"
+> and was documented as routine. Field evidence retired it — see
+> [Why `observed` is a lower bound](#why-observed-is-a-lower-bound-155).
 
 #### What an `over` warning does and does not tell you
 
@@ -1346,7 +1358,7 @@ trusted:
 **Concurrent departure is the benign cause to rule out first**, and the warning
 text says so. What the asymmetry argument actually buys is the other half:
 concurrent *arrivals* cannot produce `over`, because a message arriving
-mid-operation *raises* the after-count and biases the reading toward `under`.
+mid-operation *raises* the after-count and biases the reading short.
 That is why `over` is the interesting direction — a strong signal, not a proof.
 
 Setting `APPLE_MAIL_MCP_AUDIT_LOG` is what settles which one you have: the
@@ -1354,12 +1366,42 @@ collateral diff below **names** the messages that disappeared, and "the
 newsletter my rule files every morning" is a very different report from a message
 nothing should have touched.
 
-`under`, by contrast, is routine: an account that flags deletions rather than
-removing them leaves the message in place and the count does not move, and a
-Gmail label mailbox can behave the same way while the delete genuinely succeeded.
-A warning that fires on every ordinary Gmail delete would be ignored exactly when
-it matters, so `under` is **reported** in `countDelta` (with a `note` explaining
-it) and never warned about.
+#### Why `observed` is a lower bound (#155)
+
+**`observed` is the movement of Mail's count. It is a lower bound on how many
+messages left, not a count of how many left.**
+
+On iCloud, @scottstern0325 ran the check that settled this: for two batches
+reporting `observed: 0`, the messages were located **in Trash**, matched by
+`date received` + sender against the audit log's pre-image. The deletes had
+happened. Mail's count had not caught up. Across four readings — 0 of 4, 0 of 1
+(a *single-id* delete), 15 of 16, and 14 of 15 — the shortfall bore no relation
+to batch size, which is what a lagging count looks like and not what a
+store-behaviour rule looks like.
+
+So a short reading is not evidence about your operation. **The per-id outcomes
+are what report success; this number is not. Do not retry on the strength of
+it** — that is how a message gets deleted twice.
+
+Two things follow:
+
+- A count that does not move at all is still the ordinary reading on a store that
+  flags deletions instead of removing them (Gmail label mailboxes, IMAP accounts
+  with "move deleted messages to Trash" off). It reports
+  `unknownReason: "count-did-not-move"` and says so, and it is never warned about
+  — a warning that fires on every ordinary Gmail delete would be ignored exactly
+  when it matters.
+- **To confirm where messages went, match them at the destination by `date
+  received` plus sender — not by the numeric ids you passed.** Ids are renumbered
+  by the move and do not survive it.
+
+**Removed in 2.11.0: the "reported success with no observed effect" warning.**
+Shipped in 2.10.30, it fired when the count was flat, the snapshot read cleanly
+and nothing had disappeared. Its premise was that the snapshot corroborated the
+count — but both are read back-to-back in the same script, and the record that
+prompted it turns out to have had *both* instruments stale at once. It therefore
+fired on stores that had done exactly what they were asked. It is gone rather
+than narrowed; `over` is the only surviving assertion.
 
 Three more honesty rules:
 
@@ -1489,8 +1531,15 @@ a hole, because a wrong name here is worse than a missing one:
 | both | withheld | withheld |
 
 **An absent field means "not computable", never "empty".** Check
-`"snapshot": "ok"` before reading `disappeared` as a clean bill of health — the
-false-ok warning does exactly that, so a `partial` snapshot never triggers it.
+`"snapshot": "ok"` before reading `disappeared` as a clean bill of health.
+
+> ⚠️ **`"ok"` is necessary, not sufficient.** The enumeration's range is bounded
+> by Mail's own message count, and #155 established that count can lag the
+> mutation. A count reading **low** truncates the enumeration silently — the
+> unread tail is never requested, so it never registers as a failed slice and the
+> status still says `"ok"` — and messages past that bound would then look like
+> they disappeared. Until that is fixed, treat a `disappeared` entry as a lead to
+> check, not a proof.
 
 ### Privacy, and what the file costs you
 

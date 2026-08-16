@@ -718,6 +718,43 @@ const SELF_MOVE_NOTE =
   "comparison and is never warned about.";
 
 /**
+ * The `note` when the count did not move AT ALL (`unknownReason:
+ * "count-did-not-move"`).
+ *
+ * This is the ordinary reading on a store that flags deletions instead of
+ * removing them, and it must keep saying so plainly. Two things it deliberately
+ * does NOT do, both of which a previous version got wrong (#155):
+ *
+ *   - it does not tell the reader to go check a destination. On a flag-only
+ *     store the message was never moved, so there is nothing to find, and its
+ *     absence reads as "the delete failed" when the delete succeeded;
+ *   - it does not suggest retrying. The operation reported success per id, and
+ *     a retry on the strength of a count is how one deletes twice.
+ */
+const COUNT_UNMOVED_NOTE =
+  "Mail's count did not move. This is the ordinary reading on a store that flags deletions " +
+  'instead of removing them (Gmail label mailboxes and IMAP accounts with "move deleted ' +
+  'messages to Trash" off), where the message stays put and the operation still fully ' +
+  "succeeded. It can also mean Mail's count simply had not caught up yet. The per-id outcomes " +
+  "are what report success; this number is not, so do not retry on the strength of it.";
+
+/**
+ * The `note` when the count moved but by less than the operation accounted for
+ * (`unknownReason: "count-partial"`).
+ *
+ * A flag-only store cannot produce this shape — its count does not move at all —
+ * so unlike COUNT_UNMOVED_NOTE this one can talk about a lag without being wrong
+ * on the commonest benign store.
+ */
+const COUNT_PARTIAL_NOTE =
+  "Mail's count moved by less than this operation accounted for. That is a LOWER BOUND on " +
+  "what left, not a count of what left: Mail has been observed reporting a stale count for a " +
+  "delete it had already performed (issue #155), and new mail arriving mid-operation reads the " +
+  "same way. No claim is made either way. To confirm where the messages went, match them at " +
+  'the destination by "date received" plus sender — NOT by the numeric ids you passed, which ' +
+  "are renumbered by the move and do not survive it.";
+
+/**
  * Same key discipline for a snapshot entry's (numeric id, Message-ID) identity —
  * including writing the separator as an escape rather than a raw byte. The id
  * half is already canonicalised by `parseSnapshot`, so both phases of a
@@ -1454,13 +1491,32 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const observed = readable ? m.before - m.after : null;
       const note = noteFor(m.account, m.mailbox);
       let status: CountDelta["status"];
-      // Two independent reasons there is nothing to compare: Mail would not
-      // report a count, or no expected delta can be justified. Either one ends
-      // in `unknown`, which never warns.
-      if (!readable || m.expected === null) status = "unknown";
-      else if (observed === m.expected) status = "match";
-      else if ((observed ?? 0) > m.expected) status = "over";
-      else status = "under";
+      let unknownReason: CountDelta["unknownReason"];
+      // Four disjoint ways there is nothing this server will assert. They are
+      // NOT interchangeable to a reader, so each carries its own reason and its
+      // own note — see the #155 retraction on CountDelta.
+      if (!readable) {
+        status = "unknown";
+        unknownReason = "count-unreadable";
+      } else if (m.expected === null) {
+        status = "unknown";
+        unknownReason = "no-expectation";
+      } else if (observed === m.expected) {
+        status = "match";
+      } else if ((observed ?? 0) > m.expected) {
+        status = "over";
+      } else if (observed === 0) {
+        // The count did not move at all. On a store that flags deletions
+        // instead of removing them this is the ORDINARY reading for an
+        // operation that fully succeeded, so it must keep saying so.
+        status = "unknown";
+        unknownReason = "count-did-not-move";
+      } else {
+        // It moved, but short. A flag-only store cannot produce this, which is
+        // the whole reason it is worth telling apart from the case above.
+        status = "unknown";
+        unknownReason = "count-partial";
+      }
       return {
         account: m.account,
         mailbox: m.mailbox,
@@ -1469,18 +1525,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         expected: m.expected,
         observed,
         status,
+        ...(unknownReason ? { unknownReason } : {}),
         ...(note ? { note } : {}),
-        ...(status === "unknown" && readable === false
+        ...(unknownReason === "count-unreadable"
           ? { note: note ?? "Mail did not report a message count for this mailbox" }
           : {}),
-        ...(status === "under" && !note
-          ? {
-              note:
-                "Fewer messages left the mailbox than were operated on. This is normal on a store " +
-                "that flags deletions instead of removing them (and when new mail arrives " +
-                "mid-operation), so it is reported but not warned about.",
-            }
-          : {}),
+        ...(unknownReason === "count-did-not-move" && !note ? { note: COUNT_UNMOVED_NOTE } : {}),
+        ...(unknownReason === "count-partial" && !note ? { note: COUNT_PARTIAL_NOTE } : {}),
       };
     });
 
@@ -1500,8 +1551,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
 
     // Collateral: subtract the after-snapshot from the before-snapshot per
-    // mailbox. Keyed on RFC Message-ID, which is stable and store-independent;
-    // the numeric id rides along for correlation with the caller's id list.
+    // mailbox. Keyed on the (numeric id, RFC Message-ID) PAIR — see
+    // `snapshotKey`. Both phases read the same source mailbox before and after,
+    // so neither half of the key moves under a message that stayed put; the
+    // numeric id also correlates the entry with the caller's id list.
     const collateral: CollateralDiff[] = [];
     const byMailbox = new Map<
       string,
