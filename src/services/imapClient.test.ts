@@ -26,6 +26,7 @@ import {
   imapMailStats,
   imapListAttachments,
   imapFetchAttachment,
+  bodyStructureHasAttachments,
   imapBatchMarkRead,
   imapBatchMove,
   imapThread,
@@ -1016,6 +1017,160 @@ describe("attachments via BODYSTRUCTURE (I1)", () => {
     expect(r.success).toBe(true);
     expect(r.attachments?.map((a) => a.name)).toEqual(["report.pdf", "logo.png"]);
     expect(r.attachments?.[0]).toMatchObject({ mimeType: "application/pdf", size: 2048 });
+  });
+
+  // Apple Mail sends genuine file attachments as `Content-Disposition: inline`
+  // — it inlines them into the message flow rather than appending them. The
+  // structure below is copied from a real message (an invoice PDF this server's
+  // own author sent from Mail.app): inline, named, and with NO Content-ID.
+  //
+  // Excluding every inline part made all of them invisible AND unfetchable over
+  // IMAP, because fetch-attachment resolves by name against this same list.
+  function appleMailClient(): ImapClientLike {
+    return {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 9,
+        bodyStructure: {
+          type: "multipart/alternative",
+          childNodes: [
+            { part: "1", type: "text/plain", size: 353 },
+            {
+              part: "2",
+              type: "multipart/mixed",
+              childNodes: [
+                { part: "2.1", type: "text/html", size: 443 },
+                {
+                  part: "2.2",
+                  type: "application/pdf",
+                  parameters: { name: "SEI Invoice.pdf" },
+                  disposition: "inline",
+                  dispositionParameters: { filename: "SEI Invoice.pdf" },
+                  size: 66714,
+                },
+                { part: "2.3", type: "text/html", size: 3715 },
+              ],
+            },
+          ],
+        },
+      }),
+      download: async (_range: string, part: string) => ({
+        meta: {},
+        content: (async function* () {
+          yield Buffer.from(`bytes-of-${part}`);
+        })(),
+      }),
+    };
+  }
+
+  it("lists an inline-disposition file attachment (Apple Mail's shape)", async () => {
+    const r = await imapListAttachments(MID, {
+      config: cfg,
+      connect: async () => appleMailClient(),
+    });
+    expect(r.success).toBe(true);
+    expect(r.attachments?.map((a) => a.name)).toEqual(["SEI Invoice.pdf"]);
+    expect(r.attachments?.[0]).toMatchObject({ mimeType: "application/pdf", size: 66714 });
+  });
+
+  it("can fetch that inline attachment by name", async () => {
+    // Listing it is only half the fix: fetch/save resolve by name against the
+    // same walk, so an unlisted part is also an unfetchable one.
+    const r = await imapFetchAttachment(MID, "SEI Invoice.pdf", {
+      config: cfg,
+      connect: async () => appleMailClient(),
+    });
+    expect(r.success).toBe(true);
+    expect(r.mimeType).toBe("application/pdf");
+  });
+
+  it("still excludes an embedded image referenced by Content-ID", async () => {
+    // The other half: a signature logo is inline, named AND carries a
+    // Content-ID because the HTML references it as cid:. That one is genuinely
+    // not an attachment, and widening the rule must not start listing it.
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 9,
+        bodyStructure: {
+          type: "multipart/related",
+          childNodes: [
+            { part: "1", type: "text/html", size: 900 },
+            {
+              part: "2",
+              type: "image/png",
+              id: "<image001.png@01DC.4F2>",
+              parameters: { name: "image001.png" },
+              disposition: "inline",
+              dispositionParameters: { filename: "image001.png" },
+              size: 4096,
+            },
+          ],
+        },
+      }),
+    };
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(true);
+    expect(r.attachments).toEqual([]);
+  });
+
+  it("reports hasAttachments from BODYSTRUCTURE rather than assuming false", async () => {
+    // Hardcoded `false` from 2.2.0: indistinguishable from "no attachments", so
+    // every IMAP-sourced message claimed to have none and a caller deciding
+    // whether to call list-attachments would always skip.
+    const withAtt = bodyStructureHasAttachments({
+      type: "multipart/mixed",
+      childNodes: [
+        { part: "1", type: "text/plain", size: 10 },
+        {
+          part: "2",
+          type: "application/pdf",
+          disposition: "inline",
+          dispositionParameters: { filename: "Invoice.pdf" },
+          size: 99,
+        },
+      ],
+    });
+    expect(withAtt).toBe(true);
+
+    const bodyOnly = bodyStructureHasAttachments({
+      type: "multipart/alternative",
+      childNodes: [
+        { part: "1", type: "text/plain", size: 10 },
+        { part: "2", type: "text/html", size: 20 },
+      ],
+    });
+    expect(bodyOnly).toBe(false);
+
+    // Absent BODYSTRUCTURE must not claim attachments exist.
+    expect(bodyStructureHasAttachments(undefined)).toBe(false);
+  });
+
+  it("lists an explicit attachment even when it carries a Content-ID", async () => {
+    // Observed in real mail: disposition "attachment" WITH a Content-ID. The
+    // explicit disposition has to win, or Content-ID becomes an over-broad veto.
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 9,
+        bodyStructure: {
+          type: "multipart/mixed",
+          childNodes: [
+            { part: "1", type: "text/plain", size: 10 },
+            {
+              part: "2",
+              type: "application/pdf",
+              id: "<newsletter@example>",
+              disposition: "attachment",
+              dispositionParameters: { filename: "Newsletter.pdf" },
+              size: 1234,
+            },
+          ],
+        },
+      }),
+    };
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => client });
+    expect(r.attachments?.map((a) => a.name)).toEqual(["Newsletter.pdf"]);
   });
 
   it("fetches an attachment's bytes by filename", async () => {

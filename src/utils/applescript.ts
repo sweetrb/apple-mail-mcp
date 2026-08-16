@@ -202,12 +202,39 @@ function sleep(ms: number): void {
  * User-friendly error messages mapped from common AppleScript errors.
  * Each entry maps a pattern (regex or string) to a user-friendly message.
  */
+/**
+ * What a raw AppleScript TCC refusal looks like before normalisation.
+ *
+ * Exported with the message below because the two MUST stay derived from one
+ * source. They did not: `healthCheck` classified a denial by re-testing for
+ * "not authorized"/"not permitted" — substrings this mapping had already
+ * REPLACED — so `isPermError` was unreachable, a genuine denial reported
+ * `passed: true`, and the early `healthy: false` return never fired. The check
+ * shared a NAME with the real thing but not a code path.
+ */
+export const PERMISSION_DENIED_PATTERN = /not authorized|not permitted|access.*denied/i;
+
+/** The normalised text a permission failure is reported to callers as. */
+export const PERMISSION_DENIED_MESSAGE =
+  "Permission denied. Grant automation access in System Settings > Privacy & Security > Automation.";
+
+/**
+ * Is this error a TCC/Automation refusal?
+ *
+ * Accepts BOTH forms deliberately — the raw text AppleScript emits and the
+ * normalised text callers actually receive — so a caller cannot be caught out
+ * by which side of `mapError` it happens to be reading.
+ */
+export function isPermissionDenied(error?: string | null): boolean {
+  if (!error) return false;
+  return PERMISSION_DENIED_PATTERN.test(error) || error.includes(PERMISSION_DENIED_MESSAGE);
+}
+
 const ERROR_MAPPINGS: Array<{ pattern: RegExp; message: string }> = [
   // Permission errors
   {
-    pattern: /not authorized|not permitted|access.*denied/i,
-    message:
-      "Permission denied. Grant automation access in System Settings > Privacy & Security > Automation.",
+    pattern: PERMISSION_DENIED_PATTERN,
+    message: PERMISSION_DENIED_MESSAGE,
   },
   // Application not running
   {

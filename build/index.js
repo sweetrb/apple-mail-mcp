@@ -78071,11 +78071,17 @@ function sleep(ms) {
     }
   }
 }
+var PERMISSION_DENIED_PATTERN = /not authorized|not permitted|access.*denied/i;
+var PERMISSION_DENIED_MESSAGE = "Permission denied. Grant automation access in System Settings > Privacy & Security > Automation.";
+function isPermissionDenied(error2) {
+  if (!error2) return false;
+  return PERMISSION_DENIED_PATTERN.test(error2) || error2.includes(PERMISSION_DENIED_MESSAGE);
+}
 var ERROR_MAPPINGS = [
   // Permission errors
   {
-    pattern: /not authorized|not permitted|access.*denied/i,
-    message: "Permission denied. Grant automation access in System Settings > Privacy & Security > Automation."
+    pattern: PERMISSION_DENIED_PATTERN,
+    message: PERMISSION_DENIED_MESSAGE
   },
   // Application not running
   {
@@ -82841,7 +82847,7 @@ ${actionStmts.join("\n")}
         message: "Mail.app is accessible"
       });
     } else {
-      const errorHint = mailCheck.error?.includes("not authorized") ? " (check System Settings > Privacy & Security > Automation)" : "";
+      const errorHint = isPermissionDenied(mailCheck.error) ? " (check System Settings > Privacy & Security > Automation)" : "";
       checks.push({
         name: "mail_app",
         passed: false,
@@ -82857,7 +82863,7 @@ ${actionStmts.join("\n")}
         message: "AppleScript automation permissions granted"
       });
     } else {
-      const isPermError = permCheck.error?.includes("not authorized") || permCheck.error?.includes("not permitted");
+      const isPermError = isPermissionDenied(permCheck.error);
       checks.push({
         name: "permissions",
         passed: !isPermError,
@@ -83681,7 +83687,12 @@ function structuredRow(m, account, path) {
     flagColorIndex: mailFlagColorIndex(m.flags),
     mailbox: path,
     account,
-    hasAttachments: false,
+    // Derived from BODYSTRUCTURE, which the list/search fetch now requests.
+    // This was hardcoded `false` from 2.2.0 until 2.11.1 — indistinguishable to
+    // a caller from "no attachments", so every IMAP-sourced message claimed to
+    // have none. Falls back to false only when the fetch carried no
+    // BODYSTRUCTURE at all.
+    hasAttachments: bodyStructureHasAttachments(m.bodyStructure),
     // Message-ID (when the envelope carries it) is the strongest cross-/intra-
     // backend dedup key for the multi-account merge (imapMultiAccount.ts). The
     // AppleScript path does not expose it, so cross-backend dedup falls back to
@@ -83712,7 +83723,10 @@ async function run(args, listMode, deps) {
         const byUid = /* @__PURE__ */ new Map();
         for await (const msg of client.fetch(
           newest.join(","),
-          { envelope: true, flags: true },
+          // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
+          // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
+          // the fetch (~17%), same single round trip, no extra request.
+          { envelope: true, flags: true, bodyStructure: true },
           { uid: true }
         )) {
           byUid.set(msg.uid, msg);
@@ -84206,7 +84220,8 @@ function collectAttachments(node, out = []) {
   if (!node) return out;
   const filename = node.dispositionParameters?.filename || node.parameters?.name;
   const disposition = node.disposition?.toLowerCase();
-  const isAttachment = !!node.part && (disposition === "attachment" || !!filename && disposition !== "inline");
+  const isEmbeddedByReference = disposition === "inline" && !!node.id;
+  const isAttachment = !!node.part && (disposition === "attachment" || !!filename && !isEmbeddedByReference);
   if (isAttachment) {
     out.push({
       part: node.part,
@@ -84217,6 +84232,9 @@ function collectAttachments(node, out = []) {
   }
   for (const child of node.childNodes ?? []) collectAttachments(child, out);
   return out;
+}
+function bodyStructureHasAttachments(node) {
+  return !!node && collectAttachments(node).length > 0;
 }
 async function streamToBuffer(content, maxBytes) {
   const chunks = [];
@@ -84389,7 +84407,10 @@ async function imapThread(id, deps = {}, limit = 50) {
         const msgs = [];
         for await (const msg of client.fetch(
           uids.join(","),
-          { envelope: true, flags: true },
+          // Same reason as the list/search fetch: get-thread emits structured
+          // rows too, so it needs BODYSTRUCTURE or its hasAttachments would
+          // silently disagree with the same message seen via search.
+          { envelope: true, flags: true, bodyStructure: true },
           { uid: true }
         )) {
           msgs.push(msg);
