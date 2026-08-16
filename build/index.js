@@ -83838,6 +83838,10 @@ function imapMailStats(deps = {}) {
 function errText(e) {
   return e instanceof Error ? e.message : String(e);
 }
+function assertMutated(result, what) {
+  if (!result) throw new Error(`${what}: server rejected the command (IMAP NO/BAD)`);
+  return result;
+}
 var poolConnect = defaultConnect;
 var pools = /* @__PURE__ */ new Map();
 function poolKey(cfg) {
@@ -84176,7 +84180,10 @@ async function imapMoveMessageById(id, destMailbox, deps = {}) {
     const destPath = dest.kind === "found" ? dest.path : resolveMailboxPath(destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
-      await client.messageMove([ref.uid], destPath, { uid: true });
+      assertMutated(
+        await client.messageMove([ref.uid], destPath, { uid: true }),
+        `IMAP move of UID ${ref.uid} to "${destPath}"`
+      );
       return { success: true, info: `Moved UID ${ref.uid} to "${destPath}" via IMAP.` };
     } catch (e) {
       return {
@@ -84188,9 +84195,12 @@ async function imapMoveMessageById(id, destMailbox, deps = {}) {
     }
   });
 }
+var FALLBACK_TRASH_PATH = "Trash";
 async function resolveTrashPath(client) {
+  let listed = false;
   try {
     const boxes = await client.list();
+    listed = true;
     const special = boxes.find((b) => b.specialUse === "\\Trash");
     if (special) return special.path;
     const named = boxes.find(
@@ -84199,15 +84209,27 @@ async function resolveTrashPath(client) {
     if (named) return named.path;
   } catch {
   }
-  return resolveMailboxPath("trash", "list");
+  if (!listed) return resolveMailboxPath("trash", "list");
+  try {
+    const created = await client.mailboxCreate(FALLBACK_TRASH_PATH);
+    return created?.path || FALLBACK_TRASH_PATH;
+  } catch {
+    return FALLBACK_TRASH_PATH;
+  }
 }
 async function trashUids(client, uids, srcPath) {
   const dest = await resolveTrashPath(client);
   if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
-    await client.messageDelete(uids, { uid: true });
+    assertMutated(
+      await client.messageDelete(uids, { uid: true }),
+      `IMAP expunge of ${uids.length} message(s) from "${srcPath}"`
+    );
     return { dest, expunged: true };
   }
-  await client.messageMove(uids, dest, { uid: true });
+  assertMutated(
+    await client.messageMove(uids, dest, { uid: true }),
+    `IMAP move of ${uids.length} message(s) from "${srcPath}" to "${dest}"`
+  );
   return { dest, expunged: false };
 }
 async function imapDeleteMessageById(id, deps = {}) {
@@ -84347,22 +84369,37 @@ async function imapBatch(ids, deps, op) {
   return { success, failed, errors };
 }
 var imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+  assertMutated(
+    await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true }),
+    `IMAP mark-read of ${uids.length} message(s)`
+  );
 });
 var imapBatchMarkUnread = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+  assertMutated(
+    await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true }),
+    `IMAP mark-unread of ${uids.length} message(s)`
+  );
 });
 var imapBatchFlag = (ids, colorIndex, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
   if (colorIndex === void 0) {
-    await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+    assertMutated(
+      await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true }),
+      `IMAP flag of ${uids.length} message(s)`
+    );
     return;
   }
   const { set, clear } = mailFlagBitsFor(colorIndex);
-  await c.messageFlagsAdd(uids, ["\\Flagged", ...set], { uid: true });
+  assertMutated(
+    await c.messageFlagsAdd(uids, ["\\Flagged", ...set], { uid: true }),
+    `IMAP flag of ${uids.length} message(s)`
+  );
   if (clear.length) await c.messageFlagsRemove(uids, clear, { uid: true });
 });
 var imapBatchUnflag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  await c.messageFlagsRemove(uids, ["\\Flagged", ...MAIL_FLAG_BITS], { uid: true });
+  assertMutated(
+    await c.messageFlagsRemove(uids, ["\\Flagged", ...MAIL_FLAG_BITS], { uid: true }),
+    `IMAP unflag of ${uids.length} message(s)`
+  );
 });
 var imapBatchDelete = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids, path) => {
   await trashUids(c, uids, path);
@@ -84370,7 +84407,10 @@ var imapBatchDelete = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids, p
 function imapBatchMove(ids, destMailbox, deps = {}) {
   return imapBatch(ids, deps, async (c, uids) => {
     const dest = await findMailboxPathOrThrow(c, destMailbox) ?? resolveMailboxPath(destMailbox, "list");
-    await c.messageMove(uids, dest, { uid: true });
+    assertMutated(
+      await c.messageMove(uids, dest, { uid: true }),
+      `IMAP move of ${uids.length} message(s) to "${dest}"`
+    );
   });
 }
 function senderName(from) {

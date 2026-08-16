@@ -122,6 +122,17 @@ interface ImapMailboxListing {
   specialUse?: string;
 }
 type FlagOpts = { uid: boolean };
+/**
+ * What imapflow's `messageMove`/`messageCopy` resolve to on success. `uidMap` and
+ * `uidValidity` are present only when the server advertises UIDPLUS (COPYUID);
+ * their ABSENCE is not a failure signal, so nothing here may branch on it.
+ */
+export interface ImapMoveResult {
+  path: string;
+  destination: string;
+  uidValidity?: bigint;
+  uidMap?: Map<number, number>;
+}
 export interface ImapClientLike {
   connect(): Promise<void>;
   getMailboxLock(path: string): Promise<MailboxLock>;
@@ -147,7 +158,14 @@ export interface ImapClientLike {
   mailboxDelete(path: string): Promise<{ path: string }>;
   messageFlagsAdd(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
   messageFlagsRemove(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
-  messageMove(range: number[], destination: string, opts: FlagOpts): Promise<unknown>;
+  /** `false` on failure — see `assertMutated`. Typed as a union deliberately:
+   *  it used to be `Promise<unknown>`, which made the failure channel
+   *  unreachable through the interface and hid #181 from the type checker. */
+  messageMove(
+    range: number[],
+    destination: string,
+    opts: FlagOpts
+  ): Promise<ImapMoveResult | false>;
   messageDelete(range: number[], opts: FlagOpts): Promise<boolean>;
   noop(): Promise<void>;
   logout(): Promise<void>;
@@ -822,6 +840,32 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * Gate EVERY imapflow mutation result through here. (#181)
+ *
+ * imapflow 1.6.6 does not throw when the server rejects a command: each
+ * mutation catches the error, logs a warning, and RESOLVES to `false`
+ * (`move.js:55`, `copy.js:42`, `store.js:96`, `expunge.js:55`). So
+ * `await client.messageMove(...)` inside a try/catch cannot fail for the entire
+ * class of server rejections — the catch is unreachable and the caller reports
+ * `{success: true}` for a move that never happened. Discarding the result is
+ * therefore a silent-success bug, not a style issue.
+ *
+ * A falsy result is unambiguous at our call sites. Besides the swallowed
+ * server error, imapflow only returns `false` early when `resolveRange` gets an
+ * EMPTY range (`[].join(",") === ""`), and every caller here builds its uid list
+ * from decoded message ids — never empty. Callers that could pass an empty list
+ * must short-circuit before reaching the client, not rely on this.
+ *
+ * NOTE: this checks only the falsy/truthy channel. It deliberately does NOT
+ * inspect `uidMap`/`uidValidity`: those are UIDPLUS-only, and treating their
+ * absence as failure hard-fails working moves on servers without the extension.
+ */
+function assertMutated<T>(result: T, what: string): NonNullable<T> {
+  if (!result) throw new Error(`${what}: server rejected the command (IMAP NO/BAD)`);
+  return result as NonNullable<T>;
+}
+
 // ---------------------------------------------------------------------------
 // Connection pool (issue #50 / A3)
 //
@@ -1373,7 +1417,10 @@ export async function imapMoveMessageById(
     const destPath = dest.kind === "found" ? dest.path : resolveMailboxPath(destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
-      await client.messageMove([ref.uid], destPath, { uid: true });
+      assertMutated(
+        await client.messageMove([ref.uid], destPath, { uid: true }),
+        `IMAP move of UID ${ref.uid} to "${destPath}"`
+      );
       return { success: true, info: `Moved UID ${ref.uid} to "${destPath}" via IMAP.` };
     } catch (e) {
       return {
@@ -1396,9 +1443,14 @@ export async function imapMoveMessageById(
  * actually trashed Gmail mail*. A move to `[Gmail]/Trash` is what Gmail treats
  * as "trash" (and matches the tools' documented "moves to Trash" contract).
  */
+/** Created only when the account demonstrably has no Trash mailbox at all. */
+const FALLBACK_TRASH_PATH = "Trash";
+
 async function resolveTrashPath(client: ImapClientLike): Promise<string> {
+  let listed = false;
   try {
     const boxes = await client.list();
+    listed = true;
     const special = boxes.find((b) => b.specialUse === "\\Trash");
     if (special) return special.path;
     const named = boxes.find(
@@ -1407,9 +1459,26 @@ async function resolveTrashPath(client: ImapClientLike): Promise<string> {
     );
     if (named) return named.path;
   } catch {
-    // Fall through to the Gmail default if LIST fails.
+    // LIST failed, so we cannot tell what exists — the Gmail default is the
+    // best remaining guess. A wrong guess now fails loudly (#181) instead of
+    // silently discarding the delete.
   }
-  return resolveMailboxPath("trash", "list");
+  if (!listed) return resolveMailboxPath("trash", "list");
+
+  // LIST succeeded and this account has no Trash mailbox of any kind. Returning
+  // the Gmail default here is what made `delete-message` a SILENT NO-OP on every
+  // non-Gmail server without a Trash folder: the MOVE drew `NO [TRYCREATE]`,
+  // imapflow resolved it to `false`, and the discarded result was reported as a
+  // successful delete. Create the mailbox instead — "recoverable" is the
+  // contract these tools document, and a hard delete is never an option.
+  try {
+    const created = await client.mailboxCreate(FALLBACK_TRASH_PATH);
+    return created?.path || FALLBACK_TRASH_PATH;
+  } catch {
+    // Racing another client that just created it is fine; if it genuinely could
+    // not be created, the MOVE below now fails loudly rather than silently.
+    return FALLBACK_TRASH_PATH;
+  }
 }
 
 /**
@@ -1425,10 +1494,16 @@ async function trashUids(
 ): Promise<{ dest: string; expunged: boolean }> {
   const dest = await resolveTrashPath(client);
   if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
-    await client.messageDelete(uids, { uid: true });
+    assertMutated(
+      await client.messageDelete(uids, { uid: true }),
+      `IMAP expunge of ${uids.length} message(s) from "${srcPath}"`
+    );
     return { dest, expunged: true };
   }
-  await client.messageMove(uids, dest, { uid: true });
+  assertMutated(
+    await client.messageMove(uids, dest, { uid: true }),
+    `IMAP move of ${uids.length} message(s) from "${srcPath}" to "${dest}"`
+  );
   return { dest, expunged: false };
 }
 
@@ -1670,13 +1745,22 @@ async function imapBatch(
   return { success, failed, errors };
 }
 
+// Every op below routes its imapflow result through `assertMutated`: a throw is
+// what `imapBatch` converts into a per-group `failed` count plus an error string,
+// so a server rejection is reported instead of counted as a success. (#181)
 export const imapBatchMarkRead = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
   imapBatch(ids, deps, async (c, uids) => {
-    await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
+    assertMutated(
+      await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true }),
+      `IMAP mark-read of ${uids.length} message(s)`
+    );
   });
 export const imapBatchMarkUnread = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
   imapBatch(ids, deps, async (c, uids) => {
-    await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+    assertMutated(
+      await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true }),
+      `IMAP mark-unread of ${uids.length} message(s)`
+    );
   });
 export const imapBatchFlag = (
   ids: string[],
@@ -1685,18 +1769,30 @@ export const imapBatchFlag = (
 ): Promise<ImapBatchResult> =>
   imapBatch(ids, deps, async (c, uids) => {
     if (colorIndex === undefined) {
-      await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true });
+      assertMutated(
+        await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true }),
+        `IMAP flag of ${uids.length} message(s)`
+      );
       return;
     }
     const { set, clear } = mailFlagBitsFor(colorIndex);
-    await c.messageFlagsAdd(uids, ["\\Flagged", ...set], { uid: true });
+    assertMutated(
+      await c.messageFlagsAdd(uids, ["\\Flagged", ...set], { uid: true }),
+      `IMAP flag of ${uids.length} message(s)`
+    );
     // Clear the unwanted bits so re-flagging with a new color replaces it.
+    // Deliberately NOT asserted, matching the single-message path: the flag and
+    // its color are already set, so a failure here can only leave a stale higher
+    // bit — cosmetic, and not worth failing an otherwise-applied batch.
     if (clear.length) await c.messageFlagsRemove(uids, clear, { uid: true });
   });
 export const imapBatchUnflag = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
   imapBatch(ids, deps, async (c, uids) => {
     // Clear the color bits too, or Mail.app keeps rendering the color.
-    await c.messageFlagsRemove(uids, ["\\Flagged", ...MAIL_FLAG_BITS], { uid: true });
+    assertMutated(
+      await c.messageFlagsRemove(uids, ["\\Flagged", ...MAIL_FLAG_BITS], { uid: true }),
+      `IMAP unflag of ${uids.length} message(s)`
+    );
   });
 export const imapBatchDelete = (ids: string[], deps: ImapDeps = {}): Promise<ImapBatchResult> =>
   imapBatch(ids, deps, async (c, uids, path) => {
@@ -1712,7 +1808,10 @@ export function imapBatchMove(
     // as a failure rather than moving the batch somewhere the caller didn't name.
     const dest =
       (await findMailboxPathOrThrow(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
-    await c.messageMove(uids, dest, { uid: true });
+    assertMutated(
+      await c.messageMove(uids, dest, { uid: true }),
+      `IMAP move of ${uids.length} message(s) to "${dest}"`
+    );
   });
 }
 
