@@ -1439,10 +1439,12 @@ They carry their own post-condition check instead. `delete-message` and
 `move-message` on an `imap:` id return a **`verification`** object in
 `structuredContent`:
 
-```jsonc
-"verification": {
-  "verdict": "verified",
-  "how": "COPYUID: UID 5 arrived in \"Archive\" as UID 91"
+```json
+{
+  "verification": {
+    "verdict": "verified",
+    "how": "COPYUID: UID 5 arrived in \"Archive\" as UID 91"
+  }
 }
 ```
 
