@@ -1720,3 +1720,127 @@ describe("#181 IMAP mutations report a rejected command as a failure", () => {
     expect(r.success).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #181 part 2: an ACCEPTED mutation now reports whether its effect was
+// observed. Before 2.13.0 every one of these returned a bare {success:true},
+// so "confirmed" and "nobody looked" were indistinguishable — the asymmetry
+// with the AppleScript path (countDelta / collateral snapshot) that #181 is
+// about. `unverified` is NOT a failure and must never be rendered as one.
+// ---------------------------------------------------------------------------
+describe("#181 three-valued verification of accepted IMAP mutations", () => {
+  const ID = encodeImapId("acct", "INBOX", 5);
+
+  // The reported case: a Gmail draft whose move returned ok:true while the
+  // message demonstrably stayed in [Gmail]/Drafts and the destination stayed
+  // empty. This is the guard the issue asks for.
+  it("move: accepted but the message is still in the source reads as UNVERIFIED, not success", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+      // no uidMap => server does not advertise UIDPLUS
+      messageMove: async () => ({ path: "INBOX", destination: "Archive" }),
+      // the message never left
+      fetchOne: async () => ({ uid: 5 }),
+    };
+    const r = await imapMoveMessageById(ID, "Archive", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.success).toBe(true); // the server did accept it
+    expect(r.verification?.verdict).toBe("unverified");
+    expect(r.info).toMatch(/UNVERIFIED/);
+    // and it must not be dressed up as a confirmed move
+    expect(r.info).not.toMatch(/\(verified:/);
+  });
+
+  it("move: COPYUID from a UIDPLUS server verifies arrival directly", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+      messageMove: async () => ({
+        path: "INBOX",
+        destination: "Archive",
+        uidMap: new Map([[5, 91]]),
+      }),
+      // still present in source; COPYUID must win over the fallback probe
+      fetchOne: async () => ({ uid: 5 }),
+    };
+    const r = await imapMoveMessageById(ID, "Archive", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.verification).toEqual({
+      verdict: "verified",
+      how: 'COPYUID: UID 5 arrived in "Archive" as UID 91',
+    });
+    expect(r.info).toMatch(/verified/);
+  });
+
+  it("move: without UIDPLUS, the uid leaving the source verifies the move", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+      messageMove: async () => ({ path: "INBOX", destination: "Archive" }),
+      fetchOne: async () => false, // gone from the source
+    };
+    const r = await imapMoveMessageById(ID, "Archive", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.verification?.verdict).toBe("verified");
+    expect(r.verification).toMatchObject({ how: expect.stringMatching(/no longer present/) });
+  });
+
+  it("move: a probe that throws is unverified, never a failure", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Archive", name: "Archive" }],
+      messageMove: async () => ({ path: "INBOX", destination: "Archive" }),
+      fetchOne: async () => {
+        throw new Error("connection reset");
+      },
+    };
+    const r = await imapMoveMessageById(ID, "Archive", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.success).toBe(true);
+    expect(r.verification?.verdict).toBe("unverified");
+    expect(r.verification).toMatchObject({ why: expect.stringMatching(/connection reset/) });
+  });
+
+  it("delete: the move to Trash is verified the same way", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [
+        { path: "INBOX", name: "INBOX" },
+        { path: "Trash", name: "Trash", specialUse: "\\Trash" },
+      ],
+      messageMove: async () => ({
+        path: "INBOX",
+        destination: "Trash",
+        uidMap: new Map([[5, 12]]),
+      }),
+    };
+    const r = await imapDeleteMessageById(ID, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(true);
+    expect(r.verification?.verdict).toBe("verified");
+  });
+
+  it("delete-from-Trash: an accepted EXPUNGE that left the uid in place is unverified", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Trash", name: "Trash", specialUse: "\\Trash" }],
+      messageDelete: async () => true,
+      fetchOne: async () => ({ uid: 5 }), // still there
+    };
+    const r = await imapDeleteMessageById(encodeImapId("acct", "Trash", 5), {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.success).toBe(true);
+    expect(r.verification?.verdict).toBe("unverified");
+    expect(r.verification).toMatchObject({ why: expect.stringMatching(/still present/) });
+  });
+});

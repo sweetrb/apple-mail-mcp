@@ -40,6 +40,39 @@ describe("routeMessage", () => {
     expect(res.content[0].text).toBe("boom");
   });
 
+  // #181: the verdict has to reach structuredContent, or a caller can only tell
+  // "confirmed" from "nobody looked" by parsing prose.
+  it("merges an IMAP verification verdict into structuredContent", async () => {
+    const res = await routeMessage(imapId, {
+      imap: async () => ({
+        success: true,
+        info: "moved",
+        verification: { verdict: "unverified" as const, why: "no UIDPLUS" },
+      }),
+      apple: () => ({ content: [{ type: "text", text: "apple" }] }),
+      ok: "ok",
+      fail: "fail",
+      structured: { ok: true, id: imapId, mailbox: "Archive" },
+    });
+    expect(res.structuredContent).toEqual({
+      ok: true,
+      id: imapId,
+      mailbox: "Archive",
+      verification: { verdict: "unverified", why: "no UIDPLUS" },
+    });
+  });
+
+  it("leaves structuredContent alone when the op reports no verification", async () => {
+    const res = await routeMessage(imapId, {
+      imap: async () => ({ success: true, info: "flagged" }),
+      apple: () => ({ content: [{ type: "text", text: "apple" }] }),
+      ok: "ok",
+      fail: "fail",
+      structured: { ok: true, id: imapId },
+    });
+    expect(res.structuredContent).toEqual({ ok: true, id: imapId });
+  });
+
   it("falls through to the AppleScript branch for numeric ids", async () => {
     let imapCalled = false;
     const res = await routeMessage("57820", {

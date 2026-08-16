@@ -83842,6 +83842,27 @@ function assertMutated(result, what) {
   if (!result) throw new Error(`${what}: server rejected the command (IMAP NO/BAD)`);
   return result;
 }
+async function verifyMoved(client, moved, uid, srcPath, destPath) {
+  const newUid = moved.uidMap?.get(uid);
+  if (newUid !== void 0) {
+    return {
+      verdict: "verified",
+      how: `COPYUID: UID ${uid} arrived in "${destPath}" as UID ${newUid}`
+    };
+  }
+  try {
+    const stillThere = await client.fetchOne(String(uid), { uid: true }, { uid: true });
+    if (!stillThere) {
+      return { verdict: "verified", how: `UID ${uid} is no longer present in "${srcPath}"` };
+    }
+    return {
+      verdict: "unverified",
+      why: `the server accepted the MOVE, but UID ${uid} is still present in "${srcPath}" and this server does not advertise UIDPLUS, so arrival in "${destPath}" could not be confirmed. A Gmail label store can legitimately keep a message in an all-mail view after a move, so this is not reported as a failure`
+    };
+  } catch (e) {
+    return { verdict: "unverified", why: `the post-move check could not run: ${errText(e)}` };
+  }
+}
 var poolConnect = defaultConnect;
 var pools = /* @__PURE__ */ new Map();
 function poolKey(cfg) {
@@ -84180,11 +84201,16 @@ async function imapMoveMessageById(id, destMailbox, deps = {}) {
     const destPath = dest.kind === "found" ? dest.path : resolveMailboxPath(destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
-      assertMutated(
+      const moved = assertMutated(
         await client.messageMove([ref.uid], destPath, { uid: true }),
         `IMAP move of UID ${ref.uid} to "${destPath}"`
       );
-      return { success: true, info: `Moved UID ${ref.uid} to "${destPath}" via IMAP.` };
+      const verification = await verifyMoved(client, moved, ref.uid, ref.path, destPath);
+      return {
+        success: true,
+        info: verification.verdict === "verified" ? `Moved UID ${ref.uid} to "${destPath}" via IMAP (verified: ${verification.how}).` : `Moved UID ${ref.uid} to "${destPath}" via IMAP \u2014 UNVERIFIED: ${verification.why}.`,
+        verification
+      };
     } catch (e) {
       return {
         success: false,
@@ -84226,21 +84252,38 @@ async function trashUids(client, uids, srcPath) {
     );
     return { dest, expunged: true };
   }
-  assertMutated(
+  const moved = assertMutated(
     await client.messageMove(uids, dest, { uid: true }),
     `IMAP move of ${uids.length} message(s) from "${srcPath}" to "${dest}"`
   );
-  return { dest, expunged: false };
+  return { dest, expunged: false, moved };
+}
+async function verifyExpunged(client, uid, path) {
+  try {
+    const stillThere = await client.fetchOne(String(uid), { uid: true }, { uid: true });
+    if (!stillThere) {
+      return { verdict: "verified", how: `UID ${uid} is no longer present in "${path}"` };
+    }
+    return {
+      verdict: "unverified",
+      why: `the server accepted the EXPUNGE but UID ${uid} is still present in "${path}"`
+    };
+  } catch (e) {
+    return { verdict: "unverified", why: `the post-delete check could not run: ${errText(e)}` };
+  }
 }
 async function imapDeleteMessageById(id, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     try {
-      const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
+      const { dest, expunged, moved } = await trashUids(client, [ref.uid], ref.path);
+      const verification = expunged || !moved ? await verifyExpunged(client, ref.uid, ref.path) : await verifyMoved(client, moved, ref.uid, ref.path, dest);
+      const what = expunged ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP` : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP`;
       return {
         success: true,
-        info: expunged ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.` : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`
+        info: verification.verdict === "verified" ? `${what} (verified: ${verification.how}).` : `${what} \u2014 UNVERIFIED: ${verification.why}.`,
+        verification
       };
     } catch (e) {
       return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
@@ -84820,10 +84863,12 @@ function formatMergedRows(rows, showReadState = true) {
 async function routeMessage(id, opts) {
   if (decodeImapId(id)) {
     const r = await opts.imap();
-    return r.success ? successResponse(
+    if (!r.success) return errorResponse(r.error ?? opts.fail);
+    const structured = opts.structuredFromResult ? opts.structuredFromResult(r) : opts.structured;
+    return successResponse(
       r.info ?? opts.ok,
-      opts.structuredFromResult ? opts.structuredFromResult(r) : opts.structured
-    ) : errorResponse(r.error ?? opts.fail);
+      r.verification && structured ? { ...structured, verification: r.verification } : structured
+    );
   }
   return opts.apple();
 }
@@ -85387,6 +85432,13 @@ var COUNT_DELTA_OUTPUT_SCHEMA = external_exports.array(
     note: external_exports.string().optional()
   })
 ).optional();
+var VERIFICATION_OUTPUT_SCHEMA = external_exports.object({
+  verdict: external_exports.enum(["verified", "unverified"]),
+  /** Present on `verified`: what was observed. */
+  how: external_exports.string().optional(),
+  /** Present on `unverified`: why no observation was possible. */
+  why: external_exports.string().optional()
+}).optional();
 var CHECK_ITEM_SCHEMA = external_exports.object({}).passthrough();
 var require2 = createRequire(import.meta.url);
 var { version: version2 } = require2("../package.json");
@@ -86239,7 +86291,8 @@ registerTool(
     outputSchema: {
       ok: external_exports.boolean().optional(),
       id: external_exports.string().optional(),
-      countDelta: COUNT_DELTA_OUTPUT_SCHEMA
+      countDelta: COUNT_DELTA_OUTPUT_SCHEMA,
+      verification: VERIFICATION_OUTPUT_SCHEMA
     }
   },
   withErrorHandling(
@@ -86279,7 +86332,8 @@ registerTool(
       ok: external_exports.boolean().optional(),
       id: external_exports.string().optional(),
       mailbox: external_exports.string().optional(),
-      countDelta: COUNT_DELTA_OUTPUT_SCHEMA
+      countDelta: COUNT_DELTA_OUTPUT_SCHEMA,
+      verification: VERIFICATION_OUTPUT_SCHEMA
     }
   },
   withErrorHandling(
