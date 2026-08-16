@@ -1,5 +1,43 @@
 ## [Unreleased]
 
+## [2.15.1] - 2026-08-16
+
+### Fixed
+
+- **A message Mail merely RENUMBERED was reported as collateral data loss.**
+  The collateral diff keys each snapshot entry on `(numeric id, Message-ID)`.
+  Mail renumbers ids — @scottstern0325 established on #155 that pre-image ids do
+  not survive a move to Trash — so a message that only got a **new id** has a
+  different key in each phase, and therefore appeared in **both** halves of the
+  diff: once as `disappeared`, once as `appeared`.
+
+  If the caller had not named it, it also landed in `unrequested`, which the
+  audit log documents as *"IS the #155 symptom, with names attached"*. So the
+  instrument could report a message that **demonstrably never left** as evidence
+  of data loss — the fabricated finding this layer exists to avoid, produced by
+  a mechanism the reporter had already documented.
+
+  A message present in both snapshots under the same Message-ID did not leave
+  and did not arrive. Those are now identified, removed from `disappeared` and
+  `appeared`, and reported separately.
+
+### Added
+
+- **`renumbered` on the collateral diff** — `{ messageId, before, after }` per
+  message whose numeric id changed across the operation.
+
+  Two guards keep it from inventing pairings: an **empty** Message-ID matches
+  nothing (the snapshot emits one when Mail would not give it up, and treating
+  "unknown" as an identity would pair arbitrary messages), and a Message-ID seen
+  **more than once on either side** is skipped as ambiguous (duplicates are real
+  — a label store shows one message in several views, a resend reuses the
+  header).
+
+  ⚠️ This is a **correlation, not a mechanism**. It does not establish that
+  renumbering explains #155's unexplained `over` symptom; that remains unproven,
+  and `runBatchOperation` re-resolving ids after prior mutations argues against
+  it. `renumbered` says only "these ids changed".
+
 ## [2.15.0] - 2026-08-16
 
 The last piece of #181's suggested direction: both backends now report the same

@@ -332,6 +332,22 @@ export interface CollateralDiff {
    * readable, i.e. no evidence it was high — never "the count was correct".
    */
   countStale?: { phase: "before" | "after"; measuredLength: number }[];
+  /**
+   * Messages Mail RENUMBERED across the operation — same RFC Message-ID, a
+   * different numeric id — rather than removed. (#155)
+   *
+   * These are excluded from `disappeared` and `appeared`, because a message
+   * present in both snapshots demonstrably did not leave and did not arrive;
+   * before 2.15.1 they were reported as collateral, which is a fabricated
+   * finding. The reporter established that pre-image ids do not survive a move
+   * to Trash, so this is expected on that path rather than alarming.
+   *
+   * ⚠️ A correlation, not a mechanism. This does NOT establish that renumbering
+   * explains #155's unexplained `over` symptom — that is still unproven, and
+   * `runBatchOperation` re-resolving ids after prior mutations argues against
+   * it. It says only "these ids changed".
+   */
+  renumbered?: { messageId: string; before: string; after: string }[];
   skipReason?: string;
   /**
    * The slices of the mailbox that could not be read, per phase — 1-based

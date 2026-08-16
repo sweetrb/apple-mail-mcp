@@ -61,6 +61,13 @@ const h = vi.hoisted(() => ({
   /** Mail refuses to report a count at all: `_cb`/`_ca` stay at -1. */
   suppressCount: false,
   /**
+   * Mail RENUMBERS every surviving message by this offset during the operation:
+   * same Message-ID, new numeric id. The reporter established that pre-image ids
+   * do not survive a move to Trash, so this is a real behaviour, and it is the
+   * one that makes a survivor land in BOTH halves of the collateral diff (#155).
+   */
+  renumberSurvivorsBy: 0,
+  /**
    * What `messages i thru j of mb` does when `j` exceeds the mailbox's real
    * length. AppleScript RAISES on an out-of-range element range (`items 2 thru
    * 5 of {1,2,3}` → -1728), so the default is `false` = the slice fails whole.
@@ -353,6 +360,15 @@ function simulateDestructive(script: string): string {
     h.mailbox = h.mailbox.filter((m) => !h.collateral.includes(m.id));
   }
 
+  // Mail renumbering the survivors. Message-IDs are untouched — that asymmetry
+  // is the entire point: the numeric id is not an identity, the Message-ID is.
+  if (h.renumberSurvivorsBy !== 0) {
+    h.mailbox = h.mailbox.map((m) => ({
+      ...m,
+      id: String(Number(m.id) + h.renumberSurvivorsBy),
+    }));
+  }
+
   // `staleAfterCountBy` now bounds the after-SNAPSHOT as well as the after-COUNT,
   // which is the point: they are read by the same script against the same
   // lagging state. A stale-LOW count truncates the enumeration (#179); a
@@ -405,6 +421,7 @@ beforeEach(() => {
   h.staleAfterCountBy = 0;
   h.suppressCount = false;
   h.outOfRangeSliceClamps = false;
+  h.renumberSurvivorsBy = 0;
   tmp = mkdtempSync(join(tmpdir(), "amcp-audit-"));
   delete process.env[AUDIT_LOG_ENV];
   delete process.env[AUDIT_SUBJECTS_ENV];
@@ -960,6 +977,61 @@ describe("collateral identification (opt-in, gated on the audit log)", () => {
     const [c] = mgr.consumeLastForensics()!.collateral;
     expect(c.snapshot).toBe("ok");
     expect(c.countStale).toBeUndefined();
+  });
+
+  // =========================================================================
+  // #155 renumber cross-check. `snapshotKey` is (numeric id, Message-ID), and
+  // Mail renumbers ids — the reporter established that pre-image ids do not
+  // survive a move to Trash. So a message that merely got a NEW ID lands in
+  // both halves of the diff and was reported as collateral: a message that
+  // demonstrably never left, named as data loss.
+  // =========================================================================
+  it("does not report a RENUMBERED survivor as collateral", () => {
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    h.renumberSurvivorsBy = 1000; // every survivor gets a new id
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    const [c] = mgr.consumeLastForensics()!.collateral;
+
+    // Only the requested message left. The four survivors changed id, and not
+    // one of them may be named as having disappeared.
+    expect(c.disappeared).toEqual([{ id: "75811", messageId: "a@example.com" }]);
+    expect(c.unrequested).toEqual([]);
+    // Nor may they read as newly ARRIVED.
+    expect(c.appeared).toEqual([]);
+  });
+
+  it("REPORTS the renumbering as its own observation, with both ids", () => {
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    h.renumberSurvivorsBy = 1000;
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    const [c] = mgr.consumeLastForensics()!.collateral;
+    expect(c.renumbered).toEqual([
+      { messageId: "b@example.com", before: "75812", after: "76812" },
+      { messageId: "c@example.com", before: "75813", after: "76813" },
+      { messageId: "d@example.com", before: "75814", after: "76814" },
+      { messageId: "e@example.com", before: "75815", after: "76815" },
+    ]);
+  });
+
+  it("says nothing about renumbering when no id changed", () => {
+    // Cry-wolf guard: the field exists only when there is something to report.
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    const [c] = mgr.consumeLastForensics()!.collateral;
+    expect(c.renumbered).toBeUndefined();
+    expect(c.disappeared).toEqual([{ id: "75811", messageId: "a@example.com" }]);
+  });
+
+  it("still names a genuine collateral departure while renumbering is happening", () => {
+    // The cross-check must not become a blanket excuse: a message that really
+    // left has no counterpart in `appeared`, so it stays reported.
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    h.renumberSurvivorsBy = 1000;
+    h.collateral = ["75814"]; // leaves without being asked for
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    const [c] = mgr.consumeLastForensics()!.collateral;
+    expect(c.unrequested).toEqual([{ id: "75814", messageId: "d@example.com" }]);
+    expect(c.renumbered?.map((r) => r.messageId)).not.toContain("d@example.com");
   });
 
   it("RECORDS the skip when the mailbox is above the ceiling", () => {
