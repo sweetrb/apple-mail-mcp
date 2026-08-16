@@ -79503,6 +79503,35 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end if
             set _sLo to _sHi + 1
           end repeat
+          -- #179: the loop above is bounded by the count Mail JUST reported,
+          -- and that count can lag the mailbox (#155). Positions past the bound
+          -- are never requested, so \u2014 unlike a slice that failed \u2014 they leave
+          -- no trace in _sMiss, and the record would claim a complete
+          -- observation while every message past the bound looks like it
+          -- disappeared. That is a FABRICATED finding with names attached,
+          -- which is worse than the gap it papers over.
+          --
+          -- Probe exactly ONE position past the bound. One, not a slice: an
+          -- out-of-range RANGE raises as a whole, so an over-requested slice
+          -- could not distinguish "nothing there" from "count was low by more
+          -- than a chunk". If a message is there, the count was low and the
+          -- unread tail is recorded as a hole, which makes this snapshot
+          -- PARTIAL under the existing rules and withholds the halves a
+          -- truncation would poison.
+          try
+            set _sOverId to ((id of message (${countVar} + 1) of ${mbVar}) as string)
+            -- A specifier that CLAMPS rather than raising hands back the LAST
+            -- message instead of failing. That is not evidence of a truncation,
+            -- so only an id this enumeration did not already record counts.
+            set _sSeen to false
+            repeat with _sP in _sPairs
+              if (contents of _sP) starts with (_sOverId & "${SNAP_PAIR}") then set _sSeen to true
+            end repeat
+            if not _sSeen then
+              if _sMiss is not "" then set _sMiss to _sMiss & ","
+              set _sMiss to _sMiss & ((${countVar} + 1) as string) & "-end"
+            end if
+          end try
           if _sMiss is not "" then
             if (count of _sPairs) is 0 then
               set _sStatus to "unavailable"

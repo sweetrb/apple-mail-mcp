@@ -60,6 +60,15 @@ const h = vi.hoisted(() => ({
   staleAfterCountBy: 0,
   /** Mail refuses to report a count at all: `_cb`/`_ca` stay at -1. */
   suppressCount: false,
+  /**
+   * What `messages i thru j of mb` does when `j` exceeds the mailbox's real
+   * length. AppleScript RAISES on an out-of-range element range (`items 2 thru
+   * 5 of {1,2,3}` → -1728), so the default is `false` = the slice fails whole.
+   * Whether Mail's `messages` specifier behaves the same across every backend
+   * (iCloud/IMAP vs Exchange vs POP vs On-My-Mac) is NOT settled — #179 —
+   * so the other semantics is modelled rather than assumed away.
+   */
+  outOfRangeSliceClamps: false,
   /** id → the error text Mail raises for it instead of performing the op. */
   errorOn: {} as Record<string, string>,
   /** id → the "account/mailbox, " list Mail builds when an id is ambiguous. */
@@ -201,23 +210,49 @@ function simulateDestructive(script: string): string {
     const m = /repeat with _sTry from 1 to (\d+)/.exec(script);
     return m ? Number(m[1]) : 1;
   })();
+  /** Whether the script probes one position past the count bound (#179). */
+  const probesPastBound = script.includes("set _sOverId to");
 
-  const emitSnapshot = (phase: "before" | "after", state: FakeMsg[]): void => {
+  /**
+   * `reportedCount` is the count the generated script just put in `_cb`/`_ca`
+   * — NOT the mailbox's real length. (#179)
+   *
+   * `snapshotFragment` bounds its slice loop by that count (`repeat while
+   * _sLo <= _cb`), so when Mail's count lags the listing the two disagree and
+   * the enumeration is cut short. The simulator used to slice by
+   * `state.length`, i.e. by the truth, which made it structurally incapable of
+   * reproducing that: a test for the truncation would have passed vacuously
+   * against broken code. Deriving the range from the emitted count is what
+   * makes the bug expressible here at all.
+   */
+  const emitSnapshot = (
+    phase: "before" | "after",
+    state: FakeMsg[],
+    reportedCount: number
+  ): void => {
     if (snapMax === null) return;
-    if (state.length > snapMax) {
+    // `_cb < 0` is Mail declining to answer the count at all.
+    if (reportedCount < 0) {
+      out +=
+        `${SNAP_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${phase}${FIELD_SEP}unavailable` +
+        `${FIELD_SEP}${FIELD_SEP}${RECORD_SEP}`;
+      return;
+    }
+    if (reportedCount > snapMax) {
       out +=
         `${SNAP_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${phase}${FIELD_SEP}skipped${FIELD_SEP}` +
-        `mailbox holds ${state.length} messages, above APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX=${snapMax}${RECORD_SEP}`;
+        `mailbox holds ${reportedCount} messages, above APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX=${snapMax}${RECORD_SEP}`;
       return;
     }
     // Exactly the requests the script issues: one whole-mailbox read when it
-    // names no chunk size, otherwise consecutive slices of that size.
+    // names no chunk size, otherwise consecutive slices of that size — both
+    // bounded by the REPORTED count, as the script's own loop is.
     const slices: [number, number][] = [];
     if (snapChunk === null) {
-      if (state.length > 0) slices.push([1, state.length]);
+      if (reportedCount > 0) slices.push([1, reportedCount]);
     } else {
-      for (let lo = 1; lo <= state.length; lo += snapChunk) {
-        slices.push([lo, Math.min(lo + snapChunk - 1, state.length)]);
+      for (let lo = 1; lo <= reportedCount; lo += snapChunk) {
+        slices.push([lo, Math.min(lo + snapChunk - 1, reportedCount)]);
       }
     }
     const observed: FakeMsg[] = [];
@@ -228,8 +263,27 @@ function simulateDestructive(script: string): string {
       const always = h.failSliceAlways[phase].includes(range);
       // Answered on a retry — only if the script actually retries.
       const transient = h.failSliceOnce.includes(range) && snapAttempts < 2;
-      if (tooBig || always || transient) missed.push(range);
+      // A stale-HIGH count asks for positions past the end of the mailbox.
+      // AppleScript RAISES on an out-of-range element range (`items 2 thru 5 of
+      // {1,2,3}` → -1728) rather than clamping, so such a slice fails as a
+      // whole and is recorded as a hole. `outOfRangeSliceClamps` models the
+      // other possible semantics, which is not settled for Mail's `messages i
+      // thru j` specifier across backends (#179).
+      const outOfRange = hi > state.length;
+      const raises = outOfRange && !h.outOfRangeSliceClamps;
+      if (tooBig || always || transient || raises) missed.push(range);
       else observed.push(...state.slice(lo - 1, hi));
+    }
+    // The #179 overrun probe, answered only when the generated script actually
+    // issues it — the simulator serves the requests the script makes, so this
+    // stays absent (and the truncation stays invisible) against a script
+    // without the probe.
+    if (probesPastBound && state.length > reportedCount) {
+      const probed = state[reportedCount];
+      // The script only counts an id it has not already recorded, so a clamping
+      // specifier handing back the last message is not read as a truncation.
+      const already = observed.some((m) => m.id === probed.id);
+      if (!already) missed.push(`${reportedCount + 1}-end`);
     }
     const status = missed.length === 0 ? "ok" : observed.length === 0 ? "unavailable" : "partial";
     const payload = observed
@@ -240,7 +294,11 @@ function simulateDestructive(script: string): string {
       `${FIELD_SEP}${payload}${FIELD_SEP}${missed.join(",")}${RECORD_SEP}`;
   };
 
-  emitSnapshot("before", before);
+  // The count and the snapshot are consecutive Apple Events in ONE script with
+  // nothing between them, so the snapshot is bounded by the count the script
+  // just took — they are co-stale, not independent instruments (#155, #179).
+  const beforeCount = h.suppressCount ? -1 : before.length;
+  emitSnapshot("before", before, beforeCount);
 
   for (const t of targets) {
     // An id Mail finds in several mailboxes: refused, naming the candidates it
@@ -276,13 +334,13 @@ function simulateDestructive(script: string): string {
     h.mailbox = h.mailbox.filter((m) => !h.collateral.includes(m.id));
   }
 
-  emitSnapshot("after", h.mailbox);
+  // `staleAfterCountBy` now bounds the after-SNAPSHOT as well as the after-COUNT,
+  // which is the point: they are read by the same script against the same
+  // lagging state. A stale-LOW count truncates the enumeration (#179); a
+  // stale-HIGH count over-requests and the out-of-range slice fails.
+  const afterCount = h.suppressCount ? -1 : h.mailbox.length + h.staleAfterCountBy;
+  emitSnapshot("after", h.mailbox, afterCount);
   if (wantsCount) {
-    // The count is a SEPARATE instrument from the listing above, and #155 is
-    // exactly the case where they disagree — so the simulator has to be able to
-    // report a stale count over a correct list.
-    const beforeCount = h.suppressCount ? -1 : before.length;
-    const afterCount = h.suppressCount ? -1 : h.mailbox.length + h.staleAfterCountBy;
     out += `${RECON_TAG}${FIELD_SEP}${acct}${FIELD_SEP}${mbox}${FIELD_SEP}${beforeCount}${FIELD_SEP}${afterCount}${FIELD_SEP}${RECORD_SEP}`;
   }
   return out;
@@ -327,6 +385,7 @@ beforeEach(() => {
   h.failSliceOnce = [];
   h.staleAfterCountBy = 0;
   h.suppressCount = false;
+  h.outOfRangeSliceClamps = false;
   tmp = mkdtempSync(join(tmpdir(), "amcp-audit-"));
   delete process.env[AUDIT_LOG_ENV];
   delete process.env[AUDIT_SUBJECTS_ENV];
@@ -809,6 +868,34 @@ describe("collateral identification (opt-in, gated on the audit log)", () => {
       { id: "75814", messageId: "d@example.com" },
     ]);
     expect(c.unrequested).toEqual([{ id: "75814", messageId: "d@example.com" }]);
+  });
+
+  // =========================================================================
+  // #179 — the snapshot loop is bounded by the COUNT, and Mail's count can lag.
+  // A stale-LOW count truncates the after-enumeration; positions past the bound
+  // are never requested, so only a FAILED slice enters _sMiss and an unrequested
+  // tail leaves no trace at all. Every message past the bound is then present in
+  // `before`, absent from `after`, and lands in `disappeared` -> `unrequested`,
+  // which the audit log documents as "IS the #155 symptom, with names attached".
+  // That is the fabricated finding the #176 contract promises is impossible.
+  // =========================================================================
+  it("does not fabricate `unrequested` when a stale-LOW count truncates the after-snapshot", () => {
+    process.env[AUDIT_LOG_ENV] = auditFile();
+    // One message really leaves. Mail's after-count reads 2 when 4 remain, so
+    // the loop asks only for positions 1-2 and never sees 75814 / 75815.
+    h.staleAfterCountBy = -2;
+    mgr.batchDeleteMessages(["75811"], { account: h.account, mailbox: h.mailboxName });
+    const report = mgr.consumeLastForensics()!;
+    const [c] = report.collateral;
+
+    // 75814 and 75815 never moved. Naming either as collateral would put an
+    // innocent message in front of someone mid-incident as evidence of data
+    // loss. The snapshot must not claim a complete observation it did not make.
+    expect(c.unrequested ?? []).toEqual([]);
+    expect(c.disappeared ?? []).not.toContainEqual({ id: "75814", messageId: "d@example.com" });
+    expect(c.disappeared ?? []).not.toContainEqual({ id: "75815", messageId: "e@example.com" });
+    // "ok" asserts both snapshots were read IN FULL, which is false here.
+    expect(c.snapshot).not.toBe("ok");
   });
 
   it("RECORDS the skip when the mailbox is above the ceiling", () => {
