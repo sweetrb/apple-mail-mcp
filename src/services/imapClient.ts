@@ -830,10 +830,29 @@ export function imapMailStats(deps: ImapDeps = {}): Promise<ImapStats> {
 // configured; AppleScript remains the path for everything else.
 // ===========================================================================
 
+/**
+ * Whether the server's acceptance of a mutation was corroborated by observing
+ * the effect. (#181)
+ *
+ * Three-valued on purpose. `success: false` already covers a command the server
+ * REJECTED (#181 part 1). What this adds is the distinction the IMAP path was
+ * missing entirely: a command the server ACCEPTED whose effect was confirmed,
+ * versus one whose effect nobody looked at. Before 2.13.0 both returned a bare
+ * `{success: true}`, so an unverified mutation was indistinguishable from a
+ * verified one — the asymmetry #181 was filed for.
+ *
+ * `unverified` is NOT a failure and must never be rendered as one. It means
+ * exactly "the server accepted this and we have no observation either way".
+ */
+export type ImapVerification =
+  { verdict: "verified"; how: string } | { verdict: "unverified"; why: string };
+
 export interface ImapOpResult {
   success: boolean;
   error?: string;
   info?: string;
+  /** Absent on operations that perform no post-condition check at all. */
+  verification?: ImapVerification;
 }
 
 function errText(e: unknown): string {
@@ -861,9 +880,60 @@ function errText(e: unknown): string {
  * inspect `uidMap`/`uidValidity`: those are UIDPLUS-only, and treating their
  * absence as failure hard-fails working moves on servers without the extension.
  */
-function assertMutated<T>(result: T, what: string): NonNullable<T> {
+function assertMutated<T>(result: T, what: string): Exclude<T, false | null | undefined> {
   if (!result) throw new Error(`${what}: server rejected the command (IMAP NO/BAD)`);
-  return result as NonNullable<T>;
+  return result as Exclude<T, false | null | undefined>;
+}
+
+/**
+ * Corroborate a MOVE the server already accepted. (#181)
+ *
+ * The AppleScript path has a whole effect-reconciliation layer precisely because
+ * "the command did not throw" is not evidence that anything happened; the IMAP
+ * path had none of it, and since reads route to IMAP whenever an account is
+ * IMAP-configured, that meant the layer was off for essentially all real
+ * traffic.
+ *
+ * Deliberately never returns a failure. A contradicted post-condition is
+ * reported as `unverified` with the contradiction named, because a Gmail label
+ * store can legitimately keep a message visible in an all-mail view after a
+ * move — and hard-failing a working move is the strictly worse error. Callers
+ * that need certainty should read `verdict`, not infer it from `success`.
+ */
+async function verifyMoved(
+  client: ImapClientLike,
+  moved: ImapMoveResult,
+  uid: number,
+  srcPath: string,
+  destPath: string
+): Promise<ImapVerification> {
+  // Strongest evidence and it costs nothing: with UIDPLUS the server's own
+  // COPYUID response names the UID the message received in the destination.
+  const newUid = moved.uidMap?.get(uid);
+  if (newUid !== undefined) {
+    return {
+      verdict: "verified",
+      how: `COPYUID: UID ${uid} arrived in "${destPath}" as UID ${newUid}`,
+    };
+  }
+  // No UIDPLUS. The source mailbox is still selected here, so asking whether the
+  // UID is still in it is one FETCH and needs no extra capability.
+  try {
+    const stillThere = await client.fetchOne(String(uid), { uid: true }, { uid: true });
+    if (!stillThere) {
+      return { verdict: "verified", how: `UID ${uid} is no longer present in "${srcPath}"` };
+    }
+    return {
+      verdict: "unverified",
+      why:
+        `the server accepted the MOVE, but UID ${uid} is still present in "${srcPath}" and ` +
+        `this server does not advertise UIDPLUS, so arrival in "${destPath}" could not be ` +
+        `confirmed. A Gmail label store can legitimately keep a message in an all-mail view ` +
+        `after a move, so this is not reported as a failure`,
+    };
+  } catch (e) {
+    return { verdict: "unverified", why: `the post-move check could not run: ${errText(e)}` };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1417,11 +1487,19 @@ export async function imapMoveMessageById(
     const destPath = dest.kind === "found" ? dest.path : resolveMailboxPath(destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
-      assertMutated(
+      const moved = assertMutated(
         await client.messageMove([ref.uid], destPath, { uid: true }),
         `IMAP move of UID ${ref.uid} to "${destPath}"`
       );
-      return { success: true, info: `Moved UID ${ref.uid} to "${destPath}" via IMAP.` };
+      const verification = await verifyMoved(client, moved, ref.uid, ref.path, destPath);
+      return {
+        success: true,
+        info:
+          verification.verdict === "verified"
+            ? `Moved UID ${ref.uid} to "${destPath}" via IMAP (verified: ${verification.how}).`
+            : `Moved UID ${ref.uid} to "${destPath}" via IMAP — UNVERIFIED: ${verification.why}.`,
+        verification,
+      };
     } catch (e) {
       return {
         success: false,
@@ -1491,7 +1569,7 @@ async function trashUids(
   client: ImapClientLike,
   uids: number[],
   srcPath: string
-): Promise<{ dest: string; expunged: boolean }> {
+): Promise<{ dest: string; expunged: boolean; moved?: ImapMoveResult }> {
   const dest = await resolveTrashPath(client);
   if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
     assertMutated(
@@ -1500,11 +1578,34 @@ async function trashUids(
     );
     return { dest, expunged: true };
   }
-  assertMutated(
+  const moved = assertMutated(
     await client.messageMove(uids, dest, { uid: true }),
     `IMAP move of ${uids.length} message(s) from "${srcPath}" to "${dest}"`
   );
-  return { dest, expunged: false };
+  return { dest, expunged: false, moved };
+}
+
+/**
+ * Corroborate an EXPUNGE the server already accepted. Same contract as
+ * `verifyMoved`: never a failure, only "confirmed" vs "nobody looked". (#181)
+ */
+async function verifyExpunged(
+  client: ImapClientLike,
+  uid: number,
+  path: string
+): Promise<ImapVerification> {
+  try {
+    const stillThere = await client.fetchOne(String(uid), { uid: true }, { uid: true });
+    if (!stillThere) {
+      return { verdict: "verified", how: `UID ${uid} is no longer present in "${path}"` };
+    }
+    return {
+      verdict: "unverified",
+      why: `the server accepted the EXPUNGE but UID ${uid} is still present in "${path}"`,
+    };
+  } catch (e) {
+    return { verdict: "unverified", why: `the post-delete check could not run: ${errText(e)}` };
+  }
 }
 
 export async function imapDeleteMessageById(
@@ -1515,12 +1616,21 @@ export async function imapDeleteMessageById(
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     try {
-      const { dest, expunged } = await trashUids(client, [ref.uid], ref.path);
+      const { dest, expunged, moved } = await trashUids(client, [ref.uid], ref.path);
+      const verification =
+        expunged || !moved
+          ? await verifyExpunged(client, ref.uid, ref.path)
+          : await verifyMoved(client, moved, ref.uid, ref.path, dest);
+      const what = expunged
+        ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP`
+        : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP`;
       return {
         success: true,
-        info: expunged
-          ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP.`
-          : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP.`,
+        info:
+          verification.verdict === "verified"
+            ? `${what} (verified: ${verification.how}).`
+            : `${what} — UNVERIFIED: ${verification.why}.`,
+        verification,
       };
     } catch (e) {
       return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };

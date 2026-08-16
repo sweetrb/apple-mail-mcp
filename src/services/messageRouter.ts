@@ -42,12 +42,17 @@ export async function routeMessage(
 ): Promise<ToolResponse> {
   if (decodeImapId(id)) {
     const r = await opts.imap();
-    return r.success
-      ? successResponse(
-          r.info ?? opts.ok,
-          opts.structuredFromResult ? opts.structuredFromResult(r) : opts.structured
-        )
-      : errorResponse(r.error ?? opts.fail);
+    if (!r.success) return errorResponse(r.error ?? opts.fail);
+    const structured = opts.structuredFromResult ? opts.structuredFromResult(r) : opts.structured;
+    // #181: carry the post-condition verdict through to structuredContent so a
+    // caller can tell "confirmed" from "the server accepted it and nobody
+    // looked" without parsing prose. Any tool surfacing this MUST declare
+    // `verification` in its outputSchema — a bare zod raw shape implies
+    // additionalProperties:false, and the client rejects undeclared keys.
+    return successResponse(
+      r.info ?? opts.ok,
+      r.verification && structured ? { ...structured, verification: r.verification } : structured
+    );
   }
   return opts.apple();
 }

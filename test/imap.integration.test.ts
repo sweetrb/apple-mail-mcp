@@ -153,10 +153,18 @@ run("IMAP backend (GreenMail) integration", () => {
       await imapSearchMessages({ mailbox: "INBOX", subject: "Movable", limit: 1 }, deps)
     ).text;
     const id = firstImapId(search);
-    expect((await imapMoveMessageById(id, "Dest", deps)).success).toBe(true);
+    const moved = await imapMoveMessageById(id, "Dest", deps);
+    expect(moved.success).toBe(true);
+    // #181: a real move against a real server must come back CORROBORATED, not
+    // merely un-rejected. Whether that arrives via UIDPLUS COPYUID or via the
+    // uid leaving the source is the server's business, but "unverified" here
+    // would mean the post-condition check does not actually work end to end.
+    expect(moved.verification?.verdict).toBe("verified");
     const inDest = (await imapListMessages({ mailbox: "Dest", limit: 10 }, deps)).text;
     const destId = firstImapId(inDest);
-    expect((await imapDeleteMessageById(destId, deps)).success).toBe(true);
+    const deleted = await imapDeleteMessageById(destId, deps);
+    expect(deleted.success).toBe(true);
+    expect(deleted.verification?.verdict).toBe("verified");
     await imapDeleteMailbox("Dest", deps);
     expect(list).toMatch(/via IMAP/);
   });

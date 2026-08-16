@@ -247,6 +247,26 @@ const COUNT_DELTA_OUTPUT_SCHEMA = z
   )
   .optional();
 
+/**
+ * Whether a mutation the server ACCEPTED was corroborated by observing its
+ * effect (#181). Distinct from `ok`: `ok` says the command was not rejected,
+ * this says whether anyone checked that it did anything.
+ *
+ * `unverified` is not a failure — it means "accepted, no observation either
+ * way" — and must never be rendered as one. Modelled as a flat object rather
+ * than a discriminated union so the emitted JSON Schema stays simple; exactly
+ * one of `how`/`why` is populated, matching the verdict.
+ */
+const VERIFICATION_OUTPUT_SCHEMA = z
+  .object({
+    verdict: z.enum(["verified", "unverified"]),
+    /** Present on `verified`: what was observed. */
+    how: z.string().optional(),
+    /** Present on `unverified`: why no observation was possible. */
+    why: z.string().optional(),
+  })
+  .optional();
+
 /** A health/doctor check item — loose to accept both health-check
  *  ({name, passed, message}) and doctor ({name, status, detail}) items. */
 const CHECK_ITEM_SCHEMA = z.object({}).passthrough();
@@ -1510,6 +1530,7 @@ registerTool(
       ok: z.boolean().optional(),
       id: z.string().optional(),
       countDelta: COUNT_DELTA_OUTPUT_SCHEMA,
+      verification: VERIFICATION_OUTPUT_SCHEMA,
     },
   },
   withErrorHandling(
@@ -1555,6 +1576,7 @@ registerTool(
       id: z.string().optional(),
       mailbox: z.string().optional(),
       countDelta: COUNT_DELTA_OUTPUT_SCHEMA,
+      verification: VERIFICATION_OUTPUT_SCHEMA,
     },
   },
   withErrorHandling(

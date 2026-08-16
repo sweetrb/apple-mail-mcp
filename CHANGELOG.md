@@ -1,5 +1,48 @@
 ## [Unreleased]
 
+## [2.13.0] - 2026-08-16
+
+Second and final change for #181, and the one that closes it. 2.12.0 stopped a
+**rejected** command being reported as a success; this makes an **accepted** one
+say whether its effect was actually observed.
+
+### Added
+
+- **`verification` on `delete-message` and `move-message` for `imap:` ids.** The
+  AppleScript destructive path has carried an effect-reconciliation layer
+  (`countDelta`, the collateral snapshot) since #155, built precisely because
+  "the command did not throw" is not evidence that anything happened. The IMAP
+  path had none of it — and since reads route to IMAP whenever an account is
+  IMAP-configured, the layer was off for essentially all real traffic.
+
+  `structuredContent.verification` is three-valued in effect:
+
+  | verdict | meaning |
+  |---|---|
+  | `verified` | the effect was observed — UIDPLUS `COPYUID` named the new UID in the destination, or the UID is gone from the source |
+  | `unverified` | the server accepted the command and nothing could confirm the effect; `why` says what stopped it |
+  | *(failure)* | `success: false` — the server rejected the command outright (2.12.0) |
+
+  `unverified` is **not a failure** and is not rendered as one. Reporting it is
+  the point: an absent verification must never read as a successful one, which
+  is the rule already adopted for the collateral diff in #176/#178.
+
+  A message still present in the source after an accepted move is reported
+  `unverified` rather than failed, deliberately — a Gmail label store can
+  legitimately keep a message in an all-mail view after a move, and hard-failing
+  a working move is the strictly worse error.
+
+  The originally reported case — a Gmail draft whose `move-message` returned
+  `ok: true` while the message stayed in `[Gmail]/Drafts` and the destination
+  stayed empty — now returns `unverified` with the contradiction named.
+
+### Changed
+
+- `routeMessage` merges an operation's `verification` into `structuredContent`,
+  so every IMAP-routed single-message tool reports it uniformly. Tools surfacing
+  it declare `verification` in their `outputSchema`: a bare zod shape implies
+  `additionalProperties: false`, and the client rejects undeclared keys.
+
 ## [2.12.0] - 2026-08-16
 
 First of two changes for #181. This one closes the channel through which a

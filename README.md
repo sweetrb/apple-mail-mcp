@@ -1430,9 +1430,33 @@ Three more honesty rules:
   than list positions — and `expected` stays comparable with the mailbox instead
   of double-counting a duplicate into a false `over`.
 
-`imap:` ids are not reconciled. An IMAP UID names exactly one message in exactly
-one mailbox, so the mis-targeting class this exists for cannot occur there; a
-batch of only `imap:` ids returns no `countDelta` rather than a fabricated one.
+`imap:` ids are not reconciled by `countDelta`. An IMAP UID names exactly one
+message in exactly one mailbox, so the mis-targeting class this exists for cannot
+occur there; a batch of only `imap:` ids returns no `countDelta` rather than a
+fabricated one.
+
+They carry their own post-condition check instead. `delete-message` and
+`move-message` on an `imap:` id return a **`verification`** object in
+`structuredContent`:
+
+```jsonc
+"verification": {
+  "verdict": "verified",
+  "how": "COPYUID: UID 5 arrived in \"Archive\" as UID 91"
+}
+```
+
+| `verdict` | Meaning |
+|---|---|
+| `verified` | The effect was **observed** — either the server's UIDPLUS `COPYUID` named the message's new UID in the destination, or the UID is no longer in the source mailbox. |
+| `unverified` | The server **accepted** the command and nothing could confirm the effect. Populates `why`. |
+
+`unverified` is **not a failure** and must not be rendered as one — it means
+"accepted, no observation either way". It is reported rather than hidden because
+an absent verification must never read as a successful one, the same rule the
+collateral diff follows. A message that is still in the source mailbox after an
+accepted move is reported `unverified` rather than failed, because a Gmail label
+store can legitimately keep a message visible in an all-mail view after a move.
 
 ### `APPLE_MAIL_MCP_AUDIT_LOG` — opt-in forensic log
 
