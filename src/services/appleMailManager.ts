@@ -46,6 +46,7 @@ import {
   auditSnapshotChunk,
   SNAPSHOT_SLICE_ATTEMPTS,
   AUDIT_SNAPSHOT_MAX_ENV,
+  classifyCountStatus,
   type CountDelta,
   type AuditPreImage,
   type AuditOutcome,
@@ -1628,33 +1629,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const readable = m.before >= 0 && m.after >= 0;
       const observed = readable ? m.before - m.after : null;
       const note = noteFor(m.account, m.mailbox);
-      let status: CountDelta["status"];
-      let unknownReason: CountDelta["unknownReason"];
       // Four disjoint ways there is nothing this server will assert. They are
       // NOT interchangeable to a reader, so each carries its own reason and its
-      // own note — see the #155 retraction on CountDelta.
-      if (!readable) {
-        status = "unknown";
-        unknownReason = "count-unreadable";
-      } else if (m.expected === null) {
-        status = "unknown";
-        unknownReason = "no-expectation";
-      } else if (observed === m.expected) {
-        status = "match";
-      } else if ((observed ?? 0) > m.expected) {
-        status = "over";
-      } else if (observed === 0) {
-        // The count did not move at all. On a store that flags deletions
-        // instead of removing them this is the ORDINARY reading for an
-        // operation that fully succeeded, so it must keep saying so.
-        status = "unknown";
-        unknownReason = "count-did-not-move";
-      } else {
-        // It moved, but short. A flag-only store cannot produce this, which is
-        // the whole reason it is worth telling apart from the case above.
-        status = "unknown";
-        unknownReason = "count-partial";
-      }
+      // own note — see the #155 retraction on CountDelta. The classification
+      // itself is shared with the IMAP path so the two cannot drift (#181).
+      const { status, unknownReason } = classifyCountStatus(readable, m.expected, observed);
       return {
         account: m.account,
         mailbox: m.mailbox,

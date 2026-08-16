@@ -17,6 +17,7 @@
 import type { BatchOperationResult } from "@/types.js";
 import type { ToolResponse } from "@/tools/respond.js";
 import type { ImapBatchResult } from "@/services/imapClient.js";
+import type { CountDelta } from "@/services/auditLog.js";
 import { hybridBatchCounts, batchResponse } from "@/tools/batchResults.js";
 
 /** The source scope a caller pins numeric ids to. Both fields or neither (#159). */
@@ -67,6 +68,23 @@ export function toManagerScope(args: {
   return { account: args.sourceAccount, mailbox: args.sourceMailbox };
 }
 
+/**
+ * Combine the AppleScript and IMAP reconciliation into one `countDelta`. (#181)
+ *
+ * Concatenated, never summed: the two measure different stores with different
+ * instruments — Mail's own count, which #155 showed can lag, versus the
+ * server's `STATUS`, which cannot. Collapsing them into one number would
+ * average a trustworthy reading with an untrustworthy one and hide which was
+ * which. Each entry already names its own account and mailbox.
+ */
+function mergeCountDeltas(
+  apple: CountDelta[] | undefined,
+  imap: CountDelta[] | undefined
+): { countDelta?: CountDelta[] } {
+  const all = [...(apple ?? []), ...(imap ?? [])];
+  return all.length ? { countDelta: all } : {};
+}
+
 /** `batch-delete-messages`. */
 export async function runBatchDelete(
   deps: BatchMutationDeps,
@@ -94,7 +112,10 @@ export async function runBatchDelete(
       allFailed: (n) => `Failed to delete all ${n} message(s)`,
       partial: (ok, failed) => `Deleted ${ok} message(s), ${failed} failed`,
     },
-    forensics.countDelta ? { countDelta: forensics.countDelta } : {},
+    // #181: merge both backends' reconciliation. An AppleScript-only batch is
+    // unchanged; an IMAP-only one now reports a delta where it previously
+    // reported nothing; a mixed batch reports both, per source mailbox.
+    mergeCountDeltas(forensics.countDelta as CountDelta[] | undefined, counts.countDelta),
     forensics.warnings
   );
 }
@@ -141,7 +162,10 @@ export async function runBatchMove(
       allFailed: (n) => `Failed to move all ${n} message(s)`,
       partial: (ok, failed) => `Moved ${ok} message(s) to "${mailbox}", ${failed} failed`,
     },
-    { mailbox, ...(forensics.countDelta ? { countDelta: forensics.countDelta } : {}) },
+    {
+      mailbox,
+      ...mergeCountDeltas(forensics.countDelta as CountDelta[] | undefined, counts.countDelta),
+    },
     forensics.warnings
   );
 }

@@ -1444,12 +1444,23 @@ Three more honesty rules:
   than list positions — and `expected` stays comparable with the mailbox instead
   of double-counting a duplicate into a false `over`.
 
-`imap:` ids are not reconciled by `countDelta`. An IMAP UID names exactly one
-message in exactly one mailbox, so the mis-targeting class this exists for cannot
-occur there; a batch of only `imap:` ids returns no `countDelta` rather than a
-fabricated one.
+**`imap:` ids are reconciled too, as of 2.15.0.** `batch-delete-messages` and
+`batch-move-messages` return the same `countDelta` structure on the IMAP path, so
+one shape covers both backends and a mixed batch reports an entry per source
+mailbox from whichever backend handled it. The entries are **concatenated, never
+summed** — Mail's own count can lag (#155) while the server's `STATUS` cannot, and
+averaging the two would hide which reading you were looking at.
 
-They carry their own post-condition check instead. `delete-message` and
+Only the operations that actually remove messages from their source reconcile.
+`batch-mark-as-read` and the flag tools change no count, so emitting
+`expected: N, observed: 0` for them would manufacture an alarm; they report no
+`countDelta` at all.
+
+Note the mis-targeting class `countDelta` was originally built for cannot occur
+on the IMAP path — a UID names exactly one message in exactly one mailbox — so
+there the value is effect confirmation rather than target confirmation.
+
+Single-message tools carry a post-condition check instead. `delete-message` and
 `move-message` on an `imap:` id return a **`verification`** object in
 `structuredContent`:
 

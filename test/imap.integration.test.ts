@@ -225,6 +225,32 @@ run("IMAP 2.1 optimizations (GreenMail) integration", () => {
     expect(Buffer.from(fetched.base64 as string, "base64").toString()).toBe("PDF-BYTES-HERE");
   });
 
+  // #181: the countDelta the IMAP path now reports must agree with a REAL
+  // server's STATUS, not just with a mock that returns whatever we told it to.
+  it("batch move reports a countDelta that matches the server's own STATUS", async () => {
+    expect((await imapCreateMailbox("CDdest", deps)).success).toBe(true);
+    await appendMessage("CountDelta A", "a");
+    await appendMessage("CountDelta B", "b");
+    const found = (
+      await imapSearchMessages({ mailbox: "INBOX", subject: "CountDelta", limit: 10 }, deps)
+    ).text;
+    const ids = [...found.matchAll(/imap:[A-Za-z0-9_-]+/g)].map((m) => m[0]).slice(0, 2);
+    expect(ids.length).toBe(2);
+
+    const r = await imapBatchMove(ids, "CDdest", deps);
+    expect(r.success).toBe(2);
+    const [d] = r.countDelta ?? [];
+    expect(d).toBeDefined();
+    expect(d.mailbox).toBe("INBOX");
+    expect(d.expected).toBe(2);
+    // A real server removes both from the source, so this is the `match` case.
+    // before/after come from STATUS and must be internally consistent.
+    expect(d.before! - d.after!).toBe(d.observed);
+    expect(d.observed).toBe(2);
+    expect(d.status).toBe("match");
+    await imapDeleteMailbox("CDdest", deps);
+  });
+
   it("batch mark-read + move over a UID set (I2)", async () => {
     await imapCreateMailbox("BatchDest", deps);
     const u1 = await appendRaw("From: a@x.com\nSubject: batch-1\n\nb");
