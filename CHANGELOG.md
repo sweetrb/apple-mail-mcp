@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [2.16.1] - 2026-08-19
+### Changed
+- Dependency bump via Dependabot; committed bundle rebuilt. (automated)
+
 ## [2.16.0] - 2026-08-16
 
 **Closes #183** and **#193**. 2.14.0 made Mail's local "On My Mac" mailboxes
