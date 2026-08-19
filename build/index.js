@@ -23342,9 +23342,9 @@ var require_pino = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/logger.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/logger.js
 var require_logger = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/logger.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/logger.js"(exports, module) {
     "use strict";
     var logger = require_pino()();
     logger.level = "trace";
@@ -48700,9 +48700,9 @@ var require_mailsplit = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/limited-passthrough.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/limited-passthrough.js
 var require_limited_passthrough = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var normalizeByteLimit = (value) => {
@@ -48741,9 +48741,9 @@ var require_limited_passthrough = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/limits.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/limits.js
 var require_limits = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
     "use strict";
     var MAX_LITERAL_SIZE = 1024 * 1024 * 1024;
     var MAX_LINE_SIZE = MAX_LITERAL_SIZE;
@@ -48760,9 +48760,9 @@ var require_limits = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-stream.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-stream.js
 var require_imap_stream = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var logger = require_logger();
@@ -49163,9 +49163,9 @@ var require_imap_stream = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-formal-syntax.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-formal-syntax.js
 var require_imap_formal_syntax = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
     "use strict";
     function expandRange(start, end) {
       let chars = [];
@@ -49309,9 +49309,9 @@ var require_imap_formal_syntax = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/token-parser.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/token-parser.js
 var require_token_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { MAX_LITERAL_SIZE, normalizeLimit, createLiteralTooLargeError } = require_limits();
@@ -49878,9 +49878,9 @@ var require_token_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/parser-instance.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/parser-instance.js
 var require_parser_instance = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { TokenParser } = require_token_parser();
@@ -50074,9 +50074,9 @@ var require_parser_instance = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-parser.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-parser.js
 var require_imap_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { ParserInstance } = require_parser_instance();
@@ -50134,9 +50134,9 @@ var require_imap_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-compiler.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-compiler.js
 var require_imap_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var SEQ_RANGE = /^(\d+|\*)(:(\d+|\*))?$/;
@@ -50324,9 +50324,9 @@ var require_imap_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-handler.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-handler.js
 var require_imap_handler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
     "use strict";
     var parser = require_imap_parser();
     var compiler = require_imap_compiler();
@@ -50337,12 +50337,12 @@ var require_imap_handler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/package.json
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/package.json
 var require_package4 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/package.json"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/package.json"(exports, module) {
     module.exports = {
       name: "imapflow",
-      version: "1.6.6",
+      version: "1.7.0",
       description: "IMAP Client for Node",
       main: "lib/imap-flow.js",
       types: "lib/imap-flow.d.ts",
@@ -51766,9 +51766,9 @@ var require_util3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/address-error.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/address-error.js
 var require_address_error = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/address-error.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/address-error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.AddressError = void 0;
@@ -51783,9 +51783,9 @@ var require_address_error = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/common.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/common.js
 var require_common = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/common.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/common.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.isInSubnet = isInSubnet;
@@ -51858,9 +51858,9 @@ var require_common = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v4/constants.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v4/constants.js
 var require_constants3 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v4/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v4/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RE_SUBNET_STRING = exports.RE_ADDRESS = exports.GROUPS = exports.BITS = void 0;
@@ -51871,9 +51871,9 @@ var require_constants3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv4.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv4.js
 var require_ipv4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv4.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv4.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52201,7 +52201,10 @@ var require_ipv4 = __commonJS({
         return _Address4.fromHex(bigInt.toString(16).padStart(8, "0"));
       }
       /**
-       * Convert a byte array to an Address4 object.
+       * Convert a byte array to an Address4 object. Throws `AddressError` unless
+       * given exactly 4 integers from 0 to 255. Signed bytes are rejected, so
+       * this differs from `Address6.fromByteArray`, which folds them; the two
+       * contracts converge on this stricter form in the next major version.
        *
        * To convert from a Node.js `Buffer`, spread it: `Address4.fromByteArray([...buf])`.
        * @param {Array<number>} bytes - an array of 4 bytes (0-255)
@@ -52212,7 +52215,12 @@ var require_ipv4 = __commonJS({
         return this.fromUnsignedByteArray(bytes);
       }
       /**
-       * Convert an unsigned byte array to an Address4 object
+       * Convert an unsigned byte array to an Address4 object. Throws
+       * `AddressError` unless given exactly 4 bytes, and rejects values outside
+       * 0 to 255 when parsing the resulting address.
+       *
+       * To convert from a Node.js `Buffer`, spread it:
+       * `Address4.fromUnsignedByteArray([...buf])`.
        * @param {Array<number>} bytes - an array of 4 unsigned bytes (0-255)
        * @returns {Address4}
        */
@@ -52242,7 +52250,8 @@ var require_ipv4 = __commonJS({
         return this.binaryZeroPad().slice(start, end);
       }
       /**
-       * Return the reversed ip6.arpa form of the address
+       * Return the reversed in-addr.arpa form of the address, e.g.
+       * `42.2.0.192.in-addr.arpa.` for `192.0.2.42`.
        * @param {Object} options
        * @param {boolean} options.omitSuffix - omit the "in-addr.arpa" suffix
        * @returns {String}
@@ -52317,7 +52326,12 @@ var require_ipv4 = __commonJS({
         return this._binaryZeroPad;
       }
       /**
-       * Groups an IPv4 address for inclusion at the end of an IPv6 address
+       * Groups an IPv4 address for inclusion at the end of an IPv6 address.
+       *
+       * Returns an HTML fragment: each half of the address is wrapped in a
+       * `<span>` carrying the group classes an address-inspector UI hovers on.
+       * The address content is HTML-escaped; anything you concatenate around it
+       * is your responsibility.
        * @returns {String}
        */
       groupForV6() {
@@ -52340,9 +52354,9 @@ var require_ipv4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/constants.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/constants.js
 var require_constants4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RE_URL_WITH_PORT = exports.RE_URL = exports.RE_ZONE_STRING = exports.RE_SUBNET_STRING = exports.RE_BAD_ADDRESS = exports.RE_BAD_CHARACTERS = exports.TYPES = exports.SCOPES = exports.GROUPS = exports.BITS = void 0;
@@ -52397,9 +52411,9 @@ var require_constants4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/helpers.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/helpers.js
 var require_helpers = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/helpers.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/helpers.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.escapeHtml = escapeHtml;
@@ -52436,9 +52450,9 @@ var require_helpers = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/regular-expressions.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/regular-expressions.js
 var require_regular_expressions = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52528,9 +52542,9 @@ var require_regular_expressions = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv6.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv6.js
 var require_ipv6 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ipv6.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv6.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52695,26 +52709,21 @@ var require_ipv6 = __commonJS({
         let host;
         let port = null;
         let result;
+        let error2;
         const stripped = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
         if (stripped.indexOf("[") !== -1 && stripped.indexOf("]:") !== -1) {
+          error2 = "failed to parse address with port";
           result = constants6.RE_URL_WITH_PORT.exec(stripped);
           if (result === null) {
-            return {
-              error: "failed to parse address with port",
-              address: null,
-              port: null
-            };
+            return { error: error2, address: null, port: null };
           }
           host = result[1];
           port = result[2];
         } else {
+          error2 = "failed to parse address from URL";
           result = constants6.RE_URL.exec(stripped);
           if (result === null) {
-            return {
-              error: "failed to parse address from URL",
-              address: null,
-              port: null
-            };
+            return { error: error2, address: null, port: null };
           }
           host = (_a = result[1]) !== null && _a !== void 0 ? _a : result[2];
         }
@@ -52726,10 +52735,13 @@ var require_ipv6 = __commonJS({
         } else {
           port = null;
         }
-        return {
-          address: new _Address6(host),
-          port
-        };
+        let address;
+        try {
+          address = new _Address6(host);
+        } catch {
+          return { error: error2, address: null, port: null };
+        }
+        return { address, port };
       }
       /**
        * Construct an `Address6` from an address and a hex subnet mask given as
@@ -53665,7 +53677,12 @@ var require_ipv6 = __commonJS({
         return `<a href="${safeHref}">${safeForm}</a>`;
       }
       /**
-       * Groups an address
+       * Groups an address.
+       *
+       * Returns an HTML fragment: each group is wrapped in a `<span>` carrying
+       * the group classes an address-inspector UI hovers on. The address content
+       * is HTML-escaped; anything you concatenate around it is your
+       * responsibility.
        * @returns {String}
        */
       group() {
@@ -53762,9 +53779,9 @@ var require_ipv6 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ip-address.js
+// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ip-address.js
 var require_ip_address = __commonJS({
-  "node_modules/.pnpm/ip-address@10.4.0/node_modules/ip-address/dist/ip-address.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ip-address.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -54671,9 +54688,9 @@ var require_build = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/connection-deadline.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/connection-deadline.js
 var require_connection_deadline = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
     "use strict";
     var CONNECT_TIMEOUT = 90 * 1e3;
     var ConnectionDeadline = class {
@@ -54754,9 +54771,9 @@ var require_connection_deadline = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/proxy-connection.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/proxy-connection.js
 var require_proxy_connection = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
     "use strict";
     var { SocksClient } = require_build();
     var dns = __require("dns").promises;
@@ -55033,9 +55050,9 @@ var require_proxy_connection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/charsets.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/charsets.js
 var require_charsets2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/charsets.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/charsets.js"(exports, module) {
     "use strict";
     var CHARACTER_SETS = [
       "US-ASCII",
@@ -55312,9 +55329,9 @@ var require_charsets2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/jp-decoder.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/jp-decoder.js
 var require_jp_decoder = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var encodingJapanese = require_src();
@@ -55378,9 +55395,9 @@ var require_jp_decoder = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/tools.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/tools.js
 var require_tools2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/tools.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/tools.js"(exports, module) {
     "use strict";
     var libmime = require_libmime();
     var { resolveCharset } = require_charsets2();
@@ -56454,9 +56471,9 @@ var require_tools2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/id.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/id.js
 var require_id2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/id.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/id.js"(exports, module) {
     "use strict";
     var { formatDateTime } = require_tools2();
     module.exports = async (connection, clientInfo) => {
@@ -56506,9 +56523,9 @@ var require_id2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/capability.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/capability.js
 var require_capability = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.capabilities.size && !connection.expectCapabilityUpdate) {
@@ -56527,9 +56544,9 @@ var require_capability = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/namespace.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/namespace.js
 var require_namespace = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
     "use strict";
     var { hasCapability, getStringList } = require_tools2();
     module.exports = async (connection) => {
@@ -56635,9 +56652,9 @@ var require_namespace = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/login.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/login.js
 var require_login = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/login.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/login.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     module.exports = async (connection, username, password) => {
@@ -56666,9 +56683,9 @@ var require_login = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/logout.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/logout.js
 var require_logout = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state === connection.states.LOGOUT) {
@@ -56700,9 +56717,9 @@ var require_logout = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/starttls.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/starttls.js
 var require_starttls = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("STARTTLS") || connection.secureConnection) {
@@ -56722,9 +56739,9 @@ var require_starttls = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/status-fields.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/status-fields.js
 var require_status_fields = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/status-fields.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/status-fields.js"(exports, module) {
     "use strict";
     var { parseBigIntValue, parseUintValue, MAX_UINT32_DIGITS } = require_tools2();
     var uint32 = (value) => parseUintValue(value, MAX_UINT32_DIGITS);
@@ -56767,9 +56784,9 @@ var require_status_fields = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/special-use.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/special-use.js
 var require_special_use = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/special-use.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/special-use.js"(exports, module) {
     "use strict";
     var GENERIC_TOKENS = new Set(
       [
@@ -57646,9 +57663,9 @@ var require_special_use = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/list.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/list.js
 var require_list = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/list.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/list.js"(exports, module) {
     "use strict";
     var {
       decodePath,
@@ -57993,9 +58010,9 @@ var require_list = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/enable.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/enable.js
 var require_enable = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
     "use strict";
     var { hasCapability } = require_tools2();
     module.exports = async (connection, extensionList) => {
@@ -58042,9 +58059,9 @@ var require_enable = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/select.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/select.js
 var require_select = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/select.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/select.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError, parseBigIntValue, parseUintValue, getStringList, MAX_UINT32_DIGITS } = require_tools2();
     var VALUED_RESPONSE_CODES = Object.assign(/* @__PURE__ */ Object.create(null), {
@@ -58227,9 +58244,9 @@ var require_select = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/fetch.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/fetch.js
 var require_fetch2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
     "use strict";
     var { formatMessageResponse, isRev2Active } = require_tools2();
     module.exports = async (connection, range, query, options) => {
@@ -58414,9 +58431,9 @@ var require_fetch2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/create.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/create.js
 var require_create = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/create.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/create.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, getStatusCode, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58473,9 +58490,9 @@ var require_create = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/delete.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/delete.js
 var require_delete = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58503,9 +58520,9 @@ var require_delete = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/rename.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/rename.js
 var require_rename = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path, newPath) => {
@@ -58538,9 +58555,9 @@ var require_rename = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/close.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/close.js
 var require_close = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/close.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/close.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state !== connection.states.SELECTED) {
@@ -58566,9 +58583,9 @@ var require_close = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/subscribe.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/subscribe.js
 var require_subscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58590,9 +58607,9 @@ var require_subscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/unsubscribe.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/unsubscribe.js
 var require_unsubscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58614,9 +58631,9 @@ var require_unsubscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/store.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/store.js
 var require_store = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/store.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/store.js"(exports, module) {
     "use strict";
     var { formatFlag, canUseFlag, enhanceCommandError } = require_tools2();
     module.exports = async (connection, range, flags, options) => {
@@ -58678,9 +58695,9 @@ var require_store = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/search-compiler.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/search-compiler.js
 var require_search_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
     "use strict";
     var { formatDate, formatFlag, canUseFlag, isDate, isRev2Active } = require_tools2();
     var setBoolOpt = (attributes, term, value) => {
@@ -59004,9 +59021,9 @@ var require_search_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/search.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/search.js
 var require_search = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/search.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/search.js"(exports, module) {
     "use strict";
     var {
       enhanceCommandError,
@@ -59231,9 +59248,9 @@ var require_search = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/noop.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/noop.js
 var require_noop = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       try {
@@ -59248,9 +59265,9 @@ var require_noop = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/expunge.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/expunge.js
 var require_expunge = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
     "use strict";
     var { enhanceCommandError, hasCapability, parseBigIntValue } = require_tools2();
     module.exports = async (connection, range, options) => {
@@ -59284,9 +59301,9 @@ var require_expunge = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/append.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/append.js
 var require_append = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/append.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/append.js"(exports, module) {
     "use strict";
     var {
       formatFlag,
@@ -59401,9 +59418,9 @@ var require_append = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/status.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/status.js
 var require_status = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/status.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/status.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, buildStatusQueryAttributes, isRev2Active } = require_tools2();
     var { parseStatusList } = require_status_fields();
@@ -59479,9 +59496,9 @@ var require_status = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/copyuid-parser.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/copyuid-parser.js
 var require_copyuid_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
     "use strict";
     var { expandRange, parseBigIntValue } = require_tools2();
     function parseCopyUid(response, map) {
@@ -59504,9 +59521,9 @@ var require_copyuid_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/copy.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/copy.js
 var require_copy = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -59536,9 +59553,9 @@ var require_copy = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/move.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/move.js
 var require_move = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/move.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/move.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError, hasCapability } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -59579,9 +59596,9 @@ var require_move = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/compress.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/compress.js
 var require_compress = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("COMPRESS=DEFLATE") || connection._inflate) {
@@ -59608,9 +59625,9 @@ var require_compress = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/quota.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/quota.js
 var require_quota = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError, parseUintValue, isUnsafeKey } = require_tools2();
     module.exports = async (connection, path) => {
@@ -59699,9 +59716,9 @@ var require_quota = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/idle.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/idle.js
 var require_idle = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
     "use strict";
     var { hasCapability, unrefTimer } = require_tools2();
     var NOOP_INTERVAL = 2 * 60 * 1e3;
@@ -59870,18 +59887,27 @@ var require_idle = __commonJS({
               return cancel();
             }
             pollOnce(connection, session).then(() => {
+              connection._lastPollAt = Date.now();
               if (session.cancelled) {
                 return;
               }
-              session.timer = setTimeout(runPoll, interval);
-              unrefTimer(session.timer);
+              scheduleNextPoll(interval);
             }).catch((err) => {
               connection.log.warn({ err, cid: connection.id });
               cancel();
             });
           };
+          function scheduleNextPoll(delay) {
+            session.timer = setTimeout(runPoll, delay);
+            unrefTimer(session.timer);
+          }
           connection.log.debug({ src: "c", msg: `initiated NOOP loop`, cid: connection.id });
-          runPoll();
+          let sinceLastPoll = Math.max(0, Date.now() - (connection._lastPollAt || 0));
+          if (sinceLastPoll >= interval) {
+            runPoll();
+          } else {
+            scheduleNextPoll(interval - sinceLastPoll);
+          }
         });
       } finally {
         session.cancelled = true;
@@ -59926,9 +59952,9 @@ var require_idle = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/authenticate.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/authenticate.js
 var require_authenticate = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     async function handleAuthError(err, errorResponse2) {
@@ -60062,9 +60088,9 @@ var require_authenticate = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/imap-commands.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/imap-commands.js
 var require_imap_commands = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
     "use strict";
     module.exports = /* @__PURE__ */ new Map([
       ["ID", require_id2()],
@@ -60099,9 +60125,9 @@ var require_imap_commands = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/imap-flow.js
+// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/imap-flow.js
 var require_imap_flow = __commonJS({
-  "node_modules/.pnpm/imapflow@1.6.6/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
     "use strict";
     var tls = __require("tls");
     var net = __require("net");
@@ -60147,11 +60173,32 @@ var require_imap_flow = __commonJS({
     var SOCKET_TIMEOUT = 5 * 60 * 1e3;
     var MAX_THROTTLE_DELAY = 5 * 60 * 1e3;
     var HELD_LOCK_WARN_MS = 30 * 60 * 1e3;
+    var AUTO_IDLE_DELAY = 15 * 1e3;
+    var AUTO_IDLE_SOCKET_MARGIN = 1e3;
+    var MAX_TIMER_DELAY = 2 ** 31 - 1;
     var states = {
       NOT_AUTHENTICATED: 1,
       AUTHENTICATED: 2,
       SELECTED: 3,
       LOGOUT: 4
+    };
+    var normalizeAutoIdleDelay = (value, socketTimeout, log, cid) => {
+      const maxDelay = Math.max(0, Math.min(socketTimeout, MAX_TIMER_DELAY) - AUTO_IDLE_SOCKET_MARGIN);
+      const configured = value !== void 0 && value !== null;
+      let delay = typeof value === "number" || typeof value === "string" && value.trim() ? Number(value) : NaN;
+      let reason = null;
+      if (!Number.isFinite(delay) || delay < 0) {
+        reason = "not a non-negative finite number";
+        delay = AUTO_IDLE_DELAY;
+      }
+      if (delay > maxDelay) {
+        reason = reason || `above socketTimeout (${socketTimeout} ms)`;
+        delay = maxDelay;
+      }
+      if (configured && reason) {
+        log.warn({ msg: "Adjusted unusable autoIdleDelay option", requested: value, autoIdleDelay: delay, reason, cid });
+      }
+      return Math.floor(delay);
     };
     var ImapFlow3 = class extends EventEmitter {
       /**
@@ -60217,6 +60264,15 @@ var require_imap_flow = __commonJS({
        *
        * @property {Boolean} [disableAutoIdle=false]
        *     If `true`, do not start IDLE automatically. Useful when only specific operations are needed.
+       *
+       * @property {Number} [autoIdleDelay=15000]
+       *     How long (in milliseconds) the connection has to be inactive before IDLE is started automatically.
+       *     Keep it above the pause your own code usually leaves between two commands, otherwise every command is
+       *     followed by an IDLE that the next command has to break, costing two extra round-trips per command.
+       *     To turn auto-IDLE off entirely use `disableAutoIdle` rather than a very large delay: the value is
+       *     capped below `socketTimeout`, because auto-IDLE has to start before the inactivity watchdog fires.
+       *     On servers without IDLE support this controls when the polling fallback starts, not how often it
+       *     polls - the poll interval is `maxIdleTime`, capped at 2 minutes.
        *
        * @property {Object} [tls]
        *     Additional TLS options. For details, see [Node.js TLS connect](https://nodejs.org/api/tls.html#tls_tls_connect_options_callback).
@@ -60367,6 +60423,9 @@ var require_imap_flow = __commonJS({
         this.locks = [];
         this.idRequested = false;
         this.maxIdleTime = this.options.maxIdleTime || false;
+        this.autoIdleDelay = normalizeAutoIdleDelay(this.options.autoIdleDelay, this.socketTimeout, this.log, this.id);
+        this._lastPollAt = 0;
+        this._openDownloads = 0;
         this.missingIdleCommand = (this.options.missingIdleCommand || "").toString().toUpperCase().trim() || "NOOP";
         this.disableBinary = !!this.options.disableBinary;
         this.skipListSubscribedArg = false;
@@ -60947,13 +61006,15 @@ var require_imap_flow = __commonJS({
         this._socketTimeout = this._socketTimeout || (() => {
           const err = new Error("Socket timeout");
           err.code = "ETIMEOUT";
-          if (this.idling) {
+          const quietExpected = this.idling || this._openDownloads || this.currentLock;
+          const commandStuck = this.currentRequest && !(this.idling && this.currentRequest.command === "IDLE");
+          if (quietExpected && !commandStuck) {
             if (!this.usable || !this.socket || this.socket.destroyed) {
               this.emitError(err);
               return;
             }
-            this.run("NOOP").then(() => this.idle()).catch((err2) => {
-              this.log.warn({ msg: "IDLE recovery failed after timeout", err: err2, cid: this.id });
+            this.run("NOOP").catch((err2) => {
+              this.log.warn({ msg: "Connection recovery failed after timeout", err: err2, cid: this.id });
               if (!this.isClosed) {
                 this.close();
               }
@@ -61544,6 +61605,15 @@ var require_imap_flow = __commonJS({
         }
         return range;
       }
+      // The single definition of "the connection is not free". A held or queued mailbox lock, a
+      // command in flight or queued, and an open download stream all mean a caller is
+      // mid-sequence: starting IDLE there injects an IDLE/DONE round trip - or, with
+      // `missingIdleCommand` set to SELECT or STATUS, a mailbox poll - between two of that
+      // caller's own commands. Every one of those states ends by calling autoidle() again, so
+      // declining while busy postpones IDLE, it never cancels it.
+      connectionBusy() {
+        return !!(this.currentLock || this.locks.length || this.currentRequest || this.requestQueue.length || this._openDownloads);
+      }
       // Timer process-liveness policy: connection establishment and greeting deadlines keep the
       // process alive, because a caller is waiting on connect() to settle. Background timers
       // (auto-IDLE, IDLE restart, fallback polling, throttle back-off, the held-lock diagnostic) are
@@ -61554,9 +61624,15 @@ var require_imap_flow = __commonJS({
         if (this.options.disableAutoIdle || this.state !== this.states.SELECTED) {
           return;
         }
+        if (this.connectionBusy()) {
+          return;
+        }
         this.idleStartTimer = setTimeout(() => {
+          if (this.state !== this.states.SELECTED || this.connectionBusy()) {
+            return;
+          }
           this.idle().catch((err) => this.log.warn({ err, cid: this.id }));
-        }, 15 * 1e3);
+        }, this.autoIdleDelay);
         unrefTimer(this.idleStartTimer);
       }
       // PUBLIC API METHODS
@@ -63037,6 +63113,15 @@ var require_imap_flow = __commonJS({
             }
           }
         };
+        this._openDownloads++;
+        let downloadDone = false;
+        let finishDownload = () => {
+          if (!downloadDone) {
+            downloadDone = true;
+            this._openDownloads--;
+            this.autoidle();
+          }
+        };
         let runFetchAllParts = () => {
           fetchAllParts().catch((err) => {
             if (!fetchAborted && stream && !stream.destroyed) {
@@ -63051,6 +63136,7 @@ var require_imap_flow = __commonJS({
               });
             }
           }).finally(() => {
+            finishDownload();
             if (!fetchAborted && stream && !stream.destroyed) {
               stream.end();
             }
@@ -63062,6 +63148,7 @@ var require_imap_flow = __commonJS({
             writeResult = writeChunk(chunk);
           } catch (err) {
             stream.emit("error", err);
+            finishDownload();
             if (!fetchAborted && stream && !stream.destroyed) {
               stream.end();
             }
@@ -63071,6 +63158,8 @@ var require_imap_flow = __commonJS({
             stream.once("drain", () => {
               if (!fetchAborted) {
                 runFetchAllParts();
+              } else {
+                finishDownload();
               }
             });
           } else {
@@ -63200,14 +63289,16 @@ var require_imap_flow = __commonJS({
           throw this.createNoConnectionError();
         }
         clearTimeout(this.idleStartTimer);
-        if (typeof this.preCheck === "function") {
-          await this.preCheck();
+        try {
+          if (typeof this.preCheck === "function") {
+            await this.preCheck();
+          }
+          return await this.runInternal(command, ...args);
+        } finally {
+          if (command !== "IDLE") {
+            this.autoidle();
+          }
         }
-        let result = await this.runInternal(command, ...args);
-        if (command !== "IDLE") {
-          this.autoidle();
-        }
-        return result;
       }
       /**
        * Dispatches a command without the IDLE handshake that `run()` performs.
@@ -63304,6 +63395,7 @@ var require_imap_flow = __commonJS({
                   idling: this.idling
                 });
                 this.currentLock = false;
+                this.autoidle();
                 setImmediate(() => {
                   this.processLocks().catch((err) => this.log.error({ err, cid: this.id }));
                 });
@@ -63322,6 +63414,12 @@ var require_imap_flow = __commonJS({
               reject(error2);
               continue;
             }
+            const grantLock = () => {
+              this.currentLock = lock;
+              armHeldTimer();
+              this.autoidle();
+              resolve3({ path, release });
+            };
             if (this.mailbox && this.mailbox.path === path && !!this.mailbox.readOnly === !!options.readOnly) {
               this.log.trace({
                 msg: "Mailbox lock acquired [existing]",
@@ -63330,9 +63428,7 @@ var require_imap_flow = __commonJS({
                 idling: this.idling,
                 ...options.description && { description: options.description }
               });
-              this.currentLock = lock;
-              armHeldTimer();
-              resolve3({ path, release });
+              grantLock();
               break;
             }
             try {
@@ -63344,9 +63440,7 @@ var require_imap_flow = __commonJS({
                 idling: this.idling,
                 ...options.description && { description: options.description }
               });
-              this.currentLock = lock;
-              armHeldTimer();
-              resolve3({ path, release });
+              grantLock();
               break;
             } catch (err) {
               if (err.responseStatus === "NO") {
