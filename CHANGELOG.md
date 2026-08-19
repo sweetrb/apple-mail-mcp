@@ -2,7 +2,11 @@
 
 ## [2.16.1] - 2026-08-19
 ### Changed
-- Dependency bump via Dependabot; committed bundle rebuilt. (automated)
+- `imapflow` 1.6.6 → 1.7.0: makes the auto-IDLE delay configurable, aligns the
+  socket watchdog with the auto-IDLE busy guard, and validates `autoIdleDelay`
+  to keep auto-IDLE off a busy connection.
+- Dev-tooling bump (`@typescript-eslint/*` 8.66.0 → 8.67.0, `esbuild` 0.28.1 →
+  0.28.2, `globals` 17.9.0 → 17.10.0); committed bundle rebuilt.
 
 ## [2.16.0] - 2026-08-16
 
