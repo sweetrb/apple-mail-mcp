@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [2.16.2] - 2026-08-22
+
+### Fixed
+
+- AppleScript mailbox lookup now uses account-relative paths. A top-level
+  `Inbox` and a nested `Archive/Inbox` no longer collapse into the same name;
+  exact paths win, and ambiguous leaf names require a full path (#197).
+
 ## [2.16.1] - 2026-08-19
 ### Changed
 - `imapflow` 1.6.6 → 1.7.0: makes the auto-IDLE delay configurable, aligns the

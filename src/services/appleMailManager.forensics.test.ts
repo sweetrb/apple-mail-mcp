@@ -471,7 +471,7 @@ describe("effect reconciliation (always on, no audit log configured)", () => {
   it("reconciles the mailbox it actually opened", () => {
     mgr.batchDeleteMessages(["75811"]);
     const script = h.calls.find((s) => s.includes("delete _msg"))!;
-    const opened = /if \(name of _m\) is "([^"]*)"/.exec(script)![1];
+    const opened = /if _mPath is "([^"]*)"/.exec(script)![1];
     const openedAccount = /if \(name of _a\) is "([^"]*)"/.exec(script)![1];
     const [delta] = mgr.consumeLastForensics()!.countDeltas;
     expect(delta.mailbox).toBe(opened);

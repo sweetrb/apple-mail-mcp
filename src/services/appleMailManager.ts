@@ -896,6 +896,24 @@ function buildAppLevelScript(command: string): string {
 }
 
 /**
+ * AppleScript fragment that writes an account-relative mailbox path into
+ * `outputVar` by walking the mailbox's container chain. Mail.app exposes an
+ * account's `mailboxes` collection recursively, but `name of mailbox` is only
+ * the leaf (so Inbox and Archive/Inbox both report "Inbox").
+ */
+function mailboxPathFragment(mailboxVar: string, outputVar: string): string {
+  return `
+        set ${outputVar} to name of ${mailboxVar}
+        set _pathParent to container of ${mailboxVar}
+        repeat while _pathParent is not missing value
+          set _parentClass to class of _pathParent
+          if _parentClass is account or _parentClass is application then exit repeat
+          set ${outputVar} to (name of _pathParent) & "/" & ${outputVar}
+          set _pathParent to container of _pathParent
+        end repeat`;
+}
+
+/**
  * Common mailbox name variations across different account types.
  * Maps normalized (lowercase) names to possible actual names.
  */
@@ -907,6 +925,47 @@ const MAILBOX_ALIASES: Record<string, string[]> = {
   junk: ["Junk", "Junk Email", "Spam", "JUNK", "junk"],
   archive: ["Archive", "ARCHIVE", "archive", "All Mail"],
 };
+
+function mailboxLeaf(path: string): string {
+  return path.split("/").at(-1) ?? path;
+}
+
+/**
+ * Resolve a user-supplied mailbox reference against canonical mailbox paths.
+ * Exact paths win, which intentionally makes "Inbox" select the top-level
+ * mailbox even when Archive/Inbox also exists. Legacy leaf names remain valid
+ * only when they identify one mailbox; otherwise the caller gets the candidate
+ * paths rather than an arbitrary folder.
+ */
+export function resolveAppleMailboxPath(mailbox: string, actualPaths: readonly string[]): string {
+  if (actualPaths.length === 0) return mailbox;
+
+  const candidates = [mailbox, ...(MAILBOX_ALIASES[mailbox.toLowerCase()] ?? [])];
+  for (const candidate of candidates) {
+    const exact = actualPaths.find((path) => path === candidate);
+    if (exact) return exact;
+    const folded = actualPaths.find((path) => path.toLowerCase() === candidate.toLowerCase());
+    if (folded) return folded;
+  }
+
+  for (const candidate of candidates) {
+    const leafMatches = actualPaths.filter(
+      (path) => mailboxLeaf(path).toLowerCase() === candidate.toLowerCase()
+    );
+    if (leafMatches.length === 1) return leafMatches[0];
+    if (leafMatches.length > 1) {
+      const paths = [...leafMatches]
+        .sort()
+        .map((path) => `"${path}"`)
+        .join(" and ");
+      throw new Error(
+        `Mailbox "${mailbox}" is ambiguous — it matches ${paths}. Pass the full path.`
+      );
+    }
+  }
+
+  return mailbox;
+}
 
 /**
  * The mailbox names (as `list-mailboxes` reports them) that hold a Gmail-style
@@ -938,7 +997,7 @@ function isInboxScope(mailbox: string): boolean {
  * keep the ordinary single-INBOX behavior. Matching is case-insensitive.
  */
 function gmailReceivingMailboxes(mailboxNames: readonly string[]): string[] | null {
-  const lower = mailboxNames.map((n) => n.toLowerCase());
+  const lower = mailboxNames.map((n) => mailboxLeaf(n).toLowerCase());
   if (!lower.includes("all mail")) return null;
   const present = GMAIL_INBOX_MAILBOXES.filter((want) => lower.includes(want.toLowerCase()));
   return present.length > 0 ? present : null;
@@ -1121,7 +1180,11 @@ export class AppleMailManager {
         if (count of _acctM) is 1 then
           set _mbM to {}
           repeat with _m in (mailboxes of (item 1 of _acctM))
-            if (name of _m) is "${escapeForAppleScript(resolved)}" then set end of _mbM to _m
+            set _mPath to ""
+            ${mailboxPathFragment("_m", "_mPath")}
+            ignoring case
+              if _mPath is "${escapeForAppleScript(resolved)}" then set end of _mbM to _m
+            end ignoring
           end repeat
           if (count of _mbM) is 1 then set _tmb to item 1 of _mbM
         end if`;
@@ -1880,8 +1943,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   }
 
   /**
-   * Returns cached mailbox names for an account, or fetches fresh.
-   * This caches only the name list used by resolveMailbox(), not the
+   * Returns cached canonical mailbox paths for an account, or fetches fresh.
+   * This caches only the path list used by resolveMailbox(), not the
    * full Mailbox objects with counts (which change frequently).
    */
   private getCachedMailboxNames(account: string): string[] {
@@ -2102,40 +2165,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @returns Actual mailbox name, or original if not found
    */
   private resolveMailbox(mailbox: string, account: string): string {
-    const actualMailboxes = this.getCachedMailboxNames(account);
-    if (actualMailboxes.length === 0) {
-      return mailbox; // Fall back to original
-    }
-
-    // 1. Try exact match
-    if (actualMailboxes.includes(mailbox)) {
-      return mailbox;
-    }
-
-    // 2. Try case-insensitive match
-    const lowerMailbox = mailbox.toLowerCase();
-    const caseMatch = actualMailboxes.find((mb) => mb.toLowerCase() === lowerMailbox);
-    if (caseMatch) {
-      return caseMatch;
-    }
-
-    // 3. Try known aliases
-    const aliases = MAILBOX_ALIASES[lowerMailbox];
-    if (aliases) {
-      for (const alias of aliases) {
-        if (actualMailboxes.includes(alias)) {
-          return alias;
-        }
-        // Also try case-insensitive alias match
-        const aliasMatch = actualMailboxes.find((mb) => mb.toLowerCase() === alias.toLowerCase());
-        if (aliasMatch) {
-          return aliasMatch;
-        }
-      }
-    }
-
-    // No match found, return original and let AppleScript handle the error
-    return mailbox;
+    return resolveAppleMailboxPath(mailbox, this.getCachedMailboxNames(account));
   }
 
   // ===========================================================================
@@ -2279,12 +2309,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const scanThreshold = getMailboxScanThreshold();
 
     let searchCommand: string;
+    let resultMailbox = mailbox || "INBOX";
+    let rowsIncludeMailbox = mailbox === undefined;
 
     if (mailbox) {
       // Search a specific mailbox. The caller explicitly chose this mailbox, so
       // we don't apply the count-guard skip — but we still wrap the scan so a
       // timeout is reported as a partial result rather than a false empty.
       const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
+      resultMailbox = targetMailbox;
 
       // Gmail virtual-INBOX (BUG A1): a Gmail-style account's literal "INBOX"
       // mailbox is an empty shell — the mail actually received lives under the
@@ -2298,6 +2331,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         : null;
 
       if (gmailInbox) {
+        rowsIncludeMailbox = true;
         const nameList = appleScriptLowerNameList(gmailInbox);
         searchCommand = `
       ${dateSetup}set outputText to ""
@@ -2310,12 +2344,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         if msgCount >= ${limit} then exit repeat
         set mbName to ""
         try
-          set mbName to name of mb
+          ${mailboxPathFragment("mb", "mbName")}
         end try
         ignoring case
-          if _wantNames contains mbName then
+          if _wantNames contains (name of mb) then
             try
-              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter })}
+              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, trailing: ` & "${FIELD_SEP}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
@@ -2359,7 +2393,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         if msgCount >= ${limit} then exit repeat
         set mbName to ""
         try
-          set mbName to name of mb
+          ${mailboxPathFragment("mb", "mbName")}
         end try
         if ((current date) - _startedAt) > ${SEARCH_ACCOUNT_BUDGET_SECONDS} then
           set _timedOut to true
@@ -2407,16 +2441,23 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       };
     }
 
-    return this.parseSearchResult(result.output, mailbox || "INBOX", targetAccount);
+    return this.parseSearchResult(result.output, resultMailbox, targetAccount, rowsIncludeMailbox);
   }
 
   /**
    * Split a per-account search payload into its message list and the DIAG
    * trailer, parse both, and return a SearchResult. See searchMessagesWithDiagnostics.
    */
-  private parseSearchResult(output: string, mailbox: string, account: string): SearchResult {
+  private parseSearchResult(
+    output: string,
+    mailbox: string,
+    account: string,
+    rowsIncludeMailbox = false
+  ): SearchResult {
     const { payload, diagnostics } = splitSearchDiagnostics(output, account);
-    const messages = payload.trim() ? this.parseMessageList(payload, mailbox, account) : [];
+    const messages = payload.trim()
+      ? this.parseMessageList(payload, mailbox, account, rowsIncludeMailbox)
+      : [];
     return { messages, diagnostics };
   }
 
@@ -2457,7 +2498,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 set msgFlagged to flagged status of msg as string
                 set msgJunk to junk mail status of msg as string
                 set msgDeleted to deleted status of msg as string
-                set msgMailbox to name of mb
+                set msgMailbox to ""
+                ${mailboxPathFragment("mb", "msgMailbox")}
                 set msgAccount to name of acct
                 set hasAtt to "false"
                 try
@@ -2535,7 +2577,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         set targetMb to missing value
         ignoring case
           repeat with mb in _mbs
-            if (name of mb) is "${escapeForAppleScript(resolved)}" then
+            set _mbPath to ""
+            ${mailboxPathFragment("mb", "_mbPath")}
+            if _mbPath is "${escapeForAppleScript(resolved)}" then
               set targetMb to mb
               exit repeat
             end if
@@ -2545,7 +2589,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         set targetMb to missing value
         ignoring case
           repeat with mb in mailboxes of acct
-            if (name of mb) is "${escapeForAppleScript(resolved)}" then
+            set _mbPath to ""
+            ${mailboxPathFragment("mb", "_mbPath")}
+            if _mbPath is "${escapeForAppleScript(resolved)}" then
               set targetMb to mb
               exit repeat
             end if
@@ -2886,11 +2932,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const mbIter = local ? "_mbs" : "mailboxes";
 
     let listCommand: string;
+    let resultMailbox = mailbox || "INBOX";
+    let rowsIncludeMailbox = mailbox === undefined;
 
     if (mailbox) {
       // List from a specific mailbox. Caller-scoped, so no count-guard skip, but
       // wrap the scan so a timeout is reported as partial, not a false empty.
       const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
+      resultMailbox = targetMailbox;
 
       // Gmail virtual-INBOX (BUG A1, ported from searchMessagesWithDiagnostics):
       // a Gmail-style account's literal "INBOX" mailbox is an empty shell — mail
@@ -2903,6 +2952,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         : null;
 
       if (gmailInbox) {
+        rowsIncludeMailbox = true;
         const nameList = appleScriptLowerNameList(gmailInbox);
         listCommand = `
       set outputText to ""
@@ -2916,10 +2966,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         if msgCount >= ${limit} then exit repeat
         set mbName to ""
         try
-          set mbName to name of mb
+          ${mailboxPathFragment("mb", "mbName")}
         end try
         ignoring case
-          if _wantNames contains mbName then
+          if _wantNames contains (name of mb) then
             try
               ${buildMessageRowLoop({ collection: `messages of mb ${fromFilter}`, limit, offset, dedup: true, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
             on error _errMsg number _errNum
@@ -2965,7 +3015,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         if msgCount >= ${limit} then exit repeat
         set mbName to ""
         try
-          set mbName to name of mb
+          ${mailboxPathFragment("mb", "mbName")}
         end try
         if ((current date) - _startedAt) > ${SEARCH_ACCOUNT_BUDGET_SECONDS} then
           set _timedOut to true
@@ -3011,7 +3061,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       };
     }
 
-    return this.parseSearchResult(result.output, mailbox || "INBOX", targetAccount);
+    return this.parseSearchResult(result.output, resultMailbox, targetAccount, rowsIncludeMailbox);
   }
 
   /**
@@ -3025,7 +3075,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * false-negative for MIME-embedded attachments (a known AppleScript
    * limitation). Use getMessage or list-attachments for authoritative info.
    */
-  private parseMessageList(output: string, mailbox: string, account: string): Message[] {
+  private parseMessageList(
+    output: string,
+    mailbox: string,
+    account: string,
+    rowsIncludeMailbox = false
+  ): Message[] {
     const items = output.split(RECORD_SEP);
     const messages: Message[] = [];
 
@@ -3035,9 +3090,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
       let msgMailbox = mailbox;
       let hasAttachments = false;
-      if (parts.length >= 8) {
+      if (rowsIncludeMailbox && parts.length >= 7) {
         msgMailbox = parts[6];
-        hasAttachments = parts[7] === "true";
+        hasAttachments = parts.length >= 8 ? parts[7] === "true" : false;
       } else if (parts.length === 7) {
         hasAttachments = parts[6] === "true";
       }
@@ -3789,9 +3844,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * Move a message to a destination mailbox, with full nested-mailbox support.
    *
    * Resolving the destination as `mailbox "X" of account "Y"` only finds
-   * top-level mailboxes, so nested destinations (e.g. a "Moore" subfolder)
-   * silently failed. Instead we walk the target account's full mailbox tree and
-   * match by name. Resolution is:
+   * top-level mailboxes on some stores. Instead we walk the account's recursive
+   * mailbox collection, reconstruct each container path, and match by path.
+   * Resolution is:
    *   - account-scoped (won't move to a same-named mailbox in another account)
    *   - ambiguity-aware: if the name matches more than one mailbox in the
    *     account we refuse to guess and return an error — silently moving mail to
@@ -3874,15 +3929,17 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     const script = buildAppLevelScript(`
       try
-        -- \`mailboxes of account\` is already flat: it includes nested mailboxes
-        -- (named by path, e.g. "Processed/Vendors"). Descending via \`mailboxes of mb\`
-        -- is unreliable (it double-prepends the parent path), so we DON'T recurse —
-        -- we match against this flat list by exact name and use the reference directly
-        -- (addressing \`mailbox "X" of account "Y"\` only finds some top-level mailboxes).
+        -- \`mailboxes of account\` recursively includes nested mailboxes, but
+        -- \`name of mb\` is only the leaf. Reconstruct each path from its
+        -- container chain so Inbox and Archive/Inbox remain distinct.
         set destName to "${safeMailbox}"
         set destMatches to {}
         repeat with mb in (mailboxes of account "${safeAccount}")
-          if (name of mb) is destName then set end of destMatches to mb
+          set _destPath to ""
+          ${mailboxPathFragment("mb", "_destPath")}
+          ignoring case
+            if _destPath is destName then set end of destMatches to mb
+          end ignoring
         end repeat
         if (count of destMatches) is 0 then return "error:Destination mailbox \\"" & destName & "\\" not found in account \\"${safeAccount}\\""
         if (count of destMatches) > 1 then return "error:Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; disambiguate or move by full path"
@@ -4388,14 +4445,18 @@ ${this.errorEmit("              ")}
     const safeMailbox = escapeForAppleScript(targetMailbox);
     const safeAccount = escapeForAppleScript(targetAccount);
 
-    // Resolved once, before the walk. `mailboxes of account` is already flat
-    // (includes nested mailboxes by path), so we match by exact name and use the
-    // reference directly. A bad/ambiguous destination fails the whole batch.
+    // Resolved once, before the walk. `mailboxes of account` includes nested
+    // mailboxes, whose paths are rebuilt from their container chains. A bad or
+    // ambiguous destination fails the whole batch.
     const setup = `
         set destName to "${safeMailbox}"
         set destMatches to {}
         repeat with _dmb in (mailboxes of account "${safeAccount}")
-          if (name of _dmb) is destName then set end of destMatches to _dmb
+          set _destPath to ""
+          ${mailboxPathFragment("_dmb", "_destPath")}
+          ignoring case
+            if _destPath is destName then set end of destMatches to _dmb
+          end ignoring
         end repeat
         if (count of destMatches) is 0 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" not found in account \\"${safeAccount}\\""
         if (count of destMatches) > 1 then return "${BATCH_FATAL}Destination mailbox \\"" & destName & "\\" is ambiguous (" & (count of destMatches) & " matches) in account \\"${safeAccount}\\"; move by full path"
@@ -4698,10 +4759,11 @@ ${this.errorEmit("              ")}
     const listCommand = (iterExpr: string): string => `
       set mailboxList to {}
       repeat with mb in ${iterExpr}
-        set mbName to name of mb
+        set mbPath to ""
+        ${mailboxPathFragment("mb", "mbPath")}
         set mbUnread to unread count of mb
         set mbCount to count of messages of mb
-        set end of mailboxList to mbName & "${FIELD_SEP}" & mbUnread & "${FIELD_SEP}" & mbCount
+        set end of mailboxList to mbPath & "${FIELD_SEP}" & mbUnread & "${FIELD_SEP}" & mbCount
       end repeat
       set AppleScript's text item delimiters to "${RECORD_SEP}"
       return mailboxList as text
@@ -5561,14 +5623,16 @@ end tell`;
   }
 
   /**
-   * Fetches mailbox names for an account directly from Mail.app.
+   * Fetches canonical mailbox paths for an account directly from Mail.app.
    * Used internally by the cache; prefer getCachedMailboxNames().
    */
   private fetchMailboxNames(account: string): string[] {
     const body = `
       set mbNames to {}
       repeat with mb in ${isLocalStoreLabel(account) ? "_mbs" : "mailboxes"}
-        set end of mbNames to name of mb
+        set mbPath to ""
+        ${mailboxPathFragment("mb", "mbPath")}
+        set end of mbNames to mbPath
       end repeat
       return mbNames
     `;

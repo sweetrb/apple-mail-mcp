@@ -44,7 +44,7 @@ describe("by-id message identity", () => {
     expect(mgr.replyToMessage("42", "Reply body", false, false)).toMatchObject({ success: true });
     let script = lastScript();
     expect(script).toContain('if (name of _a) is "work@example.com"');
-    expect(script).toContain('if (name of _m) is "INBOX"');
+    expect(script).toContain('if _mPath is "INBOX"');
     expect(script).toContain("messages of _tmb whose id is 42");
     expect(script).toContain("reply msg without opening window");
     expect(script).not.toContain("messages of mb whose id is 42");
@@ -71,7 +71,7 @@ describe("by-id message identity", () => {
     });
     let script = lastScript();
     expect(script).toContain('first account whose name is "work@example.com"');
-    expect(script).toContain('if (name of mb) is "INBOX" then');
+    expect(script).toContain('if _mbPath is "INBOX" then');
     expect(script).toContain("messages of targetMb whose id is 42");
     expect(script).not.toContain("messages of mb whose id is 42");
 
@@ -80,9 +80,22 @@ describe("by-id message identity", () => {
     expect(mgr.getRawSource("42")).toBe("raw MIME source");
     script = lastScript();
     expect(script).toContain('first account whose name is "work@example.com"');
-    expect(script).toContain('if (name of mb) is "INBOX" then');
+    expect(script).toContain('if _mbPath is "INBOX" then');
     expect(script).toContain("messages of targetMb whose id is 42");
     expect(script).not.toContain("messages of mb whose id is 42");
+  });
+
+  it("keeps a recorded nested mailbox path intact", () => {
+    mgr.noteMessageLocation("42", "work@example.com", "Archive/Inbox");
+    h.output = "raw MIME source";
+
+    expect(mgr.getRawSource("42")).toBe("raw MIME source");
+    const script = lastScript();
+    expect(script).toContain('if _mbPath is "Archive/Inbox" then');
+    expect(script).toContain('set _mbPath to (name of _pathParent) & "/" & _mbPath');
+    expect(script).toContain(
+      "if _parentClass is account or _parentClass is application then exit repeat"
+    );
   });
 
   it("does not read an arbitrary first match when an id has no recorded location", () => {
