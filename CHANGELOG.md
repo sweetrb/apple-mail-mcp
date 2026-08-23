@@ -1,12 +1,58 @@
 ## [Unreleased]
 
-## [2.16.2] - 2026-08-22
+## [2.17.0] - 2026-08-23
+
+### Changed
+
+- **AppleScript mailbox lookup now uses account-relative paths, not leaf
+  names.** A top-level `Inbox` and a nested `Archive/Inbox` no longer collapse
+  into the same mailbox — exact paths win, unique leaf names keep working, and
+  an ambiguous leaf name is refused rather than guessed. Applies everywhere a
+  `mailbox` is addressed: `list-mailboxes`, `search-messages`, `list-messages`,
+  `get-unread-count`, `move-message`, `batch-move-messages`, `delete-mailbox`,
+  `rename-mailbox`, and `create-rule`'s `moveTo` (#197). Minor bump because
+  this is a visible contract change for Gmail accounts: nested special
+  mailboxes now report their real path (e.g. `[Gmail]/All Mail` instead of
+  `All Mail`) in `list-mailboxes` output and every `Message.mailbox` field.
 
 ### Fixed
 
-- AppleScript mailbox lookup now uses account-relative paths. A top-level
-  `Inbox` and a nested `Archive/Inbox` no longer collapse into the same name;
-  exact paths win, and ambiguous leaf names require a full path (#197).
+- The container-walk that builds a mailbox's path no longer raises `(-1728)`
+  against a real account. Mail never reports the bare `account` class Apple's
+  own docs use — only a concrete subclass (`imap account`, `exchange
+  account`, …) — so the walk's terminator condition was dead code and
+  `container of <account>` errored on every account type; a local "On My Mac"
+  mailbox hit an equivalent phantom-container error one hop earlier. The walk
+  now whitelists `mailbox`/`container` classes and guards every accessor with
+  its own `try`, degrading to the leaf name instead of failing outright if a
+  future Mail version changes the container chain shape.
+- A destructive-operation forensics comparison (the reconciliation check
+  behind #155) could throw on an ambiguous mailbox leaf **after** a move had
+  already succeeded, misreporting a completed move as a failed one. The
+  comparison now uses a non-throwing resolver, and the underlying RECON
+  records carry canonical paths instead of leaves.
+- `rename-mailbox` could leave an orphaned destination mailbox with no
+  rollback if `oldName` turned out to be an ambiguous leaf — the ambiguity
+  was previously discovered only after the new mailbox had already been
+  created. The old name is now resolved (and refused, if ambiguous) before
+  anything is created.
+- `search-messages`/`list-messages` scoped to a specific mailbox, plus
+  `get-unread-count`, `delete-mailbox`, `rename-mailbox`, and `create-rule`'s
+  account-scoped `moveTo`, now resolve a compound path (e.g. `Archive/Inbox`)
+  via the same container-walk match `move-message` already used, instead of
+  the flat `mailbox "X"` AppleScript form, which only matches a leaf name and
+  silently found nothing (or the wrong mailbox) for a nested destination.
+- Fixed a field-count desync in the all-mailboxes row parser: an explicit
+  empty-string `mailbox` (schema-legal, since `mailbox` is merely optional)
+  took neither the single-mailbox nor the all-mailboxes parsing branch, so
+  every returned message reported the wrong mailbox and `hasAttachments:
+  false` regardless of the real value — and cached the wrong mailbox for
+  later by-id reads, replies, and deletes.
+- The no-`account` fan-out in `search-messages`/`list-messages` no longer
+  aborts the whole call (discarding results already gathered from other
+  accounts) when one account's mailbox resolution throws on an ambiguous
+  leaf; that account is now reported via the same partial-results diagnostics
+  used for a timeout or an oversized mailbox.
 
 ## [2.16.1] - 2026-08-19
 ### Changed

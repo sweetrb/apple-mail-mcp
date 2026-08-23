@@ -937,10 +937,21 @@ List all mailboxes for an account.
 |-----------|------|----------|-------------|
 | `account` | string | No | Account to list from, or `"On My Mac"` for the local store |
 
-**Returns:** List of mailbox names with message and unread counts. A source that
-could not be read is **named** (`partial: true` + `failedAccounts`) rather than
-dropped, and a listing Mail refused outright returns an error naming the accounts
-that do exist — never an empty list.
+**Returns:** List of mailbox **paths** (account-relative, e.g. `Archive/Inbox` for
+a nested mailbox — a top-level `Inbox` stays `Inbox`) with message and unread
+counts. A source that could not be read is **named** (`partial: true` +
+`failedAccounts`) rather than dropped, and a listing Mail refused outright
+returns an error naming the accounts that do exist — never an empty list.
+
+**Nested mailboxes and Gmail labels.** Every `mailbox` parameter across this
+server (search-messages, list-messages, get-unread-count, move-message,
+delete-mailbox, rename-mailbox, create-rule's `moveTo`) accepts either the full
+path or a leaf name that is unique across the account — the same rule
+move-message has always used. A leaf name that matches more than one mailbox
+(e.g. a top-level `Inbox` and an `Archive/Inbox` on an Exchange account) is
+refused rather than guessed; pass the full path to disambiguate. This also
+means Gmail's nested special mailboxes now report their real path, e.g.
+`[Gmail]/All Mail` rather than `All Mail` — a visible change from before 2.17.0.
 
 **Mail's local "On My Mac" mailboxes** are not children of any account — they
 hang off the application — so they are reported under the synthetic account label

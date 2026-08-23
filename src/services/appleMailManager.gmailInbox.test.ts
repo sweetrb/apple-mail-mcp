@@ -148,7 +148,7 @@ describe("A1: INBOX-scoped search on a NON-Gmail account is unchanged", () => {
 
     const scan = lastScript("set outputText to");
     expect(scan).toBeDefined();
-    expect(scan).toMatch(/set theMailbox to mailbox "INBOX"/);
+    expect(scan).toMatch(/if _mbcPath is "INBOX"/);
     expect(scan).not.toContain('"all mail"');
   });
 
@@ -159,7 +159,7 @@ describe("A1: INBOX-scoped search on a NON-Gmail account is unchanged", () => {
     mgr.searchMessages(undefined, "Sent Mail", "robert.b.sweet@gmail.com", 50);
 
     const scan = lastScript("set outputText to");
-    expect(scan).toMatch(/set theMailbox to mailbox "Sent Mail"/);
+    expect(scan).toMatch(/if _mbcPath is "Sent Mail"/);
   });
 });
 
@@ -219,7 +219,7 @@ describe("A3: INBOX-scoped list-messages on a NON-Gmail account is unchanged", (
 
     const scan = lastScript("set outputText to");
     expect(scan).toBeDefined();
-    expect(scan).toMatch(/set theMailbox to mailbox "INBOX"/);
+    expect(scan).toMatch(/if _mbcPath is "INBOX"/);
     expect(scan).not.toContain('"all mail"');
   });
 
@@ -230,7 +230,7 @@ describe("A3: INBOX-scoped list-messages on a NON-Gmail account is unchanged", (
     mgr.listMessages("Sent Mail", "robert.b.sweet@gmail.com", 50);
 
     const scan = lastScript("set outputText to");
-    expect(scan).toMatch(/set theMailbox to mailbox "Sent Mail"/);
+    expect(scan).toMatch(/if _mbcPath is "Sent Mail"/);
   });
 });
 

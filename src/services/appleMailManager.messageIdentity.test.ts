@@ -94,7 +94,7 @@ describe("by-id message identity", () => {
     expect(script).toContain('if _mbPath is "Archive/Inbox" then');
     expect(script).toContain('set _mbPath to (name of _pathParent) & "/" & _mbPath');
     expect(script).toContain(
-      "if _parentClass is account or _parentClass is application then exit repeat"
+      "if _parentClass is not mailbox and _parentClass is not container then exit repeat"
     );
   });
 
