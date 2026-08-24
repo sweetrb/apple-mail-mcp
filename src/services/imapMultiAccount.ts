@@ -122,11 +122,6 @@ export function mergeMessages(
   return limit >= 0 ? merged.slice(0, limit) : merged;
 }
 
-/** Gmail/Workspace IMAP host? Its `[Gmail]/All Mail` virtual mailbox is Gmail-only. */
-export function isGmailHost(host: string): boolean {
-  return /(^|\.)gmail\.com$/i.test(host.trim());
-}
-
 /**
  * Fan an IMAP message query out over EVERY configured IMAP account and return
  * the concatenated structured rows (not yet merged with AppleScript, not yet
@@ -142,20 +137,22 @@ export async function fanOutImapMessages(
   kind: "search" | "list",
   deps: Omit<ImapDeps, "config" | "account"> = {},
   configs: ImapConfig[] = resolveImapConfigs()
-): Promise<{ rows: MessageRow[]; accountsQueried: string[]; accountsFailed: string[] }> {
+): Promise<{
+  rows: MessageRow[];
+  accountsQueried: string[];
+  accountsFailed: string[];
+  failedMailboxes: string[];
+}> {
   const rows: MessageRow[] = [];
   const accountsQueried: string[] = [];
   const accountsFailed: string[] = [];
+  const failedMailboxes: string[] = [];
   for (const config of configs) {
-    // Default-mailbox resolution is PER-ACCOUNT: the single-account search default
-    // ("[Gmail]/All Mail") is Gmail-only, so fanning it out to a non-Gmail account
-    // (e.g. iCloud) makes that SELECT fail and the account silently drops from the
-    // merged results. When the caller pinned no mailbox, give Gmail hosts their
-    // All-Mail default (undefined → resolved downstream) and every other host a
-    // universal "INBOX". (limit is applied AFTER the cross-account merge so the
-    // global newest-N is correct even when one account dominates.)
-    const mailbox = args.mailbox ?? (isGmailHost(config.host) ? undefined : "INBOX");
-    const perAccountArgs: ImapSearchArgs = { ...args, account: undefined, mailbox };
+    // Keep an omitted mailbox omitted. The per-account search discovers an RFC
+    // 6154 `\\All` mailbox when available (Gmail), otherwise it searches every
+    // selectable mailbox (iCloud/generic IMAP). Hostname heuristics cannot tell
+    // us what a server actually exposes.
+    const perAccountArgs: ImapSearchArgs = { ...args, account: undefined };
     try {
       const res =
         kind === "search"
@@ -163,12 +160,15 @@ export async function fanOutImapMessages(
           : await imapListMessages(perAccountArgs, { ...deps, config });
       rows.push(...res.messages);
       accountsQueried.push(config.accountLabel);
+      failedMailboxes.push(
+        ...res.failedMailboxes.map((mailbox) => `${config.accountLabel} / ${mailbox}`)
+      );
     } catch (e) {
       accountsFailed.push(config.accountLabel);
       console.error(`IMAP fan-out failed for account "${config.accountLabel}": ${String(e)}`);
     }
   }
-  return { rows, accountsQueried, accountsFailed };
+  return { rows, accountsQueried, accountsFailed, failedMailboxes };
 }
 
 // ---------------------------------------------------------------------------

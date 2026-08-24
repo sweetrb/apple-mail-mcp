@@ -84030,8 +84030,8 @@ var defaultConnect = async (cfg) => {
   }
   return client;
 };
-function resolveMailboxPath(mailbox, mode) {
-  if (!mailbox) return mode === "search" ? "[Gmail]/All Mail" : "INBOX";
+function resolveMailboxPath(mailbox, _mode) {
+  if (!mailbox) return "INBOX";
   const map = {
     "all mail": "[Gmail]/All Mail",
     "sent mail": "[Gmail]/Sent Mail",
@@ -84094,49 +84094,127 @@ function structuredRow(m, account, path) {
     ...env.messageId ? { messageId: env.messageId } : {}
   };
 }
+function hasMailboxFlag(mailbox, wanted) {
+  const normalized = wanted.toLowerCase();
+  return [...mailbox.flags ?? []].some((flag) => flag.toLowerCase() === normalized);
+}
+function messageDateEpoch(message) {
+  if (!message.envelope?.date) return 0;
+  const epoch = new Date(message.envelope.date).getTime();
+  return Number.isNaN(epoch) ? 0 : epoch;
+}
+function messageIdentity(entry) {
+  const raw = entry.message.envelope?.messageId?.trim() ?? "";
+  const messageId = raw.replace(/^<+|>+$/g, "").trim().toLowerCase();
+  return messageId ? `mid:${messageId}` : `${entry.path}\0${entry.message.uid}`;
+}
+async function fetchMailboxMatches(client, path, criteria, newestCount) {
+  const lock = await client.getMailboxLock(path);
+  try {
+    const found = await client.search(criteria, { uid: true });
+    const uids = Array.isArray(found) ? found : [];
+    if (uids.length === 0 || newestCount === 0) return { messages: [], total: uids.length };
+    const newest = uids.slice().reverse().slice(0, newestCount);
+    const byUid = /* @__PURE__ */ new Map();
+    for await (const msg of client.fetch(
+      newest.join(","),
+      // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
+      // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
+      // the fetch (~17%), same single round trip, no extra request.
+      { envelope: true, flags: true, bodyStructure: true },
+      { uid: true }
+    )) {
+      byUid.set(msg.uid, msg);
+    }
+    return {
+      messages: newest.map((uid) => byUid.get(uid)).filter((message) => message !== void 0),
+      total: uids.length
+    };
+  } finally {
+    lock.release();
+  }
+}
 async function run(args, listMode, deps) {
   return useClient(
     { ...deps, account: deps.account ?? args.account },
     async (client, cfg) => {
-      const path = resolveMailboxPath(args.mailbox, listMode ? "list" : "search");
-      const lock = await client.getMailboxLock(path);
-      try {
-        const found = await client.search(buildCriteria(args, listMode), { uid: true });
-        const uids = Array.isArray(found) ? found : [];
-        if (uids.length === 0) {
-          return {
-            text: `No messages found via IMAP in "${path}" (account ${cfg.accountLabel}).`,
-            messages: [],
-            count: 0,
-            partial: false
-          };
+      const unscopedSearch = !listMode && !args.mailbox;
+      let paths;
+      let allMailboxCount = 0;
+      if (unscopedSearch) {
+        const listed = await client.list();
+        const selectable = listed.filter((mailbox) => !hasMailboxFlag(mailbox, "\\Noselect"));
+        const allMailbox = selectable.find(
+          (mailbox) => mailbox.specialUse?.toLowerCase() === "\\all"
+        );
+        paths = allMailbox ? [allMailbox.path] : selectable.map((mailbox) => mailbox.path);
+        allMailboxCount = paths.length;
+        if (paths.length === 0) {
+          throw new Error(`No selectable IMAP mailboxes found for account ${cfg.accountLabel}.`);
         }
-        const limit = args.limit ?? 50;
-        const offset = args.offset ?? 0;
-        const newest = uids.slice().reverse().slice(offset, offset + limit);
-        const byUid = /* @__PURE__ */ new Map();
-        for await (const msg of client.fetch(
-          newest.join(","),
-          // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
-          // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
-          // the fetch (~17%), same single round trip, no extra request.
-          { envelope: true, flags: true, bodyStructure: true },
-          { uid: true }
-        )) {
-          byUid.set(msg.uid, msg);
+      } else {
+        paths = [resolveMailboxPath(args.mailbox, listMode ? "list" : "search")];
+      }
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const criteria = buildCriteria(args, listMode);
+      const newestPerMailbox = offset + limit;
+      const fetched = [];
+      const failedMailboxes = [];
+      let totalMatched = 0;
+      for (const path of paths) {
+        try {
+          const result = await fetchMailboxMatches(client, path, criteria, newestPerMailbox);
+          totalMatched += result.total;
+          fetched.push(...result.messages.map((message) => ({ message, path })));
+        } catch (error2) {
+          failedMailboxes.push(path);
+          console.error(
+            `IMAP ${listMode ? "list" : "search"} failed for account "${cfg.accountLabel}", mailbox "${path}": ${String(error2)}`
+          );
         }
-        const ordered = newest.map((u) => byUid.get(u)).filter((m) => m !== void 0);
-        const rows = ordered.map((m) => formatRow(m, cfg.accountLabel, path));
-        const messages = ordered.map((m) => structuredRow(m, cfg.accountLabel, path));
-        const verb = listMode ? "listed" : "matched";
-        const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, mailbox "${path}"; ${uids.length} total ${verb}):
+      }
+      if (failedMailboxes.length === paths.length) {
+        throw new Error(
+          `IMAP ${listMode ? "list" : "search"} failed in every requested mailbox for account ${cfg.accountLabel}: ${failedMailboxes.join(", ")}.`
+        );
+      }
+      let ordered = fetched;
+      if (unscopedSearch) {
+        ordered = fetched.slice().sort((a, b) => messageDateEpoch(b.message) - messageDateEpoch(a.message));
+        const unique = /* @__PURE__ */ new Map();
+        for (const entry of ordered) {
+          const key = messageIdentity(entry);
+          if (!unique.has(key)) unique.set(key, entry);
+        }
+        ordered = [...unique.values()].slice(offset, offset + limit);
+      } else {
+        ordered = fetched.slice(offset, offset + limit);
+      }
+      const rows = ordered.map(({ message, path }) => formatRow(message, cfg.accountLabel, path));
+      const messages = ordered.map(
+        ({ message, path }) => structuredRow(message, cfg.accountLabel, path)
+      );
+      const partial2 = failedMailboxes.length > 0;
+      const failureNote = partial2 ? `
+
+Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}"`).join(", ")}.` : "";
+      const verb = listMode ? "listed" : "matched";
+      const scope = unscopedSearch ? allMailboxCount === 1 ? `mailbox "${paths[0]}"` : `${allMailboxCount} selectable mailboxes` : `mailbox "${paths[0]}"`;
+      if (messages.length === 0) {
+        return {
+          text: `No messages found via IMAP in ${scope} (account ${cfg.accountLabel}).${failureNote}`,
+          messages,
+          count: 0,
+          partial: partial2,
+          failedMailboxes
+        };
+      }
+      const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalMatched} total ${verb}):
 ` + rows.join("\n") + `
 
-Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`;
-        return { text, messages, count: messages.length, partial: false };
-      } finally {
-        lock.release();
-      }
+Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.` + failureNote;
+      return { text, messages, count: messages.length, partial: partial2, failedMailboxes };
     },
     true
   );
@@ -85240,26 +85318,26 @@ function mergeMessages(imapRows, appleRows, limit) {
   merged.sort((a, b) => dateEpoch(b) - dateEpoch(a));
   return limit >= 0 ? merged.slice(0, limit) : merged;
 }
-function isGmailHost(host) {
-  return /(^|\.)gmail\.com$/i.test(host.trim());
-}
 async function fanOutImapMessages(args, kind, deps = {}, configs = resolveImapConfigs()) {
   const rows = [];
   const accountsQueried = [];
   const accountsFailed = [];
+  const failedMailboxes = [];
   for (const config2 of configs) {
-    const mailbox = args.mailbox ?? (isGmailHost(config2.host) ? void 0 : "INBOX");
-    const perAccountArgs = { ...args, account: void 0, mailbox };
+    const perAccountArgs = { ...args, account: void 0 };
     try {
       const res = kind === "search" ? await imapSearchMessages(perAccountArgs, { ...deps, config: config2 }) : await imapListMessages(perAccountArgs, { ...deps, config: config2 });
       rows.push(...res.messages);
       accountsQueried.push(config2.accountLabel);
+      failedMailboxes.push(
+        ...res.failedMailboxes.map((mailbox) => `${config2.accountLabel} / ${mailbox}`)
+      );
     } catch (e) {
       accountsFailed.push(config2.accountLabel);
       console.error(`IMAP fan-out failed for account "${config2.accountLabel}": ${String(e)}`);
     }
   }
-  return { rows, accountsQueried, accountsFailed };
+  return { rows, accountsQueried, accountsFailed, failedMailboxes };
 }
 function configMatchesAccount(config2, account) {
   const name = account.name.trim().toLowerCase();
@@ -85847,7 +85925,8 @@ var LIST_OUTPUT_SCHEMA = {
   partial: external_exports.boolean().optional(),
   skippedLargeMailboxes: external_exports.array(external_exports.string()).optional(),
   notSearchedMailboxes: external_exports.array(external_exports.string()).optional(),
-  timedOutAccounts: external_exports.array(external_exports.string()).optional()
+  timedOutAccounts: external_exports.array(external_exports.string()).optional(),
+  failedMailboxes: external_exports.array(external_exports.string()).optional()
 };
 var BATCH_COUNT_OUTPUT_SCHEMA = {
   ok: external_exports.boolean().optional(),
@@ -85926,8 +86005,9 @@ function mergedMessageResponse(fan, apple, limit, verb) {
   const merged = mergeMessages(fan.rows, apple.rows, limit);
   const diagnostics = {
     ...apple.diagnostics,
-    partial: apple.diagnostics.partial || fan.accountsFailed.length > 0,
-    timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed]
+    partial: apple.diagnostics.partial || fan.accountsFailed.length > 0 || fan.failedMailboxes.length > 0,
+    timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
+    notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes]
   };
   const structured = {
     messages: merged,
@@ -85935,7 +86015,8 @@ function mergedMessageResponse(fan, apple, limit, verb) {
     partial: diagnostics.partial,
     skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
     notSearchedMailboxes: diagnostics.notSearchedMailboxes,
-    timedOutAccounts: diagnostics.timedOutAccounts
+    timedOutAccounts: diagnostics.timedOutAccounts,
+    failedMailboxes: fan.failedMailboxes
   };
   const coverageBlock = partialCoverageBlock(diagnostics);
   if (merged.length === 0) {
@@ -86031,7 +86112,8 @@ registerTool(
           return successResponse(r.text, {
             messages: r.messages,
             count: r.count,
-            partial: r.partial
+            partial: r.partial,
+            failedMailboxes: r.failedMailboxes
           });
         }
         const fan = await fanOutImapMessages(imapArgs, "search");
@@ -86178,7 +86260,8 @@ registerTool(
       subject: external_exports.string().optional(),
       messages: external_exports.array(MESSAGE_ROW_SCHEMA).optional(),
       count: external_exports.number().optional(),
-      partial: external_exports.boolean().optional()
+      partial: external_exports.boolean().optional(),
+      failedMailboxes: external_exports.array(external_exports.string()).optional()
     }
   },
   withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
@@ -86206,7 +86289,8 @@ ${r.text}`, {
           subject: base,
           messages: r.messages,
           count: r.count,
-          partial: r.partial
+          partial: r.partial,
+          failedMailboxes: r.failedMailboxes
         });
       }
       const fan = await fanOutImapMessages({ subject: base, mailbox, limit }, "search");
@@ -86231,17 +86315,19 @@ ${r.text}`, {
       const orderedRows = mergedNewestFirst.slice().reverse().sort(
         (a, b) => (a.dateReceived ? new Date(a.dateReceived).getTime() : 0) - (b.dateReceived ? new Date(b.dateReceived).getTime() : 0)
       );
-      const partial2 = apple.diagnostics.partial || fan.accountsFailed.length > 0;
+      const partial2 = apple.diagnostics.partial || fan.accountsFailed.length > 0 || fan.failedMailboxes.length > 0;
       const coverage = partialCoverageBlock({
         ...apple.diagnostics,
         partial: partial2,
-        timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed]
+        timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
+        notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes]
       });
       const structured2 = {
         subject: base,
         messages: orderedRows,
         count: orderedRows.length,
-        partial: partial2
+        partial: partial2,
+        failedMailboxes: fan.failedMailboxes
       };
       if (orderedRows.length === 0) {
         return successResponse(`No messages found in thread "${base}".${coverage}`, structured2);
@@ -86304,7 +86390,8 @@ registerTool(
         return successResponse(r.text, {
           messages: r.messages,
           count: r.count,
-          partial: r.partial
+          partial: r.partial,
+          failedMailboxes: r.failedMailboxes
         });
       }
       const fan = await fanOutImapMessages({ mailbox, limit, offset, from, unreadOnly }, "list");

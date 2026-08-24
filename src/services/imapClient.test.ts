@@ -84,7 +84,7 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
       }
     },
     fetchOne: async () => false,
-    list: async () => [],
+    list: async () => [{ path: "[Gmail]/All Mail", name: "All Mail", specialUse: "\\All" }],
     status: async (path: string) => ({ path, messages: 0, unseen: 0, recent: 0 }),
     download: async () => ({
       meta: { filename: "file.bin" },
@@ -388,8 +388,8 @@ describe("imapHealthCheck configured-gate (#138)", () => {
 });
 
 describe("resolveMailboxPath", () => {
-  it("defaults to All Mail for search, INBOX for list", () => {
-    expect(resolveMailboxPath(undefined, "search")).toBe("[Gmail]/All Mail");
+  it("uses the provider-neutral INBOX fallback when no path is pinned", () => {
+    expect(resolveMailboxPath(undefined, "search")).toBe("INBOX");
     expect(resolveMailboxPath(undefined, "list")).toBe("INBOX");
   });
   it("maps common Gmail folder names", () => {
@@ -439,6 +439,94 @@ describe("imapSearchMessages", () => {
     expect(res.text).toMatch(/No messages found via IMAP/);
     expect(res.count).toBe(0);
     expect(res.messages).toEqual([]);
+  });
+
+  it("searches every selectable mailbox when the server has no special-use All mailbox", async () => {
+    let selected = "";
+    const locked: string[] = [];
+    const matches: Record<string, number[]> = {
+      INBOX: [1],
+      Archive: [2, 3],
+      Projects: [],
+    };
+    const dates: Record<string, string> = {
+      "INBOX:1": "2026-06-03T00:00:00Z",
+      "Archive:2": "2026-06-01T00:00:00Z",
+      "Archive:3": "2026-06-02T00:00:00Z",
+    };
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [
+        { path: "INBOX", name: "INBOX" },
+        { path: "Archive", name: "Archive" },
+        { path: "Projects", name: "Projects" },
+        { path: "Folders", name: "Folders", flags: new Set(["\\Noselect"]) },
+      ],
+      getMailboxLock: async (path: string) => {
+        selected = path;
+        locked.push(path);
+        return { release: () => undefined };
+      },
+      search: async () => matches[selected] ?? [],
+      fetch: async function* (range: string) {
+        for (const uid of range.split(",").map(Number)) {
+          yield {
+            uid,
+            envelope: {
+              subject: `${selected} ${uid}`,
+              date: new Date(dates[`${selected}:${uid}`]),
+              from: [{ address: "sender@example.com" }],
+            },
+            flags: new Set<string>(),
+          };
+        }
+      },
+    };
+
+    const res = await imapSearchMessages(
+      { query: "needle", limit: 2 },
+      {
+        config: { ...cfg, host: "imap.mail.me.com", accountLabel: "iCloud" },
+        connect: async () => client,
+      }
+    );
+
+    expect(locked).toEqual(["INBOX", "Archive", "Projects"]);
+    expect(res.messages.map((m) => `${m.mailbox}:${decodeImapId(m.id as string)?.uid}`)).toEqual([
+      "INBOX:1",
+      "Archive:3",
+    ]);
+    expect(res.partial).toBe(false);
+  });
+
+  it("reports a partial all-mailbox search instead of hiding a failed mailbox", async () => {
+    let selected = "";
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [
+        { path: "INBOX", name: "INBOX" },
+        { path: "Archive", name: "Archive" },
+      ],
+      getMailboxLock: async (path: string) => {
+        selected = path;
+        if (path === "Archive") throw new Error("cannot select");
+        return { release: () => undefined };
+      },
+      search: async () => (selected === "INBOX" ? [7] : []),
+    };
+
+    const res = await imapSearchMessages(
+      { query: "needle" },
+      {
+        config: { ...cfg, host: "imap.mail.me.com", accountLabel: "iCloud" },
+        connect: async () => client,
+      }
+    );
+
+    expect(res.count).toBe(1);
+    expect(res.partial).toBe(true);
+    expect(res.failedMailboxes).toEqual(["Archive"]);
+    expect(res.text).toContain('Could not search mailbox(es): "Archive"');
   });
 });
 

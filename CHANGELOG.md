@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Fixed
+
+- Unscoped IMAP `search-messages` no longer assumes every provider exposes
+  Gmail's `[Gmail]/All Mail` path. The server now uses an advertised RFC 6154
+  `\\All` mailbox when one exists; otherwise it searches every selectable
+  mailbox (including iCloud folders), de-duplicates by Message-ID, and applies
+  offset/limit to the globally newest results. Mailboxes that cannot be
+  searched are named in partial-result diagnostics instead of being hidden.
+
 ## [2.17.0] - 2026-08-23
 
 ### Changed
