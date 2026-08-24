@@ -58,7 +58,7 @@ export interface Message {
   /** Whether the message has been deleted */
   isDeleted: boolean;
 
-  /** Name of the mailbox containing the message */
+  /** Canonical account-relative path of the mailbox containing the message. */
   mailbox: string;
 
   /** Name of the account containing the message */
@@ -132,7 +132,7 @@ export interface MessageContent {
  * Represents a mailbox (folder) in Apple Mail.
  */
 export interface Mailbox {
-  /** Display name of the mailbox */
+  /** Canonical account-relative mailbox path. Top-level names are unchanged. */
   name: string;
 
   /** Account containing the mailbox */

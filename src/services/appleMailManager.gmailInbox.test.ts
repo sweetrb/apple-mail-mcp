@@ -59,8 +59,8 @@ function makeRouter(opts: {
   searchOutput?: string;
 }): (script: string) => ScriptResult {
   return (script: string): ScriptResult => {
-    // fetchMailboxNames: `repeat with mb in mailboxes ... set end of mbNames to name of mb`
-    if (script.includes("set end of mbNames to name of mb")) {
+    // fetchMailboxNames emits canonical paths after walking each container chain.
+    if (script.includes("set end of mbNames to mbPath")) {
       return { success: true, output: opts.mailboxNames.join(", ") };
     }
     // A search/list scan returns its rows (the DIAG trailer is optional here).
@@ -119,14 +119,23 @@ describe("A1: INBOX-scoped search on a Gmail-style account", () => {
   });
 
   it("finds messages the receiving-set scan returns", () => {
-    // One row: id 100, in All Mail. Six FIELD_SEP fields.
-    const row = ["100", "Hello", "a@b.com", "2026-7-1-9-0-0", "false", "false"].join(FIELD_SEP);
+    // One row: id 100, in the nested All Mail mailbox.
+    const row = [
+      "100",
+      "Hello",
+      "a@b.com",
+      "2026-7-1-9-0-0",
+      "false",
+      "false",
+      "[Gmail]/All Mail",
+    ].join(FIELD_SEP);
     h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, searchOutput: row });
     const mgr = new AppleMailManager();
 
     const msgs = mgr.searchMessages(undefined, "INBOX", "robert.b.sweet@gmail.com", 50);
 
     expect(msgs.map((m) => m.id)).toContain("100");
+    expect(msgs[0].mailbox).toBe("[Gmail]/All Mail");
   });
 });
 
@@ -139,7 +148,7 @@ describe("A1: INBOX-scoped search on a NON-Gmail account is unchanged", () => {
 
     const scan = lastScript("set outputText to");
     expect(scan).toBeDefined();
-    expect(scan).toMatch(/set theMailbox to mailbox "INBOX"/);
+    expect(scan).toMatch(/if _mbcPath is "INBOX"/);
     expect(scan).not.toContain('"all mail"');
   });
 
@@ -150,7 +159,7 @@ describe("A1: INBOX-scoped search on a NON-Gmail account is unchanged", () => {
     mgr.searchMessages(undefined, "Sent Mail", "robert.b.sweet@gmail.com", 50);
 
     const scan = lastScript("set outputText to");
-    expect(scan).toMatch(/set theMailbox to mailbox "Sent Mail"/);
+    expect(scan).toMatch(/if _mbcPath is "Sent Mail"/);
   });
 });
 
@@ -180,17 +189,24 @@ describe("A3: INBOX-scoped list-messages on a Gmail-style account", () => {
   });
 
   it("finds messages the receiving-set scan returns, and agrees with search-messages", () => {
-    // One row: id 100, in All Mail. 7 FIELD_SEP fields (list-messages requests
-    // withAttachments, so the row schema is one field longer than search's).
-    const row = ["100", "Hello", "a@b.com", "2026-7-1-9-0-0", "false", "false", "false"].join(
-      FIELD_SEP
-    );
+    // One row: id 100, canonical mailbox path, and attachment flag.
+    const row = [
+      "100",
+      "Hello",
+      "a@b.com",
+      "2026-7-1-9-0-0",
+      "false",
+      "false",
+      "[Gmail]/All Mail",
+      "false",
+    ].join(FIELD_SEP);
     h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, searchOutput: row });
     const mgr = new AppleMailManager();
 
     const msgs = mgr.listMessages("INBOX", "robert.b.sweet@gmail.com", 50);
 
     expect(msgs.map((m) => m.id)).toContain("100");
+    expect(msgs[0].mailbox).toBe("[Gmail]/All Mail");
   });
 });
 
@@ -203,7 +219,7 @@ describe("A3: INBOX-scoped list-messages on a NON-Gmail account is unchanged", (
 
     const scan = lastScript("set outputText to");
     expect(scan).toBeDefined();
-    expect(scan).toMatch(/set theMailbox to mailbox "INBOX"/);
+    expect(scan).toMatch(/if _mbcPath is "INBOX"/);
     expect(scan).not.toContain('"all mail"');
   });
 
@@ -214,7 +230,7 @@ describe("A3: INBOX-scoped list-messages on a NON-Gmail account is unchanged", (
     mgr.listMessages("Sent Mail", "robert.b.sweet@gmail.com", 50);
 
     const scan = lastScript("set outputText to");
-    expect(scan).toMatch(/set theMailbox to mailbox "Sent Mail"/);
+    expect(scan).toMatch(/if _mbcPath is "Sent Mail"/);
   });
 });
 
