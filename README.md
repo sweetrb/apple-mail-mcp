@@ -470,11 +470,20 @@ matching `account` is passed. There are three cases:
   sort newest-first; count tools (`get-unread-count`, `get-mail-stats`) count each
   account via exactly one backend so a coverage mismatch can never double- (or
   under-) count.
-  - **Default mailbox is resolved per account.** When you don't pin a `mailbox`, a
-    fan-out search scopes each account to its own default — Gmail/Workspace to
-    `[Gmail]/All Mail`, every other IMAP host (iCloud, etc.) to `INBOX` (since
-    `[Gmail]/All Mail` is Gmail-only and selecting it elsewhere would silently drop
-    that account). Pin a `mailbox` to search a wider scope on non-Gmail accounts.
+  - **An omitted mailbox on `search-messages` searches the account's entire
+    store, not just one default folder** (v2.17.1, [#199](https://github.com/sweetrb/apple-mail-mcp/issues/199)).
+    Per account, the fan-out uses the server-advertised RFC 6154 `\All`
+    mailbox when one exists (Gmail/Workspace's `[Gmail]/All Mail`); otherwise
+    it searches every selectable mailbox the server lists (iCloud, generic
+    IMAP), merges the matches, de-duplicates by Message-ID, and sorts
+    newest-first before applying `limit`/`offset`. A mailbox that can't be
+    selected or searched is named in the result instead of silently dropping
+    coverage. Scanning every mailbox on a large, deeply-nested account costs
+    one `SEARCH` + a bounded `FETCH` per mailbox over the pooled IMAP
+    connection — pin a `mailbox` to skip the fan-out when you already know
+    where to look. `list-messages` (no query) still defaults an omitted
+    mailbox to `INBOX` on every provider — only unscoped *search* scans the
+    whole account.
 
 If IMAP is **not** configured at all, every read behaves exactly as before
 (pure AppleScript). The three mailbox-**write** ops (`create-mailbox`,

@@ -188,8 +188,7 @@ const FLAG_COLOR_SCHEMA = z
 const MESSAGE_ROW_SCHEMA = z.object({}).passthrough();
 
 /** Shape returned by list/search style tools (messages + count + optional
- *  partial-coverage diagnostics). Diagnostics only appear on the AppleScript
- *  path, so they are optional. */
+ *  partial-coverage diagnostics from either backend). */
 const LIST_OUTPUT_SCHEMA = {
   messages: z.array(MESSAGE_ROW_SCHEMA).optional(),
   count: z.number().optional(),
@@ -197,6 +196,7 @@ const LIST_OUTPUT_SCHEMA = {
   skippedLargeMailboxes: z.array(z.string()).optional(),
   notSearchedMailboxes: z.array(z.string()).optional(),
   timedOutAccounts: z.array(z.string()).optional(),
+  failedMailboxes: z.array(z.string()).optional(),
 };
 
 /** Shape returned by the batch count tools. */
@@ -338,7 +338,12 @@ function appleScanForAccounts(
  * @param verb "matched" (search) or "listed" (list) — only affects empty-state text.
  */
 function mergedMessageResponse(
-  fan: { rows: MessageRow[]; accountsQueried: string[]; accountsFailed: string[] },
+  fan: {
+    rows: MessageRow[];
+    accountsQueried: string[];
+    accountsFailed: string[];
+    failedMailboxes: string[];
+  },
   apple: AppleScan,
   limit: number,
   verb: "matched" | "listed"
@@ -348,8 +353,10 @@ function mergedMessageResponse(
   // partial merge is never mistaken for a confirmed "no such mail".
   const diagnostics: SearchDiagnostics = {
     ...apple.diagnostics,
-    partial: apple.diagnostics.partial || fan.accountsFailed.length > 0,
+    partial:
+      apple.diagnostics.partial || fan.accountsFailed.length > 0 || fan.failedMailboxes.length > 0,
     timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
+    notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes],
   };
   const structured = {
     messages: merged,
@@ -358,6 +365,7 @@ function mergedMessageResponse(
     skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
     notSearchedMailboxes: diagnostics.notSearchedMailboxes,
     timedOutAccounts: diagnostics.timedOutAccounts,
+    failedMailboxes: fan.failedMailboxes,
   };
   const coverageBlock = partialCoverageBlock(diagnostics);
   if (merged.length === 0) {
@@ -556,6 +564,7 @@ registerTool(
             messages: r.messages,
             count: r.count,
             partial: r.partial,
+            failedMailboxes: r.failedMailboxes,
           });
         }
         const fan = await fanOutImapMessages(imapArgs, "search");
@@ -731,6 +740,7 @@ registerTool(
       messages: z.array(MESSAGE_ROW_SCHEMA).optional(),
       count: z.number().optional(),
       partial: z.boolean().optional(),
+      failedMailboxes: z.array(z.string()).optional(),
     },
   },
   withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
@@ -771,6 +781,7 @@ registerTool(
           messages: r.messages,
           count: r.count,
           partial: r.partial,
+          failedMailboxes: r.failedMailboxes,
         });
       }
       const fan = await fanOutImapMessages({ subject: base, mailbox, limit }, "search");
@@ -800,17 +811,22 @@ registerTool(
             (a.dateReceived ? new Date(a.dateReceived as string).getTime() : 0) -
             (b.dateReceived ? new Date(b.dateReceived as string).getTime() : 0)
         );
-      const partial = apple.diagnostics.partial || fan.accountsFailed.length > 0;
+      const partial =
+        apple.diagnostics.partial ||
+        fan.accountsFailed.length > 0 ||
+        fan.failedMailboxes.length > 0;
       const coverage = partialCoverageBlock({
         ...apple.diagnostics,
         partial,
         timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
+        notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes],
       });
       const structured = {
         subject: base,
         messages: orderedRows,
         count: orderedRows.length,
         partial,
+        failedMailboxes: fan.failedMailboxes,
       };
       if (orderedRows.length === 0) {
         return successResponse(`No messages found in thread "${base}".${coverage}`, structured);
@@ -905,6 +921,7 @@ registerTool(
           messages: r.messages,
           count: r.count,
           partial: r.partial,
+          failedMailboxes: r.failedMailboxes,
         });
       }
       const fan = await fanOutImapMessages({ mailbox, limit, offset, from, unreadOnly }, "list");

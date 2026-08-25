@@ -121,6 +121,8 @@ interface ImapMailboxListing {
   name: string;
   /** RFC 6154 special-use flag ("\\Trash", "\\Sent", …) when the server advertises it. */
   specialUse?: string;
+  /** Includes "\\Noselect" for hierarchy containers that cannot be opened. */
+  flags?: Set<string>;
 }
 type FlagOpts = { uid: boolean };
 /**
@@ -542,8 +544,8 @@ const defaultConnect: ImapConnect = async (cfg) => {
 };
 
 /** Map common (Gmail) mailbox names to their IMAP paths. */
-export function resolveMailboxPath(mailbox: string | undefined, mode: "search" | "list"): string {
-  if (!mailbox) return mode === "search" ? "[Gmail]/All Mail" : "INBOX";
+export function resolveMailboxPath(mailbox: string | undefined, _mode: "search" | "list"): string {
+  if (!mailbox) return "INBOX";
   const map: Record<string, string> = {
     "all mail": "[Gmail]/All Mail",
     "sent mail": "[Gmail]/Sent Mail",
@@ -632,6 +634,68 @@ export interface ImapListResult {
   messages: Record<string, unknown>[];
   count: number;
   partial: boolean;
+  /** Mailboxes omitted from an unscoped IMAP search because SELECT/SEARCH failed. */
+  failedMailboxes: string[];
+}
+
+interface FetchedMailboxMessage {
+  message: ImapMessage;
+  path: string;
+}
+
+function hasMailboxFlag(mailbox: ImapMailboxListing, wanted: string): boolean {
+  const normalized = wanted.toLowerCase();
+  return [...(mailbox.flags ?? [])].some((flag) => flag.toLowerCase() === normalized);
+}
+
+function messageDateEpoch(message: ImapMessage): number {
+  if (!message.envelope?.date) return 0;
+  const epoch = new Date(message.envelope.date).getTime();
+  return Number.isNaN(epoch) ? 0 : epoch;
+}
+
+function messageIdentity(entry: FetchedMailboxMessage): string {
+  const raw = entry.message.envelope?.messageId?.trim() ?? "";
+  const messageId = raw
+    .replace(/^<+|>+$/g, "")
+    .trim()
+    .toLowerCase();
+  return messageId ? `mid:${messageId}` : `${entry.path}\u0000${entry.message.uid}`;
+}
+
+async function fetchMailboxMatches(
+  client: ImapClientLike,
+  path: string,
+  criteria: Record<string, unknown>,
+  newestCount: number
+): Promise<{ messages: ImapMessage[]; total: number }> {
+  const lock = await client.getMailboxLock(path);
+  try {
+    const found = await client.search(criteria, { uid: true });
+    const uids = Array.isArray(found) ? found : [];
+    if (uids.length === 0 || newestCount === 0) return { messages: [], total: uids.length };
+
+    const newest = uids.slice().reverse().slice(0, newestCount);
+    const byUid = new Map<number, ImapMessage>();
+    for await (const msg of client.fetch(
+      newest.join(","),
+      // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
+      // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
+      // the fetch (~17%), same single round trip, no extra request.
+      { envelope: true, flags: true, bodyStructure: true },
+      { uid: true }
+    )) {
+      byUid.set(msg.uid, msg);
+    }
+    return {
+      messages: newest
+        .map((uid) => byUid.get(uid))
+        .filter((message): message is ImapMessage => message !== undefined),
+      total: uids.length,
+    };
+  } finally {
+    lock.release();
+  }
 }
 
 async function run(
@@ -644,51 +708,97 @@ async function run(
   return useClient(
     { ...deps, account: deps.account ?? args.account },
     async (client, cfg) => {
-      const path = resolveMailboxPath(args.mailbox, listMode ? "list" : "search");
-      const lock = await client.getMailboxLock(path);
-      try {
-        const found = await client.search(buildCriteria(args, listMode), { uid: true });
-        const uids = Array.isArray(found) ? found : [];
-        if (uids.length === 0) {
-          return {
-            text: `No messages found via IMAP in "${path}" (account ${cfg.accountLabel}).`,
-            messages: [],
-            count: 0,
-            partial: false,
-          };
+      const unscopedSearch = !listMode && !args.mailbox;
+      let paths: string[];
+      let allMailboxCount = 0;
+      if (unscopedSearch) {
+        const listed = await client.list();
+        const selectable = listed.filter((mailbox) => !hasMailboxFlag(mailbox, "\\Noselect"));
+        const allMailbox = selectable.find(
+          (mailbox) => mailbox.specialUse?.toLowerCase() === "\\all"
+        );
+        paths = allMailbox ? [allMailbox.path] : selectable.map((mailbox) => mailbox.path);
+        allMailboxCount = paths.length;
+        if (paths.length === 0) {
+          throw new Error(`No selectable IMAP mailboxes found for account ${cfg.accountLabel}.`);
         }
-        const limit = args.limit ?? 50;
-        const offset = args.offset ?? 0;
-        // UIDs are ascending → newest are the highest. Apply offset+limit from the newest end.
-        const newest = uids
-          .slice()
-          .reverse()
-          .slice(offset, offset + limit);
-        const byUid = new Map<number, ImapMessage>();
-        for await (const msg of client.fetch(
-          newest.join(","),
-          // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
-          // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
-          // the fetch (~17%), same single round trip, no extra request.
-          { envelope: true, flags: true, bodyStructure: true },
-          { uid: true }
-        )) {
-          byUid.set(msg.uid, msg);
-        }
-        const ordered = newest
-          .map((u) => byUid.get(u))
-          .filter((m): m is ImapMessage => m !== undefined);
-        const rows = ordered.map((m) => formatRow(m, cfg.accountLabel, path));
-        const messages = ordered.map((m) => structuredRow(m, cfg.accountLabel, path));
-        const verb = listMode ? "listed" : "matched";
-        const text =
-          `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, mailbox "${path}"; ${uids.length} total ${verb}):\n` +
-          rows.join("\n") +
-          `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.`;
-        return { text, messages, count: messages.length, partial: false };
-      } finally {
-        lock.release();
+      } else {
+        paths = [resolveMailboxPath(args.mailbox, listMode ? "list" : "search")];
       }
+
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const criteria = buildCriteria(args, listMode);
+      const newestPerMailbox = offset + limit;
+      const fetched: FetchedMailboxMessage[] = [];
+      const failedMailboxes: string[] = [];
+      let totalMatched = 0;
+
+      for (const path of paths) {
+        try {
+          const result = await fetchMailboxMatches(client, path, criteria, newestPerMailbox);
+          totalMatched += result.total;
+          fetched.push(...result.messages.map((message) => ({ message, path })));
+        } catch (error) {
+          failedMailboxes.push(path);
+          console.error(
+            `IMAP ${listMode ? "list" : "search"} failed for account "${cfg.accountLabel}", mailbox "${path}": ${String(error)}`
+          );
+        }
+      }
+
+      if (failedMailboxes.length === paths.length) {
+        throw new Error(
+          `IMAP ${listMode ? "list" : "search"} failed in every requested mailbox for account ${cfg.accountLabel}: ${failedMailboxes.join(", ")}.`
+        );
+      }
+
+      let ordered = fetched;
+      if (unscopedSearch) {
+        ordered = fetched
+          .slice()
+          .sort((a, b) => messageDateEpoch(b.message) - messageDateEpoch(a.message));
+        const unique = new Map<string, FetchedMailboxMessage>();
+        for (const entry of ordered) {
+          const key = messageIdentity(entry);
+          if (!unique.has(key)) unique.set(key, entry);
+        }
+        ordered = [...unique.values()].slice(offset, offset + limit);
+      } else {
+        ordered = fetched.slice(offset, offset + limit);
+      }
+
+      const rows = ordered.map(({ message, path }) => formatRow(message, cfg.accountLabel, path));
+      const messages = ordered.map(({ message, path }) =>
+        structuredRow(message, cfg.accountLabel, path)
+      );
+      const partial = failedMailboxes.length > 0;
+      const failureNote = partial
+        ? `\n\nPartial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}"`).join(", ")}.`
+        : "";
+      const verb = listMode ? "listed" : "matched";
+      const scope = unscopedSearch
+        ? allMailboxCount === 1
+          ? `mailbox "${paths[0]}"`
+          : `${allMailboxCount} selectable mailboxes`
+        : `mailbox "${paths[0]}"`;
+
+      if (messages.length === 0) {
+        return {
+          text: `No messages found via IMAP in ${scope} (account ${cfg.accountLabel}).${failureNote}`,
+          messages,
+          count: 0,
+          partial,
+          failedMailboxes,
+        };
+      }
+
+      const text =
+        `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalMatched} total ${verb}):\n` +
+        rows.join("\n") +
+        `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.` +
+        failureNote;
+      return { text, messages, count: messages.length, partial, failedMailboxes };
     },
     true
   );
