@@ -23342,9 +23342,9 @@ var require_pino = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/logger.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/logger.js
 var require_logger = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/logger.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/logger.js"(exports, module) {
     "use strict";
     var logger = require_pino()();
     logger.level = "trace";
@@ -48700,9 +48700,9 @@ var require_mailsplit = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/limited-passthrough.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/limited-passthrough.js
 var require_limited_passthrough = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var normalizeByteLimit = (value) => {
@@ -48741,9 +48741,9 @@ var require_limited_passthrough = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/limits.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/limits.js
 var require_limits = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
     "use strict";
     var MAX_LITERAL_SIZE = 1024 * 1024 * 1024;
     var MAX_LINE_SIZE = MAX_LITERAL_SIZE;
@@ -48760,9 +48760,9 @@ var require_limits = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-stream.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-stream.js
 var require_imap_stream = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var logger = require_logger();
@@ -49163,9 +49163,9 @@ var require_imap_stream = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-formal-syntax.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-formal-syntax.js
 var require_imap_formal_syntax = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
     "use strict";
     function expandRange(start, end) {
       let chars = [];
@@ -49309,9 +49309,9 @@ var require_imap_formal_syntax = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/token-parser.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/token-parser.js
 var require_token_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { MAX_LITERAL_SIZE, normalizeLimit, createLiteralTooLargeError } = require_limits();
@@ -49878,9 +49878,9 @@ var require_token_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/parser-instance.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/parser-instance.js
 var require_parser_instance = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { TokenParser } = require_token_parser();
@@ -50074,9 +50074,9 @@ var require_parser_instance = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-parser.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-parser.js
 var require_imap_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { ParserInstance } = require_parser_instance();
@@ -50134,9 +50134,9 @@ var require_imap_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-compiler.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-compiler.js
 var require_imap_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var SEQ_RANGE = /^(\d+|\*)(:(\d+|\*))?$/;
@@ -50324,9 +50324,9 @@ var require_imap_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-handler.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-handler.js
 var require_imap_handler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
     "use strict";
     var parser = require_imap_parser();
     var compiler = require_imap_compiler();
@@ -50337,12 +50337,12 @@ var require_imap_handler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/package.json
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/package.json
 var require_package4 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/package.json"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/package.json"(exports, module) {
     module.exports = {
       name: "imapflow",
-      version: "1.7.0",
+      version: "1.7.1",
       description: "IMAP Client for Node",
       main: "lib/imap-flow.js",
       types: "lib/imap-flow.d.ts",
@@ -50372,9 +50372,9 @@ var require_package4 = __commonJS({
       homepage: "https://imapflow.com/",
       devDependencies: {
         "@eslint/js": "10.0.1",
-        "@types/node": "26.1.2",
+        "@types/node": "26.2.0",
         c8: "12.0.0",
-        eslint: "10.8.0",
+        eslint: "10.8.1",
         "eslint-config-nodemailer": "1.2.0",
         "eslint-config-prettier": "10.1.8",
         grunt: "1.6.3",
@@ -54688,9 +54688,9 @@ var require_build = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/connection-deadline.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/connection-deadline.js
 var require_connection_deadline = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
     "use strict";
     var CONNECT_TIMEOUT = 90 * 1e3;
     var ConnectionDeadline = class {
@@ -54771,9 +54771,9 @@ var require_connection_deadline = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/proxy-connection.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/proxy-connection.js
 var require_proxy_connection = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
     "use strict";
     var { SocksClient } = require_build();
     var dns = __require("dns").promises;
@@ -54807,8 +54807,9 @@ var require_proxy_connection = __commonJS({
       }
     };
     var stripProxyCredentials = (err) => {
-      if (err && typeof err === "object" && err.options) {
+      if (err && typeof err === "object") {
         delete err.options;
+        delete err.input;
       }
       return err;
     };
@@ -55012,7 +55013,12 @@ var require_proxy_connection = __commonJS({
       options = options || {};
       let deadline = options.deadline || new ConnectionDeadline(options.connectionTimeout);
       deadline.check();
-      let proxyUrl = new URL(connectionUrl);
+      let proxyUrl;
+      try {
+        proxyUrl = new URL(connectionUrl);
+      } catch (err) {
+        throw proxyError("Invalid proxy URL", err.code || "ERR_INVALID_URL");
+      }
       let protocol = proxyUrl.protocol.replace(/:$/, "").toLowerCase();
       let proxyHost = unbracketAddress(proxyUrl.hostname);
       switch (protocol) {
@@ -55050,9 +55056,9 @@ var require_proxy_connection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/charsets.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/charsets.js
 var require_charsets2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/charsets.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/charsets.js"(exports, module) {
     "use strict";
     var CHARACTER_SETS = [
       "US-ASCII",
@@ -55329,9 +55335,9 @@ var require_charsets2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/jp-decoder.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/jp-decoder.js
 var require_jp_decoder = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var encodingJapanese = require_src();
@@ -55395,9 +55401,9 @@ var require_jp_decoder = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/tools.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/tools.js
 var require_tools2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/tools.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/tools.js"(exports, module) {
     "use strict";
     var libmime = require_libmime();
     var { resolveCharset } = require_charsets2();
@@ -55406,6 +55412,7 @@ var require_tools2 = __commonJS({
     var { JPDecoder } = require_jp_decoder();
     var iconv = require_lib();
     var FLAG_COLORS = ["red", "orange", "yellow", "green", "blue", "purple", "grey"];
+    var CONNECTION_GONE_CODES = /* @__PURE__ */ new Set(["NoConnection", "EConnectionClosed", "StateLogout"]);
     var EXPANDED_RANGE_LIMIT = 16777216;
     var MAX_UINT32_DIGITS = 10;
     var MAX_NUMBER64_DIGITS = 19;
@@ -55444,6 +55451,31 @@ var require_tools2 = __commonJS({
           timer.unref();
         }
         return timer;
+      },
+      /**
+       * Logs a failure from background connection work at the level its cause deserves.
+       *
+       * Background work (IDLE sessions, polling timers, auto-IDLE) is interrupted by every normal
+       * disconnect, so a rejection carrying one of the CONNECTION_GONE_CODES is expected rather
+       * than notable and goes to debug. The three codes describe the same situation reached
+       * through different guards: write() throws NoConnection or StateLogout, exec() rejects
+       * EConnectionClosed for the window where the socket is destroyed but close() has not run
+       * yet, and close() rejects pending requests with NoConnection.
+       *
+       * A connection error carrying `reason` is the exception. That field holds the server's
+       * untagged BYE text ("Too many simultaneous connections", "Account is disabled"), which
+       * serverBye() only records - this log call is the one place it becomes visible, and it is
+       * usually the answer to why a client is reconnecting in a loop. Those stay at warn.
+       *
+       * Shared so the classification cannot drift between the call sites that make this decision.
+       *
+       * @param {Object} connection - IMAP connection instance
+       * @param {String} msg - What failed, so the entries stay distinguishable in the log
+       * @param {Error} err - The error to log
+       */
+      logConnectionError(connection, msg, err) {
+        let routine = !!err && CONNECTION_GONE_CODES.has(err.code) && !err.reason;
+        connection.log[routine ? "debug" : "warn"]({ msg, err, cid: connection.id });
       },
       /**
        * Checks whether IMAP4rev2 semantics are active for the connection: either the
@@ -56471,9 +56503,9 @@ var require_tools2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/id.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/id.js
 var require_id2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/id.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/id.js"(exports, module) {
     "use strict";
     var { formatDateTime } = require_tools2();
     module.exports = async (connection, clientInfo) => {
@@ -56523,9 +56555,9 @@ var require_id2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/capability.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/capability.js
 var require_capability = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.capabilities.size && !connection.expectCapabilityUpdate) {
@@ -56544,9 +56576,9 @@ var require_capability = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/namespace.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/namespace.js
 var require_namespace = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
     "use strict";
     var { hasCapability, getStringList } = require_tools2();
     module.exports = async (connection) => {
@@ -56652,9 +56684,9 @@ var require_namespace = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/login.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/login.js
 var require_login = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/login.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/login.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     module.exports = async (connection, username, password) => {
@@ -56683,9 +56715,9 @@ var require_login = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/logout.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/logout.js
 var require_logout = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state === connection.states.LOGOUT) {
@@ -56717,9 +56749,9 @@ var require_logout = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/starttls.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/starttls.js
 var require_starttls = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("STARTTLS") || connection.secureConnection) {
@@ -56739,9 +56771,9 @@ var require_starttls = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/status-fields.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/status-fields.js
 var require_status_fields = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/status-fields.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/status-fields.js"(exports, module) {
     "use strict";
     var { parseBigIntValue, parseUintValue, MAX_UINT32_DIGITS } = require_tools2();
     var uint32 = (value) => parseUintValue(value, MAX_UINT32_DIGITS);
@@ -56784,9 +56816,9 @@ var require_status_fields = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/special-use.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/special-use.js
 var require_special_use = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/special-use.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/special-use.js"(exports, module) {
     "use strict";
     var GENERIC_TOKENS = new Set(
       [
@@ -57663,9 +57695,9 @@ var require_special_use = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/list.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/list.js
 var require_list = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/list.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/list.js"(exports, module) {
     "use strict";
     var {
       decodePath,
@@ -58010,9 +58042,9 @@ var require_list = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/enable.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/enable.js
 var require_enable = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
     "use strict";
     var { hasCapability } = require_tools2();
     module.exports = async (connection, extensionList) => {
@@ -58059,9 +58091,9 @@ var require_enable = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/select.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/select.js
 var require_select = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/select.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/select.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError, parseBigIntValue, parseUintValue, getStringList, MAX_UINT32_DIGITS } = require_tools2();
     var VALUED_RESPONSE_CODES = Object.assign(/* @__PURE__ */ Object.create(null), {
@@ -58244,9 +58276,9 @@ var require_select = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/fetch.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/fetch.js
 var require_fetch2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
     "use strict";
     var { formatMessageResponse, isRev2Active } = require_tools2();
     module.exports = async (connection, range, query, options) => {
@@ -58431,9 +58463,9 @@ var require_fetch2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/create.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/create.js
 var require_create = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/create.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/create.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, getStatusCode, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58490,9 +58522,9 @@ var require_create = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/delete.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/delete.js
 var require_delete = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58520,9 +58552,9 @@ var require_delete = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/rename.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/rename.js
 var require_rename = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path, newPath) => {
@@ -58555,9 +58587,9 @@ var require_rename = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/close.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/close.js
 var require_close = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/close.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/close.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state !== connection.states.SELECTED) {
@@ -58583,9 +58615,9 @@ var require_close = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/subscribe.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/subscribe.js
 var require_subscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58607,9 +58639,9 @@ var require_subscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/unsubscribe.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/unsubscribe.js
 var require_unsubscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58631,9 +58663,9 @@ var require_unsubscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/store.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/store.js
 var require_store = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/store.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/store.js"(exports, module) {
     "use strict";
     var { formatFlag, canUseFlag, enhanceCommandError } = require_tools2();
     module.exports = async (connection, range, flags, options) => {
@@ -58695,9 +58727,9 @@ var require_store = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/search-compiler.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/search-compiler.js
 var require_search_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
     "use strict";
     var { formatDate, formatFlag, canUseFlag, isDate, isRev2Active } = require_tools2();
     var setBoolOpt = (attributes, term, value) => {
@@ -59021,9 +59053,9 @@ var require_search_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/search.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/search.js
 var require_search = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/search.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/search.js"(exports, module) {
     "use strict";
     var {
       enhanceCommandError,
@@ -59248,9 +59280,9 @@ var require_search = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/noop.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/noop.js
 var require_noop = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       try {
@@ -59265,9 +59297,9 @@ var require_noop = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/expunge.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/expunge.js
 var require_expunge = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
     "use strict";
     var { enhanceCommandError, hasCapability, parseBigIntValue } = require_tools2();
     module.exports = async (connection, range, options) => {
@@ -59301,9 +59333,9 @@ var require_expunge = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/append.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/append.js
 var require_append = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/append.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/append.js"(exports, module) {
     "use strict";
     var {
       formatFlag,
@@ -59418,9 +59450,9 @@ var require_append = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/status.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/status.js
 var require_status = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/status.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/status.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, buildStatusQueryAttributes, isRev2Active } = require_tools2();
     var { parseStatusList } = require_status_fields();
@@ -59496,9 +59528,9 @@ var require_status = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/copyuid-parser.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/copyuid-parser.js
 var require_copyuid_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
     "use strict";
     var { expandRange, parseBigIntValue } = require_tools2();
     function parseCopyUid(response, map) {
@@ -59521,9 +59553,9 @@ var require_copyuid_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/copy.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/copy.js
 var require_copy = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -59553,9 +59585,9 @@ var require_copy = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/move.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/move.js
 var require_move = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/move.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/move.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError, hasCapability } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -59596,9 +59628,9 @@ var require_move = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/compress.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/compress.js
 var require_compress = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("COMPRESS=DEFLATE") || connection._inflate) {
@@ -59625,9 +59657,9 @@ var require_compress = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/quota.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/quota.js
 var require_quota = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError, parseUintValue, isUnsafeKey } = require_tools2();
     module.exports = async (connection, path) => {
@@ -59716,11 +59748,11 @@ var require_quota = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/idle.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/idle.js
 var require_idle = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
     "use strict";
-    var { hasCapability, unrefTimer } = require_tools2();
+    var { hasCapability, logConnectionError, unrefTimer } = require_tools2();
     var NOOP_INTERVAL = 2 * 60 * 1e3;
     function claimIdling(connection) {
       let token = {};
@@ -59750,7 +59782,8 @@ var require_idle = __commonJS({
               msg: `DONE`,
               comment: `breaking IDLE`,
               lockId: connection.currentLock?.lockId,
-              path: connection.mailbox && connection.mailbox.path
+              path: connection.mailbox && connection.mailbox.path,
+              cid: connection.id
             });
             connection.write("DONE");
             doneSent = true;
@@ -59775,9 +59808,10 @@ var require_idle = __commonJS({
             queued: preCheckWaitQueue.length,
             doneRequested,
             canEnd,
-            doneSent
+            doneSent,
+            cid: connection.id
           });
-          preCheck().catch((err) => connection.log.warn({ err, cid: connection.id }));
+          preCheck().catch((err) => logConnectionError(connection, "Failed to break IDLE", err));
           return handler;
         };
         ownPreCheck = connectionPreCheck;
@@ -59787,13 +59821,18 @@ var require_idle = __commonJS({
           // After this, the server will push untagged responses for mailbox changes.
           // We can now safely send DONE if a break was already requested.
           onPlusTag: async () => {
-            connection.log.debug({ msg: `Initiated IDLE, waiting for server input`, lockId: connection.currentLock?.lockId, doneRequested });
+            connection.log.debug({
+              msg: `Initiated IDLE, waiting for server input`,
+              lockId: connection.currentLock?.lockId,
+              doneRequested,
+              cid: connection.id
+            });
             canEnd = true;
             if (doneRequested) {
               try {
                 await preCheck();
               } catch (err) {
-                connection.log.warn({ err, cid: connection.id });
+                logConnectionError(connection, "Failed to break IDLE", err);
               }
             }
           },
@@ -59803,7 +59842,7 @@ var require_idle = __commonJS({
         response.next();
         return;
       } catch (err) {
-        connection.log.warn({ err, cid: connection.id });
+        logConnectionError(connection, "IDLE session failed", err);
         while (preCheckWaitQueue.length) {
           let { reject } = preCheckWaitQueue.shift();
           reject(err);
@@ -59824,11 +59863,11 @@ var require_idle = __commonJS({
       let path = connection.mailbox && connection.mailbox.path;
       switch (connection.missingIdleCommand) {
         case "SELECT":
-          connection.log.debug({ src: "c", msg: `Running SELECT to detect changes in folder`, cid: connection.id });
+          connection.log.debug({ msg: `Running SELECT to detect changes in folder`, cid: connection.id });
           await connection.runInternal("SELECT", path, { readOnly: session.selectCommand.command === "EXAMINE" });
           break;
         case "STATUS": {
-          connection.log.debug({ src: "c", msg: `Running STATUS to detect changes in folder`, cid: connection.id });
+          connection.log.debug({ msg: `Running STATUS to detect changes in folder`, cid: connection.id });
           let status = await connection.runInternal("STATUS", path, {
             messages: true,
             uidNext: true,
@@ -59875,7 +59914,7 @@ var require_idle = __commonJS({
             resolve3();
           };
           session.preCheck = async () => {
-            connection.log.debug({ src: "c", msg: `breaking NOOP loop`, cid: connection.id });
+            connection.log.debug({ msg: `Breaking NOOP loop`, cid: connection.id });
             cancel();
           };
           connection.preCheck = session.preCheck;
@@ -59893,7 +59932,7 @@ var require_idle = __commonJS({
               }
               scheduleNextPoll(interval);
             }).catch((err) => {
-              connection.log.warn({ err, cid: connection.id });
+              logConnectionError(connection, "Failed to poll for mailbox changes", err);
               cancel();
             });
           };
@@ -59901,7 +59940,7 @@ var require_idle = __commonJS({
             session.timer = setTimeout(runPoll, delay);
             unrefTimer(session.timer);
           }
-          connection.log.debug({ src: "c", msg: `initiated NOOP loop`, cid: connection.id });
+          connection.log.debug({ msg: `Initiated NOOP loop`, cid: connection.id });
           let sinceLastPoll = Math.max(0, Date.now() - (connection._lastPollAt || 0));
           if (sinceLastPoll >= interval) {
             runPoll();
@@ -59933,7 +59972,7 @@ var require_idle = __commonJS({
                 if (typeof connection.preCheck === "function") {
                   stillIdling = true;
                   connection.log.trace({ msg: "Max allowed IDLE time reached", cid: connection.id });
-                  connection.preCheck().catch((err) => connection.log.warn({ err, cid: connection.id }));
+                  connection.preCheck().catch((err) => logConnectionError(connection, "Failed to break IDLE for restart", err));
                 }
               }
             }, maxIdleTime);
@@ -59952,9 +59991,9 @@ var require_idle = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/authenticate.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/authenticate.js
 var require_authenticate = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     async function handleAuthError(err, errorResponse2) {
@@ -60005,10 +60044,15 @@ var require_authenticate = __commonJS({
                 try {
                   errorResponse2 = JSON.parse(Buffer.from(resp.attributes[0].value, "base64").toString());
                 } catch (err) {
-                  connection.log.debug({ errorResponse: resp.attributes[0].value, err });
+                  connection.log.debug({
+                    msg: "Failed to parse OAuth error response",
+                    errorResponse: resp.attributes[0].value,
+                    err,
+                    cid: connection.id
+                  });
                 }
               }
-              connection.log.debug({ src: "c", msg: breaker, comment: `Error response for ${command}` });
+              connection.log.debug({ src: "c", msg: breaker, comment: `Error response for ${command}`, cid: connection.id });
               connection.write(breaker);
             }
           }
@@ -60029,10 +60073,10 @@ var require_authenticate = __commonJS({
               let question = Buffer.from(resp.attributes[0].value, "base64").toString().toLowerCase().replace(/[:\x00]*$/, "");
               if (question === "username" || question === "user name") {
                 let encodedUsername = Buffer.from(username).toString("base64");
-                connection.log.debug({ src: "c", msg: encodedUsername, comment: `Encoded username for AUTH=LOGIN` });
+                connection.log.debug({ src: "c", msg: encodedUsername, comment: `Encoded username for AUTH=LOGIN`, cid: connection.id });
                 connection.write(encodedUsername);
               } else if (question === "password") {
-                connection.log.debug({ src: "c", msg: "(* value hidden *)", comment: `Encoded password for AUTH=LOGIN` });
+                connection.log.debug({ src: "c", msg: "(* value hidden *)", comment: `Encoded password for AUTH=LOGIN`, cid: connection.id });
                 connection.write(Buffer.from(password).toString("base64"));
               } else {
                 throw new Error(`Unknown LOGIN question "${question}"`);
@@ -60055,7 +60099,12 @@ var require_authenticate = __commonJS({
             let authzidValue = authzid || "";
             let encodedResponse = Buffer.from([authzidValue, username, password].join("\0")).toString("base64");
             let loggedResponse = Buffer.from([authzidValue, username, "(* value hidden *)"].join("\0")).toString("base64");
-            connection.log.debug({ src: "c", msg: loggedResponse, comment: `Encoded response for AUTH=PLAIN${authzid ? " with authzid" : ""}` });
+            connection.log.debug({
+              src: "c",
+              msg: loggedResponse,
+              comment: `Encoded response for AUTH=PLAIN${authzid ? " with authzid" : ""}`,
+              cid: connection.id
+            });
             connection.write(encodedResponse);
           }
         });
@@ -60088,9 +60137,9 @@ var require_authenticate = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/imap-commands.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/imap-commands.js
 var require_imap_commands = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
     "use strict";
     module.exports = /* @__PURE__ */ new Map([
       ["ID", require_id2()],
@@ -60125,9 +60174,9 @@ var require_imap_commands = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/imap-flow.js
+// node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/imap-flow.js
 var require_imap_flow = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.0/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.1/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
     "use strict";
     var tls = __require("tls");
     var net = __require("net");
@@ -60159,6 +60208,7 @@ var require_imap_flow = __commonJS({
       AuthenticationFailure,
       getColorFlags,
       hasCapability,
+      logConnectionError,
       unrefTimer,
       parseUintValue,
       isUnsafeKey,
@@ -60175,6 +60225,40 @@ var require_imap_flow = __commonJS({
     var HELD_LOCK_WARN_MS = 30 * 60 * 1e3;
     var AUTO_IDLE_DELAY = 15 * 1e3;
     var AUTO_IDLE_SOCKET_MARGIN = 1e3;
+    var RAW_SENSITIVE_COMMANDS = /* @__PURE__ */ new Set(["LOGIN", "AUTHENTICATE"]);
+    var RAW_HIDDEN_PLACEHOLDER = Buffer.from("(* value hidden *)\r\n").toString("base64");
+    function hasSensitiveAttribute(attributes) {
+      return [].concat(attributes || []).some((node) => Array.isArray(node) ? hasSensitiveAttribute(node) : !!node && node.sensitive);
+    }
+    var MAX_ERROR_FLATTEN_DEPTH = 4;
+    function isErrorLike(value) {
+      return value instanceof Error || !!value && typeof value === "object" && typeof value.message === "string" && typeof value.stack === "string";
+    }
+    function flattenLoggedError(value, depth = 0, seen = /* @__PURE__ */ new Set()) {
+      if (depth >= MAX_ERROR_FLATTEN_DEPTH) {
+        return isErrorLike(value) ? value.message : value;
+      }
+      if (Array.isArray(value)) {
+        return value.map((entry) => flattenLoggedError(entry, depth + 1, seen));
+      }
+      if (!isErrorLike(value)) {
+        return value;
+      }
+      if (seen.has(value)) {
+        return value.message;
+      }
+      seen.add(value);
+      let flatErr = {
+        message: value.message,
+        stack: value.stack
+      };
+      for (let key of /* @__PURE__ */ new Set([...Object.keys(value), "cause", "errors"])) {
+        if (key in value) {
+          flatErr[key] = flattenLoggedError(value[key], depth + 1, seen);
+        }
+      }
+      return flatErr;
+    }
     var MAX_TIMER_DELAY = 2 ** 31 - 1;
     var states = {
       NOT_AUTHENTICATED: 1,
@@ -60292,6 +60376,7 @@ var require_imap_flow = __commonJS({
        *
        * @property {Boolean} [logRaw=false]
        *     If `true`, logs all raw data (read and written) in base64 encoding. You can pipe such logs to [eerawlog](https://github.com/postalsys/eerawlog) command for readable output.
+       *     Client frames that carry credentials are replaced with a fixed placeholder and the entry is marked with `hidden: true`.
        *
        * @property {Boolean} [emitLogs=false]
        *     If `true`, emits `'log'` events with the same data passed to the logger.
@@ -60402,6 +60487,7 @@ var require_imap_flow = __commonJS({
         this._nextUnknownTagWarn = 1;
         this.writeBytesCounter = 0;
         this.commandParts = [];
+        this.rawSensitiveCommand = true;
         this.capabilities = /* @__PURE__ */ new Map();
         this.authCapabilities = /* @__PURE__ */ new Map();
         this.rawCapabilities = null;
@@ -60513,7 +60599,8 @@ var require_imap_flow = __commonJS({
           this.log.trace({
             src: "c",
             msg: "write to socket",
-            data: chunk.toString("base64"),
+            data: this.rawSensitiveCommand ? RAW_HIDDEN_PLACEHOLDER : chunk.toString("base64"),
+            ...this.rawSensitiveCommand ? { hidden: true } : {},
             compress: !!this._deflate,
             secure: !!this.secureConnection,
             cid: this.id
@@ -60561,6 +60648,7 @@ var require_imap_flow = __commonJS({
           }
           return;
         }
+        this.rawSensitiveCommand = RAW_SENSITIVE_COMMANDS.has(typeof data.command === "string" ? data.command.toUpperCase() : "") || hasSensitiveAttribute(data.attributes);
         let compiled = await compiler(data, {
           asArray: true,
           // LITERAL- is part of base IMAP4rev2
@@ -60621,27 +60709,31 @@ var require_imap_flow = __commonJS({
         let promise = new Promise((resolve3, reject) => {
           this.requestTagMap.set(tag, { command, attributes, options, resolve: resolve3, reject });
           this.requestQueue.push({ tag, command, attributes, options });
-          this.trySend().catch((err) => this.log.warn({ err, cid: this.id }));
+          this.trySend().catch((err) => logConnectionError(this, "Failed to dispatch command", err));
         });
         promise.catch(noop);
         return promise;
       }
-      // Resolves the handler for an untagged server response. IMAP untagged responses
-      // come in two forms:
+      // Resolves an untagged server response to the keyword it is dispatched on. IMAP untagged
+      // responses come in two forms:
       //   * CAPABILITY ...       (keyword as command)
       //   * 42 FETCH (...)       (numeric prefix + keyword)
-      // For numeric-prefixed responses, we extract the keyword (FETCH, EXISTS, EXPUNGE, etc.)
-      // and look up the handler by that keyword instead.
-      // Handler priority: command-specific handlers (registered per exec() call) take
-      // precedence over global handlers (registered on the connection).
-      getUntaggedHandler(command, attributes) {
+      // For numeric-prefixed responses the keyword sits in the first attribute, because `command`
+      // holds the sequence number. Also used for logging, so a failure reports FETCH rather than
+      // the message number that happened to precede it.
+      normalizeUntaggedCommand(command, attributes) {
         if (/^[0-9]+$/.test(command)) {
           let type = attributes && attributes.length && typeof attributes[0].value === "string" ? attributes[0].value.toUpperCase() : false;
           if (type) {
             command = type;
           }
         }
-        command = command.toUpperCase().trim();
+        return command.toUpperCase().trim();
+      }
+      // Handler priority: command-specific handlers (registered per exec() call) take
+      // precedence over global handlers (registered on the connection).
+      getUntaggedHandler(command, attributes) {
+        command = this.normalizeUntaggedCommand(command, attributes);
         if (this.currentRequest && this.currentRequest.options && this.currentRequest.options.untagged && this.currentRequest.options.untagged[command]) {
           return this.currentRequest.options.untagged[command];
         }
@@ -60787,7 +60879,7 @@ var require_imap_flow = __commonJS({
         err.code = parserError.code || "ParserError";
         err.parserError = parserError;
         this.rejectCurrentRequest(err);
-        this.trySend().catch((sendErr) => this.log.warn({ err: sendErr, cid: this.id }));
+        this.trySend().catch((sendErr) => logConnectionError(this, "Failed to dispatch command", sendErr));
       }
       /**
        * Handles a single parsed server response: telemetry, continuation requests, response-code
@@ -60828,7 +60920,7 @@ var require_imap_flow = __commonJS({
           try {
             await this.currentRequest.options.onPlusTag(parsed);
           } catch (err) {
-            this.log.warn({ err, cid: this.id });
+            this.log.warn({ msg: "Failed to process continuation response", command: this.currentRequest?.command, err, cid: this.id });
           }
           return true;
         }
@@ -60838,18 +60930,19 @@ var require_imap_flow = __commonJS({
             this.write(content);
             this.log.debug({ src: "c", msg: `(* ${content.length}B continuation *)`, cid: this.id });
           } catch (err) {
-            this.log.warn({ err, cid: this.id });
+            logConnectionError(this, "Failed to send literal continuation", err);
           }
           return true;
         }
         let section = parsed.attributes && parsed.attributes.length && parsed.attributes[0] && !parsed.attributes[0].value && parsed.attributes[0].section;
         if (section && section.length && section[0] && section[0].type === "ATOM" && typeof section[0].value === "string") {
-          let sectionHandler = this.getSectionHandler(section[0].value.toUpperCase().trim());
+          let sectionKey = section[0].value.toUpperCase().trim();
+          let sectionHandler = this.getSectionHandler(sectionKey);
           if (sectionHandler) {
             try {
               await sectionHandler(section.slice(1));
             } catch (err) {
-              this.log.warn({ err, cid: this.id });
+              this.log.warn({ msg: "Failed to process response section", section: sectionKey, err, cid: this.id });
             }
           }
         }
@@ -60859,7 +60952,12 @@ var require_imap_flow = __commonJS({
             try {
               await untaggedHandler(parsed);
             } catch (err) {
-              this.log.warn({ err, cid: this.id });
+              this.log.warn({
+                msg: "Failed to process untagged response",
+                command: this.normalizeUntaggedCommand(parsed.command, parsed.attributes),
+                err,
+                cid: this.id
+              });
               return true;
             }
           }
@@ -61139,7 +61237,7 @@ var require_imap_flow = __commonJS({
             }
             this.writeSocket.end();
           } catch (err) {
-            this.log.error({ err, info: "Failed to destroy PassThrough socket", cid: this.id });
+            this.log.error({ err, msg: "Failed to destroy PassThrough socket", cid: this.id });
             throw err;
           }
         };
@@ -61474,6 +61572,19 @@ var require_imap_flow = __commonJS({
           prevCount
         });
       }
+      // Reports one expunged message, either through the caller's expungeHandler or as an
+      // 'expunge' event. Shared by the EXPUNGE and VANISHED paths so the two cannot drift.
+      async notifyExpunge(payload) {
+        if (typeof this.options.expungeHandler !== "function") {
+          this.emit("expunge", payload);
+          return;
+        }
+        try {
+          await this.options.expungeHandler(payload);
+        } catch (err) {
+          this.log.error({ msg: "Failed to notify expunge event", payload, err, cid: this.id });
+        }
+      }
       async untaggedExpunge(untagged) {
         if (!this.mailbox) {
           return;
@@ -61489,15 +61600,7 @@ var require_imap_flow = __commonJS({
             seq,
             vanished: false
           };
-          if (typeof this.options.expungeHandler === "function") {
-            try {
-              await this.options.expungeHandler(payload);
-            } catch (err) {
-              this.log.error({ msg: "Failed to notify expunge event", payload, error: err, cid: this.id });
-            }
-          } else {
-            this.emit("expunge", payload);
-          }
+          await this.notifyExpunge(payload);
         }
       }
       async untaggedVanished(untagged, mailbox) {
@@ -61525,15 +61628,7 @@ var require_imap_flow = __commonJS({
             vanished: true,
             earlier: tags.includes("EARLIER")
           };
-          if (typeof this.options.expungeHandler === "function") {
-            try {
-              await this.options.expungeHandler(payload);
-            } catch (err) {
-              this.log.error({ msg: "Failed to notify expunge event", payload, error: err, cid: this.id });
-            }
-          } else {
-            this.emit("expunge", payload);
-          }
+          await this.notifyExpunge(payload);
         }
       }
       async untaggedFetch(untagged, mailbox) {
@@ -61631,7 +61726,7 @@ var require_imap_flow = __commonJS({
           if (this.state !== this.states.SELECTED || this.connectionBusy()) {
             return;
           }
-          this.idle().catch((err) => this.log.warn({ err, cid: this.id }));
+          this.idle().catch((err) => logConnectionError(this, "Auto-IDLE failed", err));
         }, this.autoIdleDelay);
         unrefTimer(this.idleStartTimer);
       }
@@ -61677,14 +61772,13 @@ var require_imap_flow = __commonJS({
               throw new Error("Failed to setup proxy connection");
             }
           } catch (err) {
+            this.log.error({ msg: "Failed to setup proxy connection", err, cid: this.id });
             if (err.code === "CONNECT_TIMEOUT") {
-              this.log.error({ err, cid: this.id });
               throw err;
             }
             let error2 = new Error("Failed to setup proxy connection");
             error2.code = err.code || "ProxyError";
             error2._err = err;
-            this.log.error({ error: error2, cid: this.id });
             throw error2;
           }
         }
@@ -61842,7 +61936,7 @@ var require_imap_flow = __commonJS({
             reject(err);
           }
           if (typeof this.preCheck === "function") {
-            this.preCheck().catch((err) => this.log.warn({ err, cid: this.id }));
+            this.preCheck().catch((err) => logConnectionError(this, "Failed to break IDLE while closing", err));
           }
           let closedMailbox = false;
           if (!this.isClosed) {
@@ -61902,7 +61996,7 @@ var require_imap_flow = __commonJS({
               this._inflate.destroy();
               this._inflate = null;
             } catch (err) {
-              this.log.error({ err, info: "Failed to destroy inflate stream", cid: this.id });
+              this.log.error({ err, msg: "Failed to destroy inflate stream", cid: this.id });
             }
           }
           if (this._deflate) {
@@ -61911,7 +62005,7 @@ var require_imap_flow = __commonJS({
               this._deflate.destroy();
               this._deflate = null;
             } catch (err) {
-              this.log.error({ err, info: "Failed to destroy deflate stream", cid: this.id });
+              this.log.error({ err, msg: "Failed to destroy deflate stream", cid: this.id });
             }
           }
           if (this.streamer) {
@@ -61926,7 +62020,7 @@ var require_imap_flow = __commonJS({
                 this.streamer.destroy();
               }
             } catch (err) {
-              this.log.error({ err, info: "Failed to cleanup streamer", cid: this.id });
+              this.log.error({ err, msg: "Failed to cleanup streamer", cid: this.id });
             }
           }
           this.clearSocketHandlers();
@@ -61961,7 +62055,7 @@ var require_imap_flow = __commonJS({
           this._socketClose = null;
           this._socketEnd = null;
           this._socketTimeout = null;
-          this.log.trace({
+          this.log.debug({
             msg: "Connection closed",
             cid: this.id,
             ...this._unknownTagCount ? { unknownTagCount: this._unknownTagCount } : {}
@@ -61971,7 +62065,7 @@ var require_imap_flow = __commonJS({
           }
           this.emit("close");
         } catch (ex) {
-          this.log.error(ex);
+          this.log.error({ err: ex, cid: this.id });
         }
       }
       /**
@@ -63541,24 +63635,29 @@ var require_imap_flow = __commonJS({
             if (this.options.logger !== false) {
               if (typeof mainLogger[level] !== "function") {
                 if (level === "fatal" || level === "error") {
-                  console.log(JSON.stringify(...args));
+                  let entry = args[0];
+                  try {
+                    if (entry && typeof entry === "object" && entry.err) {
+                      entry = Object.assign({}, entry, { err: flattenLoggedError(entry.err) });
+                    }
+                    console.error(JSON.stringify(entry));
+                  } catch {
+                    console.error(entry);
+                  }
                 }
               } else {
                 mainLogger[level](...args);
               }
             }
             if (this.emitLogs && args && args[0] && typeof args[0] === "object") {
-              let logEntry = Object.assign({ level, t: Date.now(), cid: this.id, lo: ++this.lo }, args[0]);
-              if (logEntry.err && typeof logEntry.err === "object") {
-                let err = logEntry.err;
-                logEntry.err = {
-                  stack: err.stack
-                };
-                Object.keys(err).forEach((key) => {
-                  logEntry.err[key] = err[key];
-                });
+              try {
+                let logEntry = Object.assign({ level, t: Date.now(), cid: this.id, lo: ++this.lo }, args[0]);
+                if (logEntry.err) {
+                  logEntry.err = flattenLoggedError(logEntry.err);
+                }
+                this.emit("log", logEntry);
+              } catch {
               }
-              this.emit("log", logEntry);
             }
           };
         }
