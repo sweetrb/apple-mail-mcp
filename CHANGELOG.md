@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Documentation
+
+- Added regression tests pinning that mailbox scoping resolves by
+  iterate-and-match against a canonical path (never an AppleScript named
+  specifier) and that unscoped `search-messages` tags each result with its
+  real mailbox — confirming the two symptoms reported in #203 (filed against
+  v2.3.0) no longer reproduce on current main; no behavior changed. (#203)
+
 ## [2.17.2] - 2026-08-26
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
