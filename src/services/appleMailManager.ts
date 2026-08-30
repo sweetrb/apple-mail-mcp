@@ -5422,11 +5422,47 @@ ${this.errorEmit("              ")}
     }
     const entry = this.buildSmartMailboxEntry(name, fromContains, subjectContains, bodyContains);
     const temp = this.prepareSmartPlistWrite(plistPath);
-    const ins = spawnSync(
-      "plutil",
-      ["-insert", String(entries.length), "-json", JSON.stringify(entry), temp],
-      { encoding: "utf8" }
-    );
+    // macOS 15 regression: `plutil -insert <index>` with a bare numeric keypath at
+    // an ARRAY root crashes with an NSRangeException
+    // ("substringToIndex: Index 18446744073709551615 out of bounds") instead of
+    // appending, so every create failed and the entry never reached the plist.
+    // Reproduce outside this project:
+    //   plutil -insert 1 -json '{"b":"y"}' <array-rooted.plist>   # crashes
+    // PlistBuddy's `Merge` appends an array's items to an array root and preserves
+    // the nested structure, and the delete path below already uses PlistBuddy, so
+    // this keeps both halves on one tool.
+    const entryJson = `${temp}.entry.json`;
+    const entryPlist = `${temp}.entry.plist`;
+    const cleanupEntryFiles = (): void => {
+      for (const f of [entryJson, entryPlist]) {
+        try {
+          unlinkSync(f);
+        } catch {
+          // best effort
+        }
+      }
+    };
+    writeFileSync(entryJson, JSON.stringify([entry]), "utf8");
+    const conv = spawnSync("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
+      encoding: "utf8",
+    });
+    if (conv.status !== 0) {
+      cleanupEntryFiles();
+      try {
+        unlinkSync(temp);
+      } catch {
+        // best effort
+      }
+      return {
+        created: false,
+        alreadyExisted: false,
+        error: (conv.stderr || "plutil could not encode the smart mailbox entry").trim(),
+      };
+    }
+    const ins = spawnSync("/usr/libexec/PlistBuddy", ["-c", `Merge ${entryPlist} :`, temp], {
+      encoding: "utf8",
+    });
+    cleanupEntryFiles();
     if (ins.status !== 0) {
       try {
         unlinkSync(temp);
@@ -5436,7 +5472,7 @@ ${this.errorEmit("              ")}
       return {
         created: false,
         alreadyExisted: false,
-        error: (ins.stderr || "plutil insert failed").trim(),
+        error: (ins.stderr || "PlistBuddy merge failed").trim(),
       };
     }
     if (!this.commitSmartPlist(temp, plistPath)) {

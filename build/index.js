@@ -82817,11 +82817,36 @@ ${this.errorEmit("              ")}
     }
     const entry = this.buildSmartMailboxEntry(name, fromContains, subjectContains, bodyContains);
     const temp = this.prepareSmartPlistWrite(plistPath);
-    const ins = spawnSync2(
-      "plutil",
-      ["-insert", String(entries.length), "-json", JSON.stringify(entry), temp],
-      { encoding: "utf8" }
-    );
+    const entryJson = `${temp}.entry.json`;
+    const entryPlist = `${temp}.entry.plist`;
+    const cleanupEntryFiles = () => {
+      for (const f of [entryJson, entryPlist]) {
+        try {
+          unlinkSync(f);
+        } catch {
+        }
+      }
+    };
+    writeFileSync3(entryJson, JSON.stringify([entry]), "utf8");
+    const conv = spawnSync2("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
+      encoding: "utf8"
+    });
+    if (conv.status !== 0) {
+      cleanupEntryFiles();
+      try {
+        unlinkSync(temp);
+      } catch {
+      }
+      return {
+        created: false,
+        alreadyExisted: false,
+        error: (conv.stderr || "plutil could not encode the smart mailbox entry").trim()
+      };
+    }
+    const ins = spawnSync2("/usr/libexec/PlistBuddy", ["-c", `Merge ${entryPlist} :`, temp], {
+      encoding: "utf8"
+    });
+    cleanupEntryFiles();
     if (ins.status !== 0) {
       try {
         unlinkSync(temp);
@@ -82830,7 +82855,7 @@ ${this.errorEmit("              ")}
       return {
         created: false,
         alreadyExisted: false,
-        error: (ins.stderr || "plutil insert failed").trim()
+        error: (ins.stderr || "PlistBuddy merge failed").trim()
       };
     }
     if (!this.commitSmartPlist(temp, plistPath)) {
