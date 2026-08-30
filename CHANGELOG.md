@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+## [2.17.3] - 2026-08-30
+
+### Fixed
+
+- `create-smart-mailbox` always failed on macOS 15: `plutil -insert <index> -json`
+  crashes with an `NSRangeException` when the target plist has an array root and
+  the keypath is a bare numeric index — exactly the shape of
+  `SyncedSmartMailboxes.plist`. `delete-smart-mailbox` looked broken too, but only
+  because its test created the entry first; its own PlistBuddy path was never at
+  fault. The insert now goes through `/usr/libexec/PlistBuddy`'s `Merge` command
+  instead, which appends to an array root and preserves the `date`/`data` values
+  `plutil -convert json` can't represent, matching what `delete-smart-mailbox`
+  already used. The failure was always safe — `commitSmartPlist` discarded the
+  edited copy and the original plist was untouched — but the feature was
+  unusable. (#205, thanks @Zome59)
+
 ### Documentation
 
 - Added regression tests pinning that mailbox scoping resolves by
