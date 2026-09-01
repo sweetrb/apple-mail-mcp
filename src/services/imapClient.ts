@@ -543,9 +543,32 @@ const defaultConnect: ImapConnect = async (cfg) => {
   return client as unknown as ImapClientLike;
 };
 
-/** Map common (Gmail) mailbox names to their IMAP paths. */
-export function resolveMailboxPath(mailbox: string | undefined, _mode: "search" | "list"): string {
-  if (!mailbox) return "INBOX";
+/**
+ * Well-known alias -> IMAP SPECIAL-USE flag (RFC 6154), lowercased. Used to find
+ * the real mailbox behind a generic name ("trash", "drafts", …) regardless of
+ * what the provider actually calls it — Exchange's "Deleted Items", iCloud's
+ * "Deleted Messages", Gmail's "[Gmail]/Trash" all advertise `\Trash`.
+ */
+const SPECIAL_USE_ALIASES: Record<string, string> = {
+  "all mail": "\\all",
+  archive: "\\archive",
+  drafts: "\\drafts",
+  sent: "\\sent",
+  "sent mail": "\\sent",
+  trash: "\\trash",
+  spam: "\\junk",
+  junk: "\\junk",
+  starred: "\\flagged",
+};
+
+/**
+ * Legacy Gmail-only path guesses — the ONLY resort when a mailbox can be
+ * resolved neither as a real mailbox nor via SPECIAL-USE (LIST failed, or the
+ * account has no such special-use mailbox and isn't Gmail's proprietary
+ * combined-mailbox layout). `[Gmail]/Important` and `[Gmail]/Starred` have no
+ * SPECIAL-USE equivalent, so they can only ever be reached this way.
+ */
+function staticMailboxAlias(mailbox: string): string {
   const map: Record<string, string> = {
     "all mail": "[Gmail]/All Mail",
     "sent mail": "[Gmail]/Sent Mail",
@@ -558,6 +581,46 @@ export function resolveMailboxPath(mailbox: string | undefined, _mode: "search" 
     important: "[Gmail]/Important",
   };
   return map[mailbox.trim().toLowerCase()] ?? mailbox;
+}
+
+/**
+ * Resolve a mailbox name to its real IMAP path, in three tiers:
+ *   1. An exact real mailbox — full path or a single leaf-name match, from
+ *      `client.list()` (#207: `Junk`/`Drafts` genuinely exist on iCloud;
+ *      resolving them as real mailboxes must win over any alias table, so a
+ *      non-Gmail account's own folders are never shadowed by Gmail's).
+ *   2. A well-known alias resolved via the connection's own SPECIAL-USE flags
+ *      — provider-neutral, so "trash" finds Exchange's "Deleted Items" or
+ *      iCloud's "Deleted Messages" as readily as Gmail's.
+ *   3. The legacy Gmail-only static map (`staticMailboxAlias`), as a last
+ *      resort when LIST failed or nothing above matched.
+ *
+ * A tier-1 match that is itself ambiguous (two mailboxes sharing a leaf name)
+ * falls through to tiers 2/3 rather than erroring: unlike a *move* destination
+ * (#137), guessing wrong here only scopes a read to a plausible mailbox, not
+ * a wrong destination for a mutation.
+ */
+export async function resolveMailboxPath(
+  client: ImapClientLike,
+  mailbox: string | undefined,
+  _mode: "search" | "list"
+): Promise<string> {
+  if (!mailbox) return "INBOX";
+  try {
+    const resolved = await resolveMailbox(client, mailbox);
+    if (resolved.kind === "found") return resolved.path;
+
+    const flag = SPECIAL_USE_ALIASES[mailbox.trim().toLowerCase()];
+    if (flag) {
+      const boxes = await client.list();
+      const special = boxes.find((b) => b.specialUse?.toLowerCase() === flag);
+      if (special) return special.path;
+    }
+  } catch {
+    // LIST failed — fall through to the static guess below, same as
+    // resolveTrashPath's own `!listed` fallback.
+  }
+  return staticMailboxAlias(mailbox);
 }
 
 function buildCriteria(a: ImapSearchArgs, listMode: boolean): Record<string, unknown> {
@@ -723,7 +786,7 @@ async function run(
           throw new Error(`No selectable IMAP mailboxes found for account ${cfg.accountLabel}.`);
         }
       } else {
-        paths = [resolveMailboxPath(args.mailbox, listMode ? "list" : "search")];
+        paths = [await resolveMailboxPath(client, args.mailbox, listMode ? "list" : "search")];
       }
 
       const limit = args.limit ?? 50;
@@ -840,7 +903,9 @@ export function imapUnreadCount(mailbox: string | undefined, deps: ImapDeps = {}
   return useClient(
     deps,
     async (client) => {
-      const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
+      const s = await client.status(await resolveMailboxPath(client, mailbox, "list"), {
+        unseen: true,
+      });
       return s.unseen ?? 0;
     },
     true
@@ -1595,7 +1660,8 @@ export async function imapMoveMessageById(
         error: ambiguousMailboxError(destMailbox, dest.candidates, cfg.accountLabel),
       };
     }
-    const destPath = dest.kind === "found" ? dest.path : resolveMailboxPath(destMailbox, "list");
+    const destPath =
+      dest.kind === "found" ? dest.path : await resolveMailboxPath(client, destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
       const moved = assertMutated(
@@ -1652,7 +1718,9 @@ async function resolveTrashPath(client: ImapClientLike): Promise<string> {
     // best remaining guess. A wrong guess now fails loudly (#181) instead of
     // silently discarding the delete.
   }
-  if (!listed) return resolveMailboxPath("trash", "list");
+  // LIST just failed above, so a fresh resolveMailboxPath call would only fail
+  // the same way and fall back to this same static guess — skip straight to it.
+  if (!listed) return staticMailboxAlias("trash");
 
   // LIST succeeded and this account has no Trash mailbox of any kind. Returning
   // the Gmail default here is what made `delete-message` a SILENT NO-OP on every
@@ -2099,7 +2167,8 @@ export function imapBatchMove(
       // #137: throws on an ambiguous destination; imapBatch records it per group
       // as a failure rather than moving the batch somewhere the caller didn't name.
       const dest =
-        (await findMailboxPathOrThrow(c, destMailbox)) ?? resolveMailboxPath(destMailbox, "list");
+        (await findMailboxPathOrThrow(c, destMailbox)) ??
+        (await resolveMailboxPath(c, destMailbox, "list"));
       assertMutated(
         await c.messageMove(uids, dest, { uid: true }),
         `IMAP move of ${uids.length} message(s) to "${dest}"`

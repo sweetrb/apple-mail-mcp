@@ -84154,8 +84154,18 @@ var defaultConnect = async (cfg) => {
   }
   return client;
 };
-function resolveMailboxPath(mailbox, _mode) {
-  if (!mailbox) return "INBOX";
+var SPECIAL_USE_ALIASES = {
+  "all mail": "\\all",
+  archive: "\\archive",
+  drafts: "\\drafts",
+  sent: "\\sent",
+  "sent mail": "\\sent",
+  trash: "\\trash",
+  spam: "\\junk",
+  junk: "\\junk",
+  starred: "\\flagged"
+};
+function staticMailboxAlias(mailbox) {
   const map = {
     "all mail": "[Gmail]/All Mail",
     "sent mail": "[Gmail]/Sent Mail",
@@ -84168,6 +84178,21 @@ function resolveMailboxPath(mailbox, _mode) {
     important: "[Gmail]/Important"
   };
   return map[mailbox.trim().toLowerCase()] ?? mailbox;
+}
+async function resolveMailboxPath(client, mailbox, _mode) {
+  if (!mailbox) return "INBOX";
+  try {
+    const resolved = await resolveMailbox(client, mailbox);
+    if (resolved.kind === "found") return resolved.path;
+    const flag = SPECIAL_USE_ALIASES[mailbox.trim().toLowerCase()];
+    if (flag) {
+      const boxes = await client.list();
+      const special = boxes.find((b) => b.specialUse?.toLowerCase() === flag);
+      if (special) return special.path;
+    }
+  } catch {
+  }
+  return staticMailboxAlias(mailbox);
 }
 function buildCriteria(a, listMode) {
   const c = {};
@@ -84277,7 +84302,7 @@ async function run(args, listMode, deps) {
           throw new Error(`No selectable IMAP mailboxes found for account ${cfg.accountLabel}.`);
         }
       } else {
-        paths = [resolveMailboxPath(args.mailbox, listMode ? "list" : "search")];
+        paths = [await resolveMailboxPath(client, args.mailbox, listMode ? "list" : "search")];
       }
       const limit = args.limit ?? 50;
       const offset = args.offset ?? 0;
@@ -84353,7 +84378,9 @@ function imapUnreadCount(mailbox, deps = {}) {
   return useClient(
     deps,
     async (client) => {
-      const s = await client.status(resolveMailboxPath(mailbox, "list"), { unseen: true });
+      const s = await client.status(await resolveMailboxPath(client, mailbox, "list"), {
+        unseen: true
+      });
       return s.unseen ?? 0;
     },
     true
@@ -84785,7 +84812,7 @@ async function imapMoveMessageById(id, destMailbox, deps = {}) {
         error: ambiguousMailboxError(destMailbox, dest.candidates, cfg.accountLabel)
       };
     }
-    const destPath = dest.kind === "found" ? dest.path : resolveMailboxPath(destMailbox, "list");
+    const destPath = dest.kind === "found" ? dest.path : await resolveMailboxPath(client, destMailbox, "list");
     const lock = await client.getMailboxLock(ref.path);
     try {
       const moved = assertMutated(
@@ -84822,7 +84849,7 @@ async function resolveTrashPath(client) {
     if (named) return named.path;
   } catch {
   }
-  if (!listed) return resolveMailboxPath("trash", "list");
+  if (!listed) return staticMailboxAlias("trash");
   try {
     const created = await client.mailboxCreate(FALLBACK_TRASH_PATH);
     return created?.path || FALLBACK_TRASH_PATH;
@@ -85076,7 +85103,7 @@ function imapBatchMove(ids, destMailbox, deps = {}) {
     ids,
     deps,
     async (c, uids) => {
-      const dest = await findMailboxPathOrThrow(c, destMailbox) ?? resolveMailboxPath(destMailbox, "list");
+      const dest = await findMailboxPathOrThrow(c, destMailbox) ?? await resolveMailboxPath(c, destMailbox, "list");
       assertMutated(
         await c.messageMove(uids, dest, { uid: true }),
         `IMAP move of ${uids.length} message(s) to "${dest}"`

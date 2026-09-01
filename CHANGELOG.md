@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+## [2.17.4] - 2026-09-01
+
+### Fixed
+
+- **`resolveMailboxPath` applied Gmail's `[Gmail]/…` folder paths to every IMAP
+  account, regardless of provider.** On an iCloud (or any non-Gmail) account,
+  requesting the genuinely-existing `Junk` or `Drafts` mailbox got silently
+  rewritten to `[Gmail]/Spam` / `[Gmail]/Drafts` — paths that cannot exist
+  there — and the search/list/unread-count call failed outright, naming the
+  wrong path in the error. Resolution is now three-tiered: (1) a literal real
+  mailbox — full path or a single leaf-name match from `client.list()` —
+  always wins, so an account's own `Junk`/`Drafts` are never shadowed; (2) a
+  well-known alias (`trash`, `drafts`, `sent`, …) resolves via the
+  connection's own IMAP SPECIAL-USE flags (RFC 6154), so `trash` finds
+  Exchange's `Deleted Items` or iCloud's `Deleted Messages` exactly as
+  reliably as Gmail's; (3) the legacy Gmail-only static map remains the last
+  resort, for when LIST itself fails or (for `[Gmail]/Important` and
+  `[Gmail]/Starred`, which have no SPECIAL-USE equivalent) nothing else could
+  match. (#207, thanks @ficklma1 for the root-cause trace and reproduction
+  matrix)
+
 ## [2.17.3] - 2026-08-30
 
 ### Fixed
