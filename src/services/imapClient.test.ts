@@ -388,15 +388,62 @@ describe("imapHealthCheck configured-gate (#138)", () => {
 });
 
 describe("resolveMailboxPath", () => {
-  it("uses the provider-neutral INBOX fallback when no path is pinned", () => {
-    expect(resolveMailboxPath(undefined, "search")).toBe("INBOX");
-    expect(resolveMailboxPath(undefined, "list")).toBe("INBOX");
+  const rec: Rec = {};
+  // Gmail-shaped account: no real mailbox literally named "Junk"/"Drafts"/etc.,
+  // so every alias falls through to SPECIAL-USE (or the static map for the two
+  // that have no SPECIAL-USE equivalent).
+  const GMAIL_BOXES = [
+    { path: "INBOX", name: "INBOX" },
+    { path: "[Gmail]/All Mail", name: "All Mail", specialUse: "\\All" },
+    { path: "[Gmail]/Sent Mail", name: "Sent Mail", specialUse: "\\Sent" },
+    { path: "[Gmail]/Trash", name: "Trash", specialUse: "\\Trash" },
+    { path: "[Gmail]/Drafts", name: "Drafts", specialUse: "\\Drafts" },
+    { path: "[Gmail]/Spam", name: "Spam", specialUse: "\\Junk" },
+  ];
+  const gmailClient = () => ({ ...makeClient([], rec), list: async () => GMAIL_BOXES });
+
+  it("uses the provider-neutral INBOX fallback when no path is pinned", async () => {
+    expect(await resolveMailboxPath(gmailClient(), undefined, "search")).toBe("INBOX");
+    expect(await resolveMailboxPath(gmailClient(), undefined, "list")).toBe("INBOX");
   });
-  it("maps common Gmail folder names", () => {
-    expect(resolveMailboxPath("All Mail", "search")).toBe("[Gmail]/All Mail");
-    expect(resolveMailboxPath("Sent Mail", "list")).toBe("[Gmail]/Sent Mail");
-    expect(resolveMailboxPath("INBOX", "list")).toBe("INBOX");
-    expect(resolveMailboxPath("MyCustomLabel", "list")).toBe("MyCustomLabel");
+  it("resolves common Gmail folder names via SPECIAL-USE, and the two without an equivalent via the static map", async () => {
+    expect(await resolveMailboxPath(gmailClient(), "All Mail", "search")).toBe("[Gmail]/All Mail");
+    expect(await resolveMailboxPath(gmailClient(), "Sent Mail", "list")).toBe("[Gmail]/Sent Mail");
+    expect(await resolveMailboxPath(gmailClient(), "INBOX", "list")).toBe("INBOX");
+    expect(await resolveMailboxPath(gmailClient(), "MyCustomLabel", "list")).toBe("MyCustomLabel");
+    expect(await resolveMailboxPath(gmailClient(), "Important", "list")).toBe("[Gmail]/Important");
+  });
+
+  // #207: Junk/Drafts are genuine iCloud folder names — a real mailbox match
+  // must win over the Gmail-shaped alias table.
+  it("a literal real mailbox wins over the alias table (#207)", async () => {
+    const iCloudClient = {
+      ...makeClient([], rec),
+      list: async () => [
+        { path: "INBOX", name: "INBOX" },
+        { path: "Archive", name: "Archive" },
+        { path: "Drafts", name: "Drafts" },
+        { path: "Junk", name: "Junk" },
+        { path: "Sent Messages", name: "Sent Messages", specialUse: "\\Sent" },
+        { path: "Deleted Messages", name: "Deleted Messages", specialUse: "\\Trash" },
+      ],
+    };
+    expect(await resolveMailboxPath(iCloudClient, "Junk", "search")).toBe("Junk");
+    expect(await resolveMailboxPath(iCloudClient, "Drafts", "search")).toBe("Drafts");
+    // Not a real mailbox name here, but SPECIAL-USE still finds it under its
+    // real iCloud name rather than guessing the Gmail path.
+    expect(await resolveMailboxPath(iCloudClient, "trash", "search")).toBe("Deleted Messages");
+    expect(await resolveMailboxPath(iCloudClient, "sent", "search")).toBe("Sent Messages");
+  });
+
+  it("falls back to the static Gmail guess when LIST itself fails", async () => {
+    const brokenClient = {
+      ...makeClient([], rec),
+      list: async (): Promise<never> => {
+        throw new Error("LIST failed");
+      },
+    };
+    expect(await resolveMailboxPath(brokenClient, "Junk", "search")).toBe("[Gmail]/Spam");
   });
 });
 
