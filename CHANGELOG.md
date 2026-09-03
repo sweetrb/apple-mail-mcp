@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [2.17.7] - 2026-09-03
+
+### Documentation
+
+- Documented the **coverage-diagnostics fields** that `search-messages` and
+  `list-messages` already return (`partial`, `skippedLargeMailboxes`,
+  `notSearchedMailboxes`, `timedOutAccounts`, `failedMailboxes`) in the README's
+  "Large mailboxes & partial results" section, with each field's type, its
+  `"Account / Mailbox (count)"` formatting, and the fact that all five are
+  omitted when coverage was complete. The behaviour and the human-readable
+  `⚠️ Partial results` warning were documented; the structured fields a
+  programmatic caller actually reads were not, so the ability to tell "nothing
+  matched" apart from "I did not look everywhere" was discoverable only by
+  observing a live response. No code change. (#203, thanks @nh4p7qcxkj-cyber for
+  reporting that `skippedLargeMailboxes` was undocumented after finding it
+  empirically)
+
 ## [2.17.6] - 2026-09-03
 
 ### Security

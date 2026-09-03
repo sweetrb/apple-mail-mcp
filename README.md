@@ -256,6 +256,25 @@ To search inside a large mailbox, scope the call with `mailbox` (and ideally a
 to disable the guard and attempt every mailbox regardless of size).
 ([#24](https://github.com/sweetrb/apple-mail-mcp/issues/24))
 
+**Coverage diagnostics (structured fields).** The warning above is prose for a
+human reader; the same information is also returned as structured fields on
+`search-messages` and `list-messages`, so a caller can tell *"nothing matched"*
+apart from *"I did not look everywhere"* without parsing the text:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `partial` | boolean | Coverage was incomplete — **the result is not a confirmed "no such mail"**. True whenever any field below is non-empty. |
+| `skippedLargeMailboxes` | string[] | Mailboxes never scanned because their message count exceeded `APPLE_MAIL_MAX_SEARCH_MAILBOX`, formatted `"Account / Mailbox (count)"` — e.g. `"iCloud / Archive (90694)"`. |
+| `notSearchedMailboxes` | string[] | Mailboxes that *were* reached but timed out or errored mid-scan, formatted `"Account / Mailbox"`. Also carries the IMAP path's `failedMailboxes`. |
+| `timedOutAccounts` | string[] | Accounts whose whole-account AppleScript was killed by the per-account time budget — nothing from that account was searched. |
+| `failedMailboxes` | string[] | IMAP-backend mailboxes that errored. These are merged into `notSearchedMailboxes` as well; read that field unless you need to attribute the failure to the IMAP path specifically. |
+
+Treat a non-empty `skippedLargeMailboxes` as actionable rather than
+informational: re-run scoped to the named mailbox with a `dateFrom`/`dateTo`
+window, or configure the [IMAP backend](#imap-backend--opt-in), which searches
+those mailboxes server-side. All five fields are optional and are omitted when
+coverage was complete.
+
 ---
 
 #### `get-message`
