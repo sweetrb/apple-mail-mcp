@@ -40,9 +40,15 @@ overrides:
   # ⚠️ These are FLOORS, not pins. `fast-uri: 3.1.4` (exact) was written here as a
   # security floor and then became a CEILING: when GHSA-7p8r-x3mc-p8w7 landed with
   # a 3.1.5 fix, the exact pin held the tree on the vulnerable 3.1.4 and the
-  # advisory could not clear. Use a caret range so patch fixes flow in on their own
-  # while staying inside the major that the parent's API expects.
-  fast-uri: ^3.1.5
+  # advisory could not clear. Use a two-sided range so patch fixes flow in on
+  # their own while staying inside the major that ajv's API expects — never an
+  # unbounded ">=" (could silently jump a future major) and never an exact pin
+  # (becomes a ceiling again the next time this needs to move).
+  # GHSA-5jgf-p345-68v8 (high, host confusion via skipped IDN canonicalization)
+  # + GHSA-fph4-wmhf-6fwf (high, SSRF via repeated hostname percent-decoding):
+  # both fixed in 3.1.6. Raised the floor from ^3.1.5 (which still permitted the
+  # vulnerable 3.1.5 itself) to >=3.1.6 <4.
+  fast-uri: ">=3.1.6 <4"
   # GHSA-mwp4-54f8-5fhr (high) + GHSA-4xrf-jv44-h6hh + GHSA-22jq-vg5j-6vgg.
   # express-rate-limit -> @modelcontextprotocol/sdk pulled ip-address 10.2.0 while
   # imapflow -> socks already resolved a clean 10.3.1, so the tree carried two

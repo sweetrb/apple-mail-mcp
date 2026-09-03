@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [2.17.6] - 2026-09-03
+
+### Security
+
+- Floored the transitive `fast-uri` dependency (pulled in via `ajv`) from
+  `^3.1.5` to `>=3.1.6 <4` in `pnpm-workspace.yaml`'s `overrides:`, closing two
+  open high-severity Dependabot alerts: GHSA-5jgf-p345-68v8 (host confusion via
+  skipped IDN canonicalization on scheme-relative references) and
+  GHSA-fph4-wmhf-6fwf (SSRF via repeated hostname percent-decoding). `fast-uri`
+  is not a direct dependency, so Dependabot could not open a normal bump PR;
+  both advisories are fixed upstream in `fast-uri@3.1.6`. Rebuilt
+  `build/index.js` to bundle the patched code (`ajv`'s schema validation is the
+  only consumer; `build/cli.js` is unaffected). No behavior change.
+
 ## [2.17.5] - 2026-09-02
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
