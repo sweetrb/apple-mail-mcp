@@ -141,14 +141,14 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 - Set `replyAll: true` to reply to all recipients
 - Set `send: false` to save as draft instead of sending immediately
 - Default behavior: reply to sender only, send immediately
-- **Transport (v2.5.0):** when SMTP is configured, sends via **clean direct SMTP**, threading the reply with proper RFC 5322 `In-Reply-To`/`References` headers (built from the original) so it stays in the same conversation. Falls back to Mail.app's AppleScript `reply … without opening window` when SMTP isn't configured (or the original lacks the headers needed to thread). The `without opening window` path opens no compose window, which ensures reliable body delivery from background processes (see [Known Issues](#known-issue-resolved-reply--forward-empty-body-from-background-processes) below)
+- **Transport (v2.5.0):** when SMTP is configured, sends via **clean direct SMTP**, threading the reply with proper RFC 5322 `In-Reply-To`/`References` headers (built from the original) so it stays in the same conversation. Reads `imap:` sources directly over IMAP. `transport: "smtp"` requires clean delivery; a selected SMTP path returns configuration, source, and threading failures rather than silently falling back. With transport omitted, Mail.app's AppleScript `reply … without opening window` is used only when SMTP is unconfigured or `send: false`. Explicit `transport: "applescript"` remains available. The `without opening window` path opens no compose window, which ensures reliable body delivery from background processes (see [Known Issues](#known-issue-resolved-reply--forward-empty-body-from-background-processes) below)
 
 ### forward-message
 
 - Requires message `id` and `to` array
 - Optional `body` to prepend a message
 - Set `send: false` to save as draft
-- **Transport (v2.5.0):** when SMTP is configured, sends via **clean direct SMTP** (a forward starts a new conversation — no threading headers). Falls back to AppleScript `forward … without opening window` when SMTP isn't configured — same background-process fix as reply-to-message
+- **Transport (v2.5.0):** when SMTP is configured, sends via **clean direct SMTP** (a forward starts a new conversation — no threading headers). Reads `imap:` sources directly over IMAP. A selected SMTP path never silently falls back. With transport omitted, uses AppleScript `forward … without opening window` when SMTP is unconfigured or a draft is requested — same background-process fix as reply-to-message
 
 ### Multi-account
 

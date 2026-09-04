@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+## [2.17.8] - 2026-09-04
+
+### Fixed
+
+- SMTP replies and forwards now read composite `imap:` IDs directly from their
+  encoded account/mailbox/UID instead of passing them to a numeric AppleScript
+  source lookup. This prevents the clean SMTP path from falling back merely
+  because IMAP supplied the id. Reads are bounded to 25 MiB and release the
+  mailbox lock on success and failure. Decoded IMAP subjects are preserved.
+- Reply routing has executable regression coverage, including rendered MIME:
+  the new body stays unquoted and the original thread headers reach SMTP.
+
+### Changed
+
+- Replies and forwards accept an explicit `smtp`/`applescript` transport and
+  report the selected transport (plus the SMTP message id when available).
+  **Breaking failure behavior:** once SMTP is selected, configuration/source
+  failures, missing reply headers, and send failures are returned rather than
+  silently falling back to AppleScript. Explicit AppleScript remains available;
+  omitted transport still uses it when SMTP is unconfigured or saving a draft.
+  SMTP with `send: false` is rejected before composing.
+- The newly enabled IMAP-to-SMTP compose route rejects unrelated source-account
+  identities. The IMAP login must match the SMTP login, From, or an explicitly
+  configured allowed identity. Configured aliases are excluded from reply-all.
+
 ## [2.17.7] - 2026-09-03
 
 ### Documentation

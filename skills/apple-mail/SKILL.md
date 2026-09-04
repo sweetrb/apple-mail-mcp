@@ -251,3 +251,16 @@ User: "Check my work email"
 → 1. list-accounts to find work account name
 → 2. list-messages with account="Work Exchange"
 ```
+
+
+### Preserve reply threading and delivery format
+
+Use `reply-to-message` with the original message id for replies. `send-email`
+creates a new conversation; a `Re:` subject alone does not create threading
+headers. For clean sending, use `transport: "smtp"` on reply/forward (requires
+SMTP setup). Composite `imap:` sources are read directly, without Mail.app
+synchronization. Once SMTP is selected, errors do not silently switch delivery
+backends. Explicit `transport: "applescript"` keeps the native alternative,
+including its known quote-wrapping limitation. For drafts, use `send: false`
+with transport omitted or `applescript`, not `smtp`. Read the returned
+`transport`; SMTP success may also include the sent `messageId`.

@@ -1474,6 +1474,48 @@ async function withMailbox<T>(
   });
 }
 
+/** Source needed to compose a reply without relying on Mail.app synchronization. */
+export interface ImapMessageSource {
+  raw: string;
+  subject?: string;
+  accountUser: string;
+}
+
+/** Maximum raw source fetched for a reply/forward, including MIME attachments. */
+export const MAX_COMPOSE_SOURCE_BYTES = 25 * 1024 * 1024;
+
+/** Fetch headers and body together from the exact account/mailbox/UID in an IMAP id. */
+export async function imapGetMessageSource(
+  id: string,
+  deps: ImapDeps = {}
+): Promise<ImapMessageSource> {
+  const ref = decodeImapId(id);
+  if (!ref) throw new Error(`Not an IMAP message id: "${id}".`);
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    const lock = await client.getMailboxLock(ref.path);
+    try {
+      const msg = await client.fetchOne(
+        String(ref.uid),
+        {
+          envelope: true,
+          // One extra byte distinguishes an exact-limit source from truncation.
+          source: { start: 0, maxLength: MAX_COMPOSE_SOURCE_BYTES + 1 },
+        },
+        { uid: true }
+      );
+      if (!msg) throw new Error(`IMAP message UID ${ref.uid} not found in "${ref.path}".`);
+      if (!msg.source || !msg.source.length)
+        throw new Error("IMAP returned no original message source.");
+      if (Buffer.byteLength(msg.source) > MAX_COMPOSE_SOURCE_BYTES) {
+        throw new Error("Original message source exceeds the 25 MiB reply/forward limit.");
+      }
+      return { raw: msg.source.toString(), subject: msg.envelope?.subject, accountUser: cfg.user };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
 /** Read a message by composite IMAP id; returns "Subject: …\n\n<body>". */
 export async function imapGetMessage(
   id: string,
