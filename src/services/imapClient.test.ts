@@ -15,6 +15,8 @@ import {
   imapFetchMessageId,
   normalizeMessageId,
   imapGetMessage,
+  imapGetMessageSource,
+  MAX_COMPOSE_SOURCE_BYTES,
   imapMarkRead,
   imapMarkUnread,
   imapFlagMessage,
@@ -2096,5 +2098,79 @@ describe("#181 IMAP batch operations reconcile the source mailbox count", () => 
       connect: async () => countingClient(0),
     });
     expect(unflag.countDelta).toBeUndefined();
+  });
+});
+
+describe("imapGetMessageSource", () => {
+  const id = encodeImapId(cfg.accountLabel, "Archive/Inbox", 42);
+  const raw = "Message-ID: <parent@example.com>\r\nSubject: Hello\r\n\r\nOriginal body";
+  function sourceClient(source: Buffer | string = raw) {
+    const release = vi.fn();
+    const client = {
+      ...makeClient([], {}),
+      getMailboxLock: vi.fn(async () => ({ release })),
+      fetchOne: vi.fn(async () => ({ uid: 42, source, envelope: { subject: "Hello" } })),
+    };
+    const connect = vi.fn(async () => client);
+    return { client, release, connect, deps: { config: cfg, connect } };
+  }
+
+  it("fetches the exact mailbox and UID with a bounded source query", async () => {
+    const d = sourceClient(Buffer.from(raw));
+    expect(await imapGetMessageSource(id, d.deps)).toEqual({
+      raw,
+      subject: "Hello",
+      accountUser: cfg.user,
+    });
+    expect(d.connect).toHaveBeenCalledWith(cfg);
+    expect(d.client.getMailboxLock).toHaveBeenCalledWith("Archive/Inbox");
+    expect(d.client.fetchOne).toHaveBeenCalledWith(
+      "42",
+      { envelope: true, source: { start: 0, maxLength: MAX_COMPOSE_SOURCE_BYTES + 1 } },
+      { uid: true }
+    );
+    expect(d.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects non-IMAP ids without connecting", async () => {
+    const d = sourceClient();
+    await expect(imapGetMessageSource("42", d.deps)).rejects.toThrow("Not an IMAP");
+    expect(d.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mismatched account selector before connecting", async () => {
+    const d = sourceClient();
+    await expect(imapGetMessageSource(id, { ...d.deps, account: "Other" })).rejects.toThrow(
+      "belongs to account"
+    );
+    expect(d.connect).not.toHaveBeenCalled();
+  });
+
+  it("releases the mailbox after fetch failure", async () => {
+    const d = sourceClient();
+    d.client.fetchOne.mockRejectedValue(new Error("connection reset"));
+    await expect(imapGetMessageSource(id, d.deps)).rejects.toThrow("connection reset");
+    expect(d.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports missing messages and releases the lock", async () => {
+    const d = sourceClient();
+    d.client.fetchOne.mockResolvedValue(false);
+    await expect(imapGetMessageSource(id, d.deps)).rejects.toThrow("not found");
+    expect(d.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a missing source rather than forwarding an empty body", async () => {
+    const d = sourceClient("");
+    await expect(imapGetMessageSource(id, d.deps)).rejects.toThrow("no original message source");
+    expect(d.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts the exact limit but refuses a truncated oversized source", async () => {
+    const exact = sourceClient(Buffer.alloc(MAX_COMPOSE_SOURCE_BYTES, 65));
+    expect((await imapGetMessageSource(id, exact.deps)).raw.length).toBe(MAX_COMPOSE_SOURCE_BYTES);
+    const tooBig = sourceClient(Buffer.alloc(MAX_COMPOSE_SOURCE_BYTES + 1, 65));
+    await expect(imapGetMessageSource(id, tooBig.deps)).rejects.toThrow("25 MiB");
+    expect(tooBig.release).toHaveBeenCalledTimes(1);
   });
 });

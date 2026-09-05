@@ -725,7 +725,7 @@ Return an attachment's bytes as base64 (the read counterpart to inline-base64 se
 
 #### `resolve-message-id`
 
-Map `imap:` message IDs to their numeric Mail.app IDs, via each message's RFC 5322 `Message-ID` (the join key both backends share). Needed only for the two tools that are numeric-ID-only — `reply-to-message` and `forward-message`. Numeric IDs pass through unchanged.
+Map `imap:` message IDs to their numeric Mail.app IDs, via each message's RFC 5322 `Message-ID` (the join key both backends share). Needed for the AppleScript reply/forward path; direct SMTP replies and forwards read `imap:` IDs without numeric conversion. Numeric IDs pass through unchanged.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -747,6 +747,7 @@ Reply to an existing message.
 | `body` | string | Yes | Reply body |
 | `replyAll` | boolean | No | Reply to all recipients (default: false) |
 | `send` | boolean | No | Send immediately (default: true, false = save as draft) |
+| `transport` | string | No | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript. |
 
 **Example - Reply to sender only:**
 ```json
@@ -766,7 +767,13 @@ Reply to an existing message.
 }
 ```
 
-> **Transport (v2.5.0):** when SMTP is configured, `reply-to-message` sends via **clean SMTP**, threading the reply with proper RFC 5322 `In-Reply-To`/`References` headers (built from the original message) so it lands in the same conversation. When SMTP is not configured (or the original lacks the headers needed to thread), it falls back to Mail.app's AppleScript `reply … without opening window` — same reliable-from-background-process path as before. See [SMTP transport](#smtp-transport).
+**Delivery:** `imap:` IDs are read directly from their encoded account, mailbox, and UID. Numeric IDs are read through Mail.app. With SMTP configured, replies use clean MIME with the original `Message-ID` in `In-Reply-To` and the full `References` chain. Only the original plain-text body is quoted; the new text is not. Pass `transport: "smtp"` to require this path, or `transport: "applescript"` to use Mail.app explicitly.
+
+**Failure behavior:** once SMTP is selected, a missing password, unreadable source, missing reply address or `Message-ID`, or SMTP failure returns an error. It does not silently switch to AppleScript or create an unthreaded new message. With SMTP unconfigured and transport omitted, AppleScript remains available. `send: false` saves a Mail.app draft; combining it with `transport: "smtp"` is rejected before composing.
+
+The direct IMAP source read is bounded to 25 MiB, including MIME attachments. Its account login must match the SMTP login, configured From, or an explicitly configured `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` identity; otherwise the call fails rather than sending from an unrelated account. The SMTP configuration still represents a single sending identity, not a per-account SMTP registry.
+
+Success includes `transport` and, for SMTP when returned by the server, the new `messageId`. SMTP submission does not add a local Sent copy; server-side Sent-folder behavior is unchanged. `send-email` is for **new conversations**: adding `Re:` to its subject does not add threading headers. Use this reply tool with the original id instead.
 
 **⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
 
@@ -782,8 +789,11 @@ Forward a message to new recipients.
 | `to` | string[] | Yes | Recipients to forward to |
 | `body` | string | No | Message to prepend |
 | `send` | boolean | No | Send immediately (default: true, false = save as draft) |
+| `transport` | string | No | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript. |
 
-> **Transport (v2.5.0):** when SMTP is configured, `forward-message` sends via **clean SMTP** (a fresh message with the original quoted, no threading headers — a forward starts a new conversation). When SMTP is not configured it falls back to Mail.app's AppleScript `forward … without opening window`. See [SMTP transport](#smtp-transport).
+**Delivery:** uses the same source lookup, transport selection, 25 MiB source limit, account-identity check, and failure behavior as `reply-to-message`. A forward deliberately starts a new conversation, so it has no `In-Reply-To` or `References` headers. The existing plain-text forwarding behavior is unchanged: original attachments are not reattached. See [SMTP transport](#smtp-transport).
+
+SMTP forwarding requires a readable plain-text original. HTML-only IMAP messages and failed Mail.app body reads return an error before sending instead of silently omitting the original content. Explicitly select `transport: "applescript"` to forward these with Mail.app; no automatic fallback occurs. An intentionally empty plain-text message is still valid.
 
 **⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
 
@@ -1838,7 +1848,7 @@ Prior to v1.4.0, `reply-to-message` and `forward-message` would send messages wi
 
 **Fix:** Replaced `with opening window` with `without opening window` for both `reply` and `forward` commands. With this approach, `set content` works immediately and reliably from background processes. `In-Reply-To` and `References` headers are still set correctly by Mail.app, and no GUI compose window is opened.
 
-**Update (v2.5.0):** when SMTP is configured, `reply-to-message` and `forward-message` now prefer **clean direct SMTP** instead of AppleScript — the same prefer-direct model as `send-email`. Replies are threaded with RFC 5322 `In-Reply-To`/`References` headers built from the original message; forwards start a new conversation. The AppleScript `without opening window` path above remains the fallback when SMTP is not configured (or, for replies, when the original message lacks the headers needed to thread).
+**Update (v2.5.0):** when SMTP is configured, `reply-to-message` and `forward-message` now prefer **clean direct SMTP** instead of AppleScript — the same prefer-direct model as `send-email`. Replies are threaded with RFC 5322 `In-Reply-To`/`References` headers built from the original message; forwards start a new conversation. With transport omitted, the AppleScript `without opening window` path above is used only when SMTP is not configured or a draft is requested. Since v2.17.8, a selected SMTP path returns source/configuration/threading errors instead of silently falling back; explicit `transport: "applescript"` remains available.
 
 See [#7](https://github.com/sweetrb/apple-mail-mcp/issues/7) for full details and the list of approaches that were tested.
 

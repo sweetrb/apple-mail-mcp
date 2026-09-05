@@ -44,11 +44,7 @@ import {
   resolveSmtpConfig,
   type SmtpConfig,
 } from "@/services/smtpMailer.js";
-import {
-  buildReplyOptions,
-  buildForwardOptions,
-  parseOriginalHeaders,
-} from "@/services/replyForward.js";
+import { runReply, runForward, type ComposeDeps } from "@/tools/compose.js";
 import {
   isImapAccount,
   shouldUseImap,
@@ -72,6 +68,7 @@ import {
   imapDeleteMailbox,
   imapRenameMailbox,
   imapGetMessage,
+  imapGetMessageSource,
   imapMarkRead,
   imapMarkUnread,
   imapFlagMessage,
@@ -1175,20 +1172,6 @@ registerTool(
   }, "Error creating draft")
 );
 
-/**
- * Outcome of a direct-SMTP reply/forward attempt (2.5.0 prefer-direct path).
- * - `sent`: the SMTP transaction succeeded.
- * - `fallback`: the direct path could not be used (SMTP not fully configured, the
- *   original couldn't be fetched, or — for replies — it has no `Message-ID` to
- *   thread on); the caller should use the Mail.app AppleScript path instead.
- * - `error` (only with `fallback: false`): the SMTP transaction itself failed —
- *   surface it rather than risk a double-send by also trying Mail.app.
- */
-type DirectSendOutcome =
-  | { sent: true }
-  | { sent: false; fallback: true }
-  | { sent: false; fallback: false; error: string };
-
 /** Resolve SMTP config, falling back (host/user set but no password) to Mail.app. */
 function resolveSmtpOrFallback(): SmtpConfig | null {
   try {
@@ -1198,7 +1181,6 @@ function resolveSmtpOrFallback(): SmtpConfig | null {
   }
 }
 
-/** Reply to a message over direct SMTP with RFC 5322 threading headers. */
 /**
  * Reply and forward drive Mail.app's `reply`/`forward` verbs, which take a
  * NUMERIC Mail.app id — `findMessageScript` interpolates `Number(id)`, so an
@@ -1233,64 +1215,24 @@ async function toNumericMailId(id: string): Promise<{ numericId?: string; error?
   return { numericId };
 }
 
-async function sendReplyViaSmtp(
-  id: string,
-  body: string,
-  replyAll: boolean
-): Promise<DirectSendOutcome> {
-  const cfg = resolveSmtpOrFallback();
-  if (!cfg) return { sent: false, fallback: true };
+const composeDeps: ComposeDeps = {
+  mail: mailManager,
+  imapSource: imapGetMessageSource,
+  numericId: toNumericMailId,
+  smtpConfigured: isSmtpConfigured,
+  smtpConfig: resolveSmtpConfig,
+  smtpSend: sendViaSmtp,
+};
 
-  const raw = mailManager.getRawSource(id);
-  if (!raw) return { sent: false, fallback: true };
-
-  const original = parseOriginalHeaders(raw);
-  // Without a Message-ID we can't thread; let Mail.app's reply handle it.
-  if (!original.messageId || original.from.length === 0) {
-    return { sent: false, fallback: true };
-  }
-
-  const content = mailManager.getMessageContent(id);
-  const opts = buildReplyOptions({
-    original,
-    originalPlainText: content?.plainText ?? "",
-    body,
-    replyAll,
-    self: [cfg.from, cfg.user],
-    from: cfg.from,
-  });
-
-  const result = await sendViaSmtp(opts, cfg);
-  if (result.success) return { sent: true };
-  return { sent: false, fallback: false, error: result.error ?? "unknown SMTP error" };
-}
-
-/** Forward a message over direct SMTP (clean MIME, new thread). */
-async function sendForwardViaSmtp(
-  id: string,
-  to: string[],
-  body: string | undefined
-): Promise<DirectSendOutcome> {
-  const cfg = resolveSmtpOrFallback();
-  if (!cfg) return { sent: false, fallback: true };
-
-  const raw = mailManager.getRawSource(id);
-  if (!raw) return { sent: false, fallback: true };
-
-  const original = parseOriginalHeaders(raw);
-  const content = mailManager.getMessageContent(id);
-  const opts = buildForwardOptions({
-    original,
-    originalPlainText: content?.plainText ?? "",
-    to,
-    body,
-    from: cfg.from,
-  });
-
-  const result = await sendViaSmtp(opts, cfg);
-  if (result.success) return { sent: true };
-  return { sent: false, fallback: false, error: result.error ?? "unknown SMTP error" };
-}
+const COMPOSE_TRANSPORT_SCHEMA = z
+  .enum(["applescript", "smtp"])
+  .optional()
+  .describe(
+    "SMTP sends clean MIME and preserves reply threading; requires SMTP configuration. " +
+      "AppleScript uses Mail.app and may quote-wrap the new body on macOS 15+. " +
+      "Omit to prefer configured SMTP when sending; drafts use AppleScript. " +
+      "A selected SMTP transport never silently falls back. SMTP with send=false is rejected."
+  );
 
 // --- reply-to-message ---
 
@@ -1301,6 +1243,7 @@ registerTool(
       "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
+      transport: COMPOSE_TRANSPORT_SCHEMA,
       body: z.string().min(1, "Reply body is required"),
       replyAll: z.boolean().optional().default(false).describe("Reply to all recipients"),
       send: z
@@ -1310,47 +1253,14 @@ registerTool(
         .describe("Send immediately (false = save as draft)"),
     },
     outputSchema: {
+      transport: z.enum(["smtp", "applescript"]).optional(),
+      messageId: z.string().optional(),
       ok: z.boolean().optional(),
       sent: z.boolean().optional(),
       id: z.string().optional(),
     },
   },
-  withErrorHandling(async ({ id, body, replyAll, send }) => {
-    // 2.5.0: prefer direct SMTP (clean, correctly threaded MIME) when configured
-    // and actually sending. Drafts (send=false) and the not-configured /
-    // unthreadable cases fall through to the Mail.app AppleScript path.
-    if (send && isSmtpConfigured()) {
-      const outcome = await sendReplyViaSmtp(id, body, replyAll);
-      if (outcome.sent) {
-        return successResponse("Reply sent", { ok: true, sent: true, id });
-      }
-      if (!outcome.fallback) {
-        return errorResponse(`Failed to reply to message "${id}" via SMTP: ${outcome.error}`);
-      }
-    }
-
-    const resolvedReply = await toNumericMailId(id);
-    if (!resolvedReply.numericId) {
-      return errorResponse(`Failed to reply to message "${id}": ${resolvedReply.error}`);
-    }
-    const outcome = mailManager.replyToMessage(resolvedReply.numericId, body, replyAll, send);
-
-    if (!outcome.success) {
-      // Surface Mail's own reason. An ambiguous id names its candidate
-      // mailboxes and tells the caller to re-list; a bare failure did not.
-      return errorResponse(
-        outcome.error
-          ? `Failed to reply to message "${id}": ${outcome.error}`
-          : `Failed to reply to message "${id}"`
-      );
-    }
-
-    return successResponse(send ? "Reply sent" : "Reply saved as draft", {
-      ok: true,
-      sent: send,
-      id,
-    });
-  }, "Error replying to message")
+  withErrorHandling((args) => runReply(composeDeps, args), "Error replying to message")
 );
 
 // --- forward-message ---
@@ -1362,6 +1272,7 @@ registerTool(
       "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
+      transport: COMPOSE_TRANSPORT_SCHEMA,
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       body: z.string().optional().describe("Optional message to prepend"),
       send: z
@@ -1371,48 +1282,15 @@ registerTool(
         .describe("Send immediately (false = save as draft)"),
     },
     outputSchema: {
+      transport: z.enum(["smtp", "applescript"]).optional(),
+      messageId: z.string().optional(),
       ok: z.boolean().optional(),
       sent: z.boolean().optional(),
       recipients: z.array(z.string()).optional(),
       id: z.string().optional(),
     },
   },
-  withErrorHandling(async ({ id, to, body, send }) => {
-    // 2.5.0: prefer direct SMTP (clean MIME) when configured and actually sending.
-    if (send && isSmtpConfigured()) {
-      const outcome = await sendForwardViaSmtp(id, to, body);
-      if (outcome.sent) {
-        return successResponse(`Message forwarded to ${to.join(", ")}`, {
-          ok: true,
-          sent: true,
-          recipients: to,
-          id,
-        });
-      }
-      if (!outcome.fallback) {
-        return errorResponse(`Failed to forward message "${id}" via SMTP: ${outcome.error}`);
-      }
-    }
-
-    const resolvedFwd = await toNumericMailId(id);
-    if (!resolvedFwd.numericId) {
-      return errorResponse(`Failed to forward message "${id}": ${resolvedFwd.error}`);
-    }
-    const outcome = mailManager.forwardMessage(resolvedFwd.numericId, to, body, send);
-
-    if (!outcome.success) {
-      return errorResponse(
-        outcome.error
-          ? `Failed to forward message "${id}": ${outcome.error}`
-          : `Failed to forward message "${id}"`
-      );
-    }
-
-    return successResponse(
-      send ? `Message forwarded to ${to.join(", ")}` : "Forward saved as draft",
-      { ok: true, sent: send, recipients: to, id }
-    );
-  }, "Error forwarding message")
+  withErrorHandling((args) => runForward(composeDeps, args), "Error forwarding message")
 );
 
 // --- mark-as-read ---

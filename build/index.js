@@ -84179,123 +84179,6 @@ async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) 
   return results;
 }
 
-// src/services/replyForward.ts
-function extractAddresses(headerValue) {
-  if (!headerValue.trim()) return [];
-  return headerValue.split(",").map((part) => {
-    const angle = part.match(/<([^>]+)>/);
-    return (angle ? angle[1] : part).trim();
-  }).filter((addr) => addr.includes("@"));
-}
-function parseOriginalHeaders(raw) {
-  const headerBlock = raw.split(/\r?\n\r?\n/)[0] ?? "";
-  const lines = [];
-  for (const line of headerBlock.split(/\r?\n/)) {
-    if (/^[ \t]/.test(line) && lines.length > 0) {
-      lines[lines.length - 1] += " " + line.trim();
-    } else {
-      lines.push(line);
-    }
-  }
-  const get = (name) => {
-    const prefix = `${name.toLowerCase()}:`;
-    const found = lines.find((l) => l.toLowerCase().startsWith(prefix));
-    return found ? found.slice(found.indexOf(":") + 1).trim() : void 0;
-  };
-  const rawMessageId = get("Message-ID");
-  const messageId = rawMessageId?.match(/<[^>]+>/)?.[0] ?? rawMessageId ?? void 0;
-  const references = `${get("References") ?? ""} ${get("In-Reply-To") ?? ""}`.match(/<[^>]+>/g) ?? [];
-  return {
-    messageId,
-    references,
-    from: extractAddresses(get("From") ?? ""),
-    replyTo: extractAddresses(get("Reply-To") ?? ""),
-    to: extractAddresses(get("To") ?? ""),
-    cc: extractAddresses(get("Cc") ?? ""),
-    subject: get("Subject") ?? "",
-    date: get("Date")
-  };
-}
-function dedupe(addrs) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const a of addrs) {
-    const k = a.toLowerCase();
-    if (!seen.has(k)) {
-      seen.add(k);
-      out.push(a);
-    }
-  }
-  return out;
-}
-function withSubjectPrefix(subject, prefix) {
-  const s = subject.trim();
-  const present = prefix === "Re:" ? /^re:/i : /^(fwd?|fw):/i;
-  return present.test(s) ? s : `${prefix} ${s}`;
-}
-function quoteBody(plainText) {
-  return plainText.replace(/\s+$/, "").split(/\r?\n/).map((l) => l ? `> ${l}` : ">").join("\n");
-}
-function buildReplyOptions(args) {
-  const { original, originalPlainText, body, replyAll, self, from } = args;
-  const selfSet = new Set(self.filter(Boolean).map((s) => s.toLowerCase()));
-  const to = dedupe((original.replyTo.length ? original.replyTo : original.from).filter(Boolean));
-  const toSet = new Set(to.map((t) => t.toLowerCase()));
-  let cc;
-  if (replyAll) {
-    const extra = dedupe(
-      [...original.to, ...original.cc].filter(
-        (a) => !selfSet.has(a.toLowerCase()) && !toSet.has(a.toLowerCase())
-      )
-    );
-    cc = extra.length ? extra : void 0;
-  }
-  const attribution = buildAttribution(original);
-  const quoted = originalPlainText.trim() ? `
-
-${attribution}${quoteBody(originalPlainText)}` : "";
-  const references = dedupe(
-    original.messageId ? [...original.references, original.messageId] : original.references
-  );
-  return {
-    to,
-    cc,
-    subject: withSubjectPrefix(original.subject, "Re:"),
-    body: `${body}${quoted}`,
-    inReplyTo: original.messageId,
-    references: references.length ? references : void 0,
-    from
-  };
-}
-function buildAttribution(original) {
-  const who = original.from[0] ?? original.replyTo[0] ?? "the sender";
-  return original.date ? `On ${original.date}, ${who} wrote:
-` : `${who} wrote:
-`;
-}
-function buildForwardOptions(args) {
-  const { original, originalPlainText, to, body, from } = args;
-  const headerBlock = [
-    "---------- Forwarded message ----------",
-    original.from.length ? `From: ${original.from.join(", ")}` : "",
-    original.date ? `Date: ${original.date}` : "",
-    `Subject: ${original.subject}`,
-    original.to.length ? `To: ${original.to.join(", ")}` : "",
-    original.cc.length ? `Cc: ${original.cc.join(", ")}` : ""
-  ].filter(Boolean).join("\n");
-  const prefix = body?.trim() ? `${body}
-
-` : "";
-  return {
-    to: dedupe(to),
-    subject: withSubjectPrefix(original.subject, "Fwd:"),
-    body: `${prefix}${headerBlock}
-
-${originalPlainText}`,
-    from
-  };
-}
-
 // src/services/imapClient.ts
 var import_imapflow = __toESM(require_imap_flow(), 1);
 var IMAP_ENV = {
@@ -85058,6 +84941,34 @@ async function withMailbox(path, deps, fn) {
     }
   });
 }
+var MAX_COMPOSE_SOURCE_BYTES = 25 * 1024 * 1024;
+async function imapGetMessageSource(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) throw new Error(`Not an IMAP message id: "${id}".`);
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    const lock = await client.getMailboxLock(ref.path);
+    try {
+      const msg = await client.fetchOne(
+        String(ref.uid),
+        {
+          envelope: true,
+          // One extra byte distinguishes an exact-limit source from truncation.
+          source: { start: 0, maxLength: MAX_COMPOSE_SOURCE_BYTES + 1 }
+        },
+        { uid: true }
+      );
+      if (!msg) throw new Error(`IMAP message UID ${ref.uid} not found in "${ref.path}".`);
+      if (!msg.source || !msg.source.length)
+        throw new Error("IMAP returned no original message source.");
+      if (Buffer.byteLength(msg.source) > MAX_COMPOSE_SOURCE_BYTES) {
+        throw new Error("Original message source exceeds the 25 MiB reply/forward limit.");
+      }
+      return { raw: msg.source.toString(), subject: msg.envelope?.subject, accountUser: cfg.user };
+    } finally {
+      lock.release();
+    }
+  });
+}
 async function imapGetMessage(id, preferHtml, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
@@ -85552,6 +85463,123 @@ async function imapThread(id, deps = {}, limit = 50) {
   );
 }
 
+// src/services/replyForward.ts
+function extractAddresses(headerValue) {
+  if (!headerValue.trim()) return [];
+  return headerValue.split(",").map((part) => {
+    const angle = part.match(/<([^>]+)>/);
+    return (angle ? angle[1] : part).trim();
+  }).filter((addr) => addr.includes("@"));
+}
+function parseOriginalHeaders(raw) {
+  const headerBlock = raw.split(/\r?\n\r?\n/)[0] ?? "";
+  const lines = [];
+  for (const line of headerBlock.split(/\r?\n/)) {
+    if (/^[ \t]/.test(line) && lines.length > 0) {
+      lines[lines.length - 1] += " " + line.trim();
+    } else {
+      lines.push(line);
+    }
+  }
+  const get = (name) => {
+    const prefix = `${name.toLowerCase()}:`;
+    const found = lines.find((l) => l.toLowerCase().startsWith(prefix));
+    return found ? found.slice(found.indexOf(":") + 1).trim() : void 0;
+  };
+  const rawMessageId = get("Message-ID");
+  const messageId = rawMessageId?.match(/<[^>]+>/)?.[0] ?? rawMessageId ?? void 0;
+  const references = `${get("References") ?? ""} ${get("In-Reply-To") ?? ""}`.match(/<[^>]+>/g) ?? [];
+  return {
+    messageId,
+    references,
+    from: extractAddresses(get("From") ?? ""),
+    replyTo: extractAddresses(get("Reply-To") ?? ""),
+    to: extractAddresses(get("To") ?? ""),
+    cc: extractAddresses(get("Cc") ?? ""),
+    subject: get("Subject") ?? "",
+    date: get("Date")
+  };
+}
+function dedupe(addrs) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const a of addrs) {
+    const k = a.toLowerCase();
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(a);
+    }
+  }
+  return out;
+}
+function withSubjectPrefix(subject, prefix) {
+  const s = subject.trim();
+  const present = prefix === "Re:" ? /^re:/i : /^(fwd?|fw):/i;
+  return present.test(s) ? s : `${prefix} ${s}`;
+}
+function quoteBody(plainText) {
+  return plainText.replace(/\s+$/, "").split(/\r?\n/).map((l) => l ? `> ${l}` : ">").join("\n");
+}
+function buildReplyOptions(args) {
+  const { original, originalPlainText, body, replyAll, self, from } = args;
+  const selfSet = new Set(self.filter(Boolean).map((s) => s.toLowerCase()));
+  const to = dedupe((original.replyTo.length ? original.replyTo : original.from).filter(Boolean));
+  const toSet = new Set(to.map((t) => t.toLowerCase()));
+  let cc;
+  if (replyAll) {
+    const extra = dedupe(
+      [...original.to, ...original.cc].filter(
+        (a) => !selfSet.has(a.toLowerCase()) && !toSet.has(a.toLowerCase())
+      )
+    );
+    cc = extra.length ? extra : void 0;
+  }
+  const attribution = buildAttribution(original);
+  const quoted = originalPlainText.trim() ? `
+
+${attribution}${quoteBody(originalPlainText)}` : "";
+  const references = dedupe(
+    original.messageId ? [...original.references, original.messageId] : original.references
+  );
+  return {
+    to,
+    cc,
+    subject: withSubjectPrefix(original.subject, "Re:"),
+    body: `${body}${quoted}`,
+    inReplyTo: original.messageId,
+    references: references.length ? references : void 0,
+    from
+  };
+}
+function buildAttribution(original) {
+  const who = original.from[0] ?? original.replyTo[0] ?? "the sender";
+  return original.date ? `On ${original.date}, ${who} wrote:
+` : `${who} wrote:
+`;
+}
+function buildForwardOptions(args) {
+  const { original, originalPlainText, to, body, from } = args;
+  const headerBlock = [
+    "---------- Forwarded message ----------",
+    original.from.length ? `From: ${original.from.join(", ")}` : "",
+    original.date ? `Date: ${original.date}` : "",
+    `Subject: ${original.subject}`,
+    original.to.length ? `To: ${original.to.join(", ")}` : "",
+    original.cc.length ? `Cc: ${original.cc.join(", ")}` : ""
+  ].filter(Boolean).join("\n");
+  const prefix = body?.trim() ? `${body}
+
+` : "";
+  return {
+    to: dedupe(to),
+    subject: withSubjectPrefix(original.subject, "Fwd:"),
+    body: `${prefix}${headerBlock}
+
+${originalPlainText}`,
+    from
+  };
+}
+
 // src/tools/respond.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -85642,6 +85670,117 @@ function withErrorHandling(handler, errorPrefix) {
       });
     });
   };
+}
+
+// src/tools/compose.ts
+async function readOriginal(deps, id, cfg) {
+  if (decodeImapId(id)) {
+    const source = await deps.imapSource(id);
+    const identities = [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map(
+      (s) => s.trim().toLowerCase()
+    );
+    if (!identities.includes(source.accountUser.trim().toLowerCase())) {
+      throw new Error(
+        "The source IMAP account does not match the configured SMTP identity. Configure SMTP for that account or explicitly select transport=applescript."
+      );
+    }
+    const original = parseOriginalHeaders(source.raw);
+    if (source.subject !== void 0) original.subject = source.subject;
+    return { original, plainText: extractTextBody(source.raw) };
+  }
+  const raw = deps.mail.getRawSource(id);
+  if (!raw)
+    throw new Error(
+      "Cannot read the original message source. Re-list the intended mailbox and retry with its message id."
+    );
+  const content = deps.mail.getMessageContent(id);
+  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? null };
+}
+async function runCompose(deps, args) {
+  const { id, send, transport: transport2 } = args;
+  const verb = args.kind === "reply" ? "reply to" : "forward";
+  if (!send && transport2 === "smtp") {
+    return errorResponse(
+      "SMTP cannot save a Mail.app draft. Omit transport or use transport=applescript with send=false."
+    );
+  }
+  const smtp = send && transport2 !== "applescript" && (transport2 === "smtp" || deps.smtpConfigured());
+  if (smtp) {
+    try {
+      const cfg = deps.smtpConfig();
+      const { original, plainText } = await readOriginal(deps, id, cfg);
+      if (args.kind === "forward" && plainText === null)
+        throw new Error(
+          "The original message has no readable plain-text body. SMTP forwarding would omit its content; explicitly select transport=applescript to forward it with Mail.app."
+        );
+      if (args.kind === "reply") {
+        if (!original.messageId)
+          throw new Error(
+            "The original message has no Message-ID; a threaded SMTP reply cannot be constructed."
+          );
+        if (!original.replyTo.length && !original.from.length)
+          throw new Error("The original message has no reply address.");
+      }
+      const opts = args.kind === "reply" ? buildReplyOptions({
+        original,
+        originalPlainText: plainText ?? "",
+        body: args.body,
+        replyAll: args.replyAll,
+        self: [cfg.from, cfg.user, ...cfg.allowedFrom ?? []],
+        from: cfg.from
+      }) : buildForwardOptions({
+        original,
+        originalPlainText: plainText ?? "",
+        to: args.to,
+        body: args.body,
+        from: cfg.from
+      });
+      const result = await deps.smtpSend(opts, cfg);
+      if (!result.success)
+        return errorResponse(
+          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`
+        );
+      return successResponse(
+        args.kind === "reply" ? "Reply sent via SMTP" : `Message forwarded via SMTP to ${args.to.join(", ")}`,
+        {
+          ok: true,
+          sent: true,
+          id,
+          transport: "smtp",
+          messageId: result.messageId,
+          ...args.kind === "forward" ? { recipients: args.to } : {}
+        }
+      );
+    } catch (error2) {
+      return errorResponse(
+        `Failed to ${verb} message "${id}" via SMTP: ${error2 instanceof Error ? error2.message : String(error2)} No AppleScript fallback was attempted.`
+      );
+    }
+  }
+  const resolved = await deps.numericId(id);
+  if (!resolved.numericId)
+    return errorResponse(
+      `Failed to ${verb} message "${id}": ${resolved.error ?? "message not found"}`
+    );
+  const outcome = args.kind === "reply" ? deps.mail.replyToMessage(resolved.numericId, args.body, args.replyAll, send) : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send);
+  if (!outcome.success)
+    return errorResponse(
+      `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
+    );
+  const text = args.kind === "reply" ? send ? "Reply sent via AppleScript" : "Reply saved as draft" : send ? `Message forwarded to ${args.to.join(", ")}` : "Forward saved as draft";
+  return successResponse(text, {
+    ok: true,
+    sent: send,
+    id,
+    transport: "applescript",
+    ...args.kind === "forward" ? { recipients: args.to } : {}
+  });
+}
+function runReply(deps, args) {
+  return runCompose(deps, { ...args, kind: "reply" });
+}
+function runForward(deps, args) {
+  return runCompose(deps, { ...args, kind: "forward" });
 }
 
 // src/tools/mailboxListing.ts
@@ -87115,88 +87254,37 @@ async function toNumericMailId(id) {
   }
   return { numericId };
 }
-async function sendReplyViaSmtp(id, body, replyAll) {
-  const cfg = resolveSmtpOrFallback();
-  if (!cfg) return { sent: false, fallback: true };
-  const raw = mailManager.getRawSource(id);
-  if (!raw) return { sent: false, fallback: true };
-  const original = parseOriginalHeaders(raw);
-  if (!original.messageId || original.from.length === 0) {
-    return { sent: false, fallback: true };
-  }
-  const content = mailManager.getMessageContent(id);
-  const opts = buildReplyOptions({
-    original,
-    originalPlainText: content?.plainText ?? "",
-    body,
-    replyAll,
-    self: [cfg.from, cfg.user],
-    from: cfg.from
-  });
-  const result = await sendViaSmtp(opts, cfg);
-  if (result.success) return { sent: true };
-  return { sent: false, fallback: false, error: result.error ?? "unknown SMTP error" };
-}
-async function sendForwardViaSmtp(id, to, body) {
-  const cfg = resolveSmtpOrFallback();
-  if (!cfg) return { sent: false, fallback: true };
-  const raw = mailManager.getRawSource(id);
-  if (!raw) return { sent: false, fallback: true };
-  const original = parseOriginalHeaders(raw);
-  const content = mailManager.getMessageContent(id);
-  const opts = buildForwardOptions({
-    original,
-    originalPlainText: content?.plainText ?? "",
-    to,
-    body,
-    from: cfg.from
-  });
-  const result = await sendViaSmtp(opts, cfg);
-  if (result.success) return { sent: true };
-  return { sent: false, fallback: false, error: result.error ?? "unknown SMTP error" };
-}
+var composeDeps = {
+  mail: mailManager,
+  imapSource: imapGetMessageSource,
+  numericId: toNumericMailId,
+  smtpConfigured: isSmtpConfigured,
+  smtpConfig: resolveSmtpConfig,
+  smtpSend: sendViaSmtp
+};
+var COMPOSE_TRANSPORT_SCHEMA = external_exports.enum(["applescript", "smtp"]).optional().describe(
+  "SMTP sends clean MIME and preserves reply threading; requires SMTP configuration. AppleScript uses Mail.app and may quote-wrap the new body on macOS 15+. Omit to prefer configured SMTP when sending; drafts use AppleScript. A selected SMTP transport never silently falls back. SMTP with send=false is rejected."
+);
 registerTool(
   "reply-to-message",
   {
     description: "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
+      transport: COMPOSE_TRANSPORT_SCHEMA,
       body: external_exports.string().min(1, "Reply body is required"),
       replyAll: external_exports.boolean().optional().default(false).describe("Reply to all recipients"),
       send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)")
     },
     outputSchema: {
+      transport: external_exports.enum(["smtp", "applescript"]).optional(),
+      messageId: external_exports.string().optional(),
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
       id: external_exports.string().optional()
     }
   },
-  withErrorHandling(async ({ id, body, replyAll, send }) => {
-    if (send && isSmtpConfigured()) {
-      const outcome2 = await sendReplyViaSmtp(id, body, replyAll);
-      if (outcome2.sent) {
-        return successResponse("Reply sent", { ok: true, sent: true, id });
-      }
-      if (!outcome2.fallback) {
-        return errorResponse(`Failed to reply to message "${id}" via SMTP: ${outcome2.error}`);
-      }
-    }
-    const resolvedReply = await toNumericMailId(id);
-    if (!resolvedReply.numericId) {
-      return errorResponse(`Failed to reply to message "${id}": ${resolvedReply.error}`);
-    }
-    const outcome = mailManager.replyToMessage(resolvedReply.numericId, body, replyAll, send);
-    if (!outcome.success) {
-      return errorResponse(
-        outcome.error ? `Failed to reply to message "${id}": ${outcome.error}` : `Failed to reply to message "${id}"`
-      );
-    }
-    return successResponse(send ? "Reply sent" : "Reply saved as draft", {
-      ok: true,
-      sent: send,
-      id
-    });
-  }, "Error replying to message")
+  withErrorHandling((args) => runReply(composeDeps, args), "Error replying to message")
 );
 registerTool(
   "forward-message",
@@ -87204,47 +87292,21 @@ registerTool(
     description: "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
+      transport: COMPOSE_TRANSPORT_SCHEMA,
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       body: external_exports.string().optional().describe("Optional message to prepend"),
       send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)")
     },
     outputSchema: {
+      transport: external_exports.enum(["smtp", "applescript"]).optional(),
+      messageId: external_exports.string().optional(),
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
       recipients: external_exports.array(external_exports.string()).optional(),
       id: external_exports.string().optional()
     }
   },
-  withErrorHandling(async ({ id, to, body, send }) => {
-    if (send && isSmtpConfigured()) {
-      const outcome2 = await sendForwardViaSmtp(id, to, body);
-      if (outcome2.sent) {
-        return successResponse(`Message forwarded to ${to.join(", ")}`, {
-          ok: true,
-          sent: true,
-          recipients: to,
-          id
-        });
-      }
-      if (!outcome2.fallback) {
-        return errorResponse(`Failed to forward message "${id}" via SMTP: ${outcome2.error}`);
-      }
-    }
-    const resolvedFwd = await toNumericMailId(id);
-    if (!resolvedFwd.numericId) {
-      return errorResponse(`Failed to forward message "${id}": ${resolvedFwd.error}`);
-    }
-    const outcome = mailManager.forwardMessage(resolvedFwd.numericId, to, body, send);
-    if (!outcome.success) {
-      return errorResponse(
-        outcome.error ? `Failed to forward message "${id}": ${outcome.error}` : `Failed to forward message "${id}"`
-      );
-    }
-    return successResponse(
-      send ? `Message forwarded to ${to.join(", ")}` : "Forward saved as draft",
-      { ok: true, sent: send, recipients: to, id }
-    );
-  }, "Error forwarding message")
+  withErrorHandling((args) => runForward(composeDeps, args), "Error forwarding message")
 );
 registerTool(
   "mark-as-read",
