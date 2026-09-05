@@ -152,6 +152,12 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 
 ### Multi-account
 
+SMTP forwarding requires a readable plain-text original: HTML-only IMAP messages
+and failed Mail.app body reads return an error before sending. Explicit
+`transport: "applescript"` can forward these with Mail.app; do not switch
+transports automatically after an SMTP error. The plain-text SMTP forward path
+does not reattach original attachments.
+
 - Default account is Mail.app's configured default send account
 - `search-messages` searches all accounts when no `account` is specified
 - Use `list-accounts` to see available accounts

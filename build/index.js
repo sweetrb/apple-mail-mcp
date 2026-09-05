@@ -85686,7 +85686,7 @@ async function readOriginal(deps, id, cfg) {
     }
     const original = parseOriginalHeaders(source.raw);
     if (source.subject !== void 0) original.subject = source.subject;
-    return { original, plainText: extractTextBody(source.raw) ?? "" };
+    return { original, plainText: extractTextBody(source.raw) };
   }
   const raw = deps.mail.getRawSource(id);
   if (!raw)
@@ -85694,7 +85694,7 @@ async function readOriginal(deps, id, cfg) {
       "Cannot read the original message source. Re-list the intended mailbox and retry with its message id."
     );
   const content = deps.mail.getMessageContent(id);
-  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? "" };
+  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? null };
 }
 async function runCompose(deps, args) {
   const { id, send, transport: transport2 } = args;
@@ -85709,6 +85709,10 @@ async function runCompose(deps, args) {
     try {
       const cfg = deps.smtpConfig();
       const { original, plainText } = await readOriginal(deps, id, cfg);
+      if (args.kind === "forward" && plainText === null)
+        throw new Error(
+          "The original message has no readable plain-text body. SMTP forwarding would omit its content; explicitly select transport=applescript to forward it with Mail.app."
+        );
       if (args.kind === "reply") {
         if (!original.messageId)
           throw new Error(
@@ -85719,14 +85723,14 @@ async function runCompose(deps, args) {
       }
       const opts = args.kind === "reply" ? buildReplyOptions({
         original,
-        originalPlainText: plainText,
+        originalPlainText: plainText ?? "",
         body: args.body,
         replyAll: args.replyAll,
         self: [cfg.from, cfg.user, ...cfg.allowedFrom ?? []],
         from: cfg.from
       }) : buildForwardOptions({
         original,
-        originalPlainText: plainText,
+        originalPlainText: plainText ?? "",
         to: args.to,
         body: args.body,
         from: cfg.from

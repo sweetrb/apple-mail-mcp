@@ -57,7 +57,7 @@ async function readOriginal(deps: ComposeDeps, id: string, cfg: SmtpConfig) {
     const original = parseOriginalHeaders(source.raw);
     // The IMAP envelope supplies the decoded subject, unlike the raw MIME header.
     if (source.subject !== undefined) original.subject = source.subject;
-    return { original, plainText: extractTextBody(source.raw) ?? "" };
+    return { original, plainText: extractTextBody(source.raw) };
   }
   const raw = deps.mail.getRawSource(id);
   if (!raw)
@@ -65,7 +65,7 @@ async function readOriginal(deps: ComposeDeps, id: string, cfg: SmtpConfig) {
       "Cannot read the original message source. Re-list the intended mailbox and retry with its message id."
     );
   const content = deps.mail.getMessageContent(id);
-  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? "" };
+  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? null };
 }
 
 async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolResponse> {
@@ -82,6 +82,10 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
     try {
       const cfg = deps.smtpConfig();
       const { original, plainText } = await readOriginal(deps, id, cfg);
+      if (args.kind === "forward" && plainText === null)
+        throw new Error(
+          "The original message has no readable plain-text body. SMTP forwarding would omit its content; explicitly select transport=applescript to forward it with Mail.app."
+        );
       if (args.kind === "reply") {
         if (!original.messageId)
           throw new Error(
@@ -94,7 +98,7 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
         args.kind === "reply"
           ? buildReplyOptions({
               original,
-              originalPlainText: plainText,
+              originalPlainText: plainText ?? "",
               body: args.body,
               replyAll: args.replyAll,
               self: [cfg.from, cfg.user, ...(cfg.allowedFrom ?? [])],
@@ -102,7 +106,7 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
             })
           : buildForwardOptions({
               original,
-              originalPlainText: plainText,
+              originalPlainText: plainText ?? "",
               to: args.to,
               body: args.body,
               from: cfg.from,

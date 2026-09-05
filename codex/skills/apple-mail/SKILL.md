@@ -42,7 +42,7 @@ Use this skill when the user:
 | `unflag-message` | Remove flag from a message |
 | `delete-message` | Move a message to Trash |
 | `move-message` | Move a message to a different mailbox |
-| `resolve-message-id` | Convert `imap:` ids to numeric Mail.app ids — needed **only** for `reply-to-message` / `forward-message`, which are numeric-id only. **Not** for flag colors: since 2.10.0 `flag-message`/`batch-flag-messages` write the color over IMAP directly |
+| `resolve-message-id` | Convert `imap:` ids to numeric Mail.app ids for the AppleScript reply/forward path. Direct SMTP replies and forwards accept `imap:` ids without conversion. **Not** needed for flag colors: since 2.10.0 `flag-message`/`batch-flag-messages` write the color over IMAP directly |
 | `list-attachments` | List a message's attachments (name, MIME type, size) |
 | `save-attachment` | Save an attachment to disk |
 | `fetch-attachment` | Fetch an attachment's bytes inline as base64 |
@@ -264,3 +264,9 @@ backends. Explicit `transport: "applescript"` keeps the native alternative,
 including its known quote-wrapping limitation. For drafts, use `send: false`
 with transport omitted or `applescript`, not `smtp`. Read the returned
 `transport`; SMTP success may also include the sent `messageId`.
+
+SMTP forwards need a readable plain-text original. HTML-only IMAP messages and
+failed Mail.app body reads are rejected before sending, so the original content
+cannot silently disappear. Explicit AppleScript forwarding remains available;
+do not retry through it automatically. Original attachments are not reattached
+by the plain-text SMTP forward path.

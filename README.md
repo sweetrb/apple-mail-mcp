@@ -793,6 +793,8 @@ Forward a message to new recipients.
 
 **Delivery:** uses the same source lookup, transport selection, 25 MiB source limit, account-identity check, and failure behavior as `reply-to-message`. A forward deliberately starts a new conversation, so it has no `In-Reply-To` or `References` headers. The existing plain-text forwarding behavior is unchanged: original attachments are not reattached. See [SMTP transport](#smtp-transport).
 
+SMTP forwarding requires a readable plain-text original. HTML-only IMAP messages and failed Mail.app body reads return an error before sending instead of silently omitting the original content. Explicitly select `transport: "applescript"` to forward these with Mail.app; no automatic fallback occurs. An intentionally empty plain-text message is still valid.
+
 **⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
 
 ---

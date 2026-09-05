@@ -11,6 +11,9 @@
   mailbox lock on success and failure. Decoded IMAP subjects are preserved.
 - Reply routing has executable regression coverage, including rendered MIME:
   the new body stays unquoted and the original thread headers reach SMTP.
+- SMTP forwards reject originals without a readable plain-text body, including
+  HTML-only IMAP messages and failed Mail.app body reads, instead of silently
+  dropping the original content. Explicit AppleScript forwarding remains available.
 
 ### Changed
 

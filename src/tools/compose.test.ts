@@ -128,6 +128,55 @@ describe("reply and forward transport routing", () => {
     expect(d.mail.replyToMessage).not.toHaveBeenCalled();
   });
 
+  it("refuses an HTML-only IMAP forward instead of silently omitting its body", async () => {
+    const d = fixture();
+    d.imapSource.mockResolvedValue({
+      raw: raw.replace("text/plain", "text/html"),
+      subject: "Project update",
+      accountUser: cfg.user,
+    });
+    const result = await runForward(d, {
+      id,
+      to: ["colleague@example.com"],
+      body: "For review.",
+      send: true,
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("no readable plain-text body");
+    expect(d.smtpSend).not.toHaveBeenCalled();
+    expectNoApple(d);
+  });
+
+  it("refuses a numeric forward when Mail.app cannot return its body", async () => {
+    const d = fixture();
+    d.mail.getRawSource.mockReturnValue(raw);
+    const result = await runForward(d, {
+      id: "42",
+      to: ["colleague@example.com"],
+      send: true,
+    });
+    expect(result.isError).toBe(true);
+    expect(d.smtpSend).not.toHaveBeenCalled();
+    expect(d.mail.forwardMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows a genuinely empty plain-text forward", async () => {
+    const d = fixture();
+    d.imapSource.mockResolvedValue({
+      raw: raw.replace("Original =E2=9C=93 body.", ""),
+      subject: "Project update",
+      accountUser: cfg.user,
+    });
+    const result = await runForward(d, {
+      id,
+      to: ["colleague@example.com"],
+      send: true,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(d.smtpSend).toHaveBeenCalledTimes(1);
+    expectNoApple(d);
+  });
+
   it.each(["reply", "forward"] as const)(
     "does not fall back after a %s source fetch error",
     async (kind) => {
