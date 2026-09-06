@@ -76,3 +76,10 @@ overrides:
   # vite's own range happened to pull it forward. Matches apple-notes/apple-photos.
   # Development scope only (vitest -> vite -> postcss), not in the shipped bundle.
   postcss: ^8.5.23
+  # GHSA-4mjr-xmp4-gh2g (medium, DoS via attacker-controlled isBuffer) + GHSA-x5fp-wj9c-mxmx
+  # (medium, array-limit bypass via bracket-key comma parsing), both fixed in qs 6.16.0.
+  # Reached via @modelcontextprotocol/sdk -> express -> body-parser/express-rate-limit.
+  # qs@6.16.0 published 2026-08-29T23:50:15Z; deferred until the 7-day minimumReleaseAge
+  # soak above cleared naturally on 2026-09-05T23:50:15Z. Two-sided range per the fast-uri
+  # precedent above — never an exact pin, which becomes a ceiling for the next advisory.
+  qs: ">=6.16.0 <7"
