@@ -1,8 +1,20 @@
 ## [Unreleased]
 
 ## [2.17.9] - 2026-09-09
+### Fixed
+- IMAP pipeline: upgraded `imapflow` to 1.7.8, which keeps the download
+  pipeline's error forwarder attached across a backpressure wait — an error
+  during a paused/backpressured IMAP stream now propagates correctly instead
+  of being silently dropped.
+- SMTP send: upgraded `nodemailer` to 9.1.1, which fixes several
+  address-parser correctness/linear-time issues and tightens MIME-node
+  access-policy checks.
+
 ### Changed
-- Dependency bump via Dependabot; committed bundle rebuilt. (automated)
+- SMTP send: `nodemailer` 9.1.1 adds a `maxRecipients` cap option (not yet
+  wired up as a server-facing setting).
+- Dev tooling: `@typescript-eslint/eslint-plugin`/`parser` and
+  `typescript-eslint` to 8.69.0, `globals` to 17.12.0 (no runtime effect).
 
 ## [2.17.8] - 2026-09-04
 
