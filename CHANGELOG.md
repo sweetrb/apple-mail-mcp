@@ -1,5 +1,36 @@
 ## [Unreleased]
 
+## [2.17.10] - 2026-09-09
+
+### Fixed
+
+- Permission-denied detection is no longer tied to the American spelling
+  (#218, reported by @jarrah31). macOS emits an Automation refusal in the
+  **system language**, so an en_GB/en_AU/en_IE Mac says *"Not authorised to
+  send Apple events to Mail. (-1743)"* — which `PERMISSION_DENIED_PATTERN`
+  never matched. Two things followed: `health-check`/`doctor` computed
+  `passed: !isPermError` as **true**, skipped the early `healthy: false`
+  return, and fell through to the accounts probe, so a genuine TCC denial
+  reported `permissions: ok` and told users with fully configured Mail to
+  *"Set up an account in Mail.app first."*; and because the same constant is
+  the first entry in the error mapping, the refusal was never normalised, so
+  **no tool anywhere in the server** offered an en-GB user any remediation.
+  The pattern now accepts both spellings **and** the `(-1743)`
+  (`errAEEventNotPermitted`) OSStatus, which AppleScript emits regardless of
+  system language and is therefore the only token that can match a fully
+  localised (fr/de/es) refusal.
+- Error normalisation now tests the OSStatus against the **raw** `osascript`
+  output. The execution-error parser strips a trailing `(-1743)` while
+  extracting the human-readable half, so a fully localised refusal would
+  otherwise still have reached the user as untranslated AppleScript text with
+  no remediation.
+
+### Documentation
+
+- README troubleshooting: named the localised wording of the Automation
+  refusal and the misleading "No Mail accounts found" symptom it produced
+  before this release.
+
 ## [2.17.9] - 2026-09-09
 ### Fixed
 - IMAP pipeline: upgraded `imapflow` to 1.7.8, which keeps the download

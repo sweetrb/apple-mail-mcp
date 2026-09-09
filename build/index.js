@@ -79222,7 +79222,7 @@ function sleep(ms) {
     }
   }
 }
-var PERMISSION_DENIED_PATTERN = /not authorized|not permitted|access.*denied/i;
+var PERMISSION_DENIED_PATTERN = /not author(?:i[sz])ed|not permitted|access.*denied|\(-1743\)/i;
 var PERMISSION_DENIED_MESSAGE = "Permission denied. Grant automation access in System Settings > Privacy & Security > Automation.";
 function isPermissionDenied(error2) {
   if (!error2) return false;
@@ -79285,6 +79285,9 @@ function parseErrorMessage(errorOutput) {
   const executionError = errorOutput.match(/execution error: (.+?)(?:\s*\(-?\d+\))?$/m);
   if (executionError) {
     coreError = executionError[1].trim();
+  }
+  if (PERMISSION_DENIED_PATTERN.test(errorOutput)) {
+    return PERMISSION_DENIED_MESSAGE;
   }
   for (const { pattern, message } of ERROR_MAPPINGS) {
     const match = coreError.match(pattern);
