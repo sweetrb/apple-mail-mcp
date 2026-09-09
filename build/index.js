@@ -7194,9 +7194,9 @@ var require_dist = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/punycode/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/punycode/index.js
 var require_punycode = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/punycode/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/punycode/index.js"(exports, module) {
     "use strict";
     var maxInt = 2147483647;
     var base = 36;
@@ -7436,9 +7436,9 @@ var require_punycode = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/shared/url.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/shared/url.js
 var require_url = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/shared/url.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/shared/url.js"(exports, module) {
     "use strict";
     var urllib = __require("url");
     var punycode = require_punycode();
@@ -7525,9 +7525,9 @@ var require_url = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/fetch/cookies.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/fetch/cookies.js
 var require_cookies = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/fetch/cookies.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/fetch/cookies.js"(exports, module) {
     "use strict";
     var urllib = require_url();
     var SESSION_TIMEOUT = 1800;
@@ -7733,12 +7733,12 @@ var require_cookies = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/package.json
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/package.json
 var require_package = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/package.json"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/package.json"(exports, module) {
     module.exports = {
       name: "nodemailer",
-      version: "9.0.5",
+      version: "9.1.1",
       description: "Easy as cake e-mail sending from your Node.js applications",
       main: "lib/nodemailer.js",
       scripts: {
@@ -7765,19 +7765,19 @@ var require_package = __commonJS({
       },
       homepage: "https://nodemailer.com/",
       devDependencies: {
-        "@aws-sdk/client-sesv2": "3.1104.0",
+        "@aws-sdk/client-sesv2": "3.1121.0",
         bunyan: "1.8.15",
         c8: "12.0.0",
-        eslint: "10.8.0",
+        eslint: "10.9.1",
         "eslint-config-prettier": "10.1.8",
-        globals: "17.9.0",
+        globals: "17.11.0",
         libbase64: "1.3.0",
-        libmime: "5.4.1",
+        libmime: "5.4.2",
         libqp: "2.1.1",
         prettier: "3.9.6",
         proxy: "1.0.2",
         "proxy-test-server": "1.0.0",
-        "smtp-server": "3.19.2"
+        "smtp-server": "3.19.4"
       },
       engines: {
         node: ">=6.0.0"
@@ -7786,9 +7786,9 @@ var require_package = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/errors.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/errors.js
 var require_errors2 = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/errors.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/errors.js"(exports, module) {
     "use strict";
     var ERROR_CODES = {
       // Connection errors
@@ -7810,6 +7810,7 @@ var require_errors2 = __commonJS({
       EOAUTH2: "OAuth2 token generation or refresh error",
       // Resource errors
       EMAXLIMIT: "Pool resource limit reached (max messages per connection)",
+      EMAXRECIPIENTS: "Recipient count exceeds maxRecipients",
       // Transport-specific errors
       ESENDMAIL: "Sendmail command error",
       ESES: "AWS SES transport error",
@@ -7827,9 +7828,26 @@ var require_errors2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/fetch/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/shared/objects.js
+var require_objects = __commonJS({
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/shared/objects.js"(exports, module) {
+    "use strict";
+    module.exports.isProtoKey = (key) => key === "__proto__";
+    module.exports.copyOwnKeys = (target, source, skip) => {
+      Object.keys(source || {}).forEach((key) => {
+        if (module.exports.isProtoKey(key) || skip && skip(key)) {
+          return;
+        }
+        target[key] = source[key];
+      });
+      return target;
+    };
+  }
+});
+
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/fetch/index.js
 var require_fetch = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/fetch/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/fetch/index.js"(exports, module) {
     "use strict";
     var http = __require("http");
     var https = __require("https");
@@ -7840,7 +7858,43 @@ var require_fetch = __commonJS({
     var packageData = require_package();
     var net = __require("net");
     var errors = require_errors2();
+    var { isProtoKey } = require_objects();
     var MAX_REDIRECTS = 5;
+    var TLS_OPTION_KEYS = [
+      "ALPNProtocols",
+      "ca",
+      "cert",
+      "checkServerIdentity",
+      "ciphers",
+      "crl",
+      "dhparam",
+      "ecdhCurve",
+      "honorCipherOrder",
+      "key",
+      "maxVersion",
+      "minVersion",
+      "passphrase",
+      "pfx",
+      "rejectUnauthorized",
+      "secureContext",
+      "secureOptions",
+      "secureProtocol",
+      "servername",
+      "sessionIdContext",
+      "sigalgs"
+    ];
+    function parseFetchUrl(url) {
+      let parsed;
+      try {
+        parsed = urllib.parse(url);
+      } catch (_err) {
+        return false;
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return false;
+      }
+      return parsed;
+    }
     module.exports = function(url, options) {
       return nmfetch(url, options);
     };
@@ -7851,14 +7905,27 @@ var require_fetch = __commonJS({
       options.cookies = options.cookies || new Cookies();
       options.redirects = options.redirects || 0;
       options.maxRedirects = isNaN(options.maxRedirects) ? MAX_REDIRECTS : options.maxRedirects;
+      const fetchRes = options.fetchRes;
+      const parsed = parseFetchUrl(url);
+      if (!parsed) {
+        if (options.body && typeof options.body.destroy === "function") {
+          options.body.on("error", () => false);
+          options.body.destroy();
+        }
+        setImmediate(() => {
+          const err = new Error("Unsupported protocol for URL " + url);
+          err.code = errors.EFETCH;
+          err.sourceUrl = url;
+          fetchRes.emit("error", err);
+        });
+        return fetchRes;
+      }
       if (options.cookie) {
         [].concat(options.cookie || []).forEach((cookie) => {
           options.cookies.set(cookie, url);
         });
         options.cookie = false;
       }
-      const fetchRes = options.fetchRes;
-      const parsed = urllib.parse(url);
       let method = (options.method || "").toString().trim().toUpperCase() || "GET";
       let finished = false;
       let cookies;
@@ -7869,6 +7936,9 @@ var require_fetch = __commonJS({
         "user-agent": "nodemailer/" + packageData.version
       };
       Object.keys(options.headers || {}).forEach((key) => {
+        if (isProtoKey(key.toLowerCase().trim())) {
+          return;
+        }
         headers[key.toLowerCase().trim()] = options.headers[key];
       });
       if (options.userAgent) {
@@ -7939,7 +8009,11 @@ var require_fetch = __commonJS({
         agent: false
       };
       if (options.tls) {
-        Object.assign(reqOptions, options.tls);
+        Object.keys(options.tls).forEach((key) => {
+          if (TLS_OPTION_KEYS.includes(key)) {
+            reqOptions[key] = options.tls[key];
+          }
+        });
       }
       if (parsed.protocol === "https:" && parsed.hostname && parsed.hostname !== reqOptions.host && !net.isIP(parsed.hostname) && !reqOptions.servername) {
         reqOptions.servername = parsed.hostname;
@@ -8006,8 +8080,22 @@ var require_fetch = __commonJS({
           }
           options.method = "GET";
           options.body = false;
-          const redirectUrl = urllib.resolve(url, res.headers.location);
-          const redirectParsed = urllib.parse(redirectUrl);
+          let redirectUrl;
+          try {
+            redirectUrl = urllib.resolve(url, res.headers.location);
+          } catch (_err) {
+            redirectUrl = res.headers.location;
+          }
+          const redirectParsed = parseFetchUrl(redirectUrl);
+          if (!redirectParsed) {
+            finished = true;
+            const err = new Error("Unsupported protocol for URL " + redirectUrl);
+            err.code = errors.EFETCH;
+            err.sourceUrl = redirectUrl;
+            fetchRes.emit("error", err);
+            req.abort();
+            return;
+          }
           const crossHost = redirectParsed.hostname !== parsed.hostname;
           const downgrade = parsed.protocol === "https:" && redirectParsed.protocol === "http:";
           if (options.headers && (crossHost || downgrade)) {
@@ -8079,18 +8167,21 @@ var require_fetch = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/shared/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/shared/index.js
 var require_shared = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/shared/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/shared/index.js"(exports, module) {
     "use strict";
     var urllib = require_url();
     var util2 = __require("util");
     var fs = __require("fs");
     var nmfetch = require_fetch();
     var errors = require_errors2();
+    var objects = require_objects();
     var dns = __require("dns");
     var net = __require("net");
     var os = __require("os");
+    var isProtoKey = module.exports.isProtoKey = objects.isProtoKey;
+    module.exports.copyOwnKeys = objects.copyOwnKeys;
     var DNS_TTL = 5 * 60 * 1e3;
     var CACHE_CLEANUP_INTERVAL = 30 * 1e3;
     var MAX_CACHE_SIZE = 1e3;
@@ -8359,7 +8450,7 @@ var require_shared = __commonJS({
         } else if (key.indexOf(".") >= 0) {
           return;
         }
-        if (!(lKey in obj)) {
+        if (!isProtoKey(lKey) && !(lKey in obj)) {
           obj[lKey] = value;
         }
       });
@@ -8433,7 +8524,7 @@ var require_shared = __commonJS({
         if (sepPos > 0) {
           const key = entry.substring(0, sepPos).trim();
           const value = entry.substring(sepPos + 1).trim();
-          if (key) {
+          if (key && !isProtoKey(key)) {
             params[key] = value;
           }
         }
@@ -8493,18 +8584,19 @@ var require_shared = __commonJS({
             }
             callback(null, value);
           });
-        } else if (/^https?:\/\//i.test(content.path || content.href)) {
+        } else if (/^data:/i.test(content.path || content.href)) {
+          const parsedDataUri = module.exports.parseDataURI(content.path || content.href);
+          return callback(null, parsedDataUri && parsedDataUri.data ? parsedDataUri.data : Buffer.alloc(0));
+        } else if (content.href || /^https?:\/\//i.test(content.path)) {
+          const url = content.href || content.path;
           if (options.disableUrlAccess) {
             return setImmediate(() => {
-              const err = new Error("Url access rejected for " + (content.path || content.href));
+              const err = new Error("Url access rejected for " + url);
               err.code = errors.EURLACCESS;
               callback(err);
             });
           }
-          return resolveStream(nmfetch(content.path || content.href, { headers: content.httpHeaders, tls: content.tls }), callback);
-        } else if (/^data:/i.test(content.path || content.href)) {
-          const parsedDataUri = module.exports.parseDataURI(content.path || content.href);
-          return callback(null, parsedDataUri && parsedDataUri.data ? parsedDataUri.data : Buffer.alloc(0));
+          return resolveStream(nmfetch(url, { headers: content.httpHeaders, tls: content.tls }), callback);
         } else if (content.path) {
           if (options.disableFileAccess) {
             return setImmediate(() => {
@@ -8526,8 +8618,11 @@ var require_shared = __commonJS({
       const target = args.shift() || {};
       args.forEach((source) => {
         Object.keys(source || {}).forEach((key) => {
+          if (isProtoKey(key)) {
+            return;
+          }
           if (["tls", "auth"].includes(key) && source[key] && typeof source[key] === "object") {
-            target[key] = Object.assign(target[key] || {}, source[key]);
+            target[key] = module.exports.copyOwnKeys(target[key] || {}, source[key]);
           } else {
             target[key] = source[key];
           }
@@ -8622,9 +8717,9 @@ var require_shared = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-funcs/mime-types.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-funcs/mime-types.js
 var require_mime_types = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-funcs/mime-types.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-funcs/mime-types.js"(exports, module) {
     "use strict";
     var path = __require("path");
     var defaultMimeType = "application/octet-stream";
@@ -10726,9 +10821,9 @@ var require_mime_types = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/base64/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/base64/index.js
 var require_base64 = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/base64/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/base64/index.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     function encode(buffer) {
@@ -10825,9 +10920,9 @@ var require_base64 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/qp/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/qp/index.js
 var require_qp = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/qp/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/qp/index.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var QP_RANGES = [
@@ -10989,13 +11084,14 @@ var require_qp = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-funcs/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-funcs/index.js
 var require_mime_funcs = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-funcs/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-funcs/index.js"(exports, module) {
     "use strict";
     var base642 = require_base64();
     var qp = require_qp();
     var mimeTypes = require_mime_types();
+    var { isProtoKey } = require_objects();
     module.exports = {
       /**
        * Checks if a value is plaintext string (uses only printable 7bit chars)
@@ -11293,6 +11389,11 @@ var require_mime_funcs = __commonJS({
           value: false,
           params: {}
         };
+        const setParam = (name, value2) => {
+          if (!isProtoKey(name)) {
+            response.params[name] = value2;
+          }
+        };
         let key = false;
         let value = "";
         let type = "value";
@@ -11323,7 +11424,7 @@ var require_mime_funcs = __commonJS({
               if (key === false) {
                 response.value = value.trim();
               } else {
-                response.params[key] = value.trim();
+                setParam(key, value.trim());
               }
               type = "key";
               value = "";
@@ -11337,16 +11438,20 @@ var require_mime_funcs = __commonJS({
           if (key === false) {
             response.value = value.trim();
           } else {
-            response.params[key] = value.trim();
+            setParam(key, value.trim());
           }
         } else if (value.trim()) {
-          response.params[value.trim().toLowerCase()] = "";
+          setParam(value.trim().toLowerCase(), "");
         }
         Object.keys(response.params).forEach((key2) => {
           let actualKey, nr, match, value2;
           if (match = key2.match(/(\*(\d+)|\*(\d+)\*|\*)$/)) {
             actualKey = key2.substr(0, match.index);
             nr = Number(match[2] || match[3]) || 0;
+            if (isProtoKey(actualKey)) {
+              delete response.params[key2];
+              return;
+            }
             if (!response.params[actualKey] || typeof response.params[actualKey] !== "object") {
               response.params[actualKey] = {
                 charset: false,
@@ -11446,15 +11551,16 @@ var require_mime_funcs = __commonJS({
        */
       splitMimeEncodedString: (str2, maxlen) => {
         const lines = [];
-        let curLine, match, chr, done;
+        let curLine, fallbackLine, match, chr, done;
         maxlen = Math.max(maxlen || 0, 12);
         while (str2.length) {
           curLine = str2.substr(0, maxlen);
           if (match = curLine.match(/[=][0-9A-F]?$/i)) {
             curLine = curLine.substr(0, match.index);
           }
+          fallbackLine = curLine.length ? curLine : str2.substr(0, maxlen);
           done = false;
-          while (!done) {
+          while (!done && curLine.length) {
             done = true;
             if (match = str2.substr(curLine.length).match(/^[=]([0-9A-F]{2})/i)) {
               chr = parseInt(match[1], 16);
@@ -11464,9 +11570,10 @@ var require_mime_funcs = __commonJS({
               }
             }
           }
-          if (curLine.length) {
-            lines.push(curLine);
+          if (!curLine.length) {
+            curLine = fallbackLine;
           }
+          lines.push(curLine);
           str2 = str2.substr(curLine.length);
         }
         return lines;
@@ -11499,9 +11606,9 @@ var require_mime_funcs = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/addressparser/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/addressparser/index.js
 var require_addressparser = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/addressparser/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/addressparser/index.js"(exports, module) {
     "use strict";
     function _quoteLocalPart(address) {
       const lastAt = address.lastIndexOf("@");
@@ -11513,6 +11620,41 @@ var require_addressparser = __commonJS({
         return address;
       }
       return '"' + user.replace(/["\\]/g, "\\$&") + '"@' + address.substr(lastAt + 1);
+    }
+    var HAS_WHITESPACE = /\s/;
+    var QUOTED_LOCAL_ADDR = /^("(?:[^"\\]|\\[\s\S])*"@\S+)(?:\s+([\s\S]+))?$/;
+    var ADDR_SPEC = /^[^@\s]+@[^@\s]+$/;
+    var LOOSE_ADDR_SPEC = /^[^@\s]+@\S+$/;
+    function _recoverAddrSpec(data) {
+      if (!HAS_WHITESPACE.test(data.address)) {
+        return;
+      }
+      let address;
+      let rest;
+      const quoted = data.address.match(QUOTED_LOCAL_ADDR);
+      if (quoted) {
+        if (!quoted[2]) {
+          return;
+        }
+        address = quoted[1];
+        rest = [quoted[2]];
+      } else {
+        if (data.address.indexOf('"') >= 0) {
+          return;
+        }
+        const parts = data.address.split(/\s+/);
+        let addrIndex = parts.findIndex((part) => ADDR_SPEC.test(part));
+        if (addrIndex < 0) {
+          addrIndex = parts.findIndex((part) => LOOSE_ADDR_SPEC.test(part));
+        }
+        if (addrIndex < 0) {
+          return;
+        }
+        address = parts.splice(addrIndex, 1)[0];
+        rest = parts;
+      }
+      data.address = address;
+      data.text = [data.text].concat(rest).filter((part) => part).join(" ");
     }
     function _handleAddress(tokens, depth) {
       let isGroup = false;
@@ -11557,7 +11699,9 @@ var require_addressparser = __commonJS({
           if (state === "address") {
             token.value = token.value.replace(/^[^<]*<\s*/, "");
           }
-          if (prevToken && prevToken.noBreak && data[state].length) {
+          const parts = data[state];
+          const joins = prevToken && prevToken.noBreak && parts.length && (prevToken.value !== ")" || parts[parts.length - 1].slice(-1) === "@" || token.value.charAt(0) === "@");
+          if (joins) {
             data[state][data[state].length - 1] += token.value;
             if (state === "text" && insideQuotes) {
               data.textWasQuoted[data.textWasQuoted.length - 1] = true;
@@ -11594,7 +11738,7 @@ var require_addressparser = __commonJS({
       } else {
         if (!data.address.length && data.text.length) {
           for (let i = data.text.length - 1; i >= 0; i--) {
-            if (!data.textWasQuoted[i] && /^[^@\s]+@[^@\s]+$/.test(data.text[i])) {
+            if (!data.textWasQuoted[i] && ADDR_SPEC.test(data.text[i])) {
               data.address = data.text.splice(i, 1);
               data.textWasQuoted.splice(i, 1);
               break;
@@ -11629,6 +11773,7 @@ var require_addressparser = __commonJS({
         const addressFromQuotedText = !data.address.length && data.textWasQuoted.some((wasQuoted) => wasQuoted);
         data.text = data.text.join(" ");
         data.address = data.address.join(" ");
+        _recoverAddrSpec(data);
         const address = {
           address: data.address || data.text || "",
           name: data.text || data.address || ""
@@ -11775,18 +11920,22 @@ var require_addressparser = __commonJS({
       }
       addresses.forEach((addr) => {
         const handled = _handleAddress(addr, depth);
-        if (handled.length) {
-          parsedAddresses = parsedAddresses.concat(handled);
+        for (let i = 0; i < handled.length; i++) {
+          parsedAddresses.push(handled[i]);
         }
       });
-      for (let i = parsedAddresses.length - 2; i >= 0; i--) {
+      const mergedAddresses = [];
+      for (let i = parsedAddresses.length - 1; i >= 0; i--) {
         const current = parsedAddresses[i];
-        const next = parsedAddresses[i + 1];
-        if (current.address === "" && current.name && !current.group && next.address && next.name) {
+        const next = mergedAddresses.length ? mergedAddresses[mergedAddresses.length - 1] : null;
+        if (next && current.address === "" && current.name && !current.group && next.address && next.name) {
           next.name = current.name + ", " + next.name;
-          parsedAddresses.splice(i, 1);
+        } else {
+          mergedAddresses.push(current);
         }
       }
+      mergedAddresses.reverse();
+      parsedAddresses = mergedAddresses;
       if (options.flatten) {
         const flatAddresses = [];
         const walkAddressList = (list) => {
@@ -11806,9 +11955,9 @@ var require_addressparser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/last-newline.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-node/last-newline.js
 var require_last_newline = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/last-newline.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-node/last-newline.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LastNewline = class extends Transform {
@@ -11839,9 +11988,9 @@ var require_last_newline = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/le-windows.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-node/le-windows.js
 var require_le_windows = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/le-windows.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-node/le-windows.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LeWindows = class extends Transform {
@@ -11881,9 +12030,9 @@ var require_le_windows = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/le-unix.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-node/le-unix.js
 var require_le_unix = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/le-unix.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-node/le-unix.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var LeUnix = class extends Transform {
@@ -11916,15 +12065,16 @@ var require_le_unix = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-node/index.js
 var require_mime_node = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mime-node/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mime-node/index.js"(exports, module) {
     "use strict";
     var crypto = __require("crypto");
     var fs = __require("fs");
     var punycode = require_punycode();
     var { PassThrough } = __require("stream");
     var shared = require_shared();
+    var urlModule = __require("url");
     var mimeFuncs = require_mime_funcs();
     var qp = require_qp();
     var base642 = require_base64();
@@ -11939,6 +12089,17 @@ var require_mime_node = __commonJS({
     var DOT_ATOM = new RegExp("^" + ATEXT + "+(?:\\." + ATEXT + "+)*$");
     var QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"$/;
     var PLAIN_ADDRESS = /^[^\s"(),:;<>@[\\\]]+@[^\s"(),:;<>@[\\\]]+$/;
+    var URL_PARSER_UNSAFE = /[/\\?#%\x00-\x20\x7F]/;
+    function normalizeDomain(domain, toUnicode) {
+      const mapper = toUnicode ? urlModule.domainToUnicode : urlModule.domainToASCII;
+      if (typeof mapper === "function" && !URL_PARSER_UNSAFE.test(domain)) {
+        const mapped = mapper(domain);
+        if (mapped) {
+          return mapped;
+        }
+      }
+      return toUnicode ? punycode.toUnicode(domain) : punycode.toASCII(domain);
+    }
     var MimeNode = class _MimeNode {
       constructor(contentType, options) {
         this.nodeCounter = 0;
@@ -11999,6 +12160,9 @@ var require_mime_node = __commonJS({
        * @return {Object} Appended node object
        */
       appendChild(childNode) {
+        if (childNode.parentNode && childNode.parentNode !== this) {
+          childNode.remove();
+        }
         if (childNode.rootNode !== this.rootNode) {
           childNode.rootNode = this.rootNode;
           childNode._nodeId = ++this.rootNode.nodeCounter;
@@ -12265,11 +12429,7 @@ var require_mime_node = __commonJS({
           const options = {};
           const formattedHeaders = FORMATTED_HEADERS;
           if (value && typeof value === "object" && !formattedHeaders.includes(key)) {
-            Object.keys(value).forEach((key2) => {
-              if (key2 !== "value") {
-                options[key2] = value[key2];
-              }
-            });
+            shared.copyOwnKeys(options, value, (optionKey) => optionKey === "value");
             value = (value.value || "").toString();
             if (!value.trim()) {
               return;
@@ -12528,18 +12688,15 @@ var require_mime_node = __commonJS({
             this._envelope.from = list[0].address;
           }
         }
+        const seenRecipients = /* @__PURE__ */ new Set();
         ["to", "cc", "bcc"].forEach((key) => {
           if (envelope[key]) {
-            this._convertAddresses(this._parseEnvelopeAddresses(envelope[key]), this._envelope.to);
+            this._convertAddresses(this._parseEnvelopeAddresses(envelope[key]), this._envelope.to, seenRecipients);
           }
         });
         this._envelope.to = this._envelope.to.map((to) => to.address).filter((address) => address);
         const standardFields = ["to", "cc", "bcc", "from"];
-        Object.keys(envelope).forEach((key) => {
-          if (!standardFields.includes(key)) {
-            this._envelope[key] = envelope[key];
-          }
-        });
+        shared.copyOwnKeys(this._envelope, envelope, (key) => standardFields.includes(key));
         return this;
       }
       /**
@@ -12549,13 +12706,15 @@ var require_mime_node = __commonJS({
        */
       getAddresses() {
         const addresses = {};
+        const seenByKey = /* @__PURE__ */ new Map();
         this._headers.forEach((header) => {
           const key = header.key.toLowerCase();
           if (["from", "sender", "reply-to", "to", "cc", "bcc"].includes(key)) {
             if (!Array.isArray(addresses[key])) {
               addresses[key] = [];
+              seenByKey.set(key, /* @__PURE__ */ new Set());
             }
-            this._convertAddresses(this._parseAddresses(header.value), addresses[key]);
+            this._convertAddresses(this._parseAddresses(header.value), addresses[key], seenByKey.get(key));
           }
         });
         return addresses;
@@ -12573,6 +12732,7 @@ var require_mime_node = __commonJS({
           from: false,
           to: []
         };
+        const seenRecipients = /* @__PURE__ */ new Set();
         this._headers.forEach((header) => {
           const list = [];
           if (header.key === "From" || !envelope.from && ["Reply-To", "Sender"].includes(header.key)) {
@@ -12581,7 +12741,7 @@ var require_mime_node = __commonJS({
               envelope.from = list[0].address;
             }
           } else if (["To", "Cc", "Bcc"].includes(header.key)) {
-            this._convertAddresses(this._parseAddresses(header.value), envelope.to);
+            this._convertAddresses(this._parseAddresses(header.value), envelope.to, seenRecipients);
           }
         });
         envelope.to = envelope.to.map((to) => to.address);
@@ -12618,6 +12778,25 @@ var require_mime_node = __commonJS({
       }
       /////// PRIVATE METHODS
       /**
+       * Checks an access policy flag for this node and every node above it. The flags are set
+       * from the options the node was built with, and createChild only ever sees the options
+       * the caller passed, so a child of a closed tree starts out open. Reading the answer off
+       * the parent chain keeps it right whatever order the tree was assembled in.
+       *
+       * @param {String} flag Either 'disableFileAccess' or 'disableUrlAccess'
+       * @return {Boolean} true if this node or an ancestor closed that access
+       */
+      _accessDisabled(flag) {
+        let node = this;
+        while (node) {
+          if (node[flag]) {
+            return true;
+          }
+          node = node.parentNode;
+        }
+        return false;
+      }
+      /**
        * Detects and returns handle to a stream related with the content.
        *
        * @param {Mixed} content Node content
@@ -12640,7 +12819,7 @@ var require_mime_node = __commonJS({
           return content;
         }
         if (content && typeof content.path === "string" && !content.href) {
-          if (this.disableFileAccess) {
+          if (this._accessDisabled("disableFileAccess")) {
             contentStream = new PassThrough();
             setImmediate(() => {
               const err = new Error("File access rejected for " + content.path);
@@ -12652,7 +12831,7 @@ var require_mime_node = __commonJS({
           return fs.createReadStream(content.path);
         }
         if (content && typeof content.href === "string") {
-          if (this.disableUrlAccess) {
+          if (this._accessDisabled("disableUrlAccess")) {
             contentStream = new PassThrough();
             setImmediate(() => {
               const err = new Error("Url access rejected for " + content.href);
@@ -12681,22 +12860,26 @@ var require_mime_node = __commonJS({
        * @return {Array} An array of address objects
        */
       _parseAddresses(addresses) {
-        return [].concat.apply(
-          [],
-          [].concat(addresses).map((address) => {
-            if (address && address.address) {
-              const normalized = this._normalizeAddress(address.address);
-              if (normalized === address.address && typeof address.name === "string") {
-                return [address];
-              }
-              const copy = Object.assign({}, address);
-              copy.address = normalized;
-              copy.name = address.name || "";
-              return [copy];
+        const flattened = [];
+        [].concat(addresses).forEach((address) => {
+          if (address && address.address) {
+            const normalized = this._normalizeAddress(address.address);
+            if (normalized === address.address && typeof address.name === "string") {
+              flattened.push(address);
+              return;
             }
-            return this._normalizeParsedAddresses(addressparser(address));
-          })
-        );
+            const copy = shared.copyOwnKeys({}, address);
+            copy.address = normalized;
+            copy.name = address.name || "";
+            flattened.push(copy);
+            return;
+          }
+          const parsed = this._normalizeParsedAddresses(addressparser(address));
+          for (let i = 0; i < parsed.length; i++) {
+            flattened.push(parsed[i]);
+          }
+        });
+        return flattened;
       }
       /**
        * Normalizes the addresses of a freshly parsed address list, groups included.
@@ -12838,9 +13021,15 @@ var require_mime_node = __commonJS({
        * @param {Array} [uniqueList] An array to be populated with addresses
        * @return {String} address string
        */
-      _convertAddresses(addresses, uniqueList) {
+      _convertAddresses(addresses, uniqueList, seenAddresses) {
         const values = [];
         uniqueList = uniqueList || [];
+        if (!seenAddresses) {
+          seenAddresses = /* @__PURE__ */ new Set();
+          for (let i = 0; i < uniqueList.length; i++) {
+            seenAddresses.add(uniqueList[i].address);
+          }
+        }
         [].concat(addresses || []).forEach((address) => {
           if (address.address) {
             address.address = this._normalizeAddress(address.address);
@@ -12849,11 +13038,12 @@ var require_mime_node = __commonJS({
             } else {
               values.push(`${this._encodeAddressName(address.name)} <${address.address}>`);
             }
-            if (!uniqueList.some((a) => a.address === address.address)) {
+            if (!seenAddresses.has(address.address)) {
+              seenAddresses.add(address.address);
               uniqueList.push(address);
             }
           } else if (address.group) {
-            const groupListAddresses = (address.group.length ? this._convertAddresses(address.group, uniqueList) : "").trim();
+            const groupListAddresses = (address.group.length ? this._convertAddresses(address.group, uniqueList, seenAddresses) : "").trim();
             values.push(`${this._encodeAddressName(address.name)}:${groupListAddresses};`);
           }
         });
@@ -12877,12 +13067,9 @@ var require_mime_node = __commonJS({
         const user = address.substr(0, lastAt);
         const domain = address.substr(lastAt + 1);
         let encodedDomain = domain;
+        const smtputf8 = /[\x80-\uFFFF]/.test(user);
         try {
-          if (/[\x80-\uFFFF]/.test(user)) {
-            encodedDomain = punycode.toUnicode(domain.toLowerCase());
-          } else {
-            encodedDomain = punycode.toASCII(domain.toLowerCase());
-          }
+          encodedDomain = normalizeDomain(domain.toLowerCase(), smtputf8);
         } catch (_err) {
         }
         return `${this._normalizeLocalPart(user)}@${encodedDomain}`;
@@ -12985,13 +13172,13 @@ var require_mime_node = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mail-composer/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mail-composer/index.js
 var require_mail_composer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mail-composer/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mail-composer/index.js"(exports, module) {
     "use strict";
     var MimeNode = require_mime_node();
     var mimeFuncs = require_mime_funcs();
-    var { parseDataURI } = require_shared();
+    var { parseDataURI, copyOwnKeys } = require_shared();
     var MailComposer = class {
       constructor(mail) {
         this.mail = mail || {};
@@ -13144,7 +13331,7 @@ var require_mail_composer = __commonJS({
         if (!this._icalEvent) {
           let icalEvent;
           if (typeof this.mail.icalEvent === "object" && (this.mail.icalEvent.content || this.mail.icalEvent.path || this.mail.icalEvent.href || this.mail.icalEvent.raw)) {
-            icalEvent = Object.assign({}, this.mail.icalEvent);
+            icalEvent = copyOwnKeys({}, this.mail.icalEvent);
           } else {
             icalEvent = {
               content: this.mail.icalEvent
@@ -13441,7 +13628,7 @@ var require_mail_composer = __commonJS({
               detectedType = parts[0].trim();
             }
           }
-          return Object.assign({}, element, {
+          return Object.assign(copyOwnKeys({}, element), {
             path: false,
             href: false,
             content: Buffer.alloc(0),
@@ -13472,9 +13659,9 @@ var require_mail_composer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/message-parser.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/dkim/message-parser.js
 var require_message_parser = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/message-parser.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/dkim/message-parser.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var MessageParser = class extends Transform {
@@ -13601,9 +13788,9 @@ var require_message_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/relaxed-body.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/dkim/relaxed-body.js
 var require_relaxed_body = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/relaxed-body.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/dkim/relaxed-body.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var crypto = __require("crypto");
@@ -13710,9 +13897,9 @@ var require_relaxed_body = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/sign.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/dkim/sign.js
 var require_sign = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/sign.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/dkim/sign.js"(exports, module) {
     "use strict";
     var punycode = require_punycode();
     var mimeFuncs = require_mime_funcs();
@@ -13784,9 +13971,9 @@ var require_sign = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/dkim/index.js
 var require_dkim = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/dkim/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/dkim/index.js"(exports, module) {
     "use strict";
     var MessageParser = require_message_parser();
     var RelaxedBody = require_relaxed_body();
@@ -13795,6 +13982,7 @@ var require_dkim = __commonJS({
     var fs = __require("fs");
     var path = __require("path");
     var crypto = __require("crypto");
+    var { copyOwnKeys } = require_objects();
     var DKIM_ALGO = "sha256";
     var MAX_MESSAGE_SIZE = 2 * 1024 * 1024;
     var DKIMSigner = class {
@@ -13961,7 +14149,8 @@ var require_dkim = __commonJS({
         }
         let options = this.options;
         if (extraOptions && Object.keys(extraOptions).length) {
-          options = Object.assign({}, extraOptions, this.options);
+          options = copyOwnKeys({}, extraOptions);
+          copyOwnKeys(options, this.options);
         }
         const signer = new DKIMSigner(options, this.keys, inputStream, output);
         setImmediate(() => {
@@ -13979,9 +14168,9 @@ var require_dkim = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js
 var require_http_proxy_client = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-connection/http-proxy-client.js"(exports, module) {
     "use strict";
     var net = __require("net");
     var tls = __require("tls");
@@ -14095,13 +14284,14 @@ var require_http_proxy_client = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mailer/mail-message.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mailer/mail-message.js
 var require_mail_message = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mailer/mail-message.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mailer/mail-message.js"(exports, module) {
     "use strict";
     var shared = require_shared();
     var MimeNode = require_mime_node();
     var mimeFuncs = require_mime_funcs();
+    var hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
     var MailMessage = class {
       constructor(mailer, data) {
         this.mailer = mailer;
@@ -14110,27 +14300,32 @@ var require_mail_message = __commonJS({
         data = data || {};
         const options = mailer.options || {};
         const defaults = mailer._defaults || {};
-        Object.assign(this.data, data);
+        shared.copyOwnKeys(this.data, data);
         this.data.headers = this.data.headers || {};
-        Object.keys(defaults).forEach((key) => {
-          if (!(key in this.data)) {
-            this.data[key] = defaults[key];
-          } else if (key === "headers") {
-            Object.keys(defaults.headers).forEach((key2) => {
-              if (!(key2 in this.data.headers)) {
-                this.data.headers[key2] = defaults.headers[key2];
-              }
-            });
-          }
-        });
-        ["disableFileAccess", "disableUrlAccess", "normalizeHeaderKey"].forEach((key) => {
+        shared.copyOwnKeys(this.data, defaults, (key) => hasOwn(this.data, key));
+        shared.copyOwnKeys(this.data.headers, defaults.headers, (key) => hasOwn(this.data.headers, key));
+        ["disableFileAccess", "disableUrlAccess", "normalizeHeaderKey", "maxRecipients"].forEach((key) => {
           if (key in options) {
             this.data[key] = options[key];
           }
         });
+        ["disableFileAccess", "disableUrlAccess"].forEach((key) => {
+          if (!(key in options) && hasOwn(defaults, key)) {
+            this.data[key] = this.data[key] || defaults[key];
+          }
+        });
       }
-      resolveContent(...args) {
-        return shared.resolveContent(...args);
+      resolveContent(data, key, options, callback) {
+        if (!callback && typeof options === "function") {
+          callback = options;
+          options = false;
+        }
+        options = options || {};
+        const policy = {
+          disableFileAccess: this.data.disableFileAccess || options.disableFileAccess,
+          disableUrlAccess: this.data.disableUrlAccess || options.disableUrlAccess
+        };
+        return shared.resolveContent(data, key, policy, callback);
       }
       resolveAll(callback) {
         const keys = [
@@ -14200,11 +14395,7 @@ var require_mail_message = __commonJS({
                 content: value
               };
               if (args[0][args[1]] && typeof args[0][args[1]] === "object" && !Buffer.isBuffer(args[0][args[1]])) {
-                Object.keys(args[0][args[1]]).forEach((key) => {
-                  if (!(key in node) && !["content", "path", "href", "raw"].includes(key)) {
-                    node[key] = args[0][args[1]][key];
-                  }
-                });
+                shared.copyOwnKeys(node, args[0][args[1]], (key) => key in node || ["content", "path", "href", "raw"].includes(key));
               }
               args[0][args[1]] = node;
               resolveNext();
@@ -14253,6 +14444,9 @@ var require_mail_message = __commonJS({
           }
           data.normalizedHeaders = {};
           Object.keys(data.headers || {}).forEach((key) => {
+            if (shared.isProtoKey(key)) {
+              return;
+            }
             let value = [].concat(data.headers[key] || []).shift();
             value = value && value.value || value;
             if (value) {
@@ -14353,9 +14547,9 @@ var require_mail_message = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mailer/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mailer/index.js
 var require_mailer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/mailer/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/mailer/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var shared = require_shared();
@@ -14371,6 +14565,7 @@ var require_mailer = __commonJS({
     var net = __require("net");
     var dns = __require("dns");
     var crypto = __require("crypto");
+    var DEFAULT_MAX_RECIPIENTS = 1e5;
     var Mail = class extends EventEmitter {
       constructor(transporter, options, defaults) {
         super();
@@ -14506,6 +14701,24 @@ var require_mailer = __commonJS({
           mail.setMailerHeader();
           mail.setPriorityHeaders();
           mail.setListHeaders();
+          const maxRecipients = mail.data.maxRecipients === void 0 ? DEFAULT_MAX_RECIPIENTS : mail.data.maxRecipients;
+          const recipientCount = mail.message.getEnvelope().to.length;
+          if (maxRecipients && recipientCount > maxRecipients) {
+            const err2 = new Error(
+              `Message has ${recipientCount} recipients, which is over the ${maxRecipients} allowed by maxRecipients`
+            );
+            err2.code = errors.EMAXRECIPIENTS;
+            this.logger.error(
+              {
+                err: err2,
+                tnx: "transport",
+                action: "send"
+              },
+              "Send Error: %s",
+              err2.message
+            );
+            return callback(err2);
+          }
           this._processPlugins("stream", mail, (err2) => {
             if (err2) {
               this.logger.error(
@@ -14744,9 +14957,9 @@ var require_mailer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/data-stream.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-connection/data-stream.js
 var require_data_stream = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/data-stream.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-connection/data-stream.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var DataStream = class extends Transform {
@@ -14831,9 +15044,9 @@ var require_data_stream = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-connection/index.js
 var require_smtp_connection = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-connection/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-connection/index.js"(exports, module) {
     "use strict";
     var packageInfo = require_package();
     var { EventEmitter } = __require("events");
@@ -16332,9 +16545,9 @@ var require_smtp_connection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/xoauth2/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/xoauth2/index.js
 var require_xoauth2 = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/xoauth2/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/xoauth2/index.js"(exports, module) {
     "use strict";
     var { Stream } = __require("stream");
     var nmfetch = require_fetch();
@@ -16692,9 +16905,9 @@ var require_xoauth2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-pool/pool-resource.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-pool/pool-resource.js
 var require_pool_resource = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-pool/pool-resource.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-pool/pool-resource.js"(exports, module) {
     "use strict";
     var SMTPConnection = require_smtp_connection();
     var assign = require_shared().assign;
@@ -16913,9 +17126,9 @@ var require_pool_resource = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/well-known/services.json
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/well-known/services.json
 var require_services = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/well-known/services.json"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/well-known/services.json"(exports, module) {
     module.exports = {
       "1und1": {
         description: "1&1 Mail (German hosting provider)",
@@ -17465,9 +17678,9 @@ var require_services = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/well-known/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/well-known/index.js
 var require_well_known = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/well-known/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/well-known/index.js"(exports, module) {
     "use strict";
     var services = require_services();
     var normalized = {};
@@ -17501,9 +17714,9 @@ var require_well_known = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-pool/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-pool/index.js
 var require_smtp_pool = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-pool/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-pool/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var PoolResource = require_pool_resource();
@@ -18040,9 +18253,9 @@ var require_smtp_pool = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-transport/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-transport/index.js
 var require_smtp_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/smtp-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/smtp-transport/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var SMTPConnection = require_smtp_connection();
@@ -18409,9 +18622,9 @@ var require_smtp_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/sendmail-transport/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/sendmail-transport/index.js
 var require_sendmail_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/sendmail-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/sendmail-transport/index.js"(exports, module) {
     "use strict";
     var { spawn } = __require("child_process");
     var packageData = require_package();
@@ -18585,9 +18798,9 @@ var require_sendmail_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/stream-transport/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/stream-transport/index.js
 var require_stream_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/stream-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/stream-transport/index.js"(exports, module) {
     "use strict";
     var packageData = require_package();
     var shared = require_shared();
@@ -18706,9 +18919,9 @@ var require_stream_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/json-transport/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/json-transport/index.js
 var require_json_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/json-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/json-transport/index.js"(exports, module) {
     "use strict";
     var packageData = require_package();
     var shared = require_shared();
@@ -18775,9 +18988,9 @@ var require_json_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/ses-transport/index.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/ses-transport/index.js
 var require_ses_transport = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/ses-transport/index.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/ses-transport/index.js"(exports, module) {
     "use strict";
     var EventEmitter = __require("events");
     var packageData = require_package();
@@ -18878,7 +19091,7 @@ var require_ses_transport = __commonJS({
               );
               return callback(err);
             }
-            const sesMessage = Object.assign(
+            const sesMessage = shared.copyOwnKeys(
               {
                 Content: {
                   Raw: {
@@ -18892,7 +19105,7 @@ var require_ses_transport = __commonJS({
                   ToAddresses: envelope.to
                 }
               },
-              mail.data.ses || {}
+              mail.data.ses
             );
             this.getRegion((err2, region) => {
               if (err2 || !region) {
@@ -18994,9 +19207,9 @@ var require_ses_transport = __commonJS({
   }
 });
 
-// node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/nodemailer.js
+// node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/nodemailer.js
 var require_nodemailer = __commonJS({
-  "node_modules/.pnpm/nodemailer@9.0.5/node_modules/nodemailer/lib/nodemailer.js"(exports, module) {
+  "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/nodemailer.js"(exports, module) {
     "use strict";
     var Mailer = require_mailer();
     var shared = require_shared();
@@ -23614,9 +23827,9 @@ var require_pino = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/logger.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/logger.js
 var require_logger = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/logger.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/logger.js"(exports, module) {
     "use strict";
     var logger = require_pino()();
     logger.level = "trace";
@@ -27412,9 +27625,9 @@ var require_lib = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/util.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/util.js
 var require_util2 = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/util.js"(exports) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/util.js"(exports) {
     var config2 = require_config();
     var fromCharCode = String.fromCharCode;
     var slice = Array.prototype.slice;
@@ -27867,9 +28080,9 @@ var require_util2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/utf8-to-jis-table.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/utf8-to-jis-table.js
 var require_utf8_to_jis_table = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/utf8-to-jis-table.js"(exports, module) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/utf8-to-jis-table.js"(exports, module) {
     module.exports = {
       15711649: 33,
       15711650: 34,
@@ -35268,9 +35481,9 @@ var require_utf8_to_jis_table = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/utf8-to-jisx0212-table.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/utf8-to-jisx0212-table.js
 var require_utf8_to_jisx0212_table = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/utf8-to-jisx0212-table.js"(exports, module) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/utf8-to-jisx0212-table.js"(exports, module) {
     module.exports = {
       52120: 8751,
       52103: 8752,
@@ -41345,25 +41558,25 @@ var require_utf8_to_jisx0212_table = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/jis-to-utf8-table.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/jis-to-utf8-table.js
 var require_jis_to_utf8_table = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/jis-to-utf8-table.js"(exports, module) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/jis-to-utf8-table.js"(exports, module) {
     var JIS_TO_UTF8_TABLE = null;
     module.exports = JIS_TO_UTF8_TABLE;
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/jisx0212-to-utf8-table.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/jisx0212-to-utf8-table.js
 var require_jisx0212_to_utf8_table = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/jisx0212-to-utf8-table.js"(exports, module) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/jisx0212-to-utf8-table.js"(exports, module) {
     var JISX0212_TO_UTF8_TABLE = null;
     module.exports = JISX0212_TO_UTF8_TABLE;
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/encoding-table.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/encoding-table.js
 var require_encoding_table = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/encoding-table.js"(exports) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/encoding-table.js"(exports) {
     exports.UTF8_TO_JIS_TABLE = require_utf8_to_jis_table();
     exports.UTF8_TO_JISX0212_TABLE = require_utf8_to_jisx0212_table();
     exports.JIS_TO_UTF8_TABLE = require_jis_to_utf8_table();
@@ -41371,9 +41584,9 @@ var require_encoding_table = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/config.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/config.js
 var require_config = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/config.js"(exports) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/config.js"(exports) {
     var util2 = require_util2();
     var EncodingTable = require_encoding_table();
     exports.FALLBACK_CHARACTER = 63;
@@ -41493,9 +41706,9 @@ var require_config = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/encoding-detect.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/encoding-detect.js
 var require_encoding_detect = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/encoding-detect.js"(exports) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/encoding-detect.js"(exports) {
     function isBINARY(data) {
       var i = 0;
       var len = data && data.length;
@@ -41611,22 +41824,22 @@ var require_encoding_detect = __commonJS({
     function isSJIS(data) {
       var i = 0;
       var len = data && data.length;
-      var b;
-      while (i < len && data[i] > 128) {
-        if (data[i++] > 255) {
-          return false;
-        }
-      }
+      var b, lead;
       for (; i < len; i++) {
         b = data[i];
+        if (b > 255) {
+          return false;
+        }
         if (b <= 128 || 161 <= b && b <= 223) {
           continue;
         }
-        if (b === 160 || b > 239 || i + 1 >= len) {
+        if (b === 160 || b > 252 || i + 1 >= len) {
           return false;
         }
+        lead = b;
         b = data[++i];
-        if (b < 64 || b === 127 || b > 252) {
+        if (b < 64 || b > 252 || b === 127 || // IBM extended character area ends at 0xFC4B
+        lead === 252 && b > 75) {
           return false;
         }
       }
@@ -41642,7 +41855,7 @@ var require_encoding_detect = __commonJS({
         if (b > 255) {
           return false;
         }
-        if (b === 9 || b === 10 || b === 13 || b >= 32 && b <= 126) {
+        if (b <= 127 && b !== 27) {
           continue;
         }
         if (b >= 194 && b <= 223) {
@@ -41862,13 +42075,116 @@ var require_encoding_detect = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/encoding-convert.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/sjis-ext.js
+var require_sjis_ext = __commonJS({
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/sjis-ext.js"(exports) {
+    var CP932_IBM_EXT_SYMBOL_MAP = [
+      // 0xFA40 - 0xFA49 [ⅰ-ⅹ]
+      61167,
+      61168,
+      61169,
+      61170,
+      61171,
+      61172,
+      61173,
+      61174,
+      61175,
+      61176,
+      // 0xFA4A - 0xFA53 [Ⅰ-Ⅹ]
+      34644,
+      34645,
+      34646,
+      34647,
+      34648,
+      34649,
+      34650,
+      34651,
+      34652,
+      34653,
+      // 0xFA54 - 0xFA57 [￢￤＇＂]
+      33226,
+      61178,
+      61179,
+      61180,
+      // 0xFA58 - 0xFA5B [㈱№℡∵]
+      34698,
+      34690,
+      34692,
+      33254
+    ];
+    var CP932_IBM_EXT_LEN = 388;
+    var CP932_IBM_EXT_TRAIL_BYTES_LEN = 188;
+    function remapCP932_IBMExt(b1, b2) {
+      var leadOffset = (b1 - 250) * CP932_IBM_EXT_TRAIL_BYTES_LEN;
+      var trailIndex = b2 - (b2 < 127 ? 64 : 65);
+      var ibmExtIndex = leadOffset + trailIndex;
+      if (ibmExtIndex < 0 || ibmExtIndex >= CP932_IBM_EXT_LEN) {
+        return b1 << 8 | b2;
+      }
+      if (ibmExtIndex < CP932_IBM_EXT_SYMBOL_MAP.length) {
+        return CP932_IBM_EXT_SYMBOL_MAP[ibmExtIndex];
+      }
+      var necSelectedIbmOffset = ibmExtIndex - CP932_IBM_EXT_SYMBOL_MAP.length;
+      b1 = 237;
+      if (necSelectedIbmOffset >= CP932_IBM_EXT_TRAIL_BYTES_LEN) {
+        necSelectedIbmOffset -= CP932_IBM_EXT_TRAIL_BYTES_LEN;
+        b1++;
+      }
+      b2 = necSelectedIbmOffset + 64;
+      if (b2 >= 127) {
+        b2++;
+      }
+      return b1 << 8 | b2;
+    }
+    var CP932_NEC_DUPLICATE_MAP = {
+      34704: 33248,
+      // ≒ (NEC special characters)
+      34705: 33247,
+      // ≡
+      34706: 33255,
+      // ∫
+      34709: 33251,
+      // √
+      34710: 33243,
+      // ⊥
+      34711: 33242,
+      // ∠
+      34714: 33254,
+      // ∵
+      34715: 33215,
+      // ∩
+      34716: 33214,
+      // ∪
+      61177: 33226
+      // ￢ (NEC-selected IBM extended characters)
+    };
+    function remapCP932DuplicateCode(b1, b2) {
+      if (b2 < 64 || b2 > 252 || b2 === 127) {
+        return b1 << 8 | b2 & 255;
+      }
+      if (b1 >= 250) {
+        return remapCP932_IBMExt(b1, b2);
+      }
+      var code = b1 << 8 | b2;
+      var remapped = CP932_NEC_DUPLICATE_MAP[code];
+      return remapped == null ? code : remapped;
+    }
+    exports.remapCP932DuplicateCode = remapCP932DuplicateCode;
+    function hasCP932DuplicateCode(b1) {
+      return b1 >= 250 || b1 === 135 || b1 === 238;
+    }
+    exports.hasCP932DuplicateCode = hasCP932DuplicateCode;
+  }
+});
+
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/encoding-convert.js
 var require_encoding_convert = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/encoding-convert.js"(exports) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/encoding-convert.js"(exports) {
     var config2 = require_config();
     var util2 = require_util2();
     var EncodingDetect = require_encoding_detect();
     var EncodingTable = require_encoding_table();
+    var sjisExt = require_sjis_ext();
     function JISToSJIS(data) {
       var results = [];
       var index = 0;
@@ -41973,7 +42289,7 @@ var require_encoding_convert = __commonJS({
       var index = 0;
       var len = data && data.length;
       var i = 0;
-      var b1, b2;
+      var b1, b2, remapped;
       var esc2 = [
         27,
         40,
@@ -42002,8 +42318,13 @@ var require_encoding_convert = __commonJS({
             results[results.length] = esc2[4];
             results[results.length] = esc2[5];
           }
-          b1 <<= 1;
           b2 = data[++i];
+          if (sjisExt.hasCP932DuplicateCode(b1)) {
+            remapped = sjisExt.remapCP932DuplicateCode(b1, b2);
+            b1 = remapped >> 8;
+            b2 = remapped & 255;
+          }
+          b1 <<= 1;
           if (b2 < 159) {
             if (b1 < 319) {
               b1 -= 225;
@@ -42047,7 +42368,7 @@ var require_encoding_convert = __commonJS({
       var results = [];
       var len = data && data.length;
       var i = 0;
-      var b1, b2;
+      var b1, b2, remapped;
       for (; i < len; i++) {
         b1 = data[i];
         if (b1 >= 161 && b1 <= 223) {
@@ -42055,6 +42376,11 @@ var require_encoding_convert = __commonJS({
           results[results.length] = b1;
         } else if (b1 >= 129) {
           b2 = data[++i];
+          if (sjisExt.hasCP932DuplicateCode(b1)) {
+            remapped = sjisExt.remapCP932DuplicateCode(b1, b2);
+            b1 = remapped >> 8;
+            b2 = remapped & 255;
+          }
           b1 <<= 1;
           if (b2 < 159) {
             if (b1 < 319) {
@@ -42201,7 +42527,7 @@ var require_encoding_convert = __commonJS({
       var results = [];
       var i = 0;
       var len = data && data.length;
-      var b, b1, b2, u2, u3, jis, utf8;
+      var b, b1, b2, u2, u3, jis, utf8, remapped;
       for (; i < len; i++) {
         b = data[i];
         if (b >= 161 && b <= 223) {
@@ -42212,8 +42538,13 @@ var require_encoding_convert = __commonJS({
           results[results.length] = u2 & 255;
           results[results.length] = u3 & 255;
         } else if (b >= 128) {
-          b1 = b << 1;
           b2 = data[++i];
+          if (sjisExt.hasCP932DuplicateCode(b)) {
+            remapped = sjisExt.remapCP932DuplicateCode(b, b2);
+            b = remapped >> 8;
+            b2 = remapped & 255;
+          }
+          b1 = b << 1;
           if (b2 < 159) {
             if (b1 < 319) {
               b1 -= 225;
@@ -42464,6 +42795,9 @@ var require_encoding_convert = __commonJS({
             utf8 = (b << 24) + (data[++i] << 16) + (data[++i] << 8) + (data[++i] & 255);
           }
           jis = EncodingTable.UTF8_TO_JIS_TABLE[utf8];
+          if (jis != null && EncodingTable.UTF8_TO_JISX0212_TABLE[utf8] != null) {
+            jis = null;
+          }
           if (jis == null) {
             jis = EncodingTable.UTF8_TO_JISX0212_TABLE[utf8];
             if (jis == null) {
@@ -42540,6 +42874,9 @@ var require_encoding_convert = __commonJS({
             utf8 = (b << 24) + (data[++i] << 16) + (data[++i] << 8) + (data[++i] & 255);
           }
           jis = EncodingTable.UTF8_TO_JIS_TABLE[utf8];
+          if (jis != null && EncodingTable.UTF8_TO_JISX0212_TABLE[utf8] != null) {
+            jis = null;
+          }
           if (jis == null) {
             jis = EncodingTable.UTF8_TO_JISX0212_TABLE[utf8];
             if (jis == null) {
@@ -43123,9 +43460,9 @@ var require_encoding_convert = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/kana-case-table.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/kana-case-table.js
 var require_kana_case_table = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/kana-case-table.js"(exports) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/kana-case-table.js"(exports) {
     exports.HANKANA_TABLE = {
       12289: 65380,
       12290: 65377,
@@ -43265,12 +43602,12 @@ var require_kana_case_table = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/package.json
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/package.json
 var require_package3 = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/package.json"(exports, module) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/package.json"(exports, module) {
     module.exports = {
       name: "encoding-japanese",
-      version: "2.2.0",
+      version: "2.3.0",
       description: "Convert and detect character encoding in JavaScript",
       main: "src/index.js",
       files: [
@@ -43286,7 +43623,7 @@ var require_package3 = __commonJS({
         watch: "watchify src/index.js -o encoding.js -s Encoding -p [ bannerify --file src/banner.js ] --no-bundle-external --bare --poll=300 -v"
       },
       engines: {
-        node: ">=8.10.0"
+        node: ">=18.0.0"
       },
       repository: {
         type: "git",
@@ -43322,13 +43659,11 @@ var require_package3 = __commonJS({
       dependencies: {},
       devDependencies: {
         bannerify: "^1.0.1",
-        browserify: "^17.0.0",
+        browserify: "^17.0.1",
         eslint: "^8.57.0",
-        mocha: "^10.4.0",
+        mocha: "^11.8.0",
         "package-json-versionify": "^1.0.4",
-        "power-assert": "^1.6.1",
-        "uglify-js": "^3.17.4",
-        uglifyify: "^5.0.2",
+        "uglify-js": "^3.19.3",
         watchify: "^4.0.0"
       },
       browserify: {
@@ -43340,9 +43675,9 @@ var require_package3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/index.js
+// node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/index.js
 var require_src = __commonJS({
-  "node_modules/.pnpm/encoding-japanese@2.2.0/node_modules/encoding-japanese/src/index.js"(exports, module) {
+  "node_modules/.pnpm/encoding-japanese@2.3.0/node_modules/encoding-japanese/src/index.js"(exports, module) {
     var config2 = require_config();
     var util2 = require_util2();
     var EncodingDetect = require_encoding_detect();
@@ -43649,6 +43984,12 @@ var require_src = __commonJS({
           } else if (c === 12535) {
             results[results.length] = 12431;
             c = 12443;
+          } else if (c === 12536) {
+            results[results.length] = 12432;
+            c = 12443;
+          } else if (c === 12537) {
+            results[results.length] = 12433;
+            c = 12443;
           } else if (c === 12538) {
             results[results.length] = 12434;
             c = 12443;
@@ -43683,9 +44024,11 @@ var require_src = __commonJS({
           c = data[i++];
           if (c >= 12353 && c <= 12438) {
             if ((c === 12431 || // 「わ」 + 「゛」 => 「ワ゛」
+            c === 12432 || // 「ゐ」 + 「゛」 => 「ヰ゛」
+            c === 12433 || // 「ゑ」 + 「゛」 => 「ヱ゛」
             c === 12434) && // 「を」 + 「゛」 => 「ヲ゛」
             i < len && data[i] === 12443) {
-              c = c === 12431 ? 12535 : 12538;
+              c = c === 12431 ? 12535 : c === 12432 ? 12536 : c === 12433 ? 12537 : 12538;
               i++;
             } else {
               c += 96;
@@ -43848,9 +44191,9 @@ var require_src = __commonJS({
   }
 });
 
-// node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/charsets.js
+// node_modules/.pnpm/libmime@5.4.3/node_modules/libmime/lib/charsets.js
 var require_charsets = __commonJS({
-  "node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/charsets.js"(exports, module) {
+  "node_modules/.pnpm/libmime@5.4.3/node_modules/libmime/lib/charsets.js"(exports, module) {
     "use strict";
     module.exports = {
       "866": "IBM866",
@@ -44063,9 +44406,9 @@ var require_charsets = __commonJS({
   }
 });
 
-// node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/charset.js
+// node_modules/.pnpm/libmime@5.4.3/node_modules/libmime/lib/charset.js
 var require_charset = __commonJS({
-  "node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/charset.js"(exports, module) {
+  "node_modules/.pnpm/libmime@5.4.3/node_modules/libmime/lib/charset.js"(exports, module) {
     "use strict";
     var { Buffer: Buffer2 } = __require("node:buffer");
     var iconv = require_lib();
@@ -44542,9 +44885,9 @@ var require_libqp = __commonJS({
   }
 });
 
-// node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/mimetypes.js
+// node_modules/.pnpm/libmime@5.4.3/node_modules/libmime/lib/mimetypes.js
 var require_mimetypes = __commonJS({
-  "node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/mimetypes.js"(exports, module) {
+  "node_modules/.pnpm/libmime@5.4.3/node_modules/libmime/lib/mimetypes.js"(exports, module) {
     "use strict";
     module.exports = {
       list: {
@@ -46593,9 +46936,9 @@ var require_mimetypes = __commonJS({
   }
 });
 
-// node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/libmime.js
+// node_modules/.pnpm/libmime@5.4.3/node_modules/libmime/lib/libmime.js
 var require_libmime = __commonJS({
-  "node_modules/.pnpm/libmime@5.4.2/node_modules/libmime/lib/libmime.js"(exports, module) {
+  "node_modules/.pnpm/libmime@5.4.3/node_modules/libmime/lib/libmime.js"(exports, module) {
     "use strict";
     var { Buffer: Buffer2 } = __require("node:buffer");
     var libcharset = require_charset();
@@ -47340,9 +47683,9 @@ var require_libmime = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/headers.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/headers.js
 var require_headers = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/headers.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/headers.js"(exports, module) {
     "use strict";
     var libmime = require_libmime();
     var Libmime = (
@@ -47699,9 +48042,9 @@ var require_headers = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/mime-node.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/mime-node.js
 var require_mime_node2 = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/mime-node.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/mime-node.js"(exports, module) {
     "use strict";
     var Headers = require_headers();
     var libmime = require_libmime();
@@ -47998,9 +48341,9 @@ var require_mime_node2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/message-splitter.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/message-splitter.js
 var require_message_splitter = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/message-splitter.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/message-splitter.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var MimeNode = require_mime_node2();
@@ -48475,9 +48818,9 @@ var require_message_splitter = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/message-joiner.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/message-joiner.js
 var require_message_joiner = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/message-joiner.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/message-joiner.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var MessageJoiner = class extends Transform {
@@ -48519,9 +48862,9 @@ var require_message_joiner = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/flowed-decoder.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/flowed-decoder.js
 var require_flowed_decoder = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/flowed-decoder.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/flowed-decoder.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var libmime = require_libmime();
@@ -48577,9 +48920,9 @@ var require_flowed_decoder = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/node-rewriter.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/node-rewriter.js
 var require_node_rewriter = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/node-rewriter.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/node-rewriter.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var FlowedDecoder = require_flowed_decoder();
@@ -48765,9 +49108,9 @@ var require_node_rewriter = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/node-streamer.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/node-streamer.js
 var require_node_streamer = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/node-streamer.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/node-streamer.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var FlowedDecoder = require_flowed_decoder();
@@ -48901,9 +49244,9 @@ var require_node_streamer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/chunked-passthrough.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/chunked-passthrough.js
 var require_chunked_passthrough = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/lib/chunked-passthrough.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/lib/chunked-passthrough.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var ChunkedPassthrough = class extends Transform {
@@ -48949,9 +49292,9 @@ var require_chunked_passthrough = __commonJS({
   }
 });
 
-// node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/index.js
+// node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/index.js
 var require_mailsplit = __commonJS({
-  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.15/node_modules/@zone-eu/mailsplit/index.js"(exports, module) {
+  "node_modules/.pnpm/@zone-eu+mailsplit@5.4.16/node_modules/@zone-eu/mailsplit/index.js"(exports, module) {
     "use strict";
     var MessageSplitter = require_message_splitter();
     var MessageJoiner = require_message_joiner();
@@ -48972,9 +49315,9 @@ var require_mailsplit = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/limited-passthrough.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/limited-passthrough.js
 var require_limited_passthrough = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/limited-passthrough.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var normalizeByteLimit = (value) => {
@@ -49013,9 +49356,9 @@ var require_limited_passthrough = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/limits.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/limits.js
 var require_limits = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/limits.js"(exports, module) {
     "use strict";
     var MAX_LITERAL_SIZE = 1024 * 1024 * 1024;
     var MAX_LINE_SIZE = MAX_LITERAL_SIZE;
@@ -49032,9 +49375,9 @@ var require_limits = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-stream.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-stream.js
 var require_imap_stream = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-stream.js"(exports, module) {
     "use strict";
     var Transform = __require("stream").Transform;
     var logger = require_logger();
@@ -49435,9 +49778,9 @@ var require_imap_stream = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-formal-syntax.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-formal-syntax.js
 var require_imap_formal_syntax = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-formal-syntax.js"(exports, module) {
     "use strict";
     function expandRange(start, end) {
       let chars = [];
@@ -49581,9 +49924,9 @@ var require_imap_formal_syntax = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/token-parser.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/token-parser.js
 var require_token_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/token-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { MAX_LITERAL_SIZE, normalizeLimit, createLiteralTooLargeError } = require_limits();
@@ -50150,9 +50493,9 @@ var require_token_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/parser-instance.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/parser-instance.js
 var require_parser_instance = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/parser-instance.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { TokenParser } = require_token_parser();
@@ -50346,9 +50689,9 @@ var require_parser_instance = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-parser.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-parser.js
 var require_imap_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-parser.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var { ParserInstance } = require_parser_instance();
@@ -50406,9 +50749,9 @@ var require_imap_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-compiler.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-compiler.js
 var require_imap_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-compiler.js"(exports, module) {
     "use strict";
     var imapFormalSyntax = require_imap_formal_syntax();
     var SEQ_RANGE = /^(\d+|\*)(:(\d+|\*))?$/;
@@ -50596,9 +50939,9 @@ var require_imap_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-handler.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-handler.js
 var require_imap_handler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/handler/imap-handler.js"(exports, module) {
     "use strict";
     var parser = require_imap_parser();
     var compiler = require_imap_compiler();
@@ -50609,12 +50952,12 @@ var require_imap_handler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/package.json
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/package.json
 var require_package4 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/package.json"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/package.json"(exports, module) {
     module.exports = {
       name: "imapflow",
-      version: "1.7.6",
+      version: "1.7.8",
       description: "IMAP Client for Node",
       main: "lib/imap-flow.js",
       types: "lib/imap-flow.d.ts",
@@ -50644,9 +50987,9 @@ var require_package4 = __commonJS({
       homepage: "https://imapflow.com/",
       devDependencies: {
         "@eslint/js": "10.0.1",
-        "@types/node": "26.2.0",
+        "@types/node": "26.4.0",
         c8: "12.0.0",
-        eslint: "10.9.0",
+        eslint: "10.9.1",
         "eslint-config-nodemailer": "1.2.0",
         "eslint-config-prettier": "10.1.8",
         grunt: "1.6.3",
@@ -50658,11 +51001,11 @@ var require_package4 = __commonJS({
         typescript: "7.0.2"
       },
       dependencies: {
-        "@zone-eu/mailsplit": "5.4.15",
-        "encoding-japanese": "2.2.0",
+        "@zone-eu/mailsplit": "5.4.16",
+        "encoding-japanese": "2.3.0",
         "iconv-lite": "0.7.3",
         libbase64: "1.3.0",
-        libmime: "5.4.2",
+        libmime: "5.4.3",
         libqp: "2.1.1",
         pino: "10.3.1",
         socks: "2.8.9"
@@ -52038,9 +52381,9 @@ var require_util3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/address-error.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/address-error.js
 var require_address_error = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/address-error.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/address-error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.AddressError = void 0;
@@ -52055,13 +52398,15 @@ var require_address_error = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/common.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/common.js
 var require_common = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/common.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/common.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.isInSubnet = isInSubnet;
     exports.isHostInSubnet = isHostInSubnet;
+    exports.isGloballyReachable = isGloballyReachable;
+    exports.offsetBigInt = offsetBigInt;
     exports.isCorrect = isCorrect;
     exports.prefixLengthFromMask = prefixLengthFromMask;
     exports.assertByteArray = assertByteArray;
@@ -52077,6 +52422,29 @@ var require_common = __commonJS({
     }
     function isHostInSubnet(address) {
       return this.mask(address.subnetMask) === address.mask();
+    }
+    function isGloballyReachable(entries) {
+      let best = null;
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        if (entry.reachable !== null && isHostInSubnet.call(this, entry.subnet) && (best === null || entry.subnet.subnetMask > best.subnet.subnetMask)) {
+          best = entry;
+        }
+      }
+      return best === null ? true : best.reachable;
+    }
+    function offsetBigInt(value, n, bits, family) {
+      if (typeof n === "number" && !Number.isSafeInteger(n)) {
+        throw new address_error_1.AddressError(`${family} offset must be an integer`);
+      }
+      if (typeof n !== "number" && typeof n !== "bigint") {
+        throw new address_error_1.AddressError(`${family} offset must be an integer`);
+      }
+      const result = value + BigInt(n);
+      if (result < BigInt(0) || result > (BigInt(1) << BigInt(bits)) - BigInt(1)) {
+        throw new address_error_1.AddressError(`${family} offset leaves the address space`);
+      }
+      return result;
     }
     function isCorrect(defaultBits) {
       return function isCorrectForm() {
@@ -52130,22 +52498,50 @@ var require_common = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v4/constants.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v4/constants.js
 var require_constants3 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v4/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v4/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.RE_SUBNET_STRING = exports.RE_ADDRESS = exports.GROUPS = exports.BITS = void 0;
+    exports.SPECIAL_PURPOSE = exports.RE_SUBNET_STRING = exports.RE_ADDRESS = exports.GROUPS = exports.BITS = void 0;
     exports.BITS = 32;
     exports.GROUPS = 4;
     exports.RE_ADDRESS = /^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$/g;
     exports.RE_SUBNET_STRING = /\/\d{1,2}$/;
+    exports.SPECIAL_PURPOSE = [
+      ["0.0.0.0/8", "This network", false],
+      ["0.0.0.0/32", "This host on this network", false],
+      ["10.0.0.0/8", "Private-Use", false],
+      ["100.64.0.0/10", "Shared Address Space", false],
+      ["127.0.0.0/8", "Loopback", false],
+      ["169.254.0.0/16", "Link Local", false],
+      ["172.16.0.0/12", "Private-Use", false],
+      ["192.0.0.0/24", "IETF Protocol Assignments", false],
+      ["192.0.0.0/29", "IPv4 Service Continuity Prefix", false],
+      ["192.0.0.8/32", "IPv4 dummy address", false],
+      ["192.0.0.9/32", "Port Control Protocol Anycast", true],
+      ["192.0.0.10/32", "Traversal Using Relays around NAT Anycast", true],
+      ["192.0.0.170/32", "NAT64/DNS64 Discovery", false],
+      ["192.0.0.171/32", "NAT64/DNS64 Discovery", false],
+      ["192.0.2.0/24", "Documentation (TEST-NET-1)", false],
+      ["192.31.196.0/24", "AS112-v4", true],
+      ["192.52.193.0/24", "AMT", true],
+      ["192.88.99.0/24", "Deprecated (6to4 Relay Anycast)", null],
+      ["192.88.99.2/32", "6a44-relay anycast address", false],
+      ["192.168.0.0/16", "Private-Use", false],
+      ["192.175.48.0/24", "Direct Delegation AS112 Service", true],
+      ["198.18.0.0/15", "Benchmarking", false],
+      ["198.51.100.0/24", "Documentation (TEST-NET-2)", false],
+      ["203.0.113.0/24", "Documentation (TEST-NET-3)", false],
+      ["240.0.0.0/4", "Reserved", false],
+      ["255.255.255.255/32", "Limited Broadcast", false]
+    ];
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv4.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ipv4.js
 var require_ipv4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv4.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ipv4.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52411,6 +52807,33 @@ var require_ipv4 = __commonJS({
         return _Address4.fromBigInt(this._startAddress() + adjust);
       }
       /**
+       * Returns the address `n` addresses after this one (or before, when `n` is
+       * negative), keeping this address's subnet mask. Throws `AddressError` when
+       * the result would fall outside the IPv4 address space or `n` is not an
+       * integer.
+       * @param {number | bigint} n
+       * @returns {Address4}
+       * @example
+       * new Address4('10.0.0.0/24').offset(1).correctForm(); // '10.0.0.1'
+       */
+      offset(n) {
+        return _Address4.fromBigInt(common.offsetBigInt(this.bigInt(), n, constants.BITS, "IPv4")).withSubnetMask(this.subnetMask);
+      }
+      /**
+       * Returns the network that follows this address's network: the address after
+       * {@link endAddress}, with the same subnet mask. Throws `AddressError` when
+       * this network is the last one in the address space.
+       * @returns {Address4}
+       * @example
+       * new Address4('10.0.0.0/24').nextNetwork().networkForm(); // '10.0.1.0/24'
+       */
+      nextNetwork() {
+        return _Address4.fromBigInt(common.offsetBigInt(this._endAddress(), 1, constants.BITS, "IPv4")).withSubnetMask(this.subnetMask);
+      }
+      withSubnetMask(subnetMask) {
+        return new _Address4(`${this.correctForm()}/${subnetMask}`);
+      }
+      /**
        * Helper function getting end address.
        * @returns {bigint}
        */
@@ -52588,6 +53011,43 @@ var require_ipv4 = __commonJS({
         return this.isHostInSubnet(CGNAT_V4);
       }
       /**
+       * Returns true if the address is in one of the documentation ranges
+       * `192.0.2.0/24`, `198.51.100.0/24`, or `203.0.113.0/24` ([RFC 5737](https://datatracker.ietf.org/doc/html/rfc5737)).
+       * @returns {boolean}
+       */
+      isDocumentation() {
+        return DOCUMENTATION_V4.some((subnet) => this.isHostInSubnet(subnet));
+      }
+      /**
+       * Returns true if the address is in the benchmarking range `198.18.0.0/15` ([RFC 2544](https://datatracker.ietf.org/doc/html/rfc2544)).
+       * @returns {boolean}
+       */
+      isBenchmarking() {
+        return this.isHostInSubnet(BENCHMARKING_V4);
+      }
+      /**
+       * Returns true if the address is in the reserved range `240.0.0.0/4` ([RFC 1112](https://datatracker.ietf.org/doc/html/rfc1112)),
+       * which includes the limited broadcast address.
+       * @returns {boolean}
+       */
+      isReserved() {
+        return this.isHostInSubnet(RESERVED_V4);
+      }
+      /**
+       * Returns true if the address is globally reachable: not multicast, and not
+       * in any block the [IANA IPv4 Special-Purpose Address Registry](https://www.iana.org/assignments/iana-ipv4-special-registry/)
+       * marks as not globally reachable. That covers everything the individual
+       * classifiers name (private, loopback, link-local, CGNAT, unspecified,
+       * broadcast, documentation, benchmarking, reserved) and the blocks they do
+       * not, such as `0.0.0.0/8` and the IETF protocol assignments in
+       * `192.0.0.0/24`. This is the single predicate to use where a request must
+       * not reach an internal or special-purpose destination; see SECURITY.md.
+       * @returns {boolean}
+       */
+      isGlobal() {
+        return !this.isMulticast() && common.isGloballyReachable.call(this, SPECIAL_PURPOSE_V4);
+      }
+      /**
        * Returns a zero-padded base-2 string representation of the address
        * @returns {string}
        */
@@ -52623,15 +53083,26 @@ var require_ipv4 = __commonJS({
     var UNSPECIFIED_V4 = new Address4("0.0.0.0/32");
     var BROADCAST_V4 = new Address4("255.255.255.255/32");
     var CGNAT_V4 = new Address4("100.64.0.0/10");
+    var DOCUMENTATION_V4 = [
+      new Address4("192.0.2.0/24"),
+      new Address4("198.51.100.0/24"),
+      new Address4("203.0.113.0/24")
+    ];
+    var BENCHMARKING_V4 = new Address4("198.18.0.0/15");
+    var RESERVED_V4 = new Address4("240.0.0.0/4");
+    var SPECIAL_PURPOSE_V4 = constants.SPECIAL_PURPOSE.map(([cidr, , reachable]) => ({
+      subnet: new Address4(cidr),
+      reachable
+    }));
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/constants.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/constants.js
 var require_constants4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.RE_URL_WITH_PORT = exports.RE_URL = exports.RE_ZONE_STRING = exports.RE_SUBNET_STRING = exports.RE_BAD_ADDRESS = exports.RE_BAD_CHARACTERS = exports.TYPES = exports.SCOPES = exports.GROUPS = exports.BITS = void 0;
+    exports.SPECIAL_PURPOSE = exports.RE_URL_WITH_PORT = exports.RE_URL = exports.RE_ZONE_STRING = exports.RE_SUBNET_STRING = exports.RE_BAD_ADDRESS = exports.RE_BAD_CHARACTERS = exports.TYPES = exports.SCOPES = exports.GROUPS = exports.BITS = void 0;
     exports.BITS = 128;
     exports.GROUPS = 8;
     exports.SCOPES = {
@@ -52669,8 +53140,14 @@ var require_constants4 = __commonJS({
       "ff00::/8": "Multicast",
       "fe80::/10": "Link-local unicast",
       "fc00::/7": "Unique local",
+      "2001::/32": "Teredo",
+      "2001:2::/48": "Benchmarking",
       "2002::/16": "6to4",
       "2001:db8::/32": "Documentation",
+      "3fff::/20": "Documentation",
+      "100::/64": "Discard-only",
+      "fec0::/10": "Site-local unicast (deprecated)",
+      "::/96": "IPv4-compatible (deprecated)",
       "64:ff9b::/96": "NAT64 (well-known)",
       "64:ff9b:1::/48": "NAT64 (local-use)"
     };
@@ -52680,12 +53157,39 @@ var require_constants4 = __commonJS({
     exports.RE_ZONE_STRING = /%.*$/;
     exports.RE_URL = /^(?:\[([0-9a-f:.]+)\]|([0-9a-f:.]+))(?:[/?#].*)?$/i;
     exports.RE_URL_WITH_PORT = /^\[([0-9a-f:.]+)\]:([0-9]{1,5})(?:[/?#].*)?$/i;
+    exports.SPECIAL_PURPOSE = [
+      ["::1/128", "Loopback Address", false],
+      ["::/128", "Unspecified Address", false],
+      ["::ffff:0:0/96", "IPv4-mapped Address", false],
+      ["64:ff9b::/96", "IPv4-IPv6 Translat.", true],
+      ["64:ff9b:1::/48", "IPv4-IPv6 Translat.", false],
+      ["100::/64", "Discard-Only Address Block", false],
+      ["100:0:0:1::/64", "Dummy IPv6 Prefix", false],
+      ["2001::/23", "IETF Protocol Assignments", false],
+      ["2001::/32", "TEREDO", false],
+      ["2001:1::1/128", "Port Control Protocol Anycast", true],
+      ["2001:1::2/128", "Traversal Using Relays around NAT Anycast", true],
+      ["2001:1::3/128", "DNS-SD Service Registration Protocol Anycast", true],
+      ["2001:2::/48", "Benchmarking", false],
+      ["2001:3::/32", "AMT", true],
+      ["2001:4:112::/48", "AS112-v6", true],
+      ["2001:10::/28", "Deprecated (previously ORCHID)", null],
+      ["2001:20::/28", "ORCHIDv2", true],
+      ["2001:30::/28", "Drone Remote ID Protocol Entity Tags (DETs) Prefix", true],
+      ["2001:db8::/32", "Documentation", false],
+      ["2002::/16", "6to4", false],
+      ["2620:4f:8000::/48", "Direct Delegation AS112 Service", true],
+      ["3fff::/20", "Documentation", false],
+      ["5f00::/16", "Segment Routing (SRv6) SIDs", false],
+      ["fc00::/7", "Unique-Local", false],
+      ["fe80::/10", "Link-Local Unicast", false]
+    ];
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/helpers.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/helpers.js
 var require_helpers = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/helpers.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/helpers.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.escapeHtml = escapeHtml;
@@ -52722,9 +53226,9 @@ var require_helpers = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/regular-expressions.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/regular-expressions.js
 var require_regular_expressions = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -52814,9 +53318,9 @@ var require_regular_expressions = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv6.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ipv6.js
 var require_ipv6 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ipv6.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ipv6.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -53111,26 +53615,30 @@ var require_ipv6 = __commonJS({
         return new _Address6(`::ffff:${address4.correctForm()}/${mask6}`);
       }
       /**
-       * Return an address from ip6.arpa form
+       * Return an address from ip6.arpa form. A full 32-nibble name gives a /128
+       * address; a shorter name, as used for a delegated reverse zone, gives the
+       * network it covers, with a subnet mask of four bits per nibble, so
+       * `fromArpa(x.reverseForm())` round-trips {@link reverseForm} for any prefix.
        * @param {string} arpaFormAddress - an 'ip6.arpa' form address
        * @returns {Adress6}
        * @example
        * var address = Address6.fromArpa(e.f.f.f.3.c.2.6.f.f.f.e.6.6.8.e.1.0.6.7.9.4.e.c.0.0.0.0.1.0.0.2.ip6.arpa.)
        * address.correctForm(); // '2001:0:ce49:7601:e866:efff:62c3:fffe'
+       * Address6.fromArpa('8.b.d.0.1.0.0.2.ip6.arpa.').networkForm(); // '2001:db8::/32'
        */
       static fromArpa(arpaFormAddress) {
-        let address = arpaFormAddress.replace(/(\.ip6\.arpa)?\.$/, "");
-        const semicolonAmount = 7;
-        if (address.length !== 63) {
+        const nibbles = arpaFormAddress.replace(/(\.ip6\.arpa)?\.?$/, "");
+        if (!/^[0-9a-f](\.[0-9a-f]){0,31}$/i.test(nibbles)) {
           throw new address_error_1.AddressError("Invalid 'ip6.arpa' form.");
         }
-        const parts = address.split(".").reverse();
-        for (let i = semicolonAmount; i > 0; i--) {
-          const insertIndex = i * 4;
-          parts.splice(insertIndex, 0, ":");
+        const reversed = nibbles.split(".").reverse();
+        const subnetMask = reversed.length * 4;
+        const hex = reversed.join("").padEnd(32, "0");
+        const groups = [];
+        for (let i = 0; i < constants6.GROUPS; i++) {
+          groups.push(hex.slice(i * 4, (i + 1) * 4));
         }
-        address = parts.join("");
-        return new _Address6(address);
+        return new _Address6(`${groups.join(":")}/${subnetMask}`);
       }
       /**
        * Return the Microsoft UNC transcription of the address
@@ -53194,21 +53702,52 @@ var require_ipv6 = __commonJS({
         return BigInt(`0b${this.mask() + "1".repeat(constants6.BITS - this.subnetMask)}`);
       }
       /**
-       * The last address in the range given by this address' subnet
-       * Often referred to as the Broadcast
+       * The last address in the range given by this address's subnet. IPv6 has
+       * no broadcast address, so this is an ordinary assignable address (in a
+       * 64-bit-interface-identifier subnet it falls inside the reserved
+       * subnet-anycast block of [RFC 2526](https://datatracker.ietf.org/doc/html/rfc2526)).
        * @returns {Address6}
        */
       endAddress() {
         return _Address6.fromBigInt(this._endAddress());
       }
       /**
-       * The last host address in the range given by this address's subnet ie
-       * the last address prior to the Broadcast Address
+       * The address one before {@link endAddress}. This is the IPv6 counterpart
+       * of the IPv4 method that skips the broadcast address; IPv6 has no broadcast,
+       * so it drops exactly one address and does not model the 128 reserved
+       * subnet-anycast identifiers of [RFC 2526](https://datatracker.ietf.org/doc/html/rfc2526).
        * @returns {Address6}
        */
       endAddressExclusive() {
         const adjust = BigInt("1");
         return _Address6.fromBigInt(this._endAddress() - adjust);
+      }
+      /**
+       * Returns the address `n` addresses after this one (or before, when `n` is
+       * negative), keeping this address's subnet mask. Throws `AddressError` when
+       * the result would fall outside the IPv6 address space or `n` is not an
+       * integer.
+       * @param {number | bigint} n
+       * @returns {Address6}
+       * @example
+       * new Address6('2001:db8::/64').offset(1).correctForm(); // '2001:db8::1'
+       */
+      offset(n) {
+        return _Address6.fromBigInt(common.offsetBigInt(this.bigInt(), n, constants6.BITS, "IPv6")).withSubnetMask(this.subnetMask);
+      }
+      /**
+       * Returns the network that follows this address's network: the address after
+       * {@link endAddress}, with the same subnet mask. Throws `AddressError` when
+       * this network is the last one in the address space.
+       * @returns {Address6}
+       * @example
+       * new Address6('2001:db8::/64').nextNetwork().networkForm(); // '2001:db8:0:1::/64'
+       */
+      nextNetwork() {
+        return _Address6.fromBigInt(common.offsetBigInt(this._endAddress(), 1, constants6.BITS, "IPv6")).withSubnetMask(this.subnetMask);
+      }
+      withSubnetMask(subnetMask) {
+        return new _Address6(`${this.correctForm()}/${subnetMask}`);
       }
       /**
        * The hex form of the subnet mask, e.g. `ffff:ffff:ffff:ffff::` for a
@@ -53733,7 +54272,10 @@ var require_ipv6 = __commonJS({
         return this.addressMinusSuffix === this.canonicalForm();
       }
       /**
-       * Returns true if the address is a link local address, false otherwise
+       * Returns true if the address is a link-local unicast address in `fe80::/10`
+       * ([RFC 4291 §2.4](https://datatracker.ietf.org/doc/html/rfc4291#section-2.4))
+       * or an IPv4-mapped / NAT64 address whose embedded IPv4 address is link-local
+       * (`169.254.0.0/16`, e.g. `::ffff:169.254.169.254`), false otherwise.
        * @returns {boolean}
        */
       isLinkLocal() {
@@ -53741,10 +54283,7 @@ var require_ipv6 = __commonJS({
         if (embedded) {
           return embedded.isLinkLocal();
         }
-        if (this.getBitsBase2(0, 64) === "1111111010000000000000000000000000000000000000000000000000000000") {
-          return true;
-        }
-        return false;
+        return this.isHostInSubnet(LINK_LOCAL_SUBNET);
       }
       /**
        * Returns true if the address is a multicast address, false otherwise
@@ -53836,12 +54375,20 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Returns true if the address is private, i.e. a Unique Local Address in
-       * `fc00::/7` ([RFC 4193](https://datatracker.ietf.org/doc/html/rfc4193)) or an
-       * IPv4-mapped / NAT64 address whose embedded IPv4 address is in one of the
-       * [RFC 1918](https://datatracker.ietf.org/doc/html/rfc1918) private ranges
-       * (e.g. `::ffff:10.0.0.1`). This is the IPv6 counterpart to
+       * `fc00::/7` ([RFC 4193](https://datatracker.ietf.org/doc/html/rfc4193)), an
+       * address in the NAT64 local-use range `64:ff9b:1::/48`
+       * ([RFC 8215](https://datatracker.ietf.org/doc/html/rfc8215)), or an
+       * IPv4-mapped / NAT64 well-known address whose embedded IPv4 address is in
+       * one of the [RFC 1918](https://datatracker.ietf.org/doc/html/rfc1918)
+       * private ranges (e.g. `::ffff:10.0.0.1`). This is the IPv6 counterpart to
        * {@link Address4.isPrivate}; use it instead of {@link isULA} when you need to
        * catch mapped RFC 1918 addresses as well as native ULAs.
+       *
+       * The local-use NAT64 range is reported private as a whole rather than by
+       * its embedded IPv4 address: an operator may carve a prefix of any RFC 6052
+       * length out of `64:ff9b:1::/48`, so the same bits decode to different IPv4
+       * addresses under different deployments and no single decoding is correct.
+       * Use {@link toAddress4Nat64} with the deployment's prefix to decode one.
        * @returns {boolean}
        */
       isPrivate() {
@@ -53849,7 +54396,7 @@ var require_ipv6 = __commonJS({
         if (embedded) {
           return embedded.isPrivate();
         }
-        return this.isULA();
+        return this.isULA() || this.isHostInSubnet(NAT64_LOCAL_USE_SUBNET);
       }
       /**
        * Returns true if the address is an IPv4-mapped / NAT64 address whose embedded
@@ -53897,7 +54444,48 @@ var require_ipv6 = __commonJS({
        * @returns {boolean}
        */
       isDocumentation() {
-        return this.isHostInSubnet(DOCUMENTATION_SUBNET);
+        return DOCUMENTATION_SUBNETS.some((subnet) => this.isHostInSubnet(subnet));
+      }
+      /**
+       * Returns true if the address is in the benchmarking range `2001:2::/48`
+       * ([RFC 5180](https://datatracker.ietf.org/doc/html/rfc5180)) or is an
+       * IPv4-mapped / NAT64 address whose embedded IPv4 address is in
+       * `198.18.0.0/15`, false otherwise.
+       * @returns {boolean}
+       */
+      isBenchmarking() {
+        const embedded = this.embeddedIPv4();
+        if (embedded) {
+          return embedded.isBenchmarking();
+        }
+        return this.isHostInSubnet(BENCHMARKING_SUBNET);
+      }
+      /**
+       * Returns true if the address is globally reachable: inside the global
+       * unicast allocation `2000::/3` (the only range the [IANA IPv6 Address Space
+       * Registry](https://www.iana.org/assignments/ipv6-address-space/) assigns
+       * for global unicast; everything else is reserved, ULA, link-local, or
+       * multicast) and not in any block the [IANA IPv6 Special-Purpose Address Registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+       * marks as not globally reachable. An IPv4-mapped or NAT64 well-known
+       * address answers for its embedded IPv4 address, so `::ffff:10.0.0.1` and
+       * `64:ff9b::7f00:1` are not global. Teredo (`2001::/32`) and 6to4
+       * (`2002::/16`) are not global either: the registry lists them as N/A and a
+       * packet to one needs a relay.
+       *
+       * This covers everything the individual classifiers name and the blocks they
+       * do not: the discard-only prefix `100::/64`, the IETF protocol assignments
+       * in `2001::/23`, the deprecated site-local `fec0::/10` and IPv4-compatible
+       * `::/96` ranges, and unallocated space such as `4000::/3`. It is the single
+       * predicate to use where a request must not reach an internal or
+       * special-purpose destination; see SECURITY.md.
+       * @returns {boolean}
+       */
+      isGlobal() {
+        const embedded = this.embeddedIPv4();
+        if (embedded) {
+          return embedded.isGlobal();
+        }
+        return this.isHostInSubnet(GLOBAL_UNICAST_SUBNET) && common.isGloballyReachable.call(this, SPECIAL_PURPOSE_V6);
       }
       // #endregion
       // #region HTML
@@ -54045,15 +54633,23 @@ var require_ipv6 = __commonJS({
     var TEREDO_SUBNET = new Address6("2001::/32");
     var SIX_TO_FOUR_SUBNET = new Address6("2002::/16");
     var ULA_SUBNET = new Address6("fc00::/7");
-    var DOCUMENTATION_SUBNET = new Address6("2001:db8::/32");
+    var LINK_LOCAL_SUBNET = new Address6("fe80::/10");
+    var DOCUMENTATION_SUBNETS = [new Address6("2001:db8::/32"), new Address6("3fff::/20")];
+    var BENCHMARKING_SUBNET = new Address6("2001:2::/48");
+    var GLOBAL_UNICAST_SUBNET = new Address6("2000::/3");
+    var SPECIAL_PURPOSE_V6 = constants6.SPECIAL_PURPOSE.map(([cidr, , reachable]) => ({
+      subnet: new Address6(cidr),
+      reachable
+    }));
     var IPV4_MAPPED_SUBNET = new Address6("::ffff:0:0/96");
     var NAT64_WELL_KNOWN_SUBNET = new Address6("64:ff9b::/96");
+    var NAT64_LOCAL_USE_SUBNET = new Address6("64:ff9b:1::/48");
   }
 });
 
-// node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ip-address.js
+// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ip-address.js
 var require_ip_address = __commonJS({
-  "node_modules/.pnpm/ip-address@10.5.0/node_modules/ip-address/dist/ip-address.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ip-address.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -54960,9 +55556,9 @@ var require_build = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/connection-deadline.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/connection-deadline.js
 var require_connection_deadline = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/connection-deadline.js"(exports, module) {
     "use strict";
     var CONNECT_TIMEOUT = 90 * 1e3;
     var ConnectionDeadline = class {
@@ -55043,9 +55639,9 @@ var require_connection_deadline = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/proxy-connection.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/proxy-connection.js
 var require_proxy_connection = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/proxy-connection.js"(exports, module) {
     "use strict";
     var { SocksClient } = require_build();
     var dns = __require("dns").promises;
@@ -55328,9 +55924,9 @@ var require_proxy_connection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/charsets.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/charsets.js
 var require_charsets2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/charsets.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/charsets.js"(exports, module) {
     "use strict";
     var CHARACTER_SETS = [
       "US-ASCII",
@@ -55607,9 +56203,9 @@ var require_charsets2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/jp-decoder.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/jp-decoder.js
 var require_jp_decoder = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/jp-decoder.js"(exports, module) {
     "use strict";
     var { Transform } = __require("stream");
     var encodingJapanese = require_src();
@@ -55673,9 +56269,9 @@ var require_jp_decoder = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/tools.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/tools.js
 var require_tools2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/tools.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/tools.js"(exports, module) {
     "use strict";
     var libmime = require_libmime();
     var { resolveCharset } = require_charsets2();
@@ -56880,9 +57476,9 @@ var require_tools2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/id.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/id.js
 var require_id2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/id.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/id.js"(exports, module) {
     "use strict";
     var { formatDateTime } = require_tools2();
     module.exports = async (connection, clientInfo) => {
@@ -56932,9 +57528,9 @@ var require_id2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/capability.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/capability.js
 var require_capability = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/capability.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.capabilities.size && !connection.expectCapabilityUpdate) {
@@ -56953,9 +57549,9 @@ var require_capability = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/namespace.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/namespace.js
 var require_namespace = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/namespace.js"(exports, module) {
     "use strict";
     var { hasCapability, getStringList } = require_tools2();
     module.exports = async (connection) => {
@@ -57061,9 +57657,9 @@ var require_namespace = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/login.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/login.js
 var require_login = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/login.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/login.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     module.exports = async (connection, username, password) => {
@@ -57092,9 +57688,9 @@ var require_login = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/logout.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/logout.js
 var require_logout = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/logout.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state === connection.states.LOGOUT) {
@@ -57126,9 +57722,9 @@ var require_logout = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/starttls.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/starttls.js
 var require_starttls = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/starttls.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("STARTTLS") || connection.secureConnection) {
@@ -57148,9 +57744,9 @@ var require_starttls = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/status-fields.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/status-fields.js
 var require_status_fields = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/status-fields.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/status-fields.js"(exports, module) {
     "use strict";
     var { parseBigIntValue, parseUintValue, MAX_UINT32_DIGITS } = require_tools2();
     var uint32 = (value) => parseUintValue(value, MAX_UINT32_DIGITS);
@@ -57193,9 +57789,9 @@ var require_status_fields = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/special-use.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/special-use.js
 var require_special_use = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/special-use.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/special-use.js"(exports, module) {
     "use strict";
     var GENERIC_TOKENS = new Set(
       [
@@ -58072,9 +58668,9 @@ var require_special_use = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/list.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/list.js
 var require_list = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/list.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/list.js"(exports, module) {
     "use strict";
     var {
       decodePath,
@@ -58419,9 +59015,9 @@ var require_list = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/enable.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/enable.js
 var require_enable = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/enable.js"(exports, module) {
     "use strict";
     var { hasCapability } = require_tools2();
     module.exports = async (connection, extensionList) => {
@@ -58468,9 +59064,9 @@ var require_enable = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/select.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/select.js
 var require_select = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/select.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/select.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError, parseBigIntValue, parseUintValue, getStringList, MAX_UINT32_DIGITS } = require_tools2();
     var VALUED_RESPONSE_CODES = Object.assign(/* @__PURE__ */ Object.create(null), {
@@ -58653,9 +59249,9 @@ var require_select = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/fetch.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/fetch.js
 var require_fetch2 = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/fetch.js"(exports, module) {
     "use strict";
     var { formatMessageResponse, isRev2Active } = require_tools2();
     module.exports = async (connection, range, query, options) => {
@@ -58840,9 +59436,9 @@ var require_fetch2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/create.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/create.js
 var require_create = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/create.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/create.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, getStatusCode, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58899,9 +59495,9 @@ var require_create = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/delete.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/delete.js
 var require_delete = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/delete.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -58929,9 +59525,9 @@ var require_delete = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/rename.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/rename.js
 var require_rename = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/rename.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path, newPath) => {
@@ -58964,9 +59560,9 @@ var require_rename = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/close.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/close.js
 var require_close = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/close.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/close.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (connection.state !== connection.states.SELECTED) {
@@ -58992,9 +59588,9 @@ var require_close = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/subscribe.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/subscribe.js
 var require_subscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/subscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -59016,9 +59612,9 @@ var require_subscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/unsubscribe.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/unsubscribe.js
 var require_unsubscribe = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/unsubscribe.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError } = require_tools2();
     module.exports = async (connection, path) => {
@@ -59040,9 +59636,9 @@ var require_unsubscribe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/store.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/store.js
 var require_store = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/store.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/store.js"(exports, module) {
     "use strict";
     var { formatFlag, canUseFlag, enhanceCommandError } = require_tools2();
     module.exports = async (connection, range, flags, options) => {
@@ -59104,9 +59700,9 @@ var require_store = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/search-compiler.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/search-compiler.js
 var require_search_compiler = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/search-compiler.js"(exports, module) {
     "use strict";
     var { formatDate, formatFlag, canUseFlag, toValidDate, isRev2Active } = require_tools2();
     var setBoolOpt = (attributes, term, value) => {
@@ -59438,9 +60034,9 @@ var require_search_compiler = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/search.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/search.js
 var require_search = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/search.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/search.js"(exports, module) {
     "use strict";
     var {
       enhanceCommandError,
@@ -59665,9 +60261,9 @@ var require_search = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/noop.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/noop.js
 var require_noop = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/noop.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       try {
@@ -59682,9 +60278,9 @@ var require_noop = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/expunge.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/expunge.js
 var require_expunge = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/expunge.js"(exports, module) {
     "use strict";
     var { enhanceCommandError, hasCapability, parseBigIntValue } = require_tools2();
     module.exports = async (connection, range, options) => {
@@ -59718,9 +60314,9 @@ var require_expunge = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/append.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/append.js
 var require_append = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/append.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/append.js"(exports, module) {
     "use strict";
     var {
       formatFlag,
@@ -59835,9 +60431,9 @@ var require_append = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/status.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/status.js
 var require_status = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/status.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/status.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, buildStatusQueryAttributes, isRev2Active } = require_tools2();
     var { parseStatusList } = require_status_fields();
@@ -59913,9 +60509,9 @@ var require_status = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/copyuid-parser.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/copyuid-parser.js
 var require_copyuid_parser = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/copyuid-parser.js"(exports, module) {
     "use strict";
     var { expandRange, parseBigIntValue } = require_tools2();
     function parseCopyUid(response, map) {
@@ -59938,9 +60534,9 @@ var require_copyuid_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/copy.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/copy.js
 var require_copy = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/copy.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -59970,9 +60566,9 @@ var require_copy = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/move.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/move.js
 var require_move = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/move.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/move.js"(exports, module) {
     "use strict";
     var { normalizePath, encodePath, enhanceCommandError, hasCapability } = require_tools2();
     var { parseCopyUid } = require_copyuid_parser();
@@ -60013,9 +60609,9 @@ var require_move = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/compress.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/compress.js
 var require_compress = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/compress.js"(exports, module) {
     "use strict";
     module.exports = async (connection) => {
       if (!connection.capabilities.has("COMPRESS=DEFLATE") || connection._inflate) {
@@ -60042,9 +60638,9 @@ var require_compress = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/quota.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/quota.js
 var require_quota = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/quota.js"(exports, module) {
     "use strict";
     var { encodePath, normalizePath, enhanceCommandError, parseUintValue, isUnsafeKey } = require_tools2();
     module.exports = async (connection, path) => {
@@ -60133,9 +60729,9 @@ var require_quota = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/idle.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/idle.js
 var require_idle = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/idle.js"(exports, module) {
     "use strict";
     var { guardedPromise, hasCapability, logConnectionError, restampConnectionError, unrefTimer } = require_tools2();
     var NOOP_INTERVAL = 2 * 60 * 1e3;
@@ -60379,9 +60975,9 @@ var require_idle = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/authenticate.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/authenticate.js
 var require_authenticate = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/commands/authenticate.js"(exports, module) {
     "use strict";
     var { getStatusCode, getErrorText } = require_tools2();
     async function handleAuthError(err, errorResponse2) {
@@ -60525,9 +61121,9 @@ var require_authenticate = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/imap-commands.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/imap-commands.js
 var require_imap_commands = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/imap-commands.js"(exports, module) {
     "use strict";
     module.exports = /* @__PURE__ */ new Map([
       ["ID", require_id2()],
@@ -60562,9 +61158,9 @@ var require_imap_commands = __commonJS({
   }
 });
 
-// node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/imap-flow.js
+// node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/imap-flow.js
 var require_imap_flow = __commonJS({
-  "node_modules/.pnpm/imapflow@1.7.6/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
+  "node_modules/.pnpm/imapflow@1.7.8/node_modules/imapflow/lib/imap-flow.js"(exports, module) {
     "use strict";
     var tls = __require("tls");
     var net = __require("net");
@@ -63547,22 +64143,19 @@ var require_imap_flow = __commonJS({
             if (writeChunk(chunk2) === false) {
               try {
                 await new Promise((resolve3, reject) => {
-                  let resolved = false;
                   const finish = (err) => {
-                    if (resolved) return;
-                    resolved = true;
-                    stream.removeAllListeners("drain");
-                    stream.removeAllListeners("error");
-                    stream.removeAllListeners("close");
+                    for (let event of ["drain", "error", "close"]) {
+                      stream.removeListener(event, finish);
+                    }
                     if (err) {
                       reject(err);
                     } else {
                       resolve3();
                     }
                   };
-                  stream.once("drain", () => finish());
-                  stream.once("error", (err) => finish(err));
-                  stream.once("close", () => finish());
+                  stream.once("drain", finish);
+                  stream.once("error", finish);
+                  stream.once("close", finish);
                 });
               } catch (err) {
                 if (!fetchAborted) {
@@ -63602,7 +64195,7 @@ var require_imap_flow = __commonJS({
             if (!fetchAborted && stream && !stream.destroyed) {
               stream.end();
             }
-          });
+          }).catch((err) => this.log.error({ msg: "Failed to fail the download stream", err, cid: this.id }));
         };
         setImmediate(() => {
           let writeResult;
