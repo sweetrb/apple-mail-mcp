@@ -211,8 +211,26 @@ function sleep(ms: number): void {
  * REPLACED — so `isPermError` was unreachable, a genuine denial reported
  * `passed: true`, and the early `healthy: false` return never fired. The check
  * shared a NAME with the real thing but not a code path.
+ *
+ * The same constant then went locale-fragile (#218). macOS emits the refusal in
+ * the SYSTEM LANGUAGE, so an en_GB/en_AU/en_IE Mac says "Not authorised to send
+ * Apple events to Mail. (-1743)" — the British spelling an American-only
+ * `not authorized` cannot match. `isPermissionDenied` returned false, so
+ * `healthCheck` reported `permissions: ok` and fell through to the accounts
+ * probe ("No Mail accounts found. Set up an account in Mail.app first."), and
+ * `parseErrorMessage` never normalised the refusal either — leaving every tool
+ * in the server with raw AppleScript text and no remediation to offer.
+ *
+ * DO NOT "simplify" the `(-1743)` alternative away. It is `errAEEventNotPermitted`,
+ * the OSStatus AppleScript emits alongside the message REGARDLESS OF SYSTEM
+ * LANGUAGE, and it is the only part of a fully localised refusal ("Non autorisé
+ * à envoyer des événements Apple à Mail. (-1743)") that any English regex can
+ * ever match. `not author(?:i[sz])ed` only buys us the English locales; the
+ * OSStatus is what makes this check locale-independent. See `parseErrorMessage`
+ * for why the OSStatus must be tested against the RAW osascript output.
  */
-export const PERMISSION_DENIED_PATTERN = /not authorized|not permitted|access.*denied/i;
+export const PERMISSION_DENIED_PATTERN =
+  /not author(?:i[sz])ed|not permitted|access.*denied|\(-1743\)/i;
 
 /** The normalised text a permission failure is reported to callers as. */
 export const PERMISSION_DENIED_MESSAGE =
@@ -301,6 +319,17 @@ function parseErrorMessage(errorOutput: string): string {
   const executionError = errorOutput.match(/execution error: (.+?)(?:\s*\(-?\d+\))?$/m);
   if (executionError) {
     coreError = executionError[1].trim();
+  }
+
+  // The OSStatus is NOT part of `coreError`: the execution-error regex above
+  // strips a trailing "(-1743)" while extracting the human-readable half. Test
+  // the RAW output so a fully localised refusal — where the OSStatus is the only
+  // matchable token — is still normalised into actionable remediation instead of
+  // being handed to the user as untranslated AppleScript text. Hoisted rather
+  // than folded into the loop because permission denial is already
+  // ERROR_MAPPINGS[0], so this preserves that priority exactly. (#218)
+  if (PERMISSION_DENIED_PATTERN.test(errorOutput)) {
+    return PERMISSION_DENIED_MESSAGE;
   }
 
   // Try to match against known error patterns for user-friendly messages

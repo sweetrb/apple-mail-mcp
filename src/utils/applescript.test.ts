@@ -11,6 +11,7 @@ import {
   executeAppleScript,
   isPermissionDenied,
   PERMISSION_DENIED_MESSAGE,
+  PERMISSION_DENIED_PATTERN,
 } from "./applescript.js";
 
 // Mock the child_process module
@@ -530,10 +531,50 @@ describe("permission-denied classification", () => {
     // This is what a caller actually receives, and it contains none of the raw
     // substrings — which is exactly why the old string test could never match.
     expect(PERMISSION_DENIED_MESSAGE).not.toMatch(/not authorized|not permitted/i);
+    // Widening the pattern for #218 must not accidentally make the normalised
+    // message self-matching: it still shares NO raw marker — not the British
+    // spelling, not the OSStatus — so `isPermissionDenied` can only be reaching
+    // `true` below via the explicit `.includes(PERMISSION_DENIED_MESSAGE)`
+    // branch. That is the whole point of the original assertion; keep it true.
+    expect(PERMISSION_DENIED_MESSAGE).not.toMatch(/not author(?:i[sz])ed|\(-1743\)/i);
+    expect(PERMISSION_DENIED_PATTERN.test(PERMISSION_DENIED_MESSAGE)).toBe(false);
     expect(isPermissionDenied(PERMISSION_DENIED_MESSAGE)).toBe(true);
     expect(isPermissionDenied(`Permission check returned: ${PERMISSION_DENIED_MESSAGE}`)).toBe(
       true
     );
+  });
+
+  // #218 (@jarrah31): macOS emits the refusal in the SYSTEM language. The
+  // pattern only knew the American spelling, so on an en_GB/en_AU/en_IE Mac
+  // `isPermissionDenied` returned false — `healthCheck` then reported
+  // `permissions: ok` and blamed missing accounts, and `parseErrorMessage`
+  // handed the user raw AppleScript with no remediation.
+  it("classifies the en-GB/en-AU/en-IE spelling 'Not authorised'", () => {
+    expect(isPermissionDenied("Not authorised to send Apple events to Mail. (-1743)")).toBe(true);
+    expect(
+      isPermissionDenied("27:44: execution error: Not authorised to send Apple events to Mail.")
+    ).toBe(true);
+    // Both spellings, one pattern — the American form must not regress.
+    expect(isPermissionDenied("Not authorized to send Apple events to Mail.")).toBe(true);
+  });
+
+  it("classifies a FULLY LOCALISED refusal on the OSStatus alone", () => {
+    // No English substring to match here. -1743 is errAEEventNotPermitted,
+    // which AppleScript emits regardless of system language — it is the only
+    // token an English regex can ever catch on a fr/de/es Mac.
+    expect(isPermissionDenied("Non autorisé à envoyer des événements Apple à Mail. (-1743)")).toBe(
+      true
+    );
+    expect(isPermissionDenied("Nicht berechtigt, Apple-Events an Mail zu senden. (-1743)")).toBe(
+      true
+    );
+    expect(isPermissionDenied("No autorizado para enviar eventos Apple a Mail. (-1743)")).toBe(
+      true
+    );
+    // Sanity: it really is the OSStatus doing the work, not stray English.
+    expect(
+      PERMISSION_DENIED_PATTERN.test("Non autorisé à envoyer des événements Apple à Mail.")
+    ).toBe(false);
   });
 
   it("does not fire on unrelated errors", () => {
@@ -541,5 +582,62 @@ describe("permission-denied classification", () => {
     expect(isPermissionDenied("")).toBe(false);
     expect(isPermissionDenied("Mail.app is not responding.")).toBe(false);
     expect(isPermissionDenied("Message not found")).toBe(false);
+    // A different OSStatus must not be swept up by the -1743 alternative.
+    expect(isPermissionDenied('Can\'t get message 1 of mailbox "INBOX". (-1728)')).toBe(false);
+  });
+});
+
+describe("permission-denied normalisation across locales", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * The SECOND consequence @jarrah31 traced in #218: PERMISSION_DENIED_PATTERN
+   * is also ERROR_MAPPINGS[0], so a locale the pattern misses is a locale
+   * `parseErrorMessage` never normalises — meaning no tool anywhere in the
+   * server tells that user to grant Automation access. They get raw osascript
+   * text and no remediation.
+   */
+  const expectNormalised = (rawStderr: string) => {
+    mockExecSync.mockImplementation(() => {
+      throw new Error(rawStderr);
+    });
+    const result = executeAppleScript('tell application "Mail" to get name of account 1');
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(PERMISSION_DENIED_MESSAGE);
+    // A denial is not transient: it must not burn the retry budget.
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+  };
+
+  it("normalises the en-GB refusal to the remediation message", () => {
+    expectNormalised(
+      "Command failed: osascript -e '...'\n27:44: execution error: Not authorised to send Apple events to Mail. (-1743)"
+    );
+  });
+
+  it("normalises the American refusal to the remediation message", () => {
+    expectNormalised(
+      "Command failed: osascript -e '...'\n27:44: execution error: Not authorized to send Apple events to Mail. (-1743)"
+    );
+  });
+
+  it("normalises a fully localised refusal via the OSStatus", () => {
+    // Regression guard for a subtlety that would otherwise make the -1743
+    // alternative dead code here: parseErrorMessage's execution-error regex
+    // STRIPS the trailing "(-1743)" when extracting the core message, so the
+    // OSStatus must be tested against the raw output, not the parsed core.
+    expectNormalised(
+      "Command failed: osascript -e '...'\n27:44: execution error: Non autorisé à envoyer des événements Apple à Mail. (-1743)"
+    );
+  });
+
+  it("leaves unrelated AppleScript errors alone", () => {
+    mockExecSync.mockImplementation(() => {
+      throw new Error('27:44: execution error: Can\'t get mailbox "Nope". (-1728)');
+    });
+    const result = executeAppleScript('tell application "Mail" to get mailbox "Nope"');
+    expect(result.error).not.toBe(PERMISSION_DENIED_MESSAGE);
+    expect(result.error).toMatch(/not found/i);
   });
 });

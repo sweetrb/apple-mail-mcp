@@ -1901,6 +1901,13 @@ In a JSON string literal, `\\` — two characters — denotes **one** literal ba
 - macOS needs automation permission
 - Go to System Settings > Privacy & Security > Automation
 - Ensure your terminal/Claude has permission to control Mail
+- **On a Mac that isn't set to US English**, macOS words this refusal in the system
+  language — `Not authorised to send Apple events to Mail. (-1743)` on en-GB/en-AU/en-IE,
+  and fully translated on fr/de/es. Before **v2.17.10** the server didn't recognise
+  those spellings, so `health-check`/`doctor` reported `permissions: ok` and then blamed
+  missing accounts (*"No Mail accounts found. Set up an account in Mail.app first."*).
+  If you see that on a Mac whose Mail accounts are already configured, upgrade and
+  re-run `doctor`.
 
 ### "Message not found"
 - Message may have been deleted or moved
