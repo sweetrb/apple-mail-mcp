@@ -60,7 +60,18 @@ overrides:
   # the 24h minimumReleaseAge soak — it missed by 41 minutes. No
   # minimumReleaseAgeExclude carve-out was ever added; the soak is the point.
   # It matured at 2026-08-04T02:36:40Z and is floored here now.
-  hono: ^4.12.34
+  # 2026-09-09: three further advisories, all fixed in 4.13.5 (vulnerable range
+  # < 4.13.5) — GHSA-gqvv-2mrq-wpjv (incomplete fix for CVE-2026-39408: toSSG()
+  # still writes files outside the output directory), GHSA-g6gw-c38x-mqfc
+  # (unbounded dot-notation nesting in parseBody() -> memory exhaustion), and
+  # GHSA-crvj-82cr-hjcx (the query parser reads parameters after the URL
+  # fragment -> cache-key / proxy interpretation differentials). Reached via
+  # @modelcontextprotocol/sdk -> @hono/node-server, and NOT in the shipped
+  # bundle: the HTTP transports are tree-shaken out of this stdio server.
+  # Floor raised ^4.12.34 -> ^4.13.5. 4.13.6/4.13.7 (published 2026-09-04) are
+  # still inside the 7-day soak above, so resolution lands on 4.13.5 — expected,
+  # not a stale floor. Still a caret floor, never an exact pin (see fast-uri).
+  hono: ^4.13.5
   # GHSA-5p4m-2wfm-xmqj (high): quadratic CPU consumption resolving !!omap,
   # fixed in 4.3.1 — the CVE-2026-59870 fix was never backported to the 3.x line.
   # This entry already existed as `^4.2.0`, a floor for an earlier advisory, and
@@ -68,7 +79,12 @@ overrides:
   # protects against, because the caret only stops the tree going *backwards*.
   # Dev scope (js-yaml reaches the tree via eslint) and absent from the shipped
   # bundle, so nothing vulnerable was published.
-  js-yaml: ^4.3.1
+  # 2026-09-09: GHSA-2883-xcg3-v3hh (vulnerable range >= 4.0.0 < 4.3.2) —
+  # maxTotalMergeKeys does not bound CPU use for empty merge sources, fixed in
+  # 4.3.2. Same reachability chain (eslint -> @eslint/eslintrc -> js-yaml),
+  # still development scope only and still absent from the shipped bundle.
+  # Floor raised ^4.3.1 -> ^4.3.2.
+  js-yaml: ^4.3.2
   # GHSA-fxqj-rqcc-2cmp (moderate): incomplete fix of GHSA-6g55-p6wh-862q — an
   # attacker-controlled sourceMappingURL can read arbitrary .map files when `from`
   # is unset. Patched in 8.5.23. This floor read `^8.5.15` — below the fix — so it
