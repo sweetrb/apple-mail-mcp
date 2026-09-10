@@ -4317,12 +4317,31 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             ? `${this.countFragment("_cb")}${this.snapshotFragment("before", acctLit, mbLit, "_cb")}`
             : ""
         }
+          -- WARNING: "whose id is N" is NOT an exact match -- Mail ROUNDS.
+          -- Measured on Mail 2026-09-10 against a real store: "whose id is
+          -- 78364.6" resolves to id 78365, a DIFFERENT, ADJACENT message that
+          -- was never asked for (78364.0-.5 -> 78364, 78364.6-.0 -> 78365). So
+          -- an id reaching AppleScript with the slightest imprecision does not
+          -- fail; it silently selects a neighbour, and this loop then DELETES
+          -- or MOVES it. That is exactly the #155 residual: "two adjacent
+          -- messages that were NOT in the id list got deleted instead."
+          --
+          -- Reachable whenever an id survives JS's 2^53 safe-integer range or
+          -- renders in exponential form -- both change the value before Mail
+          -- sees it. Rather than enumerate those paths, refuse to act on any
+          -- message whose OWN id is not the one requested: a mis-resolution
+          -- becomes a safe notfound instead of a wrong-message mutation.
+          -- Compared numerically, never as strings -- see canonicalNumericId
+          -- for why the string forms cannot be trusted.
+          --
+          -- NB: no backticks anywhere in this comment. A backtick inside an
+          -- AppleScript comment terminates the enclosing TS template literal.
           repeat with _k from 1 to (count of _gids)
             set _idx to item _k of _gpos
             set _pre to ""
             try
               set _m to (messages of _tmb whose id is (item _k of _gids))
-              if (count of _m) > 0 then
+              if (count of _m) > 0 and ((id of (item 1 of _m)) is (item _k of _gids)) then
                 set _msg to item 1 of _m${pre}
                 ${operation}
                 set _out to _out & (_idx as string) & "${FIELD_SEP}ok" & _pre & "${RECORD_SEP}"
@@ -4362,7 +4381,7 @@ ${this.errorEmit("              ")}
             repeat with _k from 1 to _ucount
               try
                 set _m to (messages of mb whose id is (item _k of _uids))
-                if (count of _m) > 0 then
+                if (count of _m) > 0 and ((id of (item 1 of _m)) is (item _k of _uids)) then
                   set item _k of _uhit to ((item _k of _uhit) + 1)
                   if (item _k of _uhit) is 1 then set item _k of _umsg to (item 1 of _m)
                   set item _k of _unames to ((item _k of _unames) & (name of acct) & "/" & (name of mb) & ", ")

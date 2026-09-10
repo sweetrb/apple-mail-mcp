@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [2.18.1] - 2026-09-10
+
+### Fixed
+- By-id batch and single mutations now verify that the message AppleScript
+  resolved is actually the one requested, before deleting or moving it.
+  `whose id is N` is **not an exact match** — Mail *rounds*. Measured against a
+  real store on 2026-09-10: `whose id is 78364.6` resolves to id **78365**, a
+  different, adjacent message. So an id that reaches AppleScript with any
+  imprecision does not fail; it silently selects a neighbour, and the walk then
+  mutates it. Both resolution sites — the mailbox-scoped path and the unscoped
+  fallback walk — now compare the resolved message's own id against the
+  requested one and report `notfound` on a mismatch instead of acting.
+  Defence in depth for the still-unexplained #155 residual (messages whose ids
+  were never passed being affected); it makes that class of mis-resolution a
+  safe no-op rather than a wrong-message delete. **It is not a diagnosis of
+  #155**, which remains open pending the reporter's data.
+
 ## [2.18.0] - 2026-09-10
 
 ### Added
