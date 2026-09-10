@@ -17,6 +17,14 @@
  */
 
 import nodemailer from "nodemailer";
+// Deep import: nodemailer does not expose the raw RFC822 bytes it actually
+// sent through the Promise `sendMail` resolves to, so the only way to obtain
+// them for a Sent-folder copy (#220) is to independently compose the same
+// mail options with the same internal class nodemailer itself composes with.
+// `keepBcc` preserves the Bcc header in this copy on purpose: unlike the wire
+// copy the recipients see, the sender's own Sent-folder archive is exactly
+// where they need to see who was Bcc'd.
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { execFileSync } from "child_process";
 import type { AttachmentInput } from "@/types.js";
 import { decodeInlineAttachment } from "@/utils/attachmentLimits.js";
@@ -53,6 +61,13 @@ export interface SmtpSendOptions {
    * existing `References` plus its `Message-ID`. nodemailer accepts an array.
    */
   references?: string[];
+  /**
+   * `Reply-To` header (2.18.0, issue #220): where replies should go when it
+   * differs from the From/login address — e.g. a domain-alias setup where
+   * {@link SMTP_ENV.from} is not {@link SMTP_ENV.user}. Passed straight to
+   * nodemailer, which already supports it natively.
+   */
+  replyTo?: string;
 }
 
 /** Resolved SMTP connection configuration. */
@@ -73,6 +88,49 @@ export interface SmtpSendResult {
   success: boolean;
   messageId?: string;
   error?: string;
+  /**
+   * Best-effort Sent-folder copy over IMAP (2.18.0, issue #220). Present only
+   * when a copy was actually attempted — i.e. a configured IMAP account's
+   * login matches the SMTP identity (see {@link imapAppendSentCopy}); absent
+   * when IMAP isn't configured for this identity at all, which is not a
+   * failure. `sentCopyError` carries detail only when `sentCopy` is `false`.
+   * A `false`/failed copy never affects {@link SmtpSendResult.success} — the
+   * send itself already happened.
+   */
+  sentCopy?: boolean;
+  sentCopyError?: string;
+}
+
+/** Fields {@link sendViaSmtp} merges into its result for the Sent-copy step. */
+type SentCopyFields = Pick<SmtpSendResult, "sentCopy" | "sentCopyError">;
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Default Sent-copy hook: builds the raw RFC822 message and best-effort
+ * APPENDs it via {@link imapAppendSentCopy}. A dynamic import breaks the
+ * static cycle with `imapClient.ts` (which imports {@link readKeychainPassword}
+ * from this module) without disabling the feature by default; tests inject
+ * their own hook via {@link sendViaSmtp}'s 4th parameter instead of exercising
+ * this path.
+ */
+async function defaultAppendSentCopy(smtpUser: string, raw: Buffer): Promise<SentCopyFields> {
+  const { imapAppendSentCopy } = await import("@/services/imapClient.js");
+  const result = await imapAppendSentCopy(smtpUser, raw);
+  if (!result.attempted) return {};
+  return result.success ? { sentCopy: true } : { sentCopy: false, sentCopyError: result.error };
+}
+
+/** Independently composes the RFC822 bytes nodemailer would send for `mail`,
+ *  for filing a Sent-folder copy (`keepBcc` keeps the Bcc header in that copy,
+ *  unlike the wire message recipients see). `Record<string, unknown>` (not
+ *  nodemailer's own `Mail.Options`) so `keepBcc` — a real nodemailer option the
+ *  published types omit — can be passed without an unsafe cast at every call
+ *  site. */
+function buildRawMime(mail: Record<string, unknown>): Promise<Buffer> {
+  return new MailComposer(mail as never).compile().build();
 }
 
 /**
@@ -251,7 +309,8 @@ function buildAttachments(attachments?: AttachmentInput[]) {
 export async function sendViaSmtp(
   opts: SmtpSendOptions,
   config?: SmtpConfig,
-  createTransport: typeof nodemailer.createTransport = nodemailer.createTransport
+  createTransport: typeof nodemailer.createTransport = nodemailer.createTransport,
+  appendSentCopy: (smtpUser: string, raw: Buffer) => Promise<SentCopyFields> = defaultAppendSentCopy
 ): Promise<SmtpSendResult> {
   let cfg: SmtpConfig;
   try {
@@ -296,22 +355,49 @@ export async function sendViaSmtp(
 
   const html = opts.htmlBody?.trim() ? opts.htmlBody : undefined;
 
+  const mailOptions = {
+    from: requestedFrom || cfg.from,
+    to: opts.to,
+    cc: opts.cc,
+    bcc: opts.bcc,
+    subject: opts.subject,
+    text: opts.body,
+    // When present, nodemailer emits multipart/alternative (text + html).
+    html,
+    attachments,
+    // RFC 5322 threading for SMTP replies/forwards (2.5.0).
+    inReplyTo: opts.inReplyTo?.trim() || undefined,
+    references: opts.references?.length ? opts.references : undefined,
+    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
+    replyTo: opts.replyTo?.trim() || undefined,
+  };
+
   try {
-    const info = await transporter.sendMail({
-      from: requestedFrom || cfg.from,
-      to: opts.to,
-      cc: opts.cc,
-      bcc: opts.bcc,
-      subject: opts.subject,
-      text: opts.body,
-      // When present, nodemailer emits multipart/alternative (text + html).
-      html,
-      attachments,
-      // RFC 5322 threading for SMTP replies/forwards (2.5.0).
-      inReplyTo: opts.inReplyTo?.trim() || undefined,
-      references: opts.references?.length ? opts.references : undefined,
-    });
-    return { success: true, messageId: info.messageId };
+    const info = await transporter.sendMail(mailOptions);
+
+    // Best-effort Sent-folder copy (2.18.0, issue #220): never lets a copy
+    // failure affect the send that already succeeded above.
+    let copyFields: SentCopyFields = {};
+    try {
+      // `messageId` MUST be pinned to the one nodemailer actually sent.
+      // buildRawMime composes independently, so left to itself MailComposer
+      // mints a SECOND, different Message-ID — the archived copy would then
+      // carry an id no recipient ever saw. When someone replies, their
+      // `In-Reply-To` names the delivered id, which appears nowhere in the
+      // Sent mailbox, so the client cannot thread the reply against the
+      // message that provoked it. That is the very threading this file
+      // already carries `inReplyTo`/`references` to preserve.
+      const raw = await buildRawMime({
+        ...mailOptions,
+        keepBcc: true,
+        messageId: info.messageId,
+      });
+      copyFields = await appendSentCopy(cfg.user, raw);
+    } catch (copyError) {
+      copyFields = { sentCopy: false, sentCopyError: errText(copyError) };
+    }
+
+    return { success: true, messageId: info.messageId, ...copyFields };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const tlsHint = requireTLS

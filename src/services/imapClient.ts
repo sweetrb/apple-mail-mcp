@@ -159,6 +159,13 @@ export interface ImapClientLike {
   mailboxCreate(path: string): Promise<{ path: string; created: boolean }>;
   mailboxRename(path: string, newPath: string): Promise<{ path: string; newPath: string }>;
   mailboxDelete(path: string): Promise<{ path: string }>;
+  /** APPEND a raw RFC822 message to `path`, flagged as given. `false` on server
+   *  rejection, same falsy-on-failure contract as the other mutations here. */
+  append(
+    path: string,
+    content: string | Buffer,
+    flags?: string[]
+  ): Promise<{ destination: string } | false>;
   messageFlagsAdd(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
   messageFlagsRemove(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
   /** `false` on failure — see `assertMutated`. Typed as a union deliberately:
@@ -1448,6 +1455,57 @@ export function imapRenameMailbox(
       };
     }
   });
+}
+
+// ===========================================================================
+// Sent-folder copy for SMTP submission (issue #220)
+//
+// SMTP send (smtpMailer.ts) never touches IMAP, so a message sent that way is
+// invisible in the account's own Sent mailbox until/unless the recipient
+// replies. This best-effort APPENDs the same raw MIME `sendViaSmtp` submitted
+// to the Sent mailbox of whichever configured IMAP account's login matches
+// the SMTP identity — the documented convention (APPLE_MAIL_MCP_IMAP_* mirrors
+// APPLE_MAIL_MCP_SMTP_*) already relied on elsewhere (readOriginal in
+// tools/compose.ts). Silently SKIPPED (attempted:false), not reported as a
+// failure, when no configured IMAP account matches: this feature is opt-in by
+// that same convention, and a caller who never configured IMAP should not see
+// a scary error for a copy they never asked for.
+// ===========================================================================
+
+/** Outcome of the best-effort Sent-folder APPEND after an SMTP send. */
+export interface SentCopyResult {
+  /** False when no configured IMAP account matches the SMTP identity — the
+   *  feature was never engaged, not a failure. */
+  attempted: boolean;
+  /** Only meaningful when `attempted` is true. */
+  success?: boolean;
+  error?: string;
+  mailbox?: string;
+}
+
+/**
+ * Best-effort APPEND of `raw` (RFC822 source) to the Sent mailbox of the IMAP
+ * account whose login matches `smtpUser`, flagged `\Seen`. Never throws —
+ * every failure mode (no matching account, connection failure, server
+ * rejection) resolves to a `SentCopyResult`, so callers can report it without
+ * risking the send that already succeeded.
+ */
+export async function imapAppendSentCopy(
+  smtpUser: string,
+  raw: string | Buffer,
+  deps: ImapDeps = {}
+): Promise<SentCopyResult> {
+  if (!deps.config && !isImapAccount(smtpUser)) return { attempted: false };
+  try {
+    return await withClient({ ...deps, account: deps.account ?? smtpUser }, async (client) => {
+      const path = await resolveMailboxPath(client, "sent", "list");
+      const res = await client.append(path, raw, ["\\Seen"]);
+      if (!res) throw new Error("server rejected the APPEND (IMAP NO/BAD)");
+      return { attempted: true, success: true, mailbox: path };
+    });
+  } catch (e) {
+    return { attempted: true, success: false, error: errText(e) };
+  }
 }
 
 // ===========================================================================

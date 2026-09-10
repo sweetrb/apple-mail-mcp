@@ -161,6 +161,47 @@ describe("runCli", () => {
     expect(err.join("\n")).toMatch(/SMTP send failed: nope/);
   });
 
+  it("passes --reply-to through as SmtpSendOptions.replyTo", async () => {
+    const { deps, send } = makeDeps();
+    const code = await runCli([...REQUIRED, "--reply-to", "support@example.com"], deps);
+
+    expect(code).toBe(0);
+    expect(send.mock.calls[0][0].replyTo).toBe("support@example.com");
+  });
+
+  it("omits replyTo when --reply-to is not passed", async () => {
+    const { deps, send } = makeDeps();
+    await runCli(REQUIRED, deps);
+    expect(send.mock.calls[0][0].replyTo).toBeUndefined();
+  });
+
+  it("reports a filed Sent-folder copy in the success line (issue #220)", async () => {
+    const { deps, out } = makeDeps({
+      send: vi
+        .fn()
+        .mockResolvedValue({ success: true, messageId: "<id>", sentCopy: true }) as never,
+    });
+    const code = await runCli(REQUIRED, deps);
+
+    expect(code).toBe(0);
+    expect(out.join("\n")).toMatch(/Sent-folder copy filed/);
+  });
+
+  it("reports a failed Sent-folder copy without failing the command (issue #220)", async () => {
+    const { deps, out } = makeDeps({
+      send: vi.fn().mockResolvedValue({
+        success: true,
+        messageId: "<id>",
+        sentCopy: false,
+        sentCopyError: "IMAP APPEND failed: NO",
+      }) as never,
+    });
+    const code = await runCli(REQUIRED, deps);
+
+    expect(code).toBe(0);
+    expect(out.join("\n")).toMatch(/Sent-folder copy NOT filed: IMAP APPEND failed: NO/);
+  });
+
   it("--help prints usage and exits 0 without sending", async () => {
     const { deps, send, out } = makeDeps();
     const code = await runCli(["--help"], deps);

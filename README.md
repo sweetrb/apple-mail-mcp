@@ -357,9 +357,17 @@ Mail.app path.
 
 Two differences to know when SMTP is auto-preferred:
 
-- **No Sent-folder copy.** SMTP submission does not file the message in Mail.app's
-  Sent mailbox (the server's own "save to Sent" may, depending on provider). Use
-  `transport: "applescript"` if you need the local Sent copy.
+- **Sent-folder copy is best-effort over IMAP.** SMTP submission itself never
+  touches IMAP, so since 2.18.0 the server files the sent message into the Sent
+  mailbox of whichever configured IMAP account's login matches the SMTP identity
+  (`APPLE_MAIL_MCP_IMAP_*` mirroring `APPLE_MAIL_MCP_SMTP_*`), flagged `\Seen`.
+  The copy carries the same `Message-ID` that was delivered, so replies thread
+  against it correctly, and it keeps the `Bcc` header the recipients never see —
+  your own archive is exactly where that belongs. Results report `sentCopy: true`
+  or `sentCopy: false` with `sentCopyError`; the field is **absent** when no
+  configured IMAP account matches the SMTP identity, which is a skip, not a
+  failure. A copy that fails never fails the send — the mail has already gone.
+  Use `transport: "applescript"` if you want Mail.app itself to file the copy.
 - **`account` is a From override, not account selection.** Over SMTP, `account`
   is used as the From address only when it is an email address; a Mail.app
   account *label* (e.g. `"Work"`) can't select an account over SMTP, so a call

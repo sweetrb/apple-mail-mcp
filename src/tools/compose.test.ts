@@ -85,6 +85,41 @@ describe("reply and forward transport routing", () => {
     expectNoApple(d);
   });
 
+  it("passes through a successful Sent-copy result (issue #220)", async () => {
+    const d = fixture();
+    d.smtpSend.mockResolvedValue({
+      success: true,
+      messageId: "<sent@example.com>",
+      sentCopy: true,
+    });
+    const result = await runReply(d, args);
+    expect(result.structuredContent).toMatchObject({ sentCopy: true });
+    expect(result.structuredContent?.sentCopyError).toBeUndefined();
+  });
+
+  it("passes through a failed Sent-copy result without failing the reply (issue #220)", async () => {
+    const d = fixture();
+    d.smtpSend.mockResolvedValue({
+      success: true,
+      messageId: "<sent@example.com>",
+      sentCopy: false,
+      sentCopyError: "IMAP APPEND failed: NO",
+    });
+    const result = await runReply(d, args);
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      sentCopy: false,
+      sentCopyError: "IMAP APPEND failed: NO",
+    });
+  });
+
+  it("omits sentCopy fields entirely when no Sent-copy was attempted", async () => {
+    const d = fixture();
+    const result = await runReply(d, args);
+    expect(result.structuredContent?.sentCopy).toBeUndefined();
+    expect(result.structuredContent?.sentCopyError).toBeUndefined();
+  });
+
   it("uses the decoded IMAP subject and excludes configured aliases from reply-all", async () => {
     const d = fixture();
     d.imapSource.mockResolvedValue({ raw, subject: "Résumé update", accountUser: cfg.user });

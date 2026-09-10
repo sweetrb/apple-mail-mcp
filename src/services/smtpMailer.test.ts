@@ -395,6 +395,153 @@ describe("sendViaSmtp threading headers (2.5.0)", () => {
   });
 });
 
+describe("sendViaSmtp Reply-To (2.18.0, issue #220)", () => {
+  it("passes replyTo through to nodemailer", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    await sendViaSmtp(
+      { to: ["a@b.com"], subject: "s", body: "b", replyTo: "support@example.com" },
+      testConfig,
+      createTransport,
+      async () => ({})
+    );
+    expect(sendMail.mock.calls[0][0].replyTo).toBe("support@example.com");
+  });
+
+  it("omits replyTo when not provided", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    await sendViaSmtp(
+      { to: ["a@b.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport,
+      async () => ({})
+    );
+    expect(sendMail.mock.calls[0][0].replyTo).toBeUndefined();
+  });
+});
+
+describe("sendViaSmtp Sent-folder copy (2.18.0, issue #220)", () => {
+  it("reports a successful best-effort Sent-copy without affecting the send result", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<abc@example.com>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    const appendSentCopy = vi.fn().mockResolvedValue({ sentCopy: true });
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "Hi", body: "Body" },
+      testConfig,
+      createTransport,
+      appendSentCopy
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.sentCopy).toBe(true);
+    expect(result.sentCopyError).toBeUndefined();
+    // Called with the configured SMTP user and a raw RFC822 Buffer.
+    expect(appendSentCopy).toHaveBeenCalledTimes(1);
+    const [smtpUser, raw] = appendSentCopy.mock.calls[0];
+    expect(smtpUser).toBe(testConfig.user);
+    expect(Buffer.isBuffer(raw)).toBe(true);
+    expect(raw.toString()).toMatch(/Subject: Hi/);
+  });
+
+  it("files the copy under the SAME Message-ID nodemailer actually sent", async () => {
+    // Regression guard. buildRawMime composes the archive independently of the
+    // wire message, so without an explicit messageId MailComposer mints a
+    // second, different id. The archived copy would then carry an id no
+    // recipient ever saw: a reply's `In-Reply-To` names the delivered id,
+    // finds nothing matching in Sent, and the conversation fails to thread.
+    const delivered = "<delivered-id@example.com>";
+    const sendMail = vi.fn().mockResolvedValue({ messageId: delivered });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    const appendSentCopy = vi.fn().mockResolvedValue({ sentCopy: true });
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "Threaded", body: "Body" },
+      testConfig,
+      createTransport,
+      appendSentCopy
+    );
+
+    expect(result.messageId).toBe(delivered);
+    const raw = appendSentCopy.mock.calls[0][1].toString();
+    const archived = raw.match(/^Message-ID:\s*(.+)$/im)?.[1]?.trim();
+    expect(archived).toBe(delivered);
+    // Exactly one Message-ID header — not the delivered one plus a minted one.
+    expect(raw.match(/^Message-ID:/gim)?.length).toBe(1);
+  });
+
+  it("does not attempt a Sent-copy when none was configured (attempted:false)", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    const appendSentCopy = vi.fn().mockResolvedValue({});
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport,
+      appendSentCopy
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.sentCopy).toBeUndefined();
+    expect(result.sentCopyError).toBeUndefined();
+  });
+
+  it("reports a failed Sent-copy attempt without failing the send (non-fatal)", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    const appendSentCopy = vi
+      .fn()
+      .mockResolvedValue({ sentCopy: false, sentCopyError: "IMAP APPEND failed: NO" });
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport,
+      appendSentCopy
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.messageId).toBe("<x>");
+    expect(result.sentCopy).toBe(false);
+    expect(result.sentCopyError).toBe("IMAP APPEND failed: NO");
+  });
+
+  it("treats a throwing Sent-copy hook as a non-fatal failure too", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    const appendSentCopy = vi.fn().mockRejectedValue(new Error("pool exhausted"));
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport,
+      appendSentCopy
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.sentCopy).toBe(false);
+    expect(result.sentCopyError).toMatch(/pool exhausted/);
+  });
+
+  it("never attempts a Sent-copy when the send itself fails", async () => {
+    const sendMail = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    const appendSentCopy = vi.fn();
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport,
+      appendSentCopy
+    );
+
+    expect(result.success).toBe(false);
+    expect(appendSentCopy).not.toHaveBeenCalled();
+  });
+});
+
 describe("applyPlaceholders", () => {
   it("replaces {{Key}} tokens, escapes regex-special keys, leaves unknowns intact", () => {
     expect(applyPlaceholders("Hi {{Name}}", { Name: "Alice" })).toBe("Hi Alice");

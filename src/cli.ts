@@ -44,6 +44,8 @@ Required:
 Optional:
   --cc <addr>           CC recipient (repeatable)
   --bcc <addr>          BCC recipient (repeatable)
+  --reply-to <addr>     Reply-To header, when replies should go somewhere other
+                        than --from (issue #220, e.g. a domain-alias setup)
   --html-body-file <p>  UTF-8 file with an HTML alternative body (sends
                         multipart/alternative)
   --attach <path>       Absolute path to a file to attach (repeatable)
@@ -83,6 +85,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
     to?: string[];
     cc?: string[];
     bcc?: string[];
+    "reply-to"?: string;
     subject?: string;
     "body-file"?: string;
     "html-body-file"?: string;
@@ -97,6 +100,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
         to: { type: "string", multiple: true },
         cc: { type: "string", multiple: true },
         bcc: { type: "string", multiple: true },
+        "reply-to": { type: "string" },
         subject: { type: "string" },
         "body-file": { type: "string" },
         "html-body-file": { type: "string" },
@@ -159,6 +163,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
       to: values.to as string[],
       cc: values.cc,
       bcc: values.bcc,
+      replyTo: values["reply-to"],
       subject: values.subject as string,
       body,
       htmlBody,
@@ -172,7 +177,13 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
     return 1;
   }
 
-  out(`sent to ${(values.to as string[]).join(", ")} from ${values.from}`);
+  const copyNote =
+    result.sentCopy === true
+      ? " (Sent-folder copy filed)"
+      : result.sentCopy === false
+        ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})`
+        : "";
+  out(`sent to ${(values.to as string[]).join(", ")} from ${values.from}${copyNote}`);
   return 0;
 }
 
