@@ -971,13 +971,29 @@ registerTool(
   }, "Error listing messages")
 );
 
+// Shared output fields for the best-effort SMTP Sent-folder copy (issue
+// #220), reused across send-email, reply-to-message, and forward-message
+// since all three route through the same sendViaSmtp.
+const SENT_COPY_SCHEMA = z
+  .boolean()
+  .optional()
+  .describe(
+    "SMTP only: whether a best-effort copy was filed to the account's Sent " +
+      "mailbox over IMAP (issue #220). Absent when no configured IMAP account " +
+      "matches the SMTP identity — not a failure, the feature simply wasn't engaged."
+  );
+const SENT_COPY_ERROR_SCHEMA = z
+  .string()
+  .optional()
+  .describe("Present only when sentCopy is false: why the Sent-folder copy failed.");
+
 // --- send-email ---
 
 registerTool(
   "send-email",
   {
     description:
-      "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count.\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent — require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
+      "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent — require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
     inputSchema: {
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       subject: z.string().min(1, "Subject is required"),
@@ -986,6 +1002,15 @@ registerTool(
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
       account: z.string().optional().describe("Account to send from"),
       attachments: ATTACHMENTS_SCHEMA,
+      replyTo: z
+        .string()
+        .optional()
+        .describe(
+          "SMTP only (issue #220): sets the Reply-To header when replies should go " +
+            "somewhere other than the From/login address, e.g. a domain-alias setup " +
+            "where APPLE_MAIL_MCP_SMTP_FROM differs from APPLE_MAIL_MCP_SMTP_USER. " +
+            "Ignored on the AppleScript transport."
+        ),
       transport: z
         .enum(["applescript", "smtp"])
         .optional()
@@ -1002,48 +1027,70 @@ registerTool(
       recipients: z.array(z.string()).optional(),
       attachmentCount: z.number().optional(),
       transport: z.string().optional(),
+      sentCopy: SENT_COPY_SCHEMA,
+      sentCopyError: SENT_COPY_ERROR_SCHEMA,
     },
   },
-  withErrorHandling(async ({ to, subject, body, cc, bcc, account, attachments, transport }) => {
-    const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
+  withErrorHandling(
+    async ({ to, subject, body, cc, bcc, account, attachments, transport, replyTo }) => {
+      const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
 
-    const attachmentCount = attachments?.length ?? 0;
+      const attachmentCount = attachments?.length ?? 0;
 
-    // Prefer SMTP when explicitly requested, or automatically when it is
-    // configured and no transport was specified — except when a non-email
-    // `account` label requests Mail.app account selection (see shouldUseSmtp).
-    // Explicit transport:"applescript" always forces the Mail.app path.
-    if (shouldUseSmtp(transport, account)) {
-      // `account` is a Mail.app account label for the AppleScript path; for SMTP
-      // it only makes sense as a From override when it is an actual address.
-      // A bare label (only possible here via explicit transport:"smtp") must not
-      // corrupt the From — fall back to the configured SMTP From in that case.
-      const smtpFrom = account?.includes("@") ? account : undefined;
-      const result = await sendViaSmtp({ to, subject, body, cc, bcc, from: smtpFrom, attachments });
-      if (!result.success) {
-        return errorResponse(result.error ?? "Failed to send email via SMTP.");
+      // Prefer SMTP when explicitly requested, or automatically when it is
+      // configured and no transport was specified — except when a non-email
+      // `account` label requests Mail.app account selection (see shouldUseSmtp).
+      // Explicit transport:"applescript" always forces the Mail.app path.
+      if (shouldUseSmtp(transport, account)) {
+        // `account` is a Mail.app account label for the AppleScript path; for SMTP
+        // it only makes sense as a From override when it is an actual address.
+        // A bare label (only possible here via explicit transport:"smtp") must not
+        // corrupt the From — fall back to the configured SMTP From in that case.
+        const smtpFrom = account?.includes("@") ? account : undefined;
+        const result = await sendViaSmtp({
+          to,
+          subject,
+          body,
+          cc,
+          bcc,
+          from: smtpFrom,
+          attachments,
+          replyTo,
+        });
+        if (!result.success) {
+          return errorResponse(result.error ?? "Failed to send email via SMTP.");
+        }
+        const copyNote =
+          result.sentCopy === true
+            ? " (Sent-folder copy filed)"
+            : result.sentCopy === false
+              ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})`
+              : "";
+        return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}${copyNote}`, {
+          ok: true,
+          recipients: to,
+          attachmentCount,
+          transport: "smtp",
+          ...(result.sentCopy !== undefined ? { sentCopy: result.sentCopy } : {}),
+          ...(result.sentCopyError !== undefined ? { sentCopyError: result.sentCopyError } : {}),
+        });
       }
-      return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}`, {
+
+      const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
+
+      if (!success) {
+        return errorResponse("Failed to send email. Check Mail.app configuration.");
+      }
+
+      return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
         ok: true,
         recipients: to,
         attachmentCount,
-        transport: "smtp",
+        transport: "applescript",
       });
-    }
-
-    const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
-
-    if (!success) {
-      return errorResponse("Failed to send email. Check Mail.app configuration.");
-    }
-
-    return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
-      ok: true,
-      recipients: to,
-      attachmentCount,
-      transport: "applescript",
-    });
-  }, "Error sending email")
+    },
+    "Error sending email"
+  )
 );
 
 // --- send-serial-email ---
@@ -1240,7 +1287,7 @@ registerTool(
   "reply-to-message",
   {
     description:
-      "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
+      "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
@@ -1258,6 +1305,8 @@ registerTool(
       ok: z.boolean().optional(),
       sent: z.boolean().optional(),
       id: z.string().optional(),
+      sentCopy: SENT_COPY_SCHEMA,
+      sentCopyError: SENT_COPY_ERROR_SCHEMA,
     },
   },
   withErrorHandling((args) => runReply(composeDeps, args), "Error replying to message")
@@ -1269,7 +1318,7 @@ registerTool(
   "forward-message",
   {
     description:
-      "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
+      "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
@@ -1288,6 +1337,8 @@ registerTool(
       sent: z.boolean().optional(),
       recipients: z.array(z.string()).optional(),
       id: z.string().optional(),
+      sentCopy: SENT_COPY_SCHEMA,
+      sentCopyError: SENT_COPY_ERROR_SCHEMA,
     },
   },
   withErrorHandling((args) => runForward(composeDeps, args), "Error forwarding message")

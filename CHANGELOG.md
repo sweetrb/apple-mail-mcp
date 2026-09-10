@@ -1,5 +1,35 @@
 ## [Unreleased]
 
+## [2.18.0] - 2026-09-10
+
+### Added
+- SMTP send now files a best-effort **Sent-folder copy** over IMAP (#220). After a
+  successful submission the raw message is APPENDed, flagged `\Seen`, to the Sent
+  mailbox of whichever configured IMAP account's login matches the SMTP identity —
+  the existing `APPLE_MAIL_MCP_IMAP_*` / `APPLE_MAIL_MCP_SMTP_*` convention, so no
+  new configuration. The mailbox is located with the same three-tier resolver used
+  elsewhere (real mailbox, then IMAP SPECIAL-USE, then the Gmail map), so it works
+  on non-Gmail providers. Reported as `sentCopy` / `sentCopyError` on `send-email`,
+  `reply-to-message` and `forward-message`, and as a note on the `apple-mail-send`
+  CLI. Both fields are **absent** when no IMAP account matches the SMTP identity:
+  that is a skip, not a failure. A failed copy never fails the send.
+  - The copy is filed under the **same `Message-ID` that was actually delivered**.
+    It is composed independently of the wire message, so without pinning the id it
+    would carry a second, freshly-minted one — an id no recipient ever saw, leaving
+    a reply's `In-Reply-To` with nothing to match in Sent and breaking the very
+    threading `inReplyTo`/`references` exist to preserve.
+  - The copy retains the `Bcc` header that the delivered message does not. The
+    sender's own archive is where that information belongs.
+- `replyTo` option on the SMTP transport (#220), for when replies should go
+  somewhere other than the From/login address — e.g. a domain-alias setup where
+  `APPLE_MAIL_MCP_SMTP_FROM` differs from `APPLE_MAIL_MCP_SMTP_USER`. Exposed on
+  `send-email` and as `--reply-to` on the CLI. Ignored on the AppleScript
+  transport, which has no equivalent.
+
+### Documentation
+- README: the "No Sent-folder copy" limitation under the SMTP transport is
+  replaced with the new best-effort behaviour, including when the copy is skipped.
+
 ## [2.17.10] - 2026-09-09
 
 ### Fixed

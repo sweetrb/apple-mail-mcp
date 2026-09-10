@@ -127,6 +127,10 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
           transport: "smtp",
           messageId: result.messageId,
           ...(args.kind === "forward" ? { recipients: args.to } : {}),
+          // Best-effort Sent-folder copy (issue #220) — same field shape as
+          // send-email, since it's the same sendViaSmtp underneath.
+          ...(result.sentCopy !== undefined ? { sentCopy: result.sentCopy } : {}),
+          ...(result.sentCopyError !== undefined ? { sentCopyError: result.sentCopyError } : {}),
         }
       );
     } catch (error) {

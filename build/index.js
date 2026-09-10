@@ -12,6 +12,14 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   if (typeof require !== "undefined") return require.apply(this, arguments);
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
 var __commonJS = (cb, mod) => function __require2() {
   try {
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
@@ -7194,6 +7202,436 @@ var require_dist = __commonJS({
   }
 });
 
+// src/utils/docsUrls.ts
+var SETUP_GUIDE_URL, SETUP_HINT;
+var init_docsUrls = __esm({
+  "src/utils/docsUrls.ts"() {
+    "use strict";
+    SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
+    SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
+  }
+});
+
+// src/utils/mimeParse.ts
+function extractBoundary(source) {
+  const match = source.match(/boundary="?([^";\s\r\n]+)"?/i);
+  return match ? match[1] : null;
+}
+function getHeader(headers, name) {
+  const regex = new RegExp(`^${name}:\\s*(.+(?:\\r?\\n[ \\t]+.+)*)`, "im");
+  const match = headers.match(regex);
+  if (!match) return null;
+  return match[1].replace(/\r?\n[ \t]+/g, " ").trim();
+}
+function extractFilename(headers) {
+  const dispHeader = getHeader(headers, "Content-Disposition");
+  if (dispHeader) {
+    const fnMatch = dispHeader.match(/filename="?([^";\r\n]+)"?/i);
+    if (fnMatch) return fnMatch[1].trim();
+  }
+  const ctHeader = getHeader(headers, "Content-Type");
+  if (ctHeader) {
+    const nameMatch = ctHeader.match(/name="?([^";\r\n]+)"?/i);
+    if (nameMatch) return nameMatch[1].trim();
+  }
+  return null;
+}
+function isInlineDisposition(headers) {
+  const dispHeader = getHeader(headers, "Content-Disposition");
+  if (!dispHeader) return false;
+  return dispHeader.toLowerCase().startsWith("inline");
+}
+function extractSize(headers) {
+  const dispHeader = getHeader(headers, "Content-Disposition");
+  if (dispHeader) {
+    const sizeMatch = dispHeader.match(/size=(\d+)/i);
+    if (sizeMatch) return parseInt(sizeMatch[1], 10);
+  }
+  return 0;
+}
+function extractMimeType(headers) {
+  const ctHeader = getHeader(headers, "Content-Type");
+  if (!ctHeader) return "application/octet-stream";
+  const typeMatch = ctHeader.match(/^([^;\s]+)/);
+  return typeMatch ? typeMatch[1].toLowerCase() : "application/octet-stream";
+}
+function estimateBase64Size(base64Body) {
+  const cleaned = base64Body.replace(/[\s\r\n]/g, "");
+  return Math.floor(cleaned.length * 3 / 4);
+}
+function splitMimeParts(source, boundary) {
+  const parts = [];
+  const boundaryDelim = `--${boundary}`;
+  const sections = source.split(boundaryDelim);
+  for (const section of sections) {
+    const trimmed = section.trim();
+    if (!trimmed || trimmed.startsWith("--")) continue;
+    const blankLineIdx = trimmed.search(/\r?\n\r?\n/);
+    if (blankLineIdx === -1) continue;
+    const headers = trimmed.substring(0, blankLineIdx);
+    const body = trimmed.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
+    parts.push({ headers, body });
+  }
+  return parts;
+}
+function walkLeafParts(source, boundary, depth = 0) {
+  const result = [];
+  const parts = splitMimeParts(source, boundary);
+  for (const part of parts) {
+    const ct = getHeader(part.headers, "Content-Type");
+    if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
+      const nestedBoundary = extractBoundary(ct);
+      if (nestedBoundary) {
+        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1));
+        continue;
+      }
+    }
+    result.push(part);
+  }
+  return result;
+}
+function decodeBody(body, encoding) {
+  const enc = (encoding || "").toLowerCase().trim();
+  if (enc === "base64") {
+    return Buffer.from(body.replace(/[\s\r\n]/g, ""), "base64");
+  }
+  if (enc === "quoted-printable") {
+    return decodeQuotedPrintable(body);
+  }
+  return Buffer.from(body, "binary");
+}
+function decodeQuotedPrintable(body) {
+  const noSoft = body.replace(/=\r?\n/g, "");
+  const bytes = [];
+  for (let i = 0; i < noSoft.length; i++) {
+    const c = noSoft[i];
+    if (c === "=" && i + 2 < noSoft.length) {
+      const hex = noSoft.substring(i + 1, i + 3);
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        bytes.push(parseInt(hex, 16));
+        i += 2;
+        continue;
+      }
+    }
+    bytes.push(c.charCodeAt(0) & 255);
+  }
+  return Buffer.from(bytes);
+}
+function estimateSize(body, encoding) {
+  const enc = (encoding || "").toLowerCase().trim();
+  if (enc === "base64") return estimateBase64Size(body);
+  return body.length;
+}
+function parseMimeAttachments(source) {
+  if (!source || !source.trim()) return [];
+  const boundary = extractBoundary(source);
+  if (!boundary) return [];
+  const parts = walkLeafParts(source, boundary);
+  const attachments = [];
+  for (const part of parts) {
+    const filename = extractFilename(part.headers);
+    if (!filename) continue;
+    if (isInlineDisposition(part.headers)) continue;
+    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+    attachments.push({
+      name: filename,
+      mimeType: extractMimeType(part.headers),
+      size: extractSize(part.headers) || estimateSize(part.body, encoding)
+    });
+  }
+  return attachments;
+}
+function extractHtmlBody(source) {
+  if (!source || !source.trim()) return null;
+  const boundary = extractBoundary(source);
+  if (boundary) {
+    for (const part of walkLeafParts(source, boundary)) {
+      if (extractMimeType(part.headers) === "text/html") {
+        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
+        return decodeBody(part.body, encoding2).toString("utf8");
+      }
+    }
+    return null;
+  }
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  if (blankLineIdx === -1) return null;
+  const headers = source.substring(0, blankLineIdx);
+  if (extractMimeType(headers) !== "text/html") return null;
+  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
+  const encoding = getHeader(headers, "Content-Transfer-Encoding");
+  return decodeBody(body, encoding).toString("utf8");
+}
+function extractTextBody(source) {
+  if (!source || !source.trim()) return null;
+  const boundary = extractBoundary(source);
+  if (boundary) {
+    for (const part of walkLeafParts(source, boundary)) {
+      if (extractMimeType(part.headers) === "text/plain") {
+        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
+        return decodeBody(part.body, encoding2).toString("utf8");
+      }
+    }
+    return null;
+  }
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  if (blankLineIdx === -1) return null;
+  const headers = source.substring(0, blankLineIdx);
+  const ct = extractMimeType(headers);
+  if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
+  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
+  const encoding = getHeader(headers, "Content-Transfer-Encoding");
+  return decodeBody(body, encoding).toString("utf8");
+}
+function extractRfcMessageIdFromSource(source) {
+  if (!source || !source.trim()) return "";
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  const headers = blankLineIdx === -1 ? source : source.substring(0, blankLineIdx);
+  const raw = getHeader(headers, "Message-ID") ?? getHeader(headers, "Message-Id");
+  if (!raw) return "";
+  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
+function extractMimeAttachment(source, attachmentName) {
+  if (!source || !source.trim()) return null;
+  const boundary = extractBoundary(source);
+  if (!boundary) return null;
+  const parts = walkLeafParts(source, boundary);
+  for (const part of parts) {
+    const filename = extractFilename(part.headers);
+    if (filename !== attachmentName) continue;
+    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+    const data = decodeBody(part.body, encoding);
+    return {
+      name: filename,
+      mimeType: extractMimeType(part.headers),
+      size: extractSize(part.headers) || data.length,
+      data
+    };
+  }
+  return null;
+}
+var MAX_MIME_DEPTH;
+var init_mimeParse = __esm({
+  "src/utils/mimeParse.ts"() {
+    "use strict";
+    MAX_MIME_DEPTH = 20;
+  }
+});
+
+// src/utils/attachmentLimits.ts
+function isInlineAttachmentBase64WithinLimit(contentBase64) {
+  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS) return false;
+  let encodedChars = 0;
+  for (const char of contentBase64) {
+    if (!/\s/u.test(char) && ++encodedChars > MAX_INLINE_ATTACHMENT_BASE64_CHARS) return false;
+  }
+  return true;
+}
+function decodeInlineAttachment(contentBase64) {
+  if (!isInlineAttachmentBase64WithinLimit(contentBase64)) {
+    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
+  }
+  const content = Buffer.from(contentBase64, "base64");
+  if (content.length > MAX_INLINE_ATTACHMENT_BYTES) {
+    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
+  }
+  return content;
+}
+var MAX_INLINE_ATTACHMENT_BYTES, MAX_IMAP_ATTACHMENT_BYTES, MAX_INLINE_ATTACHMENT_BASE64_CHARS, MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS;
+var init_attachmentLimits = __esm({
+  "src/utils/attachmentLimits.ts"() {
+    "use strict";
+    MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+    MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
+    MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
+    MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
+  }
+});
+
+// src/utils/attachmentReadPolicy.ts
+import { realpathSync, statSync } from "fs";
+import { homedir as homedir2, tmpdir } from "os";
+import { delimiter, isAbsolute, join as join2, resolve, sep } from "path";
+function canonicalize(path) {
+  return realpathSync.native(path);
+}
+function sensitiveRoots() {
+  return SENSITIVE_HOME_ROOTS.map((root) => {
+    try {
+      return canonicalize(root);
+    } catch {
+      return root;
+    }
+  });
+}
+function isWithinRoot(candidate, root) {
+  return candidate === root || candidate.startsWith(root + sep);
+}
+function hasHiddenPathSegment(candidate) {
+  return candidate.split(sep).some((segment) => segment.startsWith(".") && segment.length > 1);
+}
+function isProtectedPath(candidate) {
+  if (hasHiddenPathSegment(candidate)) return true;
+  if (sensitiveRoots().some((root) => isWithinRoot(candidate, root))) return true;
+  let home;
+  try {
+    home = canonicalize(homedir2());
+  } catch {
+    home = resolve(homedir2());
+  }
+  if (!isWithinRoot(candidate, home)) return false;
+  const relative = candidate.slice(home.length).split(sep).filter(Boolean);
+  return relative.length >= 4 && relative[0].toLowerCase() === "library" && relative[1].toLowerCase() === "application support" && relative.at(-1)?.toLowerCase() === "config.json";
+}
+function configuredRoots(env) {
+  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
+  const extraRoots = raw === void 0 ? [] : raw.split(delimiter).map((root) => root.trim()).filter(Boolean);
+  const requested = [...DEFAULT_ATTACHMENT_READ_ROOTS, ...extraRoots];
+  for (const root of requested) {
+    if (!isAbsolute(root)) {
+      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
+    }
+  }
+  const resolved = [];
+  for (const root of requested) {
+    try {
+      const canonical = canonicalize(resolve(root));
+      if (!resolved.includes(canonical)) resolved.push(canonical);
+    } catch {
+    }
+  }
+  return resolved;
+}
+function resolveAttachmentReadPath(filePath, env = process.env) {
+  if (!isAbsolute(filePath)) {
+    throw new Error(`Attachment path must be absolute: "${filePath}"`);
+  }
+  let canonical;
+  try {
+    canonical = canonicalize(filePath);
+  } catch {
+    throw new Error(`Attachment file not found: "${filePath}"`);
+  }
+  try {
+    if (!statSync(canonical).isFile()) {
+      throw new Error(`Attachment path is not a regular file: "${filePath}"`);
+    }
+  } catch (error2) {
+    if (error2 instanceof Error && error2.message.includes("not a regular file")) throw error2;
+    throw new Error(`Attachment file not found: "${filePath}"`);
+  }
+  if (isProtectedPath(canonical)) {
+    throw new Error(
+      `Attachment path is in a protected location: "${filePath}". Hidden files and credential/configuration locations cannot be sent as attachments.`
+    );
+  }
+  if (!configuredRoots(env).some((root) => isWithinRoot(canonical, root))) {
+    throw new Error(
+      `Attachment path is outside the allowed read roots: "${filePath}". Use an ordinary home-directory, /Volumes, or temporary path, or configure ${ATTACHMENT_READ_ROOTS_ENV} for an additional explicit root.`
+    );
+  }
+  return canonical;
+}
+var ATTACHMENT_READ_ROOTS_ENV, DEFAULT_ATTACHMENT_READ_ROOTS, SENSITIVE_HOME_ROOTS;
+var init_attachmentReadPolicy = __esm({
+  "src/utils/attachmentReadPolicy.ts"() {
+    "use strict";
+    ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
+    DEFAULT_ATTACHMENT_READ_ROOTS = [homedir2(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
+    SENSITIVE_HOME_ROOTS = [
+      join2(homedir2(), ".ssh"),
+      join2(homedir2(), ".aws"),
+      join2(homedir2(), ".config", "gh"),
+      join2(homedir2(), "Library", "Keychains")
+    ];
+  }
+});
+
+// src/services/auditLog.ts
+import { appendFileSync } from "node:fs";
+function isOn(raw) {
+  return /^(1|true|yes|on)$/i.test((raw ?? "").trim());
+}
+function auditLogPath() {
+  const raw = process.env[AUDIT_LOG_ENV]?.trim();
+  return raw ? raw : null;
+}
+function isAuditEnabled() {
+  return auditLogPath() !== null;
+}
+function auditSubjectsEnabled() {
+  return isAuditEnabled() && isOn(process.env[AUDIT_SUBJECTS_ENV]);
+}
+function auditSnapshotMax() {
+  const raw = process.env[AUDIT_SNAPSHOT_MAX_ENV]?.trim();
+  if (raw === void 0 || raw === "") return DEFAULT_SNAPSHOT_MAX;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_SNAPSHOT_MAX;
+  return Math.floor(n);
+}
+function auditSnapshotChunk() {
+  const raw = process.env[AUDIT_SNAPSHOT_CHUNK_ENV]?.trim();
+  if (raw === void 0 || raw === "") return DEFAULT_SNAPSHOT_CHUNK;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_SNAPSHOT_CHUNK;
+  return Math.floor(n);
+}
+function classifyCountStatus(readable, expected, observed) {
+  if (!readable) return { status: "unknown", unknownReason: "count-unreadable" };
+  if (expected === null) return { status: "unknown", unknownReason: "no-expectation" };
+  if (observed === expected) return { status: "match" };
+  if ((observed ?? 0) > expected) return { status: "over" };
+  if (observed === 0) return { status: "unknown", unknownReason: "count-did-not-move" };
+  return { status: "unknown", unknownReason: "count-partial" };
+}
+function writeAuditRecord(record2) {
+  const path = auditLogPath();
+  if (!path) return;
+  try {
+    appendFileSync(path, `${JSON.stringify(record2)}
+`, "utf8");
+  } catch (err) {
+    console.error(
+      `[apple-mail-mcp] audit log write failed (${path}): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+function writeDestructiveAudit(ctx, report) {
+  if (!isAuditEnabled()) return;
+  writeAuditRecord({
+    ts: (/* @__PURE__ */ new Date()).toISOString(),
+    tool: ctx.tool,
+    serverVersion: ctx.serverVersion,
+    args: ctx.args,
+    preImages: report.preImages,
+    outcomes: report.outcomes,
+    countDeltas: report.countDeltas,
+    collateral: report.collateral,
+    subjectsLogged: auditSubjectsEnabled()
+  });
+}
+function countDeltaWarning(d) {
+  if (d.status !== "over" || d.expected === null) return null;
+  const extra = (d.observed ?? 0) - d.expected;
+  const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
+  return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. Anything else removing mail from this mailbox at the same moment \u2014 a Mail rule, a server-side filter, another client, an IMAP expunge \u2014 reads the same way, so rule that out first. If nothing else was touching it, this is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
+}
+function reconciliationWarnings(report) {
+  return report.countDeltas.map((d) => countDeltaWarning(d)).filter((w) => w !== null);
+}
+var AUDIT_LOG_ENV, AUDIT_SUBJECTS_ENV, AUDIT_SNAPSHOT_MAX_ENV, AUDIT_SNAPSHOT_CHUNK_ENV, DEFAULT_SNAPSHOT_MAX, DEFAULT_SNAPSHOT_CHUNK, SNAPSHOT_SLICE_ATTEMPTS;
+var init_auditLog = __esm({
+  "src/services/auditLog.ts"() {
+    "use strict";
+    AUDIT_LOG_ENV = "APPLE_MAIL_MCP_AUDIT_LOG";
+    AUDIT_SUBJECTS_ENV = "APPLE_MAIL_MCP_AUDIT_SUBJECTS";
+    AUDIT_SNAPSHOT_MAX_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX";
+    AUDIT_SNAPSHOT_CHUNK_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK";
+    DEFAULT_SNAPSHOT_MAX = 2e3;
+    DEFAULT_SNAPSHOT_CHUNK = 250;
+    SNAPSHOT_SLICE_ATTEMPTS = 2;
+  }
+});
+
 // node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/punycode/index.js
 var require_punycode = __commonJS({
   "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/punycode/index.js"(exports, module) {
@@ -13179,7 +13617,7 @@ var require_mail_composer = __commonJS({
     var MimeNode = require_mime_node();
     var mimeFuncs = require_mime_funcs();
     var { parseDataURI, copyOwnKeys } = require_shared();
-    var MailComposer = class {
+    var MailComposer2 = class {
       constructor(mail) {
         this.mail = mail || {};
         this.message = false;
@@ -13655,7 +14093,7 @@ var require_mail_composer = __commonJS({
         return element;
       }
     };
-    module.exports = MailComposer;
+    module.exports = MailComposer2;
   }
 });
 
@@ -14554,7 +14992,7 @@ var require_mailer = __commonJS({
     var EventEmitter = __require("events");
     var shared = require_shared();
     var mimeTypes = require_mime_types();
-    var MailComposer = require_mail_composer();
+    var MailComposer2 = require_mail_composer();
     var DKIM = require_dkim();
     var httpProxyClient = require_http_proxy_client();
     var errors = require_errors2();
@@ -14697,7 +15135,7 @@ var require_mailer = __commonJS({
             );
             return callback(err);
           }
-          mail.message = new MailComposer(mail.data).compile();
+          mail.message = new MailComposer2(mail.data).compile();
           mail.setMailerHeader();
           mail.setPriorityHeaders();
           mail.setListHeaders();
@@ -64654,6 +65092,1603 @@ var require_imap_flow = __commonJS({
   }
 });
 
+// src/services/imapClient.ts
+var imapClient_exports = {};
+__export(imapClient_exports, {
+  IMAP_ENV: () => IMAP_ENV,
+  MAX_COMPOSE_SOURCE_BYTES: () => MAX_COMPOSE_SOURCE_BYTES,
+  __resetPool: () => __resetPool,
+  __setPoolConnect: () => __setPoolConnect,
+  bodyStructureHasAttachments: () => bodyStructureHasAttachments,
+  buildImapConnectionOptions: () => buildImapConnectionOptions,
+  decodeImapId: () => decodeImapId,
+  dropAllPools: () => dropAllPools,
+  encodeImapId: () => encodeImapId,
+  imapAppendSentCopy: () => imapAppendSentCopy,
+  imapBatchDelete: () => imapBatchDelete,
+  imapBatchFlag: () => imapBatchFlag,
+  imapBatchMarkRead: () => imapBatchMarkRead,
+  imapBatchMarkUnread: () => imapBatchMarkUnread,
+  imapBatchMove: () => imapBatchMove,
+  imapBatchUnflag: () => imapBatchUnflag,
+  imapCreateMailbox: () => imapCreateMailbox,
+  imapDeleteMailbox: () => imapDeleteMailbox,
+  imapDeleteMessageById: () => imapDeleteMessageById,
+  imapFetchAttachment: () => imapFetchAttachment,
+  imapFetchMessageId: () => imapFetchMessageId,
+  imapFlagMessage: () => imapFlagMessage,
+  imapGetMessage: () => imapGetMessage,
+  imapGetMessageSource: () => imapGetMessageSource,
+  imapHealthCheck: () => imapHealthCheck,
+  imapListAttachments: () => imapListAttachments,
+  imapListMailboxes: () => imapListMailboxes,
+  imapListMessages: () => imapListMessages,
+  imapMailStats: () => imapMailStats,
+  imapMarkRead: () => imapMarkRead,
+  imapMarkUnread: () => imapMarkUnread,
+  imapMoveMessageById: () => imapMoveMessageById,
+  imapRenameMailbox: () => imapRenameMailbox,
+  imapSearchMessages: () => imapSearchMessages,
+  imapThread: () => imapThread,
+  imapUnflagMessage: () => imapUnflagMessage,
+  imapUnreadCount: () => imapUnreadCount,
+  isImapAccount: () => isImapAccount,
+  listImapAccountLabels: () => listImapAccountLabels,
+  mailFlagBitsFor: () => mailFlagBitsFor,
+  mailFlagColorIndex: () => mailFlagColorIndex,
+  normalizeMessageId: () => normalizeMessageId,
+  resolveImapConfig: () => resolveImapConfig,
+  resolveImapConfigs: () => resolveImapConfigs,
+  resolveMailboxPath: () => resolveMailboxPath,
+  shouldUseImap: () => shouldUseImap
+});
+function encodeImapId(account, path, uid) {
+  const payload = Buffer.from(JSON.stringify({ a: account, p: path, u: uid }), "utf8").toString(
+    "base64url"
+  );
+  return `imap:${payload}`;
+}
+function decodeImapId(id) {
+  if (!id || !id.startsWith("imap:")) return null;
+  try {
+    const obj = JSON.parse(Buffer.from(id.slice("imap:".length), "base64url").toString("utf8"));
+    if (typeof obj.u !== "number" || typeof obj.p !== "string") return null;
+    return { account: String(obj.a ?? ""), path: obj.p, uid: obj.u };
+  } catch {
+    return null;
+  }
+}
+function sameImapAccount(left, right, deps) {
+  if (left === right) return true;
+  if (deps.config) {
+    const aliases = /* @__PURE__ */ new Set([deps.config.accountLabel, deps.config.user]);
+    if (aliases.has(left) && aliases.has(right)) return true;
+  }
+  const specs = listImapAccountSpecs();
+  const leftSpec = specs.find((spec) => specMatchesSelector(spec, left));
+  const rightSpec = specs.find((spec) => specMatchesSelector(spec, right));
+  return leftSpec !== void 0 && leftSpec === rightSpec;
+}
+function depsForAccount(account, deps) {
+  if (deps.account && !sameImapAccount(account, deps.account, deps)) {
+    throw new Error(`IMAP message id belongs to account "${account}", not "${deps.account}".`);
+  }
+  return { ...deps, account };
+}
+function depsForMessageRef(ref, deps) {
+  return depsForAccount(ref.account, deps);
+}
+function isTruthySetting(value) {
+  return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
+}
+function specMatchesSelector(spec, selector) {
+  return spec.accountLabel === selector || spec.user === selector || (spec.aliases?.includes(selector) ?? false);
+}
+function str(v) {
+  return typeof v === "string" && v.trim() ? v.trim() : void 0;
+}
+function imapIdentityKey(spec) {
+  return `${spec.host.trim().toLowerCase()}:${spec.port}:${spec.user.trim()}`;
+}
+function listImapAccountSpecs(env = process.env) {
+  const specs = [];
+  const seen = /* @__PURE__ */ new Set();
+  const user = env[IMAP_ENV.user]?.trim();
+  if (user) {
+    const legacy = {
+      accountLabel: env[IMAP_ENV.account]?.trim() || user,
+      user,
+      host: env[IMAP_ENV.host]?.trim() || "imap.gmail.com",
+      port: env[IMAP_ENV.port] ? Number.parseInt(env[IMAP_ENV.port], 10) : 993,
+      password: env[IMAP_ENV.password],
+      keychainService: env[IMAP_ENV.keychainService]?.trim(),
+      keychainAccount: env[IMAP_ENV.keychainAccount]?.trim()
+    };
+    specs.push(legacy);
+    seen.add(imapIdentityKey(legacy));
+  }
+  const json = env[IMAP_ENV.accounts]?.trim();
+  if (json) {
+    try {
+      const arr = JSON.parse(json);
+      if (Array.isArray(arr)) {
+        for (const raw of arr) {
+          const a = raw;
+          const u = str(a.user);
+          if (!u) continue;
+          const label = str(a.account) || str(a.accountLabel) || u;
+          const host = str(a.host) || "imap.gmail.com";
+          const port = a.port ? Number(a.port) : 993;
+          const key = imapIdentityKey({ host, port, user: u });
+          if (seen.has(key)) {
+            const owner = specs.find((s) => imapIdentityKey(s) === key);
+            if (owner && owner.accountLabel !== label && !owner.aliases?.includes(label)) {
+              (owner.aliases ??= []).push(label);
+            }
+            continue;
+          }
+          if (specs.some((s) => s.accountLabel === label)) continue;
+          seen.add(key);
+          specs.push({
+            accountLabel: label,
+            user: u,
+            host,
+            port,
+            password: str(a.password),
+            keychainService: str(a.keychainService),
+            keychainAccount: str(a.keychainAccount)
+          });
+        }
+      }
+    } catch (e) {
+      console.error(`Invalid ${IMAP_ENV.accounts} JSON, ignoring: ${String(e)}`);
+    }
+  }
+  return specs;
+}
+function specToConfig(spec, allowPlaintext = false) {
+  if (!Number.isInteger(spec.port) || spec.port <= 0) {
+    throw new Error(`Invalid IMAP port for account "${spec.accountLabel}": "${spec.port}".`);
+  }
+  let pass = spec.password;
+  if (!pass && spec.keychainService) {
+    pass = readKeychainPassword(spec.keychainService, spec.keychainAccount || spec.user) ?? void 0;
+  }
+  if (!pass) {
+    throw new Error(
+      `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account. ${SETUP_HINT}`
+    );
+  }
+  return {
+    host: spec.host,
+    port: spec.port,
+    secure: spec.port === 993,
+    allowPlaintext,
+    user: spec.user,
+    pass,
+    accountLabel: spec.accountLabel
+  };
+}
+function isImapAccount(account, env = process.env) {
+  if (!account) return false;
+  return listImapAccountSpecs(env).some((s) => specMatchesSelector(s, account));
+}
+function shouldUseImap(account, env = process.env) {
+  return listImapAccountSpecs(env).length > 0 && (account === void 0 || isImapAccount(account, env));
+}
+function listImapAccountLabels(env = process.env) {
+  return listImapAccountSpecs(env).map((s) => s.accountLabel);
+}
+function resolveImapConfigs(env = process.env) {
+  const out = [];
+  const allowPlaintext = isTruthySetting(env[IMAP_ENV.allowPlaintext]);
+  for (const spec of listImapAccountSpecs(env)) {
+    try {
+      out.push(specToConfig(spec, allowPlaintext));
+    } catch (e) {
+      console.error(`Skipping IMAP account "${spec.accountLabel}": ${String(e)}`);
+    }
+  }
+  return out;
+}
+function resolveImapConfig(env = process.env, account) {
+  const specs = listImapAccountSpecs(env);
+  if (specs.length === 0) {
+    throw new Error(
+      `IMAP not configured. Set ${IMAP_ENV.user} (login address), or ${IMAP_ENV.accounts} for multiple accounts, to enable it. ${SETUP_HINT}`
+    );
+  }
+  let spec;
+  if (account) {
+    spec = specs.find((s) => specMatchesSelector(s, account));
+    if (!spec) {
+      throw new Error(
+        `No IMAP account matching "${account}". Configured: ${specs.map((s) => s.accountLabel).join(", ")}.`
+      );
+    }
+  } else {
+    spec = specs[0];
+  }
+  return specToConfig(spec, isTruthySetting(env[IMAP_ENV.allowPlaintext]));
+}
+function buildImapConnectionOptions(cfg) {
+  return {
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    // ImapFlow reads this as a tri-state, and the distinction matters:
+    //   true      -> require STARTTLS; fail if the server does not offer it
+    //   false     -> NEVER STARTTLS, even if the server advertises it
+    //   undefined -> opportunistic upgrade (ImapFlow's documented default)
+    //
+    // secure=true already has implicit TLS, so there is no upgrade to negotiate.
+    // Without the escape hatch the upgrade is required. WITH it we must fall back
+    // to `undefined`, not `false`: the escape hatch means "let me reach a server
+    // that cannot do TLS", not "never encrypt". Sending `false` suppressed the
+    // upgrade even against servers still offering it, so enabling the opt-out for
+    // one broken account silently downgraded every other plaintext-port account
+    // below what it already negotiated before this option existed.
+    doSTARTTLS: cfg.secure || cfg.allowPlaintext ? void 0 : true,
+    auth: { user: cfg.user, pass: cfg.pass },
+    logger: false
+  };
+}
+function staticMailboxAlias(mailbox) {
+  const map = {
+    "all mail": "[Gmail]/All Mail",
+    "sent mail": "[Gmail]/Sent Mail",
+    sent: "[Gmail]/Sent Mail",
+    trash: "[Gmail]/Trash",
+    drafts: "[Gmail]/Drafts",
+    spam: "[Gmail]/Spam",
+    junk: "[Gmail]/Spam",
+    starred: "[Gmail]/Starred",
+    important: "[Gmail]/Important"
+  };
+  return map[mailbox.trim().toLowerCase()] ?? mailbox;
+}
+async function resolveMailboxPath(client, mailbox, _mode) {
+  if (!mailbox) return "INBOX";
+  try {
+    const resolved = await resolveMailbox(client, mailbox);
+    if (resolved.kind === "found") return resolved.path;
+    const flag = SPECIAL_USE_ALIASES[mailbox.trim().toLowerCase()];
+    if (flag) {
+      const boxes = await client.list();
+      const special = boxes.find((b) => b.specialUse?.toLowerCase() === flag);
+      if (special) return special.path;
+    }
+  } catch {
+  }
+  return staticMailboxAlias(mailbox);
+}
+function buildCriteria(a, listMode) {
+  const c = {};
+  if (a.query) c.or = [{ subject: a.query }, { from: a.query }];
+  if (a.from) c.from = a.from;
+  if (a.subject) c.subject = a.subject;
+  if (a.isRead === true) c.seen = true;
+  if (a.isRead === false) c.unseen = true;
+  if (a.unreadOnly && listMode) c.unseen = true;
+  if (a.isFlagged === true) c.flagged = true;
+  if (a.isFlagged === false) c.unflagged = true;
+  if (a.dateFrom) c.since = new Date(a.dateFrom);
+  if (a.dateTo) c.before = new Date(a.dateTo);
+  if (Object.keys(c).length === 0) c.all = true;
+  return c;
+}
+function formatRow(m, account, path) {
+  const env = m.envelope ?? {};
+  const subject = env.subject || "(no subject)";
+  const a = env.from?.[0];
+  const from = a ? a.name ? `${a.name} <${a.address ?? ""}>` : a.address ?? "(unknown)" : "(unknown)";
+  const date3 = env.date ? new Date(env.date).toLocaleDateString() : "";
+  const read = m.flags?.has("\\Seen") ? "read" : "unread";
+  return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date3} | ${subject} (from: ${from}) [${read}]`;
+}
+function structuredRow(m, account, path) {
+  const env = m.envelope ?? {};
+  return {
+    id: encodeImapId(account, path, m.uid),
+    subject: env.subject || "(no subject)",
+    sender: senderName(env.from),
+    dateReceived: env.date ? new Date(env.date).toISOString() : "",
+    isRead: m.flags?.has("\\Seen") ?? false,
+    isFlagged: m.flags?.has("\\Flagged") ?? false,
+    flagColorIndex: mailFlagColorIndex(m.flags),
+    mailbox: path,
+    account,
+    // Derived from BODYSTRUCTURE, which the list/search fetch now requests.
+    // This was hardcoded `false` from 2.2.0 until 2.11.1 — indistinguishable to
+    // a caller from "no attachments", so every IMAP-sourced message claimed to
+    // have none. Falls back to false only when the fetch carried no
+    // BODYSTRUCTURE at all.
+    hasAttachments: bodyStructureHasAttachments(m.bodyStructure),
+    // Message-ID (when the envelope carries it) is the strongest cross-/intra-
+    // backend dedup key for the multi-account merge (imapMultiAccount.ts). The
+    // AppleScript path does not expose it, so cross-backend dedup falls back to
+    // the subject|sender|date composite key.
+    ...env.messageId ? { messageId: env.messageId } : {}
+  };
+}
+function hasMailboxFlag(mailbox, wanted) {
+  const normalized = wanted.toLowerCase();
+  return [...mailbox.flags ?? []].some((flag) => flag.toLowerCase() === normalized);
+}
+function messageDateEpoch(message) {
+  if (!message.envelope?.date) return 0;
+  const epoch = new Date(message.envelope.date).getTime();
+  return Number.isNaN(epoch) ? 0 : epoch;
+}
+function messageIdentity(entry) {
+  const raw = entry.message.envelope?.messageId?.trim() ?? "";
+  const messageId = raw.replace(/^<+|>+$/g, "").trim().toLowerCase();
+  return messageId ? `mid:${messageId}` : `${entry.path}\0${entry.message.uid}`;
+}
+async function fetchMailboxMatches(client, path, criteria, newestCount) {
+  const lock = await client.getMailboxLock(path);
+  try {
+    const found = await client.search(criteria, { uid: true });
+    const uids = Array.isArray(found) ? found : [];
+    if (uids.length === 0 || newestCount === 0) return { messages: [], total: uids.length };
+    const newest = uids.slice().reverse().slice(0, newestCount);
+    const byUid = /* @__PURE__ */ new Map();
+    for await (const msg of client.fetch(
+      newest.join(","),
+      // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
+      // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
+      // the fetch (~17%), same single round trip, no extra request.
+      { envelope: true, flags: true, bodyStructure: true },
+      { uid: true }
+    )) {
+      byUid.set(msg.uid, msg);
+    }
+    return {
+      messages: newest.map((uid) => byUid.get(uid)).filter((message) => message !== void 0),
+      total: uids.length
+    };
+  } finally {
+    lock.release();
+  }
+}
+async function run(args, listMode, deps) {
+  return useClient(
+    { ...deps, account: deps.account ?? args.account },
+    async (client, cfg) => {
+      const unscopedSearch = !listMode && !args.mailbox;
+      let paths;
+      let allMailboxCount = 0;
+      if (unscopedSearch) {
+        const listed = await client.list();
+        const selectable = listed.filter((mailbox) => !hasMailboxFlag(mailbox, "\\Noselect"));
+        const allMailbox = selectable.find(
+          (mailbox) => mailbox.specialUse?.toLowerCase() === "\\all"
+        );
+        paths = allMailbox ? [allMailbox.path] : selectable.map((mailbox) => mailbox.path);
+        allMailboxCount = paths.length;
+        if (paths.length === 0) {
+          throw new Error(`No selectable IMAP mailboxes found for account ${cfg.accountLabel}.`);
+        }
+      } else {
+        paths = [await resolveMailboxPath(client, args.mailbox, listMode ? "list" : "search")];
+      }
+      const limit = args.limit ?? 50;
+      const offset = args.offset ?? 0;
+      const criteria = buildCriteria(args, listMode);
+      const newestPerMailbox = offset + limit;
+      const fetched = [];
+      const failedMailboxes = [];
+      let totalMatched = 0;
+      for (const path of paths) {
+        try {
+          const result = await fetchMailboxMatches(client, path, criteria, newestPerMailbox);
+          totalMatched += result.total;
+          fetched.push(...result.messages.map((message) => ({ message, path })));
+        } catch (error2) {
+          failedMailboxes.push(path);
+          console.error(
+            `IMAP ${listMode ? "list" : "search"} failed for account "${cfg.accountLabel}", mailbox "${path}": ${String(error2)}`
+          );
+        }
+      }
+      if (failedMailboxes.length === paths.length) {
+        throw new Error(
+          `IMAP ${listMode ? "list" : "search"} failed in every requested mailbox for account ${cfg.accountLabel}: ${failedMailboxes.join(", ")}.`
+        );
+      }
+      let ordered = fetched;
+      if (unscopedSearch) {
+        ordered = fetched.slice().sort((a, b) => messageDateEpoch(b.message) - messageDateEpoch(a.message));
+        const unique = /* @__PURE__ */ new Map();
+        for (const entry of ordered) {
+          const key = messageIdentity(entry);
+          if (!unique.has(key)) unique.set(key, entry);
+        }
+        ordered = [...unique.values()].slice(offset, offset + limit);
+      } else {
+        ordered = fetched.slice(offset, offset + limit);
+      }
+      const rows = ordered.map(({ message, path }) => formatRow(message, cfg.accountLabel, path));
+      const messages = ordered.map(
+        ({ message, path }) => structuredRow(message, cfg.accountLabel, path)
+      );
+      const partial2 = failedMailboxes.length > 0;
+      const failureNote = partial2 ? `
+
+Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}"`).join(", ")}.` : "";
+      const verb = listMode ? "listed" : "matched";
+      const scope = unscopedSearch ? allMailboxCount === 1 ? `mailbox "${paths[0]}"` : `${allMailboxCount} selectable mailboxes` : `mailbox "${paths[0]}"`;
+      if (messages.length === 0) {
+        return {
+          text: `No messages found via IMAP in ${scope} (account ${cfg.accountLabel}).${failureNote}`,
+          messages,
+          count: 0,
+          partial: partial2,
+          failedMailboxes
+        };
+      }
+      const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalMatched} total ${verb}):
+` + rows.join("\n") + `
+
+Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.` + failureNote;
+      return { text, messages, count: messages.length, partial: partial2, failedMailboxes };
+    },
+    true
+  );
+}
+function imapSearchMessages(args, deps = {}) {
+  return run(args, false, deps);
+}
+function imapListMessages(args, deps = {}) {
+  return run(args, true, deps);
+}
+function imapUnreadCount(mailbox, deps = {}) {
+  return useClient(
+    deps,
+    async (client) => {
+      const s = await client.status(await resolveMailboxPath(client, mailbox, "list"), {
+        unseen: true
+      });
+      return s.unseen ?? 0;
+    },
+    true
+  );
+}
+function imapListMailboxes(deps = {}) {
+  return useClient(
+    deps,
+    async (client) => {
+      const out = [];
+      for (const b of await client.list()) {
+        let messages = 0;
+        let unseen = 0;
+        try {
+          const s = await client.status(b.path, { messages: true, unseen: true });
+          messages = s.messages ?? 0;
+          unseen = s.unseen ?? 0;
+        } catch {
+        }
+        out.push({ path: b.path, name: b.name, messages, unseen });
+      }
+      return out;
+    },
+    true
+  );
+}
+function imapMailStats(deps = {}) {
+  return useClient(
+    deps,
+    async (client) => {
+      const perMailbox = [];
+      let totalMessages = 0;
+      let totalUnread = 0;
+      for (const b of await client.list()) {
+        try {
+          const s = await client.status(b.path, { messages: true, unseen: true });
+          const messages = s.messages ?? 0;
+          const unseen = s.unseen ?? 0;
+          totalMessages += messages;
+          totalUnread += unseen;
+          perMailbox.push({ mailbox: b.path, messages, unseen });
+        } catch {
+        }
+      }
+      const since = (days) => new Date(Date.now() - days * 864e5);
+      const countSince = async (days) => {
+        try {
+          const lock = await client.getMailboxLock("INBOX");
+          try {
+            const found = await client.search({ since: since(days) }, { uid: true });
+            return Array.isArray(found) ? found.length : 0;
+          } finally {
+            lock.release();
+          }
+        } catch {
+          return 0;
+        }
+      };
+      const [last24h, last7d, last30d] = await Promise.all([
+        countSince(1),
+        countSince(7),
+        countSince(30)
+      ]);
+      return { totalMessages, totalUnread, perMailbox, recent: { last24h, last7d, last30d } };
+    },
+    true
+  );
+}
+function errText(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function assertMutated(result, what) {
+  if (!result) throw new Error(`${what}: server rejected the command (IMAP NO/BAD)`);
+  return result;
+}
+async function verifyMoved(client, moved, uid, srcPath, destPath) {
+  const newUid = moved.uidMap?.get(uid);
+  if (newUid !== void 0) {
+    return {
+      verdict: "verified",
+      how: `COPYUID: UID ${uid} arrived in "${destPath}" as UID ${newUid}`
+    };
+  }
+  try {
+    const stillThere = await client.fetchOne(String(uid), { uid: true }, { uid: true });
+    if (!stillThere) {
+      return { verdict: "verified", how: `UID ${uid} is no longer present in "${srcPath}"` };
+    }
+    return {
+      verdict: "unverified",
+      why: `the server accepted the MOVE, but UID ${uid} is still present in "${srcPath}" and this server does not advertise UIDPLUS, so arrival in "${destPath}" could not be confirmed. A Gmail label store can legitimately keep a message in an all-mail view after a move, so this is not reported as a failure`
+    };
+  } catch (e) {
+    return { verdict: "unverified", why: `the post-move check could not run: ${errText(e)}` };
+  }
+}
+function poolKey(cfg) {
+  return imapIdentityKey(cfg);
+}
+function imapIdleMs() {
+  const raw = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
+  if (raw !== void 0) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 3e4;
+}
+async function dropPool(key) {
+  const e = pools.get(key);
+  if (!e) return;
+  if (e.idle) clearTimeout(e.idle);
+  pools.delete(key);
+  await e.client.logout().catch(() => void 0);
+  e.client.close?.();
+}
+async function dropAllPools() {
+  await Promise.all([...pools.keys()].map((k) => dropPool(k)));
+}
+function scheduleIdleClose(key) {
+  const e = pools.get(key);
+  if (!e) return;
+  if (e.idle) clearTimeout(e.idle);
+  const ms = imapIdleMs();
+  if (ms <= 0) return;
+  e.idle = setTimeout(() => void dropPool(key), ms);
+  e.idle.unref?.();
+}
+async function acquirePooled(cfg) {
+  const key = poolKey(cfg);
+  const existing = pools.get(key);
+  if (existing) {
+    if (existing.idle) clearTimeout(existing.idle);
+    try {
+      await existing.client.noop();
+      return existing.client;
+    } catch {
+      await dropPool(key);
+    }
+  }
+  const inFlight = connecting.get(key);
+  if (inFlight) return inFlight;
+  const p = (async () => {
+    const client = await poolConnect(cfg);
+    pools.set(key, { client });
+    return client;
+  })();
+  connecting.set(key, p);
+  try {
+    return await p;
+  } finally {
+    connecting.delete(key);
+  }
+}
+async function imapHealthCheck(deps = {}) {
+  if (!deps.config && listImapAccountSpecs().length === 0) {
+    return { configured: false, ok: false };
+  }
+  let cfg;
+  try {
+    cfg = deps.config ?? resolveImapConfig(process.env, deps.account);
+  } catch (e) {
+    return { configured: true, ok: false, error: errText(e) };
+  }
+  try {
+    await useClient(deps, async (client) => {
+      await client.noop();
+    });
+    return { configured: true, ok: true, account: cfg.accountLabel, host: cfg.host };
+  } catch (e) {
+    return {
+      configured: true,
+      ok: false,
+      account: cfg.accountLabel,
+      host: cfg.host,
+      error: errText(e)
+    };
+  }
+}
+function __setPoolConnect(fn) {
+  poolConnect = fn ?? defaultConnect;
+}
+async function __resetPool() {
+  await dropAllPools();
+}
+async function useClient(deps, fn, retryOnDrop = false) {
+  const cfg = deps.config ?? resolveImapConfig(process.env, deps.account);
+  if (deps.connect) {
+    const client = await deps.connect(cfg);
+    try {
+      return await fn(client, cfg);
+    } finally {
+      await client.logout().catch(() => void 0);
+      client.close?.();
+    }
+  }
+  const key = poolKey(cfg);
+  try {
+    const client = await acquirePooled(cfg);
+    const r = await fn(client, cfg);
+    scheduleIdleClose(key);
+    return r;
+  } catch (e) {
+    await dropPool(key);
+    if (retryOnDrop) {
+      const client = await acquirePooled(cfg);
+      try {
+        const r = await fn(client, cfg);
+        scheduleIdleClose(key);
+        return r;
+      } catch (e2) {
+        await dropPool(key);
+        throw e2;
+      }
+    }
+    throw e;
+  }
+}
+function withClient(deps, fn) {
+  return useClient(deps, fn);
+}
+async function resolveMailbox(client, name) {
+  const wanted = name.trim().toLowerCase();
+  const boxes = await client.list();
+  const byPath = boxes.find((b) => b.path.toLowerCase() === wanted);
+  if (byPath) return { kind: "found", path: byPath.path };
+  const byName = boxes.filter((b) => b.name.toLowerCase() === wanted);
+  if (byName.length === 1) return { kind: "found", path: byName[0].path };
+  if (byName.length > 1) {
+    return { kind: "ambiguous", candidates: byName.map((b) => b.path).sort() };
+  }
+  return { kind: "none" };
+}
+function ambiguousMailboxError(name, candidates, accountLabel) {
+  const where = accountLabel ? ` on IMAP account ${accountLabel}` : "";
+  return `Mailbox "${name}" is ambiguous${where} \u2014 it matches ${candidates.map((c) => `"${c}"`).join(" and ")}. Pass the full path.`;
+}
+async function findMailboxPathOrThrow(client, name) {
+  const res = await resolveMailbox(client, name);
+  if (res.kind === "ambiguous") throw new Error(ambiguousMailboxError(name, res.candidates));
+  return res.kind === "found" ? res.path : null;
+}
+function imapCreateMailbox(name, deps = {}) {
+  return withClient(deps, async (client) => {
+    try {
+      const res = await client.mailboxCreate(name);
+      return res.created ? { success: true, info: `Created mailbox "${res.path}".` } : { success: true, info: `Mailbox "${res.path}" already existed.` };
+    } catch (e) {
+      return { success: false, error: `IMAP create failed for "${name}": ${errText(e)}` };
+    }
+  });
+}
+function imapDeleteMailbox(name, deps = {}) {
+  return withClient(deps, async (client, cfg) => {
+    const res = await resolveMailbox(client, name);
+    if (res.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(name, res.candidates, cfg.accountLabel)
+      };
+    }
+    if (res.kind === "none") {
+      return {
+        success: false,
+        error: `Mailbox "${name}" not found on IMAP account ${cfg.accountLabel}.`
+      };
+    }
+    const path = res.path;
+    try {
+      await client.mailboxDelete(path);
+      return {
+        success: true,
+        info: `Deleted mailbox "${path}" via IMAP (account ${cfg.accountLabel}).`
+      };
+    } catch (e) {
+      return { success: false, error: `IMAP delete failed for "${path}": ${errText(e)}` };
+    }
+  });
+}
+function imapRenameMailbox(oldName, newName, deps = {}) {
+  return withClient(deps, async (client, cfg) => {
+    const found = await resolveMailbox(client, oldName);
+    if (found.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(oldName, found.candidates, cfg.accountLabel)
+      };
+    }
+    if (found.kind === "none") {
+      return {
+        success: false,
+        error: `Mailbox "${oldName}" not found on IMAP account ${cfg.accountLabel}.`
+      };
+    }
+    const path = found.path;
+    try {
+      const res = await client.mailboxRename(path, newName);
+      return { success: true, info: `Renamed "${res.path}" to "${res.newPath}" via IMAP.` };
+    } catch (e) {
+      return {
+        success: false,
+        error: `IMAP rename failed for "${path}" -> "${newName}": ${errText(e)}`
+      };
+    }
+  });
+}
+async function imapAppendSentCopy(smtpUser, raw, deps = {}) {
+  if (!deps.config && !isImapAccount(smtpUser)) return { attempted: false };
+  try {
+    return await withClient({ ...deps, account: deps.account ?? smtpUser }, async (client) => {
+      const path = await resolveMailboxPath(client, "sent", "list");
+      const res = await client.append(path, raw, ["\\Seen"]);
+      if (!res) throw new Error("server rejected the APPEND (IMAP NO/BAD)");
+      return { attempted: true, success: true, mailbox: path };
+    });
+  } catch (e) {
+    return { attempted: true, success: false, error: errText(e) };
+  }
+}
+async function withMailbox(path, deps, fn) {
+  return withClient(deps, async (client) => {
+    const lock = await client.getMailboxLock(path);
+    try {
+      return await fn(client);
+    } finally {
+      lock.release();
+    }
+  });
+}
+async function imapGetMessageSource(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) throw new Error(`Not an IMAP message id: "${id}".`);
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    const lock = await client.getMailboxLock(ref.path);
+    try {
+      const msg = await client.fetchOne(
+        String(ref.uid),
+        {
+          envelope: true,
+          // One extra byte distinguishes an exact-limit source from truncation.
+          source: { start: 0, maxLength: MAX_COMPOSE_SOURCE_BYTES + 1 }
+        },
+        { uid: true }
+      );
+      if (!msg) throw new Error(`IMAP message UID ${ref.uid} not found in "${ref.path}".`);
+      if (!msg.source || !msg.source.length)
+        throw new Error("IMAP returned no original message source.");
+      if (Buffer.byteLength(msg.source) > MAX_COMPOSE_SOURCE_BYTES) {
+        throw new Error("Original message source exceeds the 25 MiB reply/forward limit.");
+      }
+      return { raw: msg.source.toString(), subject: msg.envelope?.subject, accountUser: cfg.user };
+    } finally {
+      lock.release();
+    }
+  });
+}
+async function imapGetMessage(id, preferHtml, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(
+      String(ref.uid),
+      { envelope: true, source: true },
+      { uid: true }
+    );
+    if (!msg)
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    const subject = msg.envelope?.subject || "(no subject)";
+    const src = msg.source ? msg.source.toString() : "";
+    const body = (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ?? extractTextBody(src) ?? extractHtmlBody(src) ?? "(no readable body)";
+    return { success: true, info: `Subject: ${subject}
+
+${body}` };
+  });
+}
+function normalizeMessageId(mid) {
+  return mid.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
+async function imapFetchMessageId(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return null;
+  try {
+    return await withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+      const msg = await client.fetchOne(String(ref.uid), { envelope: true }, { uid: true });
+      const mid = msg && msg.envelope?.messageId;
+      return mid ? normalizeMessageId(mid) : null;
+    });
+  } catch {
+    return null;
+  }
+}
+function mailFlagBitsFor(colorIndex) {
+  const set = [];
+  const clear = [];
+  for (let b = 0; b < MAIL_FLAG_BITS.length; b++) {
+    (colorIndex >> b & 1 ? set : clear).push(MAIL_FLAG_BITS[b]);
+  }
+  return { set, clear };
+}
+function mailFlagColorIndex(flags) {
+  if (!flags) return void 0;
+  const have = new Set(flags);
+  let idx = 0;
+  let any = false;
+  for (let b = 0; b < MAIL_FLAG_BITS.length; b++) {
+    if (have.has(MAIL_FLAG_BITS[b])) {
+      idx |= 1 << b;
+      any = true;
+    }
+  }
+  return any ? idx : void 0;
+}
+function flagOp(id, flag, add, deps) {
+  const ref = decodeImapId(id);
+  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = add ? await client.messageFlagsAdd([ref.uid], [flag], { uid: true }) : await client.messageFlagsRemove([ref.uid], [flag], { uid: true });
+      if (!ok)
+        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}`
+      };
+    }
+  });
+}
+function imapFlagMessage(id, colorIndex, deps = {}) {
+  if (colorIndex === void 0) return flagOp(id, "\\Flagged", true, deps);
+  const ref = decodeImapId(id);
+  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
+  const { set, clear } = mailFlagBitsFor(colorIndex);
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = await client.messageFlagsAdd([ref.uid], ["\\Flagged", ...set], { uid: true });
+      if (!ok)
+        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
+      if (clear.length) await client.messageFlagsRemove([ref.uid], clear, { uid: true });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}` };
+    }
+  });
+}
+function imapUnflagMessage(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const ok = await client.messageFlagsRemove([ref.uid], ["\\Flagged", ...MAIL_FLAG_BITS], {
+        uid: true
+      });
+      if (!ok) return { success: false, error: `IMAP unflag returned false for UID ${ref.uid}.` };
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: `IMAP unflag failed for UID ${ref.uid}: ${errText(e)}` };
+    }
+  });
+}
+async function imapMoveMessageById(id, destMailbox, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    const dest = await resolveMailbox(client, destMailbox);
+    if (dest.kind === "ambiguous") {
+      return {
+        success: false,
+        error: ambiguousMailboxError(destMailbox, dest.candidates, cfg.accountLabel)
+      };
+    }
+    const destPath = dest.kind === "found" ? dest.path : await resolveMailboxPath(client, destMailbox, "list");
+    const lock = await client.getMailboxLock(ref.path);
+    try {
+      const moved = assertMutated(
+        await client.messageMove([ref.uid], destPath, { uid: true }),
+        `IMAP move of UID ${ref.uid} to "${destPath}"`
+      );
+      const verification = await verifyMoved(client, moved, ref.uid, ref.path, destPath);
+      return {
+        success: true,
+        info: verification.verdict === "verified" ? `Moved UID ${ref.uid} to "${destPath}" via IMAP (verified: ${verification.how}).` : `Moved UID ${ref.uid} to "${destPath}" via IMAP \u2014 UNVERIFIED: ${verification.why}.`,
+        verification
+      };
+    } catch (e) {
+      return {
+        success: false,
+        error: `IMAP move failed for UID ${ref.uid} -> "${destPath}": ${errText(e)}`
+      };
+    } finally {
+      lock.release();
+    }
+  });
+}
+async function resolveTrashPath(client) {
+  let listed = false;
+  try {
+    const boxes = await client.list();
+    listed = true;
+    const special = boxes.find((b) => b.specialUse === "\\Trash");
+    if (special) return special.path;
+    const named = boxes.find(
+      (b) => /^(trash|deleted messages|deleted items|bin)$/i.test(b.name) || /(^|\/)trash$/i.test(b.path)
+    );
+    if (named) return named.path;
+  } catch {
+  }
+  if (!listed) return staticMailboxAlias("trash");
+  try {
+    const created = await client.mailboxCreate(FALLBACK_TRASH_PATH);
+    return created?.path || FALLBACK_TRASH_PATH;
+  } catch {
+    return FALLBACK_TRASH_PATH;
+  }
+}
+async function trashUids(client, uids, srcPath) {
+  const dest = await resolveTrashPath(client);
+  if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
+    assertMutated(
+      await client.messageDelete(uids, { uid: true }),
+      `IMAP expunge of ${uids.length} message(s) from "${srcPath}"`
+    );
+    return { dest, expunged: true };
+  }
+  const moved = assertMutated(
+    await client.messageMove(uids, dest, { uid: true }),
+    `IMAP move of ${uids.length} message(s) from "${srcPath}" to "${dest}"`
+  );
+  return { dest, expunged: false, moved };
+}
+async function verifyExpunged(client, uid, path) {
+  try {
+    const stillThere = await client.fetchOne(String(uid), { uid: true }, { uid: true });
+    if (!stillThere) {
+      return { verdict: "verified", how: `UID ${uid} is no longer present in "${path}"` };
+    }
+    return {
+      verdict: "unverified",
+      why: `the server accepted the EXPUNGE but UID ${uid} is still present in "${path}"`
+    };
+  } catch (e) {
+    return { verdict: "unverified", why: `the post-delete check could not run: ${errText(e)}` };
+  }
+}
+async function imapDeleteMessageById(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    try {
+      const { dest, expunged, moved } = await trashUids(client, [ref.uid], ref.path);
+      const verification = expunged || !moved ? await verifyExpunged(client, ref.uid, ref.path) : await verifyMoved(client, moved, ref.uid, ref.path, dest);
+      const what = expunged ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP` : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP`;
+      return {
+        success: true,
+        info: verification.verdict === "verified" ? `${what} (verified: ${verification.how}).` : `${what} \u2014 UNVERIFIED: ${verification.why}.`,
+        verification
+      };
+    } catch (e) {
+      return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
+    }
+  });
+}
+function collectAttachments(node, out = []) {
+  if (!node) return out;
+  const filename = node.dispositionParameters?.filename || node.parameters?.name;
+  const disposition = node.disposition?.toLowerCase();
+  const isEmbeddedByReference = disposition === "inline" && !!node.id;
+  const isAttachment = !!node.part && (disposition === "attachment" || !!filename && !isEmbeddedByReference);
+  if (isAttachment) {
+    out.push({
+      part: node.part,
+      filename: filename || `part-${node.part}`,
+      mimeType: node.type || "application/octet-stream",
+      size: node.size ?? 0
+    });
+  }
+  for (const child of node.childNodes ?? []) collectAttachments(child, out);
+  return out;
+}
+function bodyStructureHasAttachments(node) {
+  return !!node && collectAttachments(node).length > 0;
+}
+async function streamToBuffer(content, maxBytes) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of content) {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`);
+    }
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+async function imapListAttachments(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+    if (!msg || !msg.bodyStructure) {
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    }
+    const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
+      id: `${id}#${a.part}`,
+      name: a.filename,
+      mimeType: a.mimeType,
+      size: a.size
+    }));
+    return { success: true, attachments };
+  });
+}
+async function imapFetchAttachment(id, attachmentName, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
+    if (!msg || !msg.bodyStructure) {
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    }
+    const atts = collectAttachments(msg.bodyStructure);
+    const match = atts.find((a) => a.filename === attachmentName);
+    if (!match) {
+      const names = atts.map((a) => a.filename).join(", ") || "none";
+      return {
+        success: false,
+        error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`
+      };
+    }
+    if (match.size > MAX_IMAP_ATTACHMENT_BYTES) {
+      return {
+        success: false,
+        error: `IMAP attachment "${attachmentName}" is ${match.size} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`
+      };
+    }
+    try {
+      const dl = await client.download(String(ref.uid), match.part, { uid: true });
+      const buf = await streamToBuffer(dl.content, MAX_IMAP_ATTACHMENT_BYTES);
+      return {
+        success: true,
+        base64: buf.toString("base64"),
+        bytes: buf.length,
+        mimeType: match.mimeType
+      };
+    } catch (e) {
+      return { success: false, error: `IMAP attachment fetch failed: ${errText(e)}` };
+    }
+  });
+}
+async function mailboxCount(client, path) {
+  try {
+    const st = await client.status(path, { messages: true });
+    return typeof st.messages === "number" ? st.messages : null;
+  } catch {
+    return null;
+  }
+}
+async function imapBatch(ids, deps, op, opts = {}) {
+  const groups = /* @__PURE__ */ new Map();
+  const errors = [];
+  let failed = 0;
+  for (const id of ids) {
+    const ref = decodeImapId(id);
+    if (!ref) {
+      failed++;
+      errors.push(`Not an IMAP id: "${id}"`);
+      continue;
+    }
+    const key = `${ref.account}\0${ref.path}`;
+    const g = groups.get(key) ?? { account: ref.account, path: ref.path, uids: [] };
+    g.uids.push(ref.uid);
+    groups.set(key, g);
+  }
+  let success = 0;
+  const countDelta = [];
+  for (const g of groups.values()) {
+    try {
+      await useClient(depsForAccount(g.account, deps), async (client) => {
+        const before = opts.reconcile ? await mailboxCount(client, g.path) : null;
+        const lock = await client.getMailboxLock(g.path);
+        try {
+          await op(client, g.uids, g.path);
+        } finally {
+          lock.release();
+        }
+        if (!opts.reconcile) return;
+        const after = await mailboxCount(client, g.path);
+        const readable = before !== null && after !== null;
+        const observed = readable ? before - after : null;
+        const { status, unknownReason } = classifyCountStatus(readable, g.uids.length, observed);
+        countDelta.push({
+          account: g.account,
+          mailbox: g.path,
+          before,
+          after,
+          expected: g.uids.length,
+          observed,
+          status,
+          ...unknownReason ? { unknownReason } : {},
+          ...unknownReason === "count-unreadable" ? { note: "The server did not answer STATUS for this mailbox" } : {},
+          ...unknownReason === "count-did-not-move" ? {
+            note: `The mailbox count did not move. On a label store (Gmail) a message can stay visible in an all-mail view after being moved out of a label, so this is not by itself evidence the operation failed \u2014 check the destination.`
+          } : {},
+          ...unknownReason === "count-partial" ? {
+            note: `Fewer messages left than were operated on. \`observed\` is a LOWER BOUND on what left, not a count of what left \u2014 a concurrent delivery to this mailbox masks departures one-for-one.`
+          } : {}
+        });
+      });
+      success += g.uids.length;
+    } catch (e) {
+      failed += g.uids.length;
+      errors.push(`${g.path}: ${errText(e)}`);
+    }
+  }
+  return { success, failed, errors, ...countDelta.length ? { countDelta } : {} };
+}
+function imapBatchMove(ids, destMailbox, deps = {}) {
+  return imapBatch(
+    ids,
+    deps,
+    async (c, uids) => {
+      const dest = await findMailboxPathOrThrow(c, destMailbox) ?? await resolveMailboxPath(c, destMailbox, "list");
+      assertMutated(
+        await c.messageMove(uids, dest, { uid: true }),
+        `IMAP move of ${uids.length} message(s) to "${dest}"`
+      );
+    },
+    { reconcile: true }
+  );
+}
+function senderName(from) {
+  const a = from?.[0];
+  if (!a) return "(unknown)";
+  return a.name ? `${a.name} <${a.address ?? ""}>` : a.address ?? "(unknown)";
+}
+function dateMs(m) {
+  return m.envelope?.date ? new Date(m.envelope.date).getTime() : 0;
+}
+async function imapThread(id, deps = {}, limit = 50) {
+  const ref = decodeImapId(id);
+  if (!ref) return null;
+  return useClient(
+    depsForMessageRef(ref, deps),
+    async (client) => {
+      const lock = await client.getMailboxLock(ref.path);
+      try {
+        const seed = await client.fetchOne(
+          String(ref.uid),
+          { envelope: true, headers: ["references", "in-reply-to", "message-id"] },
+          { uid: true }
+        );
+        if (!seed) return null;
+        const seedMsgId = seed.envelope?.messageId;
+        const refIds = /* @__PURE__ */ new Set();
+        const hdr = seed.headers ? seed.headers.toString() : "";
+        for (const m of hdr.matchAll(/<[^>]+>/g)) refIds.add(m[0]);
+        if (seed.envelope?.inReplyTo) refIds.add(seed.envelope.inReplyTo);
+        const uidSet = /* @__PURE__ */ new Set([ref.uid]);
+        const addFound = (found) => {
+          if (Array.isArray(found)) found.forEach((u) => uidSet.add(u));
+        };
+        if (seedMsgId) {
+          addFound(await client.search({ header: { references: seedMsgId } }, { uid: true }));
+          addFound(await client.search({ header: { "in-reply-to": seedMsgId } }, { uid: true }));
+        }
+        for (const mid of [...refIds].slice(0, 20)) {
+          addFound(await client.search({ header: { "message-id": mid } }, { uid: true }));
+        }
+        if (uidSet.size <= 1) return null;
+        const uids = [...uidSet].slice(0, limit);
+        const msgs = [];
+        for await (const msg of client.fetch(
+          uids.join(","),
+          // Same reason as the list/search fetch: get-thread emits structured
+          // rows too, so it needs BODYSTRUCTURE or its hasAttachments would
+          // silently disagree with the same message seen via search.
+          { envelope: true, flags: true, bodyStructure: true },
+          { uid: true }
+        )) {
+          msgs.push(msg);
+        }
+        msgs.sort((a, b) => dateMs(a) - dateMs(b));
+        const subject = seed.envelope?.subject || "(no subject)";
+        const structured = {
+          subject,
+          count: msgs.length,
+          messages: msgs.map((m) => ({
+            id: encodeImapId(ref.account, ref.path, m.uid),
+            subject: m.envelope?.subject || "(no subject)",
+            sender: senderName(m.envelope?.from),
+            date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : "",
+            isRead: m.flags?.has("\\Seen") ?? false
+          }))
+        };
+        const text = `Thread "${subject}" \u2014 ${msgs.length} message(s) via IMAP (References-linked, oldest first):
+` + msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n");
+        return { count: msgs.length, text, structured };
+      } finally {
+        lock.release();
+      }
+    },
+    true
+  );
+}
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var init_imapClient = __esm({
+  "src/services/imapClient.ts"() {
+    "use strict";
+    import_imapflow = __toESM(require_imap_flow(), 1);
+    init_smtpMailer();
+    init_docsUrls();
+    init_mimeParse();
+    init_auditLog();
+    init_attachmentLimits();
+    IMAP_ENV = {
+      user: "APPLE_MAIL_MCP_IMAP_USER",
+      account: "APPLE_MAIL_MCP_IMAP_ACCOUNT",
+      host: "APPLE_MAIL_MCP_IMAP_HOST",
+      port: "APPLE_MAIL_MCP_IMAP_PORT",
+      password: "APPLE_MAIL_MCP_IMAP_PASSWORD",
+      keychainService: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE",
+      keychainAccount: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT",
+      allowPlaintext: "APPLE_MAIL_MCP_IMAP_ALLOW_PLAINTEXT",
+      // C2 multi-account: JSON array of additional accounts, e.g.
+      // [{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]
+      accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS"
+    };
+    defaultConnect = async (cfg) => {
+      const client = new import_imapflow.ImapFlow(buildImapConnectionOptions(cfg));
+      client.on("error", () => {
+      });
+      try {
+        await client.connect();
+      } catch (error2) {
+        if (!cfg.secure && !cfg.allowPlaintext) {
+          const detail = error2 instanceof Error ? error2.message : String(error2);
+          throw new Error(
+            `IMAP connection failed: ${detail}. STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${IMAP_ENV.allowPlaintext}=1.`
+          );
+        }
+        throw error2;
+      }
+      return client;
+    };
+    SPECIAL_USE_ALIASES = {
+      "all mail": "\\all",
+      archive: "\\archive",
+      drafts: "\\drafts",
+      sent: "\\sent",
+      "sent mail": "\\sent",
+      trash: "\\trash",
+      spam: "\\junk",
+      junk: "\\junk",
+      starred: "\\flagged"
+    };
+    poolConnect = defaultConnect;
+    pools = /* @__PURE__ */ new Map();
+    connecting = /* @__PURE__ */ new Map();
+    MAX_COMPOSE_SOURCE_BYTES = 25 * 1024 * 1024;
+    MAIL_FLAG_BITS = ["$MailFlagBit0", "$MailFlagBit1", "$MailFlagBit2"];
+    imapMarkRead = (id, deps = {}) => flagOp(id, "\\Seen", true, deps);
+    imapMarkUnread = (id, deps = {}) => flagOp(id, "\\Seen", false, deps);
+    FALLBACK_TRASH_PATH = "Trash";
+    imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+      assertMutated(
+        await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true }),
+        `IMAP mark-read of ${uids.length} message(s)`
+      );
+    });
+    imapBatchMarkUnread = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+      assertMutated(
+        await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true }),
+        `IMAP mark-unread of ${uids.length} message(s)`
+      );
+    });
+    imapBatchFlag = (ids, colorIndex, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+      if (colorIndex === void 0) {
+        assertMutated(
+          await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true }),
+          `IMAP flag of ${uids.length} message(s)`
+        );
+        return;
+      }
+      const { set, clear } = mailFlagBitsFor(colorIndex);
+      assertMutated(
+        await c.messageFlagsAdd(uids, ["\\Flagged", ...set], { uid: true }),
+        `IMAP flag of ${uids.length} message(s)`
+      );
+      if (clear.length) await c.messageFlagsRemove(uids, clear, { uid: true });
+    });
+    imapBatchUnflag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
+      assertMutated(
+        await c.messageFlagsRemove(uids, ["\\Flagged", ...MAIL_FLAG_BITS], { uid: true }),
+        `IMAP unflag of ${uids.length} message(s)`
+      );
+    });
+    imapBatchDelete = (ids, deps = {}) => imapBatch(
+      ids,
+      deps,
+      async (c, uids, path) => {
+        await trashUids(c, uids, path);
+      },
+      { reconcile: true }
+    );
+  }
+});
+
+// src/services/smtpMailer.ts
+import { execFileSync } from "child_process";
+function errText2(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+async function defaultAppendSentCopy(smtpUser, raw) {
+  const { imapAppendSentCopy: imapAppendSentCopy2 } = await Promise.resolve().then(() => (init_imapClient(), imapClient_exports));
+  const result = await imapAppendSentCopy2(smtpUser, raw);
+  if (!result.attempted) return {};
+  return result.success ? { sentCopy: true } : { sentCopy: false, sentCopyError: result.error };
+}
+function buildRawMime(mail) {
+  return new import_mail_composer.default(mail).compile().build();
+}
+function isSmtpConfigured(env = process.env) {
+  return Boolean(env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim());
+}
+function shouldUseSmtp(transport2, account, configured = isSmtpConfigured()) {
+  if (transport2 === "smtp") return true;
+  if (transport2 === "applescript") return false;
+  if (!configured) return false;
+  const isAccountLabel = Boolean(account && !account.includes("@"));
+  return !isAccountLabel;
+}
+function readKeychainPassword(service, account) {
+  for (const kind of ["find-internet-password", "find-generic-password"]) {
+    try {
+      const out = execFileSync("security", [kind, "-s", service, "-a", account, "-w"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      const pass = out.replace(/\n$/, "");
+      if (pass) return pass;
+    } catch {
+    }
+  }
+  return null;
+}
+function resolveSmtpConfig(env = process.env) {
+  const host = env[SMTP_ENV.host]?.trim();
+  const user = env[SMTP_ENV.user]?.trim();
+  const missing = [];
+  if (!host) missing.push(SMTP_ENV.host);
+  if (!user) missing.push(SMTP_ENV.user);
+  if (missing.length > 0) {
+    throw new Error(
+      `SMTP transport is not configured. Set ${missing.join(" and ")} (plus a password via ${SMTP_ENV.password} or the Keychain). ` + SETUP_HINT
+    );
+  }
+  const secure = /^(1|true|yes)$/i.test(env[SMTP_ENV.secure]?.trim() ?? "");
+  const port = env[SMTP_ENV.port] ? Number.parseInt(env[SMTP_ENV.port], 10) : secure ? 465 : 587;
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error(`Invalid ${SMTP_ENV.port}: "${env[SMTP_ENV.port]}" is not a valid port.`);
+  }
+  const from = env[SMTP_ENV.from]?.trim() || user;
+  const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  let pass = env[SMTP_ENV.password];
+  if (!pass) {
+    const service = env[SMTP_ENV.keychainService]?.trim() || host;
+    const account = env[SMTP_ENV.keychainAccount]?.trim() || user;
+    pass = readKeychainPassword(service, account) ?? void 0;
+  }
+  if (!pass) {
+    throw new Error(
+      `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
+    );
+  }
+  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
+  return {
+    host,
+    port,
+    secure,
+    allowPlaintext,
+    user,
+    pass,
+    from,
+    allowedFrom
+  };
+}
+function buildAttachments(attachments) {
+  if (!attachments || attachments.length === 0) return void 0;
+  return attachments.map((a) => {
+    if (typeof a === "string") {
+      return { path: resolveAttachmentReadPath(a) };
+    }
+    if (!a.filename || !a.contentBase64) {
+      throw new Error("Inline attachment requires both filename and contentBase64.");
+    }
+    return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
+  });
+}
+async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.default.createTransport, appendSentCopy = defaultAppendSentCopy) {
+  let cfg;
+  try {
+    cfg = config2 ?? resolveSmtpConfig();
+  } catch (error2) {
+    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
+  }
+  const requestedFrom = opts.from?.trim();
+  const allowedFrom = new Set(
+    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((value) => value.trim().toLowerCase())
+  );
+  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
+    return {
+      success: false,
+      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`
+    };
+  }
+  let attachments;
+  try {
+    attachments = buildAttachments(opts.attachments);
+  } catch (error2) {
+    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
+  }
+  const requireTLS = !cfg.secure && !cfg.allowPlaintext;
+  if (!cfg.secure && cfg.allowPlaintext) {
+    console.warn(
+      `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
+    );
+  }
+  const transporter = createTransport({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    // Port 587/143-style configurations must not silently downgrade to
+    // plaintext when the server advertises no usable TLS upgrade.
+    requireTLS,
+    auth: { user: cfg.user, pass: cfg.pass }
+  });
+  const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
+  const mailOptions = {
+    from: requestedFrom || cfg.from,
+    to: opts.to,
+    cc: opts.cc,
+    bcc: opts.bcc,
+    subject: opts.subject,
+    text: opts.body,
+    // When present, nodemailer emits multipart/alternative (text + html).
+    html,
+    attachments,
+    // RFC 5322 threading for SMTP replies/forwards (2.5.0).
+    inReplyTo: opts.inReplyTo?.trim() || void 0,
+    references: opts.references?.length ? opts.references : void 0,
+    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
+    replyTo: opts.replyTo?.trim() || void 0
+  };
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    let copyFields = {};
+    try {
+      const raw = await buildRawMime({
+        ...mailOptions,
+        keepBcc: true,
+        messageId: info.messageId
+      });
+      copyFields = await appendSentCopy(cfg.user, raw);
+    } catch (copyError) {
+      copyFields = { sentCopy: false, sentCopyError: errText2(copyError) };
+    }
+    return { success: true, messageId: info.messageId, ...copyFields };
+  } catch (error2) {
+    const detail = error2 instanceof Error ? error2.message : String(error2);
+    const tlsHint = requireTLS ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.` : "";
+    return {
+      success: false,
+      error: `SMTP send failed: ${detail}.${tlsHint}`
+    };
+  } finally {
+    transporter.close();
+  }
+}
+function applyPlaceholders(template, variables) {
+  let out = template;
+  for (const [key, value] of Object.entries(variables)) {
+    const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), value);
+  }
+  return out;
+}
+async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) {
+  const send = opts.send ?? sendViaSmtp;
+  const sleep2 = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const delay = Math.min(Math.max(opts.delayMs ?? 500, 0), 1e4);
+  const results = [];
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    try {
+      const res = await send(
+        {
+          to: [r.email],
+          subject: applyPlaceholders(subject, r.variables),
+          body: applyPlaceholders(body, r.variables),
+          from: config2.from
+        },
+        config2
+      );
+      results.push({ email: r.email, success: res.success, error: res.error });
+    } catch (error2) {
+      results.push({
+        email: r.email,
+        success: false,
+        error: error2 instanceof Error ? error2.message : String(error2)
+      });
+    }
+    if (delay > 0 && i < recipients.length - 1) {
+      await sleep2(delay);
+    }
+  }
+  return results;
+}
+var import_nodemailer, import_mail_composer, SMTP_ENV;
+var init_smtpMailer = __esm({
+  "src/services/smtpMailer.ts"() {
+    "use strict";
+    import_nodemailer = __toESM(require_nodemailer(), 1);
+    import_mail_composer = __toESM(require_mail_composer(), 1);
+    init_attachmentLimits();
+    init_attachmentReadPolicy();
+    init_docsUrls();
+    SMTP_ENV = {
+      host: "APPLE_MAIL_MCP_SMTP_HOST",
+      port: "APPLE_MAIL_MCP_SMTP_PORT",
+      secure: "APPLE_MAIL_MCP_SMTP_SECURE",
+      allowPlaintext: "APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT",
+      user: "APPLE_MAIL_MCP_SMTP_USER",
+      from: "APPLE_MAIL_MCP_SMTP_FROM",
+      allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
+      password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
+      keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
+      keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
+    };
+  }
+});
+
 // src/index.ts
 import { createRequire } from "module";
 
@@ -79409,208 +81444,9 @@ function executeAppleScript(script, options = {}) {
   return lastError;
 }
 
-// src/utils/docsUrls.ts
-var SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
-var SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
-
-// src/utils/mimeParse.ts
-function extractBoundary(source) {
-  const match = source.match(/boundary="?([^";\s\r\n]+)"?/i);
-  return match ? match[1] : null;
-}
-function getHeader(headers, name) {
-  const regex = new RegExp(`^${name}:\\s*(.+(?:\\r?\\n[ \\t]+.+)*)`, "im");
-  const match = headers.match(regex);
-  if (!match) return null;
-  return match[1].replace(/\r?\n[ \t]+/g, " ").trim();
-}
-function extractFilename(headers) {
-  const dispHeader = getHeader(headers, "Content-Disposition");
-  if (dispHeader) {
-    const fnMatch = dispHeader.match(/filename="?([^";\r\n]+)"?/i);
-    if (fnMatch) return fnMatch[1].trim();
-  }
-  const ctHeader = getHeader(headers, "Content-Type");
-  if (ctHeader) {
-    const nameMatch = ctHeader.match(/name="?([^";\r\n]+)"?/i);
-    if (nameMatch) return nameMatch[1].trim();
-  }
-  return null;
-}
-function isInlineDisposition(headers) {
-  const dispHeader = getHeader(headers, "Content-Disposition");
-  if (!dispHeader) return false;
-  return dispHeader.toLowerCase().startsWith("inline");
-}
-function extractSize(headers) {
-  const dispHeader = getHeader(headers, "Content-Disposition");
-  if (dispHeader) {
-    const sizeMatch = dispHeader.match(/size=(\d+)/i);
-    if (sizeMatch) return parseInt(sizeMatch[1], 10);
-  }
-  return 0;
-}
-function extractMimeType(headers) {
-  const ctHeader = getHeader(headers, "Content-Type");
-  if (!ctHeader) return "application/octet-stream";
-  const typeMatch = ctHeader.match(/^([^;\s]+)/);
-  return typeMatch ? typeMatch[1].toLowerCase() : "application/octet-stream";
-}
-function estimateBase64Size(base64Body) {
-  const cleaned = base64Body.replace(/[\s\r\n]/g, "");
-  return Math.floor(cleaned.length * 3 / 4);
-}
-function splitMimeParts(source, boundary) {
-  const parts = [];
-  const boundaryDelim = `--${boundary}`;
-  const sections = source.split(boundaryDelim);
-  for (const section of sections) {
-    const trimmed = section.trim();
-    if (!trimmed || trimmed.startsWith("--")) continue;
-    const blankLineIdx = trimmed.search(/\r?\n\r?\n/);
-    if (blankLineIdx === -1) continue;
-    const headers = trimmed.substring(0, blankLineIdx);
-    const body = trimmed.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-    parts.push({ headers, body });
-  }
-  return parts;
-}
-var MAX_MIME_DEPTH = 20;
-function walkLeafParts(source, boundary, depth = 0) {
-  const result = [];
-  const parts = splitMimeParts(source, boundary);
-  for (const part of parts) {
-    const ct = getHeader(part.headers, "Content-Type");
-    if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
-      const nestedBoundary = extractBoundary(ct);
-      if (nestedBoundary) {
-        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1));
-        continue;
-      }
-    }
-    result.push(part);
-  }
-  return result;
-}
-function decodeBody(body, encoding) {
-  const enc = (encoding || "").toLowerCase().trim();
-  if (enc === "base64") {
-    return Buffer.from(body.replace(/[\s\r\n]/g, ""), "base64");
-  }
-  if (enc === "quoted-printable") {
-    return decodeQuotedPrintable(body);
-  }
-  return Buffer.from(body, "binary");
-}
-function decodeQuotedPrintable(body) {
-  const noSoft = body.replace(/=\r?\n/g, "");
-  const bytes = [];
-  for (let i = 0; i < noSoft.length; i++) {
-    const c = noSoft[i];
-    if (c === "=" && i + 2 < noSoft.length) {
-      const hex = noSoft.substring(i + 1, i + 3);
-      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
-        bytes.push(parseInt(hex, 16));
-        i += 2;
-        continue;
-      }
-    }
-    bytes.push(c.charCodeAt(0) & 255);
-  }
-  return Buffer.from(bytes);
-}
-function estimateSize(body, encoding) {
-  const enc = (encoding || "").toLowerCase().trim();
-  if (enc === "base64") return estimateBase64Size(body);
-  return body.length;
-}
-function parseMimeAttachments(source) {
-  if (!source || !source.trim()) return [];
-  const boundary = extractBoundary(source);
-  if (!boundary) return [];
-  const parts = walkLeafParts(source, boundary);
-  const attachments = [];
-  for (const part of parts) {
-    const filename = extractFilename(part.headers);
-    if (!filename) continue;
-    if (isInlineDisposition(part.headers)) continue;
-    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
-    attachments.push({
-      name: filename,
-      mimeType: extractMimeType(part.headers),
-      size: extractSize(part.headers) || estimateSize(part.body, encoding)
-    });
-  }
-  return attachments;
-}
-function extractHtmlBody(source) {
-  if (!source || !source.trim()) return null;
-  const boundary = extractBoundary(source);
-  if (boundary) {
-    for (const part of walkLeafParts(source, boundary)) {
-      if (extractMimeType(part.headers) === "text/html") {
-        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodeBody(part.body, encoding2).toString("utf8");
-      }
-    }
-    return null;
-  }
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  if (blankLineIdx === -1) return null;
-  const headers = source.substring(0, blankLineIdx);
-  if (extractMimeType(headers) !== "text/html") return null;
-  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodeBody(body, encoding).toString("utf8");
-}
-function extractTextBody(source) {
-  if (!source || !source.trim()) return null;
-  const boundary = extractBoundary(source);
-  if (boundary) {
-    for (const part of walkLeafParts(source, boundary)) {
-      if (extractMimeType(part.headers) === "text/plain") {
-        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodeBody(part.body, encoding2).toString("utf8");
-      }
-    }
-    return null;
-  }
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  if (blankLineIdx === -1) return null;
-  const headers = source.substring(0, blankLineIdx);
-  const ct = extractMimeType(headers);
-  if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
-  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodeBody(body, encoding).toString("utf8");
-}
-function extractRfcMessageIdFromSource(source) {
-  if (!source || !source.trim()) return "";
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  const headers = blankLineIdx === -1 ? source : source.substring(0, blankLineIdx);
-  const raw = getHeader(headers, "Message-ID") ?? getHeader(headers, "Message-Id");
-  if (!raw) return "";
-  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
-}
-function extractMimeAttachment(source, attachmentName) {
-  if (!source || !source.trim()) return null;
-  const boundary = extractBoundary(source);
-  if (!boundary) return null;
-  const parts = walkLeafParts(source, boundary);
-  for (const part of parts) {
-    const filename = extractFilename(part.headers);
-    if (filename !== attachmentName) continue;
-    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
-    const data = decodeBody(part.body, encoding);
-    return {
-      name: filename,
-      mimeType: extractMimeType(part.headers),
-      size: extractSize(part.headers) || data.length,
-      data
-    };
-  }
-  return null;
-}
+// src/services/appleMailManager.ts
+init_docsUrls();
+init_mimeParse();
 
 // src/services/templateStore.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -79686,128 +81522,11 @@ var TemplateStore = class {
 };
 
 // src/utils/attachmentMaterialize.ts
+init_attachmentLimits();
+init_attachmentReadPolicy();
 import { writeFileSync as writeFileSync2, rmSync, mkdtempSync } from "fs";
 import { join as join3 } from "path";
 import { tmpdir as tmpdir2 } from "os";
-
-// src/utils/attachmentLimits.ts
-var MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-var MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
-var MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
-var MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
-function isInlineAttachmentBase64WithinLimit(contentBase64) {
-  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS) return false;
-  let encodedChars = 0;
-  for (const char of contentBase64) {
-    if (!/\s/u.test(char) && ++encodedChars > MAX_INLINE_ATTACHMENT_BASE64_CHARS) return false;
-  }
-  return true;
-}
-function decodeInlineAttachment(contentBase64) {
-  if (!isInlineAttachmentBase64WithinLimit(contentBase64)) {
-    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
-  }
-  const content = Buffer.from(contentBase64, "base64");
-  if (content.length > MAX_INLINE_ATTACHMENT_BYTES) {
-    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
-  }
-  return content;
-}
-
-// src/utils/attachmentReadPolicy.ts
-import { realpathSync, statSync } from "fs";
-import { homedir as homedir2, tmpdir } from "os";
-import { delimiter, isAbsolute, join as join2, resolve, sep } from "path";
-var ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
-var DEFAULT_ATTACHMENT_READ_ROOTS = [homedir2(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
-var SENSITIVE_HOME_ROOTS = [
-  join2(homedir2(), ".ssh"),
-  join2(homedir2(), ".aws"),
-  join2(homedir2(), ".config", "gh"),
-  join2(homedir2(), "Library", "Keychains")
-];
-function canonicalize(path) {
-  return realpathSync.native(path);
-}
-function sensitiveRoots() {
-  return SENSITIVE_HOME_ROOTS.map((root) => {
-    try {
-      return canonicalize(root);
-    } catch {
-      return root;
-    }
-  });
-}
-function isWithinRoot(candidate, root) {
-  return candidate === root || candidate.startsWith(root + sep);
-}
-function hasHiddenPathSegment(candidate) {
-  return candidate.split(sep).some((segment) => segment.startsWith(".") && segment.length > 1);
-}
-function isProtectedPath(candidate) {
-  if (hasHiddenPathSegment(candidate)) return true;
-  if (sensitiveRoots().some((root) => isWithinRoot(candidate, root))) return true;
-  let home;
-  try {
-    home = canonicalize(homedir2());
-  } catch {
-    home = resolve(homedir2());
-  }
-  if (!isWithinRoot(candidate, home)) return false;
-  const relative = candidate.slice(home.length).split(sep).filter(Boolean);
-  return relative.length >= 4 && relative[0].toLowerCase() === "library" && relative[1].toLowerCase() === "application support" && relative.at(-1)?.toLowerCase() === "config.json";
-}
-function configuredRoots(env) {
-  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
-  const extraRoots = raw === void 0 ? [] : raw.split(delimiter).map((root) => root.trim()).filter(Boolean);
-  const requested = [...DEFAULT_ATTACHMENT_READ_ROOTS, ...extraRoots];
-  for (const root of requested) {
-    if (!isAbsolute(root)) {
-      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
-    }
-  }
-  const resolved = [];
-  for (const root of requested) {
-    try {
-      const canonical = canonicalize(resolve(root));
-      if (!resolved.includes(canonical)) resolved.push(canonical);
-    } catch {
-    }
-  }
-  return resolved;
-}
-function resolveAttachmentReadPath(filePath, env = process.env) {
-  if (!isAbsolute(filePath)) {
-    throw new Error(`Attachment path must be absolute: "${filePath}"`);
-  }
-  let canonical;
-  try {
-    canonical = canonicalize(filePath);
-  } catch {
-    throw new Error(`Attachment file not found: "${filePath}"`);
-  }
-  try {
-    if (!statSync(canonical).isFile()) {
-      throw new Error(`Attachment path is not a regular file: "${filePath}"`);
-    }
-  } catch (error2) {
-    if (error2 instanceof Error && error2.message.includes("not a regular file")) throw error2;
-    throw new Error(`Attachment file not found: "${filePath}"`);
-  }
-  if (isProtectedPath(canonical)) {
-    throw new Error(
-      `Attachment path is in a protected location: "${filePath}". Hidden files and credential/configuration locations cannot be sent as attachments.`
-    );
-  }
-  if (!configuredRoots(env).some((root) => isWithinRoot(canonical, root))) {
-    throw new Error(
-      `Attachment path is outside the allowed read roots: "${filePath}". Use an ordinary home-directory, /Volumes, or temporary path, or configure ${ATTACHMENT_READ_ROOTS_ENV} for an additional explicit root.`
-    );
-  }
-  return canonical;
-}
-
-// src/utils/attachmentMaterialize.ts
 function materializeAttachments(attachments) {
   if (!attachments || attachments.length === 0) {
     return { paths: [], cleanup: () => void 0 };
@@ -79837,6 +81556,9 @@ function materializeAttachments(attachments) {
     }
   };
 }
+
+// src/services/appleMailManager.ts
+init_attachmentReadPolicy();
 
 // src/utils/contactsDb.ts
 import { existsSync as existsSync2, readdirSync } from "fs";
@@ -79946,87 +81668,8 @@ function searchContactsDb(query, opts) {
   return results;
 }
 
-// src/services/auditLog.ts
-import { appendFileSync } from "node:fs";
-var AUDIT_LOG_ENV = "APPLE_MAIL_MCP_AUDIT_LOG";
-var AUDIT_SUBJECTS_ENV = "APPLE_MAIL_MCP_AUDIT_SUBJECTS";
-var AUDIT_SNAPSHOT_MAX_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX";
-var AUDIT_SNAPSHOT_CHUNK_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK";
-var DEFAULT_SNAPSHOT_MAX = 2e3;
-var DEFAULT_SNAPSHOT_CHUNK = 250;
-var SNAPSHOT_SLICE_ATTEMPTS = 2;
-function isOn(raw) {
-  return /^(1|true|yes|on)$/i.test((raw ?? "").trim());
-}
-function auditLogPath() {
-  const raw = process.env[AUDIT_LOG_ENV]?.trim();
-  return raw ? raw : null;
-}
-function isAuditEnabled() {
-  return auditLogPath() !== null;
-}
-function auditSubjectsEnabled() {
-  return isAuditEnabled() && isOn(process.env[AUDIT_SUBJECTS_ENV]);
-}
-function auditSnapshotMax() {
-  const raw = process.env[AUDIT_SNAPSHOT_MAX_ENV]?.trim();
-  if (raw === void 0 || raw === "") return DEFAULT_SNAPSHOT_MAX;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return DEFAULT_SNAPSHOT_MAX;
-  return Math.floor(n);
-}
-function auditSnapshotChunk() {
-  const raw = process.env[AUDIT_SNAPSHOT_CHUNK_ENV]?.trim();
-  if (raw === void 0 || raw === "") return DEFAULT_SNAPSHOT_CHUNK;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 1) return DEFAULT_SNAPSHOT_CHUNK;
-  return Math.floor(n);
-}
-function classifyCountStatus(readable, expected, observed) {
-  if (!readable) return { status: "unknown", unknownReason: "count-unreadable" };
-  if (expected === null) return { status: "unknown", unknownReason: "no-expectation" };
-  if (observed === expected) return { status: "match" };
-  if ((observed ?? 0) > expected) return { status: "over" };
-  if (observed === 0) return { status: "unknown", unknownReason: "count-did-not-move" };
-  return { status: "unknown", unknownReason: "count-partial" };
-}
-function writeAuditRecord(record2) {
-  const path = auditLogPath();
-  if (!path) return;
-  try {
-    appendFileSync(path, `${JSON.stringify(record2)}
-`, "utf8");
-  } catch (err) {
-    console.error(
-      `[apple-mail-mcp] audit log write failed (${path}): ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-}
-function writeDestructiveAudit(ctx, report) {
-  if (!isAuditEnabled()) return;
-  writeAuditRecord({
-    ts: (/* @__PURE__ */ new Date()).toISOString(),
-    tool: ctx.tool,
-    serverVersion: ctx.serverVersion,
-    args: ctx.args,
-    preImages: report.preImages,
-    outcomes: report.outcomes,
-    countDeltas: report.countDeltas,
-    collateral: report.collateral,
-    subjectsLogged: auditSubjectsEnabled()
-  });
-}
-function countDeltaWarning(d) {
-  if (d.status !== "over" || d.expected === null) return null;
-  const extra = (d.observed ?? 0) - d.expected;
-  const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
-  return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. Anything else removing mail from this mailbox at the same moment \u2014 a Mail rule, a server-side filter, another client, an IMAP expunge \u2014 reads the same way, so rule that out first. If nothing else was touching it, this is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
-}
-function reconciliationWarnings(report) {
-  return report.countDeltas.map((d) => countDeltaWarning(d)).filter((w) => w !== null);
-}
-
 // src/services/appleMailManager.ts
+init_auditLog();
 function getMailboxScanThreshold() {
   const raw = process.env.APPLE_MAIL_MAX_SEARCH_MAILBOX;
   if (raw !== void 0) {
@@ -84574,1490 +86217,12 @@ ${actionStmts.join("\n")}
 };
 
 // src/index.ts
+init_smtpMailer();
 import { writeFileSync as writeFileSync4 } from "fs";
 import { join as joinPath } from "path";
 
-// src/services/smtpMailer.ts
-var import_nodemailer = __toESM(require_nodemailer(), 1);
-import { execFileSync } from "child_process";
-var SMTP_ENV = {
-  host: "APPLE_MAIL_MCP_SMTP_HOST",
-  port: "APPLE_MAIL_MCP_SMTP_PORT",
-  secure: "APPLE_MAIL_MCP_SMTP_SECURE",
-  allowPlaintext: "APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT",
-  user: "APPLE_MAIL_MCP_SMTP_USER",
-  from: "APPLE_MAIL_MCP_SMTP_FROM",
-  allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
-  password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
-  keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
-  keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
-};
-function isSmtpConfigured(env = process.env) {
-  return Boolean(env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim());
-}
-function shouldUseSmtp(transport2, account, configured = isSmtpConfigured()) {
-  if (transport2 === "smtp") return true;
-  if (transport2 === "applescript") return false;
-  if (!configured) return false;
-  const isAccountLabel = Boolean(account && !account.includes("@"));
-  return !isAccountLabel;
-}
-function readKeychainPassword(service, account) {
-  for (const kind of ["find-internet-password", "find-generic-password"]) {
-    try {
-      const out = execFileSync("security", [kind, "-s", service, "-a", account, "-w"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"]
-      });
-      const pass = out.replace(/\n$/, "");
-      if (pass) return pass;
-    } catch {
-    }
-  }
-  return null;
-}
-function resolveSmtpConfig(env = process.env) {
-  const host = env[SMTP_ENV.host]?.trim();
-  const user = env[SMTP_ENV.user]?.trim();
-  const missing = [];
-  if (!host) missing.push(SMTP_ENV.host);
-  if (!user) missing.push(SMTP_ENV.user);
-  if (missing.length > 0) {
-    throw new Error(
-      `SMTP transport is not configured. Set ${missing.join(" and ")} (plus a password via ${SMTP_ENV.password} or the Keychain). ` + SETUP_HINT
-    );
-  }
-  const secure = /^(1|true|yes)$/i.test(env[SMTP_ENV.secure]?.trim() ?? "");
-  const port = env[SMTP_ENV.port] ? Number.parseInt(env[SMTP_ENV.port], 10) : secure ? 465 : 587;
-  if (!Number.isInteger(port) || port <= 0) {
-    throw new Error(`Invalid ${SMTP_ENV.port}: "${env[SMTP_ENV.port]}" is not a valid port.`);
-  }
-  const from = env[SMTP_ENV.from]?.trim() || user;
-  const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-  let pass = env[SMTP_ENV.password];
-  if (!pass) {
-    const service = env[SMTP_ENV.keychainService]?.trim() || host;
-    const account = env[SMTP_ENV.keychainAccount]?.trim() || user;
-    pass = readKeychainPassword(service, account) ?? void 0;
-  }
-  if (!pass) {
-    throw new Error(
-      `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
-    );
-  }
-  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
-  return {
-    host,
-    port,
-    secure,
-    allowPlaintext,
-    user,
-    pass,
-    from,
-    allowedFrom
-  };
-}
-function buildAttachments(attachments) {
-  if (!attachments || attachments.length === 0) return void 0;
-  return attachments.map((a) => {
-    if (typeof a === "string") {
-      return { path: resolveAttachmentReadPath(a) };
-    }
-    if (!a.filename || !a.contentBase64) {
-      throw new Error("Inline attachment requires both filename and contentBase64.");
-    }
-    return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
-  });
-}
-async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.default.createTransport) {
-  let cfg;
-  try {
-    cfg = config2 ?? resolveSmtpConfig();
-  } catch (error2) {
-    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
-  }
-  const requestedFrom = opts.from?.trim();
-  const allowedFrom = new Set(
-    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((value) => value.trim().toLowerCase())
-  );
-  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
-    return {
-      success: false,
-      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`
-    };
-  }
-  let attachments;
-  try {
-    attachments = buildAttachments(opts.attachments);
-  } catch (error2) {
-    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
-  }
-  const requireTLS = !cfg.secure && !cfg.allowPlaintext;
-  if (!cfg.secure && cfg.allowPlaintext) {
-    console.warn(
-      `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
-    );
-  }
-  const transporter = createTransport({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    // Port 587/143-style configurations must not silently downgrade to
-    // plaintext when the server advertises no usable TLS upgrade.
-    requireTLS,
-    auth: { user: cfg.user, pass: cfg.pass }
-  });
-  const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
-  try {
-    const info = await transporter.sendMail({
-      from: requestedFrom || cfg.from,
-      to: opts.to,
-      cc: opts.cc,
-      bcc: opts.bcc,
-      subject: opts.subject,
-      text: opts.body,
-      // When present, nodemailer emits multipart/alternative (text + html).
-      html,
-      attachments,
-      // RFC 5322 threading for SMTP replies/forwards (2.5.0).
-      inReplyTo: opts.inReplyTo?.trim() || void 0,
-      references: opts.references?.length ? opts.references : void 0
-    });
-    return { success: true, messageId: info.messageId };
-  } catch (error2) {
-    const detail = error2 instanceof Error ? error2.message : String(error2);
-    const tlsHint = requireTLS ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.` : "";
-    return {
-      success: false,
-      error: `SMTP send failed: ${detail}.${tlsHint}`
-    };
-  } finally {
-    transporter.close();
-  }
-}
-function applyPlaceholders(template, variables) {
-  let out = template;
-  for (const [key, value] of Object.entries(variables)) {
-    const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), value);
-  }
-  return out;
-}
-async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) {
-  const send = opts.send ?? sendViaSmtp;
-  const sleep2 = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const delay = Math.min(Math.max(opts.delayMs ?? 500, 0), 1e4);
-  const results = [];
-  for (let i = 0; i < recipients.length; i++) {
-    const r = recipients[i];
-    try {
-      const res = await send(
-        {
-          to: [r.email],
-          subject: applyPlaceholders(subject, r.variables),
-          body: applyPlaceholders(body, r.variables),
-          from: config2.from
-        },
-        config2
-      );
-      results.push({ email: r.email, success: res.success, error: res.error });
-    } catch (error2) {
-      results.push({
-        email: r.email,
-        success: false,
-        error: error2 instanceof Error ? error2.message : String(error2)
-      });
-    }
-    if (delay > 0 && i < recipients.length - 1) {
-      await sleep2(delay);
-    }
-  }
-  return results;
-}
-
-// src/services/imapClient.ts
-var import_imapflow = __toESM(require_imap_flow(), 1);
-var IMAP_ENV = {
-  user: "APPLE_MAIL_MCP_IMAP_USER",
-  account: "APPLE_MAIL_MCP_IMAP_ACCOUNT",
-  host: "APPLE_MAIL_MCP_IMAP_HOST",
-  port: "APPLE_MAIL_MCP_IMAP_PORT",
-  password: "APPLE_MAIL_MCP_IMAP_PASSWORD",
-  keychainService: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE",
-  keychainAccount: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT",
-  allowPlaintext: "APPLE_MAIL_MCP_IMAP_ALLOW_PLAINTEXT",
-  // C2 multi-account: JSON array of additional accounts, e.g.
-  // [{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]
-  accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS"
-};
-function encodeImapId(account, path, uid) {
-  const payload = Buffer.from(JSON.stringify({ a: account, p: path, u: uid }), "utf8").toString(
-    "base64url"
-  );
-  return `imap:${payload}`;
-}
-function decodeImapId(id) {
-  if (!id || !id.startsWith("imap:")) return null;
-  try {
-    const obj = JSON.parse(Buffer.from(id.slice("imap:".length), "base64url").toString("utf8"));
-    if (typeof obj.u !== "number" || typeof obj.p !== "string") return null;
-    return { account: String(obj.a ?? ""), path: obj.p, uid: obj.u };
-  } catch {
-    return null;
-  }
-}
-function sameImapAccount(left, right, deps) {
-  if (left === right) return true;
-  if (deps.config) {
-    const aliases = /* @__PURE__ */ new Set([deps.config.accountLabel, deps.config.user]);
-    if (aliases.has(left) && aliases.has(right)) return true;
-  }
-  const specs = listImapAccountSpecs();
-  const leftSpec = specs.find((spec) => specMatchesSelector(spec, left));
-  const rightSpec = specs.find((spec) => specMatchesSelector(spec, right));
-  return leftSpec !== void 0 && leftSpec === rightSpec;
-}
-function depsForAccount(account, deps) {
-  if (deps.account && !sameImapAccount(account, deps.account, deps)) {
-    throw new Error(`IMAP message id belongs to account "${account}", not "${deps.account}".`);
-  }
-  return { ...deps, account };
-}
-function depsForMessageRef(ref, deps) {
-  return depsForAccount(ref.account, deps);
-}
-function isTruthySetting(value) {
-  return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
-}
-function specMatchesSelector(spec, selector) {
-  return spec.accountLabel === selector || spec.user === selector || (spec.aliases?.includes(selector) ?? false);
-}
-function str(v) {
-  return typeof v === "string" && v.trim() ? v.trim() : void 0;
-}
-function imapIdentityKey(spec) {
-  return `${spec.host.trim().toLowerCase()}:${spec.port}:${spec.user.trim()}`;
-}
-function listImapAccountSpecs(env = process.env) {
-  const specs = [];
-  const seen = /* @__PURE__ */ new Set();
-  const user = env[IMAP_ENV.user]?.trim();
-  if (user) {
-    const legacy = {
-      accountLabel: env[IMAP_ENV.account]?.trim() || user,
-      user,
-      host: env[IMAP_ENV.host]?.trim() || "imap.gmail.com",
-      port: env[IMAP_ENV.port] ? Number.parseInt(env[IMAP_ENV.port], 10) : 993,
-      password: env[IMAP_ENV.password],
-      keychainService: env[IMAP_ENV.keychainService]?.trim(),
-      keychainAccount: env[IMAP_ENV.keychainAccount]?.trim()
-    };
-    specs.push(legacy);
-    seen.add(imapIdentityKey(legacy));
-  }
-  const json = env[IMAP_ENV.accounts]?.trim();
-  if (json) {
-    try {
-      const arr = JSON.parse(json);
-      if (Array.isArray(arr)) {
-        for (const raw of arr) {
-          const a = raw;
-          const u = str(a.user);
-          if (!u) continue;
-          const label = str(a.account) || str(a.accountLabel) || u;
-          const host = str(a.host) || "imap.gmail.com";
-          const port = a.port ? Number(a.port) : 993;
-          const key = imapIdentityKey({ host, port, user: u });
-          if (seen.has(key)) {
-            const owner = specs.find((s) => imapIdentityKey(s) === key);
-            if (owner && owner.accountLabel !== label && !owner.aliases?.includes(label)) {
-              (owner.aliases ??= []).push(label);
-            }
-            continue;
-          }
-          if (specs.some((s) => s.accountLabel === label)) continue;
-          seen.add(key);
-          specs.push({
-            accountLabel: label,
-            user: u,
-            host,
-            port,
-            password: str(a.password),
-            keychainService: str(a.keychainService),
-            keychainAccount: str(a.keychainAccount)
-          });
-        }
-      }
-    } catch (e) {
-      console.error(`Invalid ${IMAP_ENV.accounts} JSON, ignoring: ${String(e)}`);
-    }
-  }
-  return specs;
-}
-function specToConfig(spec, allowPlaintext = false) {
-  if (!Number.isInteger(spec.port) || spec.port <= 0) {
-    throw new Error(`Invalid IMAP port for account "${spec.accountLabel}": "${spec.port}".`);
-  }
-  let pass = spec.password;
-  if (!pass && spec.keychainService) {
-    pass = readKeychainPassword(spec.keychainService, spec.keychainAccount || spec.user) ?? void 0;
-  }
-  if (!pass) {
-    throw new Error(
-      `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account. ${SETUP_HINT}`
-    );
-  }
-  return {
-    host: spec.host,
-    port: spec.port,
-    secure: spec.port === 993,
-    allowPlaintext,
-    user: spec.user,
-    pass,
-    accountLabel: spec.accountLabel
-  };
-}
-function isImapAccount(account, env = process.env) {
-  if (!account) return false;
-  return listImapAccountSpecs(env).some((s) => specMatchesSelector(s, account));
-}
-function shouldUseImap(account, env = process.env) {
-  return listImapAccountSpecs(env).length > 0 && (account === void 0 || isImapAccount(account, env));
-}
-function listImapAccountLabels(env = process.env) {
-  return listImapAccountSpecs(env).map((s) => s.accountLabel);
-}
-function resolveImapConfigs(env = process.env) {
-  const out = [];
-  const allowPlaintext = isTruthySetting(env[IMAP_ENV.allowPlaintext]);
-  for (const spec of listImapAccountSpecs(env)) {
-    try {
-      out.push(specToConfig(spec, allowPlaintext));
-    } catch (e) {
-      console.error(`Skipping IMAP account "${spec.accountLabel}": ${String(e)}`);
-    }
-  }
-  return out;
-}
-function resolveImapConfig(env = process.env, account) {
-  const specs = listImapAccountSpecs(env);
-  if (specs.length === 0) {
-    throw new Error(
-      `IMAP not configured. Set ${IMAP_ENV.user} (login address), or ${IMAP_ENV.accounts} for multiple accounts, to enable it. ${SETUP_HINT}`
-    );
-  }
-  let spec;
-  if (account) {
-    spec = specs.find((s) => specMatchesSelector(s, account));
-    if (!spec) {
-      throw new Error(
-        `No IMAP account matching "${account}". Configured: ${specs.map((s) => s.accountLabel).join(", ")}.`
-      );
-    }
-  } else {
-    spec = specs[0];
-  }
-  return specToConfig(spec, isTruthySetting(env[IMAP_ENV.allowPlaintext]));
-}
-function buildImapConnectionOptions(cfg) {
-  return {
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    // ImapFlow reads this as a tri-state, and the distinction matters:
-    //   true      -> require STARTTLS; fail if the server does not offer it
-    //   false     -> NEVER STARTTLS, even if the server advertises it
-    //   undefined -> opportunistic upgrade (ImapFlow's documented default)
-    //
-    // secure=true already has implicit TLS, so there is no upgrade to negotiate.
-    // Without the escape hatch the upgrade is required. WITH it we must fall back
-    // to `undefined`, not `false`: the escape hatch means "let me reach a server
-    // that cannot do TLS", not "never encrypt". Sending `false` suppressed the
-    // upgrade even against servers still offering it, so enabling the opt-out for
-    // one broken account silently downgraded every other plaintext-port account
-    // below what it already negotiated before this option existed.
-    doSTARTTLS: cfg.secure || cfg.allowPlaintext ? void 0 : true,
-    auth: { user: cfg.user, pass: cfg.pass },
-    logger: false
-  };
-}
-var defaultConnect = async (cfg) => {
-  const client = new import_imapflow.ImapFlow(buildImapConnectionOptions(cfg));
-  client.on("error", () => {
-  });
-  try {
-    await client.connect();
-  } catch (error2) {
-    if (!cfg.secure && !cfg.allowPlaintext) {
-      const detail = error2 instanceof Error ? error2.message : String(error2);
-      throw new Error(
-        `IMAP connection failed: ${detail}. STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${IMAP_ENV.allowPlaintext}=1.`
-      );
-    }
-    throw error2;
-  }
-  return client;
-};
-var SPECIAL_USE_ALIASES = {
-  "all mail": "\\all",
-  archive: "\\archive",
-  drafts: "\\drafts",
-  sent: "\\sent",
-  "sent mail": "\\sent",
-  trash: "\\trash",
-  spam: "\\junk",
-  junk: "\\junk",
-  starred: "\\flagged"
-};
-function staticMailboxAlias(mailbox) {
-  const map = {
-    "all mail": "[Gmail]/All Mail",
-    "sent mail": "[Gmail]/Sent Mail",
-    sent: "[Gmail]/Sent Mail",
-    trash: "[Gmail]/Trash",
-    drafts: "[Gmail]/Drafts",
-    spam: "[Gmail]/Spam",
-    junk: "[Gmail]/Spam",
-    starred: "[Gmail]/Starred",
-    important: "[Gmail]/Important"
-  };
-  return map[mailbox.trim().toLowerCase()] ?? mailbox;
-}
-async function resolveMailboxPath(client, mailbox, _mode) {
-  if (!mailbox) return "INBOX";
-  try {
-    const resolved = await resolveMailbox(client, mailbox);
-    if (resolved.kind === "found") return resolved.path;
-    const flag = SPECIAL_USE_ALIASES[mailbox.trim().toLowerCase()];
-    if (flag) {
-      const boxes = await client.list();
-      const special = boxes.find((b) => b.specialUse?.toLowerCase() === flag);
-      if (special) return special.path;
-    }
-  } catch {
-  }
-  return staticMailboxAlias(mailbox);
-}
-function buildCriteria(a, listMode) {
-  const c = {};
-  if (a.query) c.or = [{ subject: a.query }, { from: a.query }];
-  if (a.from) c.from = a.from;
-  if (a.subject) c.subject = a.subject;
-  if (a.isRead === true) c.seen = true;
-  if (a.isRead === false) c.unseen = true;
-  if (a.unreadOnly && listMode) c.unseen = true;
-  if (a.isFlagged === true) c.flagged = true;
-  if (a.isFlagged === false) c.unflagged = true;
-  if (a.dateFrom) c.since = new Date(a.dateFrom);
-  if (a.dateTo) c.before = new Date(a.dateTo);
-  if (Object.keys(c).length === 0) c.all = true;
-  return c;
-}
-function formatRow(m, account, path) {
-  const env = m.envelope ?? {};
-  const subject = env.subject || "(no subject)";
-  const a = env.from?.[0];
-  const from = a ? a.name ? `${a.name} <${a.address ?? ""}>` : a.address ?? "(unknown)" : "(unknown)";
-  const date3 = env.date ? new Date(env.date).toLocaleDateString() : "";
-  const read = m.flags?.has("\\Seen") ? "read" : "unread";
-  return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date3} | ${subject} (from: ${from}) [${read}]`;
-}
-function structuredRow(m, account, path) {
-  const env = m.envelope ?? {};
-  return {
-    id: encodeImapId(account, path, m.uid),
-    subject: env.subject || "(no subject)",
-    sender: senderName(env.from),
-    dateReceived: env.date ? new Date(env.date).toISOString() : "",
-    isRead: m.flags?.has("\\Seen") ?? false,
-    isFlagged: m.flags?.has("\\Flagged") ?? false,
-    flagColorIndex: mailFlagColorIndex(m.flags),
-    mailbox: path,
-    account,
-    // Derived from BODYSTRUCTURE, which the list/search fetch now requests.
-    // This was hardcoded `false` from 2.2.0 until 2.11.1 — indistinguishable to
-    // a caller from "no attachments", so every IMAP-sourced message claimed to
-    // have none. Falls back to false only when the fetch carried no
-    // BODYSTRUCTURE at all.
-    hasAttachments: bodyStructureHasAttachments(m.bodyStructure),
-    // Message-ID (when the envelope carries it) is the strongest cross-/intra-
-    // backend dedup key for the multi-account merge (imapMultiAccount.ts). The
-    // AppleScript path does not expose it, so cross-backend dedup falls back to
-    // the subject|sender|date composite key.
-    ...env.messageId ? { messageId: env.messageId } : {}
-  };
-}
-function hasMailboxFlag(mailbox, wanted) {
-  const normalized = wanted.toLowerCase();
-  return [...mailbox.flags ?? []].some((flag) => flag.toLowerCase() === normalized);
-}
-function messageDateEpoch(message) {
-  if (!message.envelope?.date) return 0;
-  const epoch = new Date(message.envelope.date).getTime();
-  return Number.isNaN(epoch) ? 0 : epoch;
-}
-function messageIdentity(entry) {
-  const raw = entry.message.envelope?.messageId?.trim() ?? "";
-  const messageId = raw.replace(/^<+|>+$/g, "").trim().toLowerCase();
-  return messageId ? `mid:${messageId}` : `${entry.path}\0${entry.message.uid}`;
-}
-async function fetchMailboxMatches(client, path, criteria, newestCount) {
-  const lock = await client.getMailboxLock(path);
-  try {
-    const found = await client.search(criteria, { uid: true });
-    const uids = Array.isArray(found) ? found : [];
-    if (uids.length === 0 || newestCount === 0) return { messages: [], total: uids.length };
-    const newest = uids.slice().reverse().slice(0, newestCount);
-    const byUid = /* @__PURE__ */ new Map();
-    for await (const msg of client.fetch(
-      newest.join(","),
-      // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
-      // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
-      // the fetch (~17%), same single round trip, no extra request.
-      { envelope: true, flags: true, bodyStructure: true },
-      { uid: true }
-    )) {
-      byUid.set(msg.uid, msg);
-    }
-    return {
-      messages: newest.map((uid) => byUid.get(uid)).filter((message) => message !== void 0),
-      total: uids.length
-    };
-  } finally {
-    lock.release();
-  }
-}
-async function run(args, listMode, deps) {
-  return useClient(
-    { ...deps, account: deps.account ?? args.account },
-    async (client, cfg) => {
-      const unscopedSearch = !listMode && !args.mailbox;
-      let paths;
-      let allMailboxCount = 0;
-      if (unscopedSearch) {
-        const listed = await client.list();
-        const selectable = listed.filter((mailbox) => !hasMailboxFlag(mailbox, "\\Noselect"));
-        const allMailbox = selectable.find(
-          (mailbox) => mailbox.specialUse?.toLowerCase() === "\\all"
-        );
-        paths = allMailbox ? [allMailbox.path] : selectable.map((mailbox) => mailbox.path);
-        allMailboxCount = paths.length;
-        if (paths.length === 0) {
-          throw new Error(`No selectable IMAP mailboxes found for account ${cfg.accountLabel}.`);
-        }
-      } else {
-        paths = [await resolveMailboxPath(client, args.mailbox, listMode ? "list" : "search")];
-      }
-      const limit = args.limit ?? 50;
-      const offset = args.offset ?? 0;
-      const criteria = buildCriteria(args, listMode);
-      const newestPerMailbox = offset + limit;
-      const fetched = [];
-      const failedMailboxes = [];
-      let totalMatched = 0;
-      for (const path of paths) {
-        try {
-          const result = await fetchMailboxMatches(client, path, criteria, newestPerMailbox);
-          totalMatched += result.total;
-          fetched.push(...result.messages.map((message) => ({ message, path })));
-        } catch (error2) {
-          failedMailboxes.push(path);
-          console.error(
-            `IMAP ${listMode ? "list" : "search"} failed for account "${cfg.accountLabel}", mailbox "${path}": ${String(error2)}`
-          );
-        }
-      }
-      if (failedMailboxes.length === paths.length) {
-        throw new Error(
-          `IMAP ${listMode ? "list" : "search"} failed in every requested mailbox for account ${cfg.accountLabel}: ${failedMailboxes.join(", ")}.`
-        );
-      }
-      let ordered = fetched;
-      if (unscopedSearch) {
-        ordered = fetched.slice().sort((a, b) => messageDateEpoch(b.message) - messageDateEpoch(a.message));
-        const unique = /* @__PURE__ */ new Map();
-        for (const entry of ordered) {
-          const key = messageIdentity(entry);
-          if (!unique.has(key)) unique.set(key, entry);
-        }
-        ordered = [...unique.values()].slice(offset, offset + limit);
-      } else {
-        ordered = fetched.slice(offset, offset + limit);
-      }
-      const rows = ordered.map(({ message, path }) => formatRow(message, cfg.accountLabel, path));
-      const messages = ordered.map(
-        ({ message, path }) => structuredRow(message, cfg.accountLabel, path)
-      );
-      const partial2 = failedMailboxes.length > 0;
-      const failureNote = partial2 ? `
-
-Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}"`).join(", ")}.` : "";
-      const verb = listMode ? "listed" : "matched";
-      const scope = unscopedSearch ? allMailboxCount === 1 ? `mailbox "${paths[0]}"` : `${allMailboxCount} selectable mailboxes` : `mailbox "${paths[0]}"`;
-      if (messages.length === 0) {
-        return {
-          text: `No messages found via IMAP in ${scope} (account ${cfg.accountLabel}).${failureNote}`,
-          messages,
-          count: 0,
-          partial: partial2,
-          failedMailboxes
-        };
-      }
-      const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalMatched} total ${verb}):
-` + rows.join("\n") + `
-
-Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.` + failureNote;
-      return { text, messages, count: messages.length, partial: partial2, failedMailboxes };
-    },
-    true
-  );
-}
-function imapSearchMessages(args, deps = {}) {
-  return run(args, false, deps);
-}
-function imapListMessages(args, deps = {}) {
-  return run(args, true, deps);
-}
-function imapUnreadCount(mailbox, deps = {}) {
-  return useClient(
-    deps,
-    async (client) => {
-      const s = await client.status(await resolveMailboxPath(client, mailbox, "list"), {
-        unseen: true
-      });
-      return s.unseen ?? 0;
-    },
-    true
-  );
-}
-function imapListMailboxes(deps = {}) {
-  return useClient(
-    deps,
-    async (client) => {
-      const out = [];
-      for (const b of await client.list()) {
-        let messages = 0;
-        let unseen = 0;
-        try {
-          const s = await client.status(b.path, { messages: true, unseen: true });
-          messages = s.messages ?? 0;
-          unseen = s.unseen ?? 0;
-        } catch {
-        }
-        out.push({ path: b.path, name: b.name, messages, unseen });
-      }
-      return out;
-    },
-    true
-  );
-}
-function imapMailStats(deps = {}) {
-  return useClient(
-    deps,
-    async (client) => {
-      const perMailbox = [];
-      let totalMessages = 0;
-      let totalUnread = 0;
-      for (const b of await client.list()) {
-        try {
-          const s = await client.status(b.path, { messages: true, unseen: true });
-          const messages = s.messages ?? 0;
-          const unseen = s.unseen ?? 0;
-          totalMessages += messages;
-          totalUnread += unseen;
-          perMailbox.push({ mailbox: b.path, messages, unseen });
-        } catch {
-        }
-      }
-      const since = (days) => new Date(Date.now() - days * 864e5);
-      const countSince = async (days) => {
-        try {
-          const lock = await client.getMailboxLock("INBOX");
-          try {
-            const found = await client.search({ since: since(days) }, { uid: true });
-            return Array.isArray(found) ? found.length : 0;
-          } finally {
-            lock.release();
-          }
-        } catch {
-          return 0;
-        }
-      };
-      const [last24h, last7d, last30d] = await Promise.all([
-        countSince(1),
-        countSince(7),
-        countSince(30)
-      ]);
-      return { totalMessages, totalUnread, perMailbox, recent: { last24h, last7d, last30d } };
-    },
-    true
-  );
-}
-function errText(e) {
-  return e instanceof Error ? e.message : String(e);
-}
-function assertMutated(result, what) {
-  if (!result) throw new Error(`${what}: server rejected the command (IMAP NO/BAD)`);
-  return result;
-}
-async function verifyMoved(client, moved, uid, srcPath, destPath) {
-  const newUid = moved.uidMap?.get(uid);
-  if (newUid !== void 0) {
-    return {
-      verdict: "verified",
-      how: `COPYUID: UID ${uid} arrived in "${destPath}" as UID ${newUid}`
-    };
-  }
-  try {
-    const stillThere = await client.fetchOne(String(uid), { uid: true }, { uid: true });
-    if (!stillThere) {
-      return { verdict: "verified", how: `UID ${uid} is no longer present in "${srcPath}"` };
-    }
-    return {
-      verdict: "unverified",
-      why: `the server accepted the MOVE, but UID ${uid} is still present in "${srcPath}" and this server does not advertise UIDPLUS, so arrival in "${destPath}" could not be confirmed. A Gmail label store can legitimately keep a message in an all-mail view after a move, so this is not reported as a failure`
-    };
-  } catch (e) {
-    return { verdict: "unverified", why: `the post-move check could not run: ${errText(e)}` };
-  }
-}
-var poolConnect = defaultConnect;
-var pools = /* @__PURE__ */ new Map();
-function poolKey(cfg) {
-  return imapIdentityKey(cfg);
-}
-function imapIdleMs() {
-  const raw = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
-  if (raw !== void 0) {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return 3e4;
-}
-async function dropPool(key) {
-  const e = pools.get(key);
-  if (!e) return;
-  if (e.idle) clearTimeout(e.idle);
-  pools.delete(key);
-  await e.client.logout().catch(() => void 0);
-  e.client.close?.();
-}
-async function dropAllPools() {
-  await Promise.all([...pools.keys()].map((k) => dropPool(k)));
-}
-function scheduleIdleClose(key) {
-  const e = pools.get(key);
-  if (!e) return;
-  if (e.idle) clearTimeout(e.idle);
-  const ms = imapIdleMs();
-  if (ms <= 0) return;
-  e.idle = setTimeout(() => void dropPool(key), ms);
-  e.idle.unref?.();
-}
-var connecting = /* @__PURE__ */ new Map();
-async function acquirePooled(cfg) {
-  const key = poolKey(cfg);
-  const existing = pools.get(key);
-  if (existing) {
-    if (existing.idle) clearTimeout(existing.idle);
-    try {
-      await existing.client.noop();
-      return existing.client;
-    } catch {
-      await dropPool(key);
-    }
-  }
-  const inFlight = connecting.get(key);
-  if (inFlight) return inFlight;
-  const p = (async () => {
-    const client = await poolConnect(cfg);
-    pools.set(key, { client });
-    return client;
-  })();
-  connecting.set(key, p);
-  try {
-    return await p;
-  } finally {
-    connecting.delete(key);
-  }
-}
-async function imapHealthCheck(deps = {}) {
-  if (!deps.config && listImapAccountSpecs().length === 0) {
-    return { configured: false, ok: false };
-  }
-  let cfg;
-  try {
-    cfg = deps.config ?? resolveImapConfig(process.env, deps.account);
-  } catch (e) {
-    return { configured: true, ok: false, error: errText(e) };
-  }
-  try {
-    await useClient(deps, async (client) => {
-      await client.noop();
-    });
-    return { configured: true, ok: true, account: cfg.accountLabel, host: cfg.host };
-  } catch (e) {
-    return {
-      configured: true,
-      ok: false,
-      account: cfg.accountLabel,
-      host: cfg.host,
-      error: errText(e)
-    };
-  }
-}
-async function useClient(deps, fn, retryOnDrop = false) {
-  const cfg = deps.config ?? resolveImapConfig(process.env, deps.account);
-  if (deps.connect) {
-    const client = await deps.connect(cfg);
-    try {
-      return await fn(client, cfg);
-    } finally {
-      await client.logout().catch(() => void 0);
-      client.close?.();
-    }
-  }
-  const key = poolKey(cfg);
-  try {
-    const client = await acquirePooled(cfg);
-    const r = await fn(client, cfg);
-    scheduleIdleClose(key);
-    return r;
-  } catch (e) {
-    await dropPool(key);
-    if (retryOnDrop) {
-      const client = await acquirePooled(cfg);
-      try {
-        const r = await fn(client, cfg);
-        scheduleIdleClose(key);
-        return r;
-      } catch (e2) {
-        await dropPool(key);
-        throw e2;
-      }
-    }
-    throw e;
-  }
-}
-function withClient(deps, fn) {
-  return useClient(deps, fn);
-}
-async function resolveMailbox(client, name) {
-  const wanted = name.trim().toLowerCase();
-  const boxes = await client.list();
-  const byPath = boxes.find((b) => b.path.toLowerCase() === wanted);
-  if (byPath) return { kind: "found", path: byPath.path };
-  const byName = boxes.filter((b) => b.name.toLowerCase() === wanted);
-  if (byName.length === 1) return { kind: "found", path: byName[0].path };
-  if (byName.length > 1) {
-    return { kind: "ambiguous", candidates: byName.map((b) => b.path).sort() };
-  }
-  return { kind: "none" };
-}
-function ambiguousMailboxError(name, candidates, accountLabel) {
-  const where = accountLabel ? ` on IMAP account ${accountLabel}` : "";
-  return `Mailbox "${name}" is ambiguous${where} \u2014 it matches ${candidates.map((c) => `"${c}"`).join(" and ")}. Pass the full path.`;
-}
-async function findMailboxPathOrThrow(client, name) {
-  const res = await resolveMailbox(client, name);
-  if (res.kind === "ambiguous") throw new Error(ambiguousMailboxError(name, res.candidates));
-  return res.kind === "found" ? res.path : null;
-}
-function imapCreateMailbox(name, deps = {}) {
-  return withClient(deps, async (client) => {
-    try {
-      const res = await client.mailboxCreate(name);
-      return res.created ? { success: true, info: `Created mailbox "${res.path}".` } : { success: true, info: `Mailbox "${res.path}" already existed.` };
-    } catch (e) {
-      return { success: false, error: `IMAP create failed for "${name}": ${errText(e)}` };
-    }
-  });
-}
-function imapDeleteMailbox(name, deps = {}) {
-  return withClient(deps, async (client, cfg) => {
-    const res = await resolveMailbox(client, name);
-    if (res.kind === "ambiguous") {
-      return {
-        success: false,
-        error: ambiguousMailboxError(name, res.candidates, cfg.accountLabel)
-      };
-    }
-    if (res.kind === "none") {
-      return {
-        success: false,
-        error: `Mailbox "${name}" not found on IMAP account ${cfg.accountLabel}.`
-      };
-    }
-    const path = res.path;
-    try {
-      await client.mailboxDelete(path);
-      return {
-        success: true,
-        info: `Deleted mailbox "${path}" via IMAP (account ${cfg.accountLabel}).`
-      };
-    } catch (e) {
-      return { success: false, error: `IMAP delete failed for "${path}": ${errText(e)}` };
-    }
-  });
-}
-function imapRenameMailbox(oldName, newName, deps = {}) {
-  return withClient(deps, async (client, cfg) => {
-    const found = await resolveMailbox(client, oldName);
-    if (found.kind === "ambiguous") {
-      return {
-        success: false,
-        error: ambiguousMailboxError(oldName, found.candidates, cfg.accountLabel)
-      };
-    }
-    if (found.kind === "none") {
-      return {
-        success: false,
-        error: `Mailbox "${oldName}" not found on IMAP account ${cfg.accountLabel}.`
-      };
-    }
-    const path = found.path;
-    try {
-      const res = await client.mailboxRename(path, newName);
-      return { success: true, info: `Renamed "${res.path}" to "${res.newPath}" via IMAP.` };
-    } catch (e) {
-      return {
-        success: false,
-        error: `IMAP rename failed for "${path}" -> "${newName}": ${errText(e)}`
-      };
-    }
-  });
-}
-async function withMailbox(path, deps, fn) {
-  return withClient(deps, async (client) => {
-    const lock = await client.getMailboxLock(path);
-    try {
-      return await fn(client);
-    } finally {
-      lock.release();
-    }
-  });
-}
-var MAX_COMPOSE_SOURCE_BYTES = 25 * 1024 * 1024;
-async function imapGetMessageSource(id, deps = {}) {
-  const ref = decodeImapId(id);
-  if (!ref) throw new Error(`Not an IMAP message id: "${id}".`);
-  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
-    const lock = await client.getMailboxLock(ref.path);
-    try {
-      const msg = await client.fetchOne(
-        String(ref.uid),
-        {
-          envelope: true,
-          // One extra byte distinguishes an exact-limit source from truncation.
-          source: { start: 0, maxLength: MAX_COMPOSE_SOURCE_BYTES + 1 }
-        },
-        { uid: true }
-      );
-      if (!msg) throw new Error(`IMAP message UID ${ref.uid} not found in "${ref.path}".`);
-      if (!msg.source || !msg.source.length)
-        throw new Error("IMAP returned no original message source.");
-      if (Buffer.byteLength(msg.source) > MAX_COMPOSE_SOURCE_BYTES) {
-        throw new Error("Original message source exceeds the 25 MiB reply/forward limit.");
-      }
-      return { raw: msg.source.toString(), subject: msg.envelope?.subject, accountUser: cfg.user };
-    } finally {
-      lock.release();
-    }
-  });
-}
-async function imapGetMessage(id, preferHtml, deps = {}) {
-  const ref = decodeImapId(id);
-  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-    const msg = await client.fetchOne(
-      String(ref.uid),
-      { envelope: true, source: true },
-      { uid: true }
-    );
-    if (!msg)
-      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-    const subject = msg.envelope?.subject || "(no subject)";
-    const src = msg.source ? msg.source.toString() : "";
-    const body = (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ?? extractTextBody(src) ?? extractHtmlBody(src) ?? "(no readable body)";
-    return { success: true, info: `Subject: ${subject}
-
-${body}` };
-  });
-}
-function normalizeMessageId(mid) {
-  return mid.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
-}
-async function imapFetchMessageId(id, deps = {}) {
-  const ref = decodeImapId(id);
-  if (!ref) return null;
-  try {
-    return await withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-      const msg = await client.fetchOne(String(ref.uid), { envelope: true }, { uid: true });
-      const mid = msg && msg.envelope?.messageId;
-      return mid ? normalizeMessageId(mid) : null;
-    });
-  } catch {
-    return null;
-  }
-}
-var MAIL_FLAG_BITS = ["$MailFlagBit0", "$MailFlagBit1", "$MailFlagBit2"];
-function mailFlagBitsFor(colorIndex) {
-  const set = [];
-  const clear = [];
-  for (let b = 0; b < MAIL_FLAG_BITS.length; b++) {
-    (colorIndex >> b & 1 ? set : clear).push(MAIL_FLAG_BITS[b]);
-  }
-  return { set, clear };
-}
-function mailFlagColorIndex(flags) {
-  if (!flags) return void 0;
-  const have = new Set(flags);
-  let idx = 0;
-  let any = false;
-  for (let b = 0; b < MAIL_FLAG_BITS.length; b++) {
-    if (have.has(MAIL_FLAG_BITS[b])) {
-      idx |= 1 << b;
-      any = true;
-    }
-  }
-  return any ? idx : void 0;
-}
-function flagOp(id, flag, add, deps) {
-  const ref = decodeImapId(id);
-  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
-  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-    try {
-      const ok = add ? await client.messageFlagsAdd([ref.uid], [flag], { uid: true }) : await client.messageFlagsRemove([ref.uid], [flag], { uid: true });
-      if (!ok)
-        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
-      return { success: true };
-    } catch (e) {
-      return {
-        success: false,
-        error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}`
-      };
-    }
-  });
-}
-var imapMarkRead = (id, deps = {}) => flagOp(id, "\\Seen", true, deps);
-var imapMarkUnread = (id, deps = {}) => flagOp(id, "\\Seen", false, deps);
-function imapFlagMessage(id, colorIndex, deps = {}) {
-  if (colorIndex === void 0) return flagOp(id, "\\Flagged", true, deps);
-  const ref = decodeImapId(id);
-  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
-  const { set, clear } = mailFlagBitsFor(colorIndex);
-  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-    try {
-      const ok = await client.messageFlagsAdd([ref.uid], ["\\Flagged", ...set], { uid: true });
-      if (!ok)
-        return { success: false, error: `IMAP flag update returned false for UID ${ref.uid}.` };
-      if (clear.length) await client.messageFlagsRemove([ref.uid], clear, { uid: true });
-      return { success: true };
-    } catch (e) {
-      return { success: false, error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}` };
-    }
-  });
-}
-function imapUnflagMessage(id, deps = {}) {
-  const ref = decodeImapId(id);
-  if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
-  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-    try {
-      const ok = await client.messageFlagsRemove([ref.uid], ["\\Flagged", ...MAIL_FLAG_BITS], {
-        uid: true
-      });
-      if (!ok) return { success: false, error: `IMAP unflag returned false for UID ${ref.uid}.` };
-      return { success: true };
-    } catch (e) {
-      return { success: false, error: `IMAP unflag failed for UID ${ref.uid}: ${errText(e)}` };
-    }
-  });
-}
-async function imapMoveMessageById(id, destMailbox, deps = {}) {
-  const ref = decodeImapId(id);
-  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
-    const dest = await resolveMailbox(client, destMailbox);
-    if (dest.kind === "ambiguous") {
-      return {
-        success: false,
-        error: ambiguousMailboxError(destMailbox, dest.candidates, cfg.accountLabel)
-      };
-    }
-    const destPath = dest.kind === "found" ? dest.path : await resolveMailboxPath(client, destMailbox, "list");
-    const lock = await client.getMailboxLock(ref.path);
-    try {
-      const moved = assertMutated(
-        await client.messageMove([ref.uid], destPath, { uid: true }),
-        `IMAP move of UID ${ref.uid} to "${destPath}"`
-      );
-      const verification = await verifyMoved(client, moved, ref.uid, ref.path, destPath);
-      return {
-        success: true,
-        info: verification.verdict === "verified" ? `Moved UID ${ref.uid} to "${destPath}" via IMAP (verified: ${verification.how}).` : `Moved UID ${ref.uid} to "${destPath}" via IMAP \u2014 UNVERIFIED: ${verification.why}.`,
-        verification
-      };
-    } catch (e) {
-      return {
-        success: false,
-        error: `IMAP move failed for UID ${ref.uid} -> "${destPath}": ${errText(e)}`
-      };
-    } finally {
-      lock.release();
-    }
-  });
-}
-var FALLBACK_TRASH_PATH = "Trash";
-async function resolveTrashPath(client) {
-  let listed = false;
-  try {
-    const boxes = await client.list();
-    listed = true;
-    const special = boxes.find((b) => b.specialUse === "\\Trash");
-    if (special) return special.path;
-    const named = boxes.find(
-      (b) => /^(trash|deleted messages|deleted items|bin)$/i.test(b.name) || /(^|\/)trash$/i.test(b.path)
-    );
-    if (named) return named.path;
-  } catch {
-  }
-  if (!listed) return staticMailboxAlias("trash");
-  try {
-    const created = await client.mailboxCreate(FALLBACK_TRASH_PATH);
-    return created?.path || FALLBACK_TRASH_PATH;
-  } catch {
-    return FALLBACK_TRASH_PATH;
-  }
-}
-async function trashUids(client, uids, srcPath) {
-  const dest = await resolveTrashPath(client);
-  if (srcPath.trim().toLowerCase() === dest.trim().toLowerCase()) {
-    assertMutated(
-      await client.messageDelete(uids, { uid: true }),
-      `IMAP expunge of ${uids.length} message(s) from "${srcPath}"`
-    );
-    return { dest, expunged: true };
-  }
-  const moved = assertMutated(
-    await client.messageMove(uids, dest, { uid: true }),
-    `IMAP move of ${uids.length} message(s) from "${srcPath}" to "${dest}"`
-  );
-  return { dest, expunged: false, moved };
-}
-async function verifyExpunged(client, uid, path) {
-  try {
-    const stillThere = await client.fetchOne(String(uid), { uid: true }, { uid: true });
-    if (!stillThere) {
-      return { verdict: "verified", how: `UID ${uid} is no longer present in "${path}"` };
-    }
-    return {
-      verdict: "unverified",
-      why: `the server accepted the EXPUNGE but UID ${uid} is still present in "${path}"`
-    };
-  } catch (e) {
-    return { verdict: "unverified", why: `the post-delete check could not run: ${errText(e)}` };
-  }
-}
-async function imapDeleteMessageById(id, deps = {}) {
-  const ref = decodeImapId(id);
-  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-    try {
-      const { dest, expunged, moved } = await trashUids(client, [ref.uid], ref.path);
-      const verification = expunged || !moved ? await verifyExpunged(client, ref.uid, ref.path) : await verifyMoved(client, moved, ref.uid, ref.path, dest);
-      const what = expunged ? `Permanently deleted UID ${ref.uid} from Trash ("${ref.path}") via IMAP` : `Moved UID ${ref.uid} to Trash ("${dest}") via IMAP`;
-      return {
-        success: true,
-        info: verification.verdict === "verified" ? `${what} (verified: ${verification.how}).` : `${what} \u2014 UNVERIFIED: ${verification.why}.`,
-        verification
-      };
-    } catch (e) {
-      return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
-    }
-  });
-}
-function collectAttachments(node, out = []) {
-  if (!node) return out;
-  const filename = node.dispositionParameters?.filename || node.parameters?.name;
-  const disposition = node.disposition?.toLowerCase();
-  const isEmbeddedByReference = disposition === "inline" && !!node.id;
-  const isAttachment = !!node.part && (disposition === "attachment" || !!filename && !isEmbeddedByReference);
-  if (isAttachment) {
-    out.push({
-      part: node.part,
-      filename: filename || `part-${node.part}`,
-      mimeType: node.type || "application/octet-stream",
-      size: node.size ?? 0
-    });
-  }
-  for (const child of node.childNodes ?? []) collectAttachments(child, out);
-  return out;
-}
-function bodyStructureHasAttachments(node) {
-  return !!node && collectAttachments(node).length > 0;
-}
-async function streamToBuffer(content, maxBytes) {
-  const chunks = [];
-  let total = 0;
-  for await (const chunk of content) {
-    total += chunk.byteLength;
-    if (total > maxBytes) {
-      throw new Error(`IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`);
-    }
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
-}
-async function imapListAttachments(id, deps = {}) {
-  const ref = decodeImapId(id);
-  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-    const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
-    if (!msg || !msg.bodyStructure) {
-      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-    }
-    const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
-      id: `${id}#${a.part}`,
-      name: a.filename,
-      mimeType: a.mimeType,
-      size: a.size
-    }));
-    return { success: true, attachments };
-  });
-}
-async function imapFetchAttachment(id, attachmentName, deps = {}) {
-  const ref = decodeImapId(id);
-  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
-  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-    const msg = await client.fetchOne(String(ref.uid), { bodyStructure: true }, { uid: true });
-    if (!msg || !msg.bodyStructure) {
-      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-    }
-    const atts = collectAttachments(msg.bodyStructure);
-    const match = atts.find((a) => a.filename === attachmentName);
-    if (!match) {
-      const names = atts.map((a) => a.filename).join(", ") || "none";
-      return {
-        success: false,
-        error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`
-      };
-    }
-    if (match.size > MAX_IMAP_ATTACHMENT_BYTES) {
-      return {
-        success: false,
-        error: `IMAP attachment "${attachmentName}" is ${match.size} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`
-      };
-    }
-    try {
-      const dl = await client.download(String(ref.uid), match.part, { uid: true });
-      const buf = await streamToBuffer(dl.content, MAX_IMAP_ATTACHMENT_BYTES);
-      return {
-        success: true,
-        base64: buf.toString("base64"),
-        bytes: buf.length,
-        mimeType: match.mimeType
-      };
-    } catch (e) {
-      return { success: false, error: `IMAP attachment fetch failed: ${errText(e)}` };
-    }
-  });
-}
-async function mailboxCount(client, path) {
-  try {
-    const st = await client.status(path, { messages: true });
-    return typeof st.messages === "number" ? st.messages : null;
-  } catch {
-    return null;
-  }
-}
-async function imapBatch(ids, deps, op, opts = {}) {
-  const groups = /* @__PURE__ */ new Map();
-  const errors = [];
-  let failed = 0;
-  for (const id of ids) {
-    const ref = decodeImapId(id);
-    if (!ref) {
-      failed++;
-      errors.push(`Not an IMAP id: "${id}"`);
-      continue;
-    }
-    const key = `${ref.account}\0${ref.path}`;
-    const g = groups.get(key) ?? { account: ref.account, path: ref.path, uids: [] };
-    g.uids.push(ref.uid);
-    groups.set(key, g);
-  }
-  let success = 0;
-  const countDelta = [];
-  for (const g of groups.values()) {
-    try {
-      await useClient(depsForAccount(g.account, deps), async (client) => {
-        const before = opts.reconcile ? await mailboxCount(client, g.path) : null;
-        const lock = await client.getMailboxLock(g.path);
-        try {
-          await op(client, g.uids, g.path);
-        } finally {
-          lock.release();
-        }
-        if (!opts.reconcile) return;
-        const after = await mailboxCount(client, g.path);
-        const readable = before !== null && after !== null;
-        const observed = readable ? before - after : null;
-        const { status, unknownReason } = classifyCountStatus(readable, g.uids.length, observed);
-        countDelta.push({
-          account: g.account,
-          mailbox: g.path,
-          before,
-          after,
-          expected: g.uids.length,
-          observed,
-          status,
-          ...unknownReason ? { unknownReason } : {},
-          ...unknownReason === "count-unreadable" ? { note: "The server did not answer STATUS for this mailbox" } : {},
-          ...unknownReason === "count-did-not-move" ? {
-            note: `The mailbox count did not move. On a label store (Gmail) a message can stay visible in an all-mail view after being moved out of a label, so this is not by itself evidence the operation failed \u2014 check the destination.`
-          } : {},
-          ...unknownReason === "count-partial" ? {
-            note: `Fewer messages left than were operated on. \`observed\` is a LOWER BOUND on what left, not a count of what left \u2014 a concurrent delivery to this mailbox masks departures one-for-one.`
-          } : {}
-        });
-      });
-      success += g.uids.length;
-    } catch (e) {
-      failed += g.uids.length;
-      errors.push(`${g.path}: ${errText(e)}`);
-    }
-  }
-  return { success, failed, errors, ...countDelta.length ? { countDelta } : {} };
-}
-var imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  assertMutated(
-    await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true }),
-    `IMAP mark-read of ${uids.length} message(s)`
-  );
-});
-var imapBatchMarkUnread = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  assertMutated(
-    await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true }),
-    `IMAP mark-unread of ${uids.length} message(s)`
-  );
-});
-var imapBatchFlag = (ids, colorIndex, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  if (colorIndex === void 0) {
-    assertMutated(
-      await c.messageFlagsAdd(uids, ["\\Flagged"], { uid: true }),
-      `IMAP flag of ${uids.length} message(s)`
-    );
-    return;
-  }
-  const { set, clear } = mailFlagBitsFor(colorIndex);
-  assertMutated(
-    await c.messageFlagsAdd(uids, ["\\Flagged", ...set], { uid: true }),
-    `IMAP flag of ${uids.length} message(s)`
-  );
-  if (clear.length) await c.messageFlagsRemove(uids, clear, { uid: true });
-});
-var imapBatchUnflag = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
-  assertMutated(
-    await c.messageFlagsRemove(uids, ["\\Flagged", ...MAIL_FLAG_BITS], { uid: true }),
-    `IMAP unflag of ${uids.length} message(s)`
-  );
-});
-var imapBatchDelete = (ids, deps = {}) => imapBatch(
-  ids,
-  deps,
-  async (c, uids, path) => {
-    await trashUids(c, uids, path);
-  },
-  { reconcile: true }
-);
-function imapBatchMove(ids, destMailbox, deps = {}) {
-  return imapBatch(
-    ids,
-    deps,
-    async (c, uids) => {
-      const dest = await findMailboxPathOrThrow(c, destMailbox) ?? await resolveMailboxPath(c, destMailbox, "list");
-      assertMutated(
-        await c.messageMove(uids, dest, { uid: true }),
-        `IMAP move of ${uids.length} message(s) to "${dest}"`
-      );
-    },
-    { reconcile: true }
-  );
-}
-function senderName(from) {
-  const a = from?.[0];
-  if (!a) return "(unknown)";
-  return a.name ? `${a.name} <${a.address ?? ""}>` : a.address ?? "(unknown)";
-}
-function dateMs(m) {
-  return m.envelope?.date ? new Date(m.envelope.date).getTime() : 0;
-}
-async function imapThread(id, deps = {}, limit = 50) {
-  const ref = decodeImapId(id);
-  if (!ref) return null;
-  return useClient(
-    depsForMessageRef(ref, deps),
-    async (client) => {
-      const lock = await client.getMailboxLock(ref.path);
-      try {
-        const seed = await client.fetchOne(
-          String(ref.uid),
-          { envelope: true, headers: ["references", "in-reply-to", "message-id"] },
-          { uid: true }
-        );
-        if (!seed) return null;
-        const seedMsgId = seed.envelope?.messageId;
-        const refIds = /* @__PURE__ */ new Set();
-        const hdr = seed.headers ? seed.headers.toString() : "";
-        for (const m of hdr.matchAll(/<[^>]+>/g)) refIds.add(m[0]);
-        if (seed.envelope?.inReplyTo) refIds.add(seed.envelope.inReplyTo);
-        const uidSet = /* @__PURE__ */ new Set([ref.uid]);
-        const addFound = (found) => {
-          if (Array.isArray(found)) found.forEach((u) => uidSet.add(u));
-        };
-        if (seedMsgId) {
-          addFound(await client.search({ header: { references: seedMsgId } }, { uid: true }));
-          addFound(await client.search({ header: { "in-reply-to": seedMsgId } }, { uid: true }));
-        }
-        for (const mid of [...refIds].slice(0, 20)) {
-          addFound(await client.search({ header: { "message-id": mid } }, { uid: true }));
-        }
-        if (uidSet.size <= 1) return null;
-        const uids = [...uidSet].slice(0, limit);
-        const msgs = [];
-        for await (const msg of client.fetch(
-          uids.join(","),
-          // Same reason as the list/search fetch: get-thread emits structured
-          // rows too, so it needs BODYSTRUCTURE or its hasAttachments would
-          // silently disagree with the same message seen via search.
-          { envelope: true, flags: true, bodyStructure: true },
-          { uid: true }
-        )) {
-          msgs.push(msg);
-        }
-        msgs.sort((a, b) => dateMs(a) - dateMs(b));
-        const subject = seed.envelope?.subject || "(no subject)";
-        const structured = {
-          subject,
-          count: msgs.length,
-          messages: msgs.map((m) => ({
-            id: encodeImapId(ref.account, ref.path, m.uid),
-            subject: m.envelope?.subject || "(no subject)",
-            sender: senderName(m.envelope?.from),
-            date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : "",
-            isRead: m.flags?.has("\\Seen") ?? false
-          }))
-        };
-        const text = `Thread "${subject}" \u2014 ${msgs.length} message(s) via IMAP (References-linked, oldest first):
-` + msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n");
-        return { count: msgs.length, text, structured };
-      } finally {
-        lock.release();
-      }
-    },
-    true
-  );
-}
+// src/tools/compose.ts
+init_imapClient();
 
 // src/services/replyForward.ts
 function extractAddresses(headerValue) {
@@ -86175,6 +86340,9 @@ ${originalPlainText}`,
     from
   };
 }
+
+// src/tools/compose.ts
+init_mimeParse();
 
 // src/tools/respond.ts
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -86344,7 +86512,11 @@ async function runCompose(deps, args) {
           id,
           transport: "smtp",
           messageId: result.messageId,
-          ...args.kind === "forward" ? { recipients: args.to } : {}
+          ...args.kind === "forward" ? { recipients: args.to } : {},
+          // Best-effort Sent-folder copy (issue #220) — same field shape as
+          // send-email, since it's the same sendViaSmtp underneath.
+          ...result.sentCopy !== void 0 ? { sentCopy: result.sentCopy } : {},
+          ...result.sentCopyError !== void 0 ? { sentCopyError: result.sentCopyError } : {}
         }
       );
     } catch (error2) {
@@ -86378,6 +86550,9 @@ function runReply(deps, args) {
 function runForward(deps, args) {
   return runCompose(deps, { ...args, kind: "forward" });
 }
+
+// src/index.ts
+init_imapClient();
 
 // src/tools/mailboxListing.ts
 function unlistableStoreError(account, error2, knownAccounts) {
@@ -86529,6 +86704,7 @@ async function runBatchMove(deps, args) {
 }
 
 // src/services/imapMultiAccount.ts
+init_imapClient();
 function normalizeMessageId2(row) {
   const raw = typeof row.messageId === "string" ? row.messageId.trim() : "";
   if (!raw) return void 0;
@@ -86643,6 +86819,7 @@ function formatMergedRows(rows, showReadState = true) {
 }
 
 // src/services/messageRouter.ts
+init_imapClient();
 async function routeMessage(id, opts) {
   if (decodeImapId(id)) {
     const r = await opts.imap();
@@ -86657,6 +86834,9 @@ async function routeMessage(id, opts) {
 }
 
 // src/tools/doctor.ts
+init_imapClient();
+init_smtpMailer();
+init_docsUrls();
 var CONFIG_FILE_HINT = "If your MCP host ignores the server 'env' block (e.g. Claude Desktop), put these in ~/Library/Application Support/apple-mail-mcp/config.json instead";
 async function runDoctor(mailManager2) {
   const checks = [];
@@ -86838,6 +87018,7 @@ function registerResourcesAndPrompts(server2, mailManager2) {
 }
 
 // src/schemas.ts
+init_attachmentLimits();
 var MESSAGE_ID_SCHEMA = external_exports.string().regex(/^(\d+|imap:[A-Za-z0-9_-]+)$/, "Message ID must be numeric or an IMAP id (imap:\u2026)");
 var BATCH_IDS_SCHEMA = external_exports.array(MESSAGE_ID_SCHEMA).min(1, "At least one message ID is required").max(100, "Cannot process more than 100 messages in a single batch");
 var DATE_FILTER_SCHEMA = external_exports.string().regex(
@@ -86880,8 +87061,12 @@ function subjectFromGetMessage(info) {
   return m ? m[1].trim() : null;
 }
 
+// src/index.ts
+init_mimeParse();
+
 // src/services/imapIdle.ts
 var import_imapflow2 = __toESM(require_imap_flow(), 1);
+init_imapClient();
 var defaultIdleConnect = async (cfg) => {
   const client = new import_imapflow2.ImapFlow(buildImapConnectionOptions(cfg));
   client.on("error", () => {
@@ -87149,6 +87334,7 @@ function withJsonSchema2020_12(transport2) {
 }
 
 // src/index.ts
+init_auditLog();
 loadFileConfig();
 var BATCH_SOURCE_MAILBOX_SCHEMA = external_exports.string().optional().describe(
   "Mailbox the numeric ids were listed from (e.g. 'INBOX'). Must be paired with sourceAccount to form an unambiguous scope. Ignored for imap: ids."
@@ -87686,10 +87872,14 @@ ${messageList}${coverageBlock}`,
     );
   }, "Error listing messages")
 );
+var SENT_COPY_SCHEMA = external_exports.boolean().optional().describe(
+  "SMTP only: whether a best-effort copy was filed to the account's Sent mailbox over IMAP (issue #220). Absent when no configured IMAP account matches the SMTP identity \u2014 not a failure, the feature simply wasn't engaged."
+);
+var SENT_COPY_ERROR_SCHEMA = external_exports.string().optional().describe("Present only when sentCopy is false: why the Sent-folder copy failed.");
 registerTool(
   "send-email",
   {
-    description: "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count.\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent \u2014 require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
+    description: "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent \u2014 require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
     inputSchema: {
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       subject: external_exports.string().min(1, "Subject is required"),
@@ -87698,6 +87888,9 @@ registerTool(
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
       account: external_exports.string().optional().describe("Account to send from"),
       attachments: ATTACHMENTS_SCHEMA,
+      replyTo: external_exports.string().optional().describe(
+        "SMTP only (issue #220): sets the Reply-To header when replies should go somewhere other than the From/login address, e.g. a domain-alias setup where APPLE_MAIL_MCP_SMTP_FROM differs from APPLE_MAIL_MCP_SMTP_USER. Ignored on the AppleScript transport."
+      ),
       transport: external_exports.enum(["applescript", "smtp"]).optional().describe(
         "Send transport. 'smtp' submits clean MIME directly via SMTP, avoiding the macOS 15+ Mail.app <blockquote> wrapping (issue #12); requires APPLE_MAIL_MCP_SMTP_* env config. 'applescript' sends through Mail.app. If omitted, SMTP is used automatically when APPLE_MAIL_MCP_SMTP_* is configured, otherwise AppleScript."
       )
@@ -87706,36 +87899,53 @@ registerTool(
       ok: external_exports.boolean().optional(),
       recipients: external_exports.array(external_exports.string()).optional(),
       attachmentCount: external_exports.number().optional(),
-      transport: external_exports.string().optional()
+      transport: external_exports.string().optional(),
+      sentCopy: SENT_COPY_SCHEMA,
+      sentCopyError: SENT_COPY_ERROR_SCHEMA
     }
   },
-  withErrorHandling(async ({ to, subject, body, cc, bcc, account, attachments, transport: transport2 }) => {
-    const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
-    const attachmentCount = attachments?.length ?? 0;
-    if (shouldUseSmtp(transport2, account)) {
-      const smtpFrom = account?.includes("@") ? account : void 0;
-      const result = await sendViaSmtp({ to, subject, body, cc, bcc, from: smtpFrom, attachments });
-      if (!result.success) {
-        return errorResponse(result.error ?? "Failed to send email via SMTP.");
+  withErrorHandling(
+    async ({ to, subject, body, cc, bcc, account, attachments, transport: transport2, replyTo }) => {
+      const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
+      const attachmentCount = attachments?.length ?? 0;
+      if (shouldUseSmtp(transport2, account)) {
+        const smtpFrom = account?.includes("@") ? account : void 0;
+        const result = await sendViaSmtp({
+          to,
+          subject,
+          body,
+          cc,
+          bcc,
+          from: smtpFrom,
+          attachments,
+          replyTo
+        });
+        if (!result.success) {
+          return errorResponse(result.error ?? "Failed to send email via SMTP.");
+        }
+        const copyNote = result.sentCopy === true ? " (Sent-folder copy filed)" : result.sentCopy === false ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})` : "";
+        return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}${copyNote}`, {
+          ok: true,
+          recipients: to,
+          attachmentCount,
+          transport: "smtp",
+          ...result.sentCopy !== void 0 ? { sentCopy: result.sentCopy } : {},
+          ...result.sentCopyError !== void 0 ? { sentCopyError: result.sentCopyError } : {}
+        });
       }
-      return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}`, {
+      const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
+      if (!success) {
+        return errorResponse("Failed to send email. Check Mail.app configuration.");
+      }
+      return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
         ok: true,
         recipients: to,
         attachmentCount,
-        transport: "smtp"
+        transport: "applescript"
       });
-    }
-    const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
-    if (!success) {
-      return errorResponse("Failed to send email. Check Mail.app configuration.");
-    }
-    return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
-      ok: true,
-      recipients: to,
-      attachmentCount,
-      transport: "applescript"
-    });
-  }, "Error sending email")
+    },
+    "Error sending email"
+  )
 );
 registerTool(
   "send-serial-email",
@@ -87864,7 +88074,7 @@ var COMPOSE_TRANSPORT_SCHEMA = external_exports.enum(["applescript", "smtp"]).op
 registerTool(
   "reply-to-message",
   {
-    description: "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
+    description: "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
@@ -87877,7 +88087,9 @@ registerTool(
       messageId: external_exports.string().optional(),
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
-      id: external_exports.string().optional()
+      id: external_exports.string().optional(),
+      sentCopy: SENT_COPY_SCHEMA,
+      sentCopyError: SENT_COPY_ERROR_SCHEMA
     }
   },
   withErrorHandling((args) => runReply(composeDeps, args), "Error replying to message")
@@ -87885,7 +88097,7 @@ registerTool(
 registerTool(
   "forward-message",
   {
-    description: "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
+    description: "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
@@ -87899,7 +88111,9 @@ registerTool(
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
       recipients: external_exports.array(external_exports.string()).optional(),
-      id: external_exports.string().optional()
+      id: external_exports.string().optional(),
+      sentCopy: SENT_COPY_SCHEMA,
+      sentCopyError: SENT_COPY_ERROR_SCHEMA
     }
   },
   withErrorHandling((args) => runForward(composeDeps, args), "Error forwarding message")

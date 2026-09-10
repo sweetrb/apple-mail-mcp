@@ -10,6 +10,7 @@ import {
   imapCreateMailbox,
   imapDeleteMailbox,
   imapRenameMailbox,
+  imapAppendSentCopy,
   encodeImapId,
   decodeImapId,
   imapFetchMessageId,
@@ -97,6 +98,7 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
     mailboxCreate: async (path: string) => ({ path, created: true }),
     mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),
     mailboxDelete: async (path: string) => ({ path }),
+    append: async (path: string) => ({ destination: path }),
     messageFlagsAdd: async () => true,
     messageFlagsRemove: async () => true,
     messageMove: async () => ({}),
@@ -778,6 +780,67 @@ describe("imapRenameMailbox", () => {
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/not found/i);
     expect(rec.renamed).toBeUndefined();
+  });
+});
+
+describe("imapAppendSentCopy (#220 SMTP Sent-folder copy)", () => {
+  it("skips silently (attempted:false) when no IMAP account matches the SMTP identity", async () => {
+    const r = await imapAppendSentCopy("rob@example.com", "raw mime", { config: undefined });
+    expect(r).toEqual({ attempted: false });
+  });
+
+  it("resolves the Sent mailbox via the same robust resolver and appends, flagged \\Seen", async () => {
+    let appended: { path: string; content: unknown; flags?: string[] } | undefined;
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [
+        { path: "INBOX", name: "INBOX" },
+        { path: "Sent Messages", name: "Sent Messages", specialUse: "\\Sent" },
+      ],
+      append: async (path: string, content: string | Buffer, flags?: string[]) => {
+        appended = { path, content, flags };
+        return { destination: path };
+      },
+    };
+    const r = await imapAppendSentCopy("rob@example.com", "raw mime source", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r).toEqual({ attempted: true, success: true, mailbox: "Sent Messages" });
+    expect(appended).toEqual({
+      path: "Sent Messages",
+      content: "raw mime source",
+      flags: ["\\Seen"],
+    });
+  });
+
+  it("reports a server-rejected APPEND as a failure, not a thrown error", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      list: async () => [{ path: "Sent Messages", name: "Sent Messages", specialUse: "\\Sent" }],
+      append: async () => false,
+    };
+    const r = await imapAppendSentCopy("rob@example.com", "raw", {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(r.attempted).toBe(true);
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/rejected the APPEND/);
+  });
+
+  it("reports a connection failure as a non-fatal failure result", async () => {
+    const r = await imapAppendSentCopy("rob@example.com", "raw", {
+      config: cfg,
+      connect: async () => {
+        throw new Error("ECONNRESET");
+      },
+    });
+    expect(r).toEqual({
+      attempted: true,
+      success: false,
+      error: expect.stringContaining("ECONNRESET"),
+    });
   });
 });
 
