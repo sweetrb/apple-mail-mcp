@@ -91,6 +91,33 @@ describe("#152 — by-id mutations are scoped to the source mailbox", () => {
     expect(s).not.toContain("set _m to (messages of mb whose id is _theId)");
   });
 
+  it("re-checks the resolved message's own id before mutating it (#155)", () => {
+    // "whose id is N" is NOT an exact match — Mail ROUNDS. Measured against a
+    // real store on 2026-09-10: "whose id is 78364.6" resolves to id 78365, a
+    // DIFFERENT, ADJACENT message. Without a re-check the walk then deletes it,
+    // which is the #155 residual verbatim: "two adjacent messages that were NOT
+    // in the id list got deleted instead." Counting the matches is therefore not
+    // enough; the message must be asked whether it is the one requested.
+    mgr.batchDeleteMessages(["75816", "75791"]);
+    const s = lastScript();
+
+    expect(s).toContain("(id of (item 1 of _m)) is (item _k of _gids)");
+    // The count-only condition must not survive on its own.
+    expect(s).not.toMatch(/if \(count of _m\) > 0 then\s*\n\s*set _msg to item 1 of _m/);
+  });
+
+  it("re-checks the id on the unscoped fallback walk too (#155)", () => {
+    // The location cache misses for an id never listed this session, and that
+    // path resolves in a different loop. A guard on only one of the two leaves
+    // the destructive path unprotected exactly when the caller knows least.
+    mgr.batchDeleteMessages(["999999"]);
+    const s = lastScript();
+
+    if (s.includes("whose id is (item _k of _uids)")) {
+      expect(s).toContain("(id of (item 1 of _m)) is (item _k of _uids)");
+    }
+  });
+
   it("batch move scopes the SOURCE lookup while still resolving the destination", () => {
     mgr.batchMoveMessages(["75816"], "Archive", "me@example.com");
     const s = lastScript();
