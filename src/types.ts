@@ -126,6 +126,16 @@ export interface MessageContent {
    * session-independent join key (e.g. sent-mail dedup logs).
    */
   rfcMessageId?: string;
+
+  /**
+   * Author's send time — Mail's `date sent`, i.e. the `Date:` header. Survives a
+   * migration/re-import that resets the arrival timestamp (#224). Undefined when
+   * Mail could not supply it.
+   */
+  dateSent?: Date;
+
+  /** Arrival time in the mailbox — Mail's `date received` (≈ IMAP INTERNALDATE). */
+  dateReceived?: Date;
 }
 
 /**

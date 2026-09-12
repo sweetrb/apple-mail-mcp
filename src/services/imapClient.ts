@@ -30,6 +30,7 @@ import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
+import { isoOrUndefined } from "@/utils/headers.js";
 import { classifyCountStatus, type CountDelta } from "@/services/auditLog.js";
 import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
 
@@ -108,6 +109,8 @@ interface ImapMessage {
   source?: Buffer | string;
   bodyStructure?: ImapBodyStructure;
   headers?: Buffer | string;
+  /** Server arrival time (IMAP INTERNALDATE) — NOT the author's `Date:` header. */
+  internalDate?: Date | string;
 }
 interface ImapDownload {
   meta?: { filename?: string; contentType?: string };
@@ -1036,6 +1039,12 @@ export interface ImapOpResult {
   info?: string;
   /** Absent on operations that perform no post-condition check at all. */
   verification?: ImapVerification;
+  /**
+   * Backend facts that do not fit `info`'s prose — e.g. the message dates a read
+   * returns alongside its body (#224). Merged into `structuredContent` by the
+   * caller; never parsed back out of `info`.
+   */
+  meta?: Record<string, unknown>;
 }
 
 function errText(e: unknown): string {
@@ -1585,7 +1594,10 @@ export async function imapGetMessage(
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     const msg = await client.fetchOne(
       String(ref.uid),
-      { envelope: true, source: true },
+      // INTERNALDATE rides along so the read can report the server's arrival
+      // time beside the author's `Date:` header (#224). The envelope's `date`
+      // IS the `Date:` header — imapflow builds ENVELOPE from the header block.
+      { envelope: true, internalDate: true, source: true },
       { uid: true }
     );
     if (!msg)
@@ -1597,7 +1609,48 @@ export async function imapGetMessage(
       extractTextBody(src) ??
       extractHtmlBody(src) ??
       "(no readable body)";
-    return { success: true, info: `Subject: ${subject}\n\n${body}` };
+    return {
+      success: true,
+      info: `Subject: ${subject}\n\n${body}`,
+      meta: {
+        dateSent: isoOrUndefined(msg.envelope?.date),
+        dateReceived: isoOrUndefined(msg.internalDate),
+        // The envelope carries the Message-ID; `info` deliberately does not (it
+        // is subject + body), so the caller could never recover it from there.
+        rfcMessageId: msg.envelope?.messageId ? normalizeMessageId(msg.envelope.messageId) : "",
+      },
+    };
+  });
+}
+
+/**
+ * Fetch ONLY the RFC 5322 header block of a message by composite IMAP id (#224):
+ * `BODY.PEEK[HEADER]` via imapflow's `headers: true`, plus INTERNALDATE so the
+ * caller can show the server's arrival time next to the author's `Date:`. Never
+ * downloads the body, so it is cheap even for a message with large attachments.
+ * Returns the raw block in `info` and `dateReceived` in `meta`.
+ */
+export async function imapGetMessageHeaders(
+  id: string,
+  deps: ImapDeps = {}
+): Promise<ImapOpResult> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(
+      String(ref.uid),
+      { envelope: true, internalDate: true, headers: true },
+      { uid: true }
+    );
+    if (!msg)
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    const raw = msg.headers ? msg.headers.toString() : "";
+    if (!raw.trim()) return { success: false, error: "IMAP returned no header block." };
+    return {
+      success: true,
+      info: raw,
+      meta: { dateReceived: isoOrUndefined(msg.internalDate) },
+    };
   });
 }
 

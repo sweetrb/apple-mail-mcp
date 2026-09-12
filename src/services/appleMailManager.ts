@@ -138,6 +138,7 @@ const DIAG_FIELD_SEP = "\x1dF\x1d"; // between diagnostics fields
 const DIAG_ITEM_SEP = "\x1dM\x1d"; // between diagnostics list items
 const CONTENT_MARKER = "\x1dCONTENT\x1d"; // subject/plain-text boundary
 const MSGID_MARKER = "\x1dMSGID\x1d"; // subject/RFC-Message-ID boundary (get-message content)
+const DATES_MARKER = "\x1dDATES\x1d"; // RFC-Message-ID/dates boundary (get-message content, #224)
 const HTML_MARKER = "\x1dHTML\x1d"; // plain-text/source boundary
 const LOOKUP_ERROR_MARKER = "\x1dERR\x1d"; // GS-wrapped — by-id lookup failure; must not be a bare text prefix because the success payload of the same script leads with the sender-controlled subject
 const BATCH_FATAL = "\x1dFATAL\x1d"; // prefix for a whole-batch failure (e.g. bad destination)
@@ -492,6 +493,37 @@ function buildAttachmentCommands(attachments?: string[]): string {
  * Use: set d to date received of msg, then inline this snippet.
  */
 const AS_DATE_TO_STRING = `((year of d) as string) & "-" & ((month of d as integer) as string) & "-" & ((day of d) as string) & "-" & ((hours of d) as string) & "-" & ((minutes of d) as string) & "-" & ((seconds of d) as string)`;
+
+/**
+ * AppleScript fragment that reads a bound `msg`'s `date sent` (the `Date:`
+ * header) and `date received` (arrival in the mailbox) into `msgDates` as
+ * `"<sent>|<received>"`, each in the locale-independent numeric form above or
+ * empty when Mail cannot supply it. Each read is individually guarded — a
+ * message with no `Date:` header has no `date sent`, and that must not cost the
+ * caller the body (#224).
+ */
+const AS_MESSAGE_DATES_FRAGMENT = `set msgDateSent to ""
+                try
+                  set d to date sent of msg
+                  set msgDateSent to ${AS_DATE_TO_STRING}
+                end try
+                set msgDateRecv to ""
+                try
+                  set d to date received of msg
+                  set msgDateRecv to ${AS_DATE_TO_STRING}
+                end try
+                set msgDates to msgDateSent & "|" & msgDateRecv`;
+
+/** Parse the `"<sent>|<received>"` pair AS_MESSAGE_DATES_FRAGMENT emits. */
+function parseMessageDates(pair: string): { dateSent?: Date; dateReceived?: Date } {
+  const [sent = "", received = ""] = pair.split("|");
+  const parse = (v: string): Date | undefined => {
+    if (!v.trim()) return undefined;
+    const d = parseAppleScriptDate(v.trim());
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  };
+  return { dateSent: parse(sent), dateReceived: parse(received) };
+}
 
 /**
  * Build the AppleScript loop that turns a message collection into delimited
@@ -2632,6 +2664,56 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   }
 
   /**
+   * The unscoped by-id resolution: walk every mailbox of every account, then the
+   * local store (#183), and run `innerAction` with `msg` bound when EXACTLY one
+   * mailbox holds the id — `{LOOKUP_ERROR_MARKER}` prefixes both the not-found
+   * and the ambiguous outcome. Shared by getMessageContent, getRawSource and
+   * getMessageHeaders so the three reads cannot drift apart (the pre-#224 code
+   * carried two byte-identical copies).
+   */
+  private unscopedByIdScript(id: string, innerAction: string): string {
+    return buildAppLevelScript(`
+      try
+        set _hits to {}
+        set _names to ""
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
+              if (count of matchingMsgs) > 0 then
+                set end of _hits to item 1 of matchingMsgs
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
+              end if
+            end try
+          end repeat
+        end repeat
+        -- #183: local mailboxes belong to no account, so the walk above cannot
+        -- reach them. Collect into the SAME _hits/_names, which means an id
+        -- present both in an account and locally is now correctly reported as
+        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
+        repeat with mb in _mbs
+          try
+            set matchingMsgs to (messages of mb whose id is ${Number(id)})
+            if (count of matchingMsgs) > 0 then
+              set end of _hits to item 1 of matchingMsgs
+              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
+            end if
+          end try
+        end repeat
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
+        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
+        if (count of _hits) is 1 then
+          set msg to item 1 of _hits
+          ${innerAction}
+        end if
+        return ""
+      on error errMsg
+        return ""
+      end try
+    `);
+  }
+
+  /**
    * Build an app-level AppleScript that opens exactly one account+mailbox, finds
    * the message with numeric `id` in it, and runs `innerAction` (which may assume
    * `msg` is bound). Used by the by-id fast paths (getMessageContent/getRawSource)
@@ -2731,7 +2813,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 end try
                 set msgContent to content of msg
                 ${sourceFetch}
-                return msgSubject & "${MSGID_MARKER}" & msgRfcId & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource`;
+                ${AS_MESSAGE_DATES_FRAGMENT}
+                return msgSubject & "${MSGID_MARKER}" & msgRfcId & "${DATES_MARKER}" & msgDates & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource`;
 
     // Fast path: when we know which account+mailbox holds this id (explicit hint
     // from the caller, or remembered from a prior search/list/by-id lookup), open
@@ -2756,45 +2839,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       // through to the full scan below rather than returning a false "not found".
     }
 
-    const script = buildAppLevelScript(`
-      try
-        set _hits to {}
-        set _names to ""
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set end of _hits to item 1 of matchingMsgs
-                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
-              end if
-            end try
-          end repeat
-        end repeat
-        -- #183: local mailboxes belong to no account, so the walk above cannot
-        -- reach them. Collect into the SAME _hits/_names, which means an id
-        -- present both in an account and locally is now correctly reported as
-        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
-        repeat with mb in _mbs
-          try
-            set matchingMsgs to (messages of mb whose id is ${Number(id)})
-            if (count of matchingMsgs) > 0 then
-              set end of _hits to item 1 of matchingMsgs
-              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
-            end if
-          end try
-        end repeat
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
-        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
-        if (count of _hits) is 1 then
-          set msg to item 1 of _hits
-          ${innerFetch}
-        end if
-        return ""
-      on error errMsg
-        return ""
-      end try
-    `);
+    const script = this.unscopedByIdScript(id, innerFetch);
 
     return this.parseMessageContent(
       id,
@@ -2834,7 +2879,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     // (added for stable, session-independent dedup) back out of the subject.
     const subjParts = parts[0].split(MSGID_MARKER);
     const subject = subjParts[0];
-    const rfcMessageId = normalizeRfcMessageId(subjParts.length > 1 ? subjParts[1] : "");
+    // The Message-ID half may carry a trailing `{DATES_MARKER}sent|received` pair
+    // (#224); a script that predates the marker simply yields no dates.
+    const idAndDates = (subjParts.length > 1 ? subjParts[1] : "").split(DATES_MARKER);
+    const rfcMessageId = normalizeRfcMessageId(idAndDates[0]);
+    const { dateSent, dateReceived } = parseMessageDates(idAndDates[1] ?? "");
 
     // Extract the actual text/html body from the raw MIME source rather than
     // returning the whole source. Falls back to undefined when the message has
@@ -2848,7 +2897,62 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       plainText: parts[1],
       htmlContent,
       rfcMessageId,
+      ...(dateSent ? { dateSent } : {}),
+      ...(dateReceived ? { dateReceived } : {}),
     };
+  }
+
+  /**
+   * Fetch ONLY the raw RFC 5322 header block of a message (#224) — Mail's
+   * `all headers` property — plus its `date received`, so the caller can show the
+   * arrival timestamp beside the author's `Date:` header. Same scoped-fast-path /
+   * full-scan resolution as getMessageContent; never reads the body or source.
+   * Returns null (with `lastMessageLookupError` set when Mail said why) on a miss.
+   */
+  getMessageHeaders(
+    id: string,
+    hint?: { account?: string; mailbox?: string }
+  ): { raw: string; dateReceived?: Date } | null {
+    this.lastMessageLookupError = undefined;
+    const innerFetch = `
+                set msgHeaders to ""
+                try
+                  set msgHeaders to all headers of msg
+                end try
+                ${AS_MESSAGE_DATES_FRAGMENT}
+                return msgDates & "${DATES_MARKER}" & msgHeaders`;
+
+    const parse = (result: AppleScriptResult): { raw: string; dateReceived?: Date } | null => {
+      if (!result.success || !result.output.trim()) {
+        if (!result.success) console.error(`Failed to get message headers: ${result.error}`);
+        return null;
+      }
+      if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+        this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
+        return null;
+      }
+      const idx = result.output.indexOf(DATES_MARKER);
+      if (idx === -1) return null;
+      const { dateReceived } = parseMessageDates(result.output.slice(0, idx));
+      const raw = result.output.slice(idx + DATES_MARKER.length);
+      if (!raw.trim()) return null;
+      return { raw, ...(dateReceived ? { dateReceived } : {}) };
+    };
+
+    const loc =
+      hint?.account && hint?.mailbox
+        ? { account: hint.account, mailbox: hint.mailbox }
+        : this.idLocationIndex.get(id.toString());
+    if (loc) {
+      const scoped = parse(
+        executeAppleScript(this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch), {
+          timeoutMs: 60000,
+        })
+      );
+      if (scoped) return scoped;
+      // Scoped miss (stale index) → full scan, as getMessageContent does.
+    }
+    return parse(executeAppleScript(this.unscopedByIdScript(id, innerFetch), { timeoutMs: 60000 }));
   }
 
   /**
@@ -2891,45 +2995,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       // Miss (stale index) → fall through to the full scan.
     }
 
-    const script = buildAppLevelScript(`
-      try
-        set _hits to {}
-        set _names to ""
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set end of _hits to item 1 of matchingMsgs
-                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
-              end if
-            end try
-          end repeat
-        end repeat
-        -- #183: local mailboxes belong to no account, so the walk above cannot
-        -- reach them. Collect into the SAME _hits/_names, which means an id
-        -- present both in an account and locally is now correctly reported as
-        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
-        repeat with mb in _mbs
-          try
-            set matchingMsgs to (messages of mb whose id is ${Number(id)})
-            if (count of matchingMsgs) > 0 then
-              set end of _hits to item 1 of matchingMsgs
-              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
-            end if
-          end try
-        end repeat
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
-        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
-        if (count of _hits) is 1 then
-          set msg to item 1 of _hits
-          return source of msg
-        end if
-        return ""
-      on error errMsg
-        return ""
-      end try
-    `);
+    const script = this.unscopedByIdScript(id, "return source of msg");
 
     const result = executeAppleScript(script, { timeoutMs: 120000 });
 

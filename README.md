@@ -159,6 +159,7 @@ tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 | **List Messages** | List messages with pagination, sender filter, date display |
 | **Search Messages** | Search by sender, subject, content, date range, read/flagged status — across all accounts |
 | **Read Messages** | Get full email content (plain text or HTML) |
+| **Read Headers** | Get a message's raw RFC 5322 headers — the author's `Date:`, Message-ID, threading ids, `Received:` trace — without downloading the body |
 | **Send Email** | Compose and send new emails (attach by file path or inline base64 content) |
 | **Send Serial Email** | Mail merge — send personalized emails to a list of recipients with {{placeholder}} support |
 | **Create Draft** | Save emails to Drafts folder (attach by file path or inline base64 content) |
@@ -288,7 +289,7 @@ Get the full content of a message.
 | `mailbox` | string | No | Mailbox holding the message (e.g. `"Sent Items"`). With `account`, opens that mailbox directly instead of scanning every mailbox — this is the fix for timeouts on large folders |
 | `account` | string | No | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan |
 
-**Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available).
+**Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available). `structuredContent` also carries `rfcMessageId` and, since 2.19.0, two dates: `dateSent` (the message's `Date:` header — Mail's `date sent`) and `dateReceived` (arrival in the mailbox — Mail's `date received` / IMAP `INTERNALDATE`). They differ legitimately by transit time; when they differ by **years**, the mailbox was migrated or re-imported and the arrival timestamp was reset — trust `dateSent` for chronology ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)).
 
 > **Large messages / attachments:** reading a full message routes through
 > `osascript`, whose captured output buffer defaults to **64 MB**. Override it
@@ -296,6 +297,22 @@ Get the full content of a message.
 > work with messages whose raw MIME (e.g. a large embedded attachment) exceeds
 > that — a value below the message size makes the read fail with a buffer-overflow
 > error rather than truncating ([#27](https://github.com/sweetrb/apple-mail-mcp/issues/27)).
+
+---
+
+#### `get-message-headers`
+
+Return a message's raw RFC 5322 header block — without fetching the body or any attachment — plus the parsed fields chronological and threading work needs. Added in 2.19.0 for mailboxes whose arrival timestamps were reset by a migration ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)): the `Date:` header is the author's send time and survives such moves; `INTERNALDATE` / `date received` does not.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID (numeric or `imap:…`) |
+| `mailbox` | string | No | Mailbox holding the message. With `account`, opens that mailbox directly instead of scanning every mailbox |
+| `account` | string | No | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan |
+
+**Returns:** The raw header block as text. `structuredContent` carries `raw`, every header as ordered `headers[]` (`{name, value}`, folded lines joined, duplicates such as `Received:` kept in wire order, values left RFC 2047-encoded), `headerCount`, and the decoded key fields: `date` (ISO 8601, from the `Date:` header), `dateHeader` (verbatim), `dateReceived` (mailbox arrival time — IMAP `INTERNALDATE` or Mail's `date received`), `messageId`, `subject`, `from`, `to`, `cc`, `replyTo`, `inReplyTo`, `references[]` and `received[]` (first entry = last hop). Fields the message does not carry are omitted.
+
+**Backends:** an `imap:` id fetches `BODY.PEEK[HEADER]` over IMAP (cheap even for a 20 MB message); a numeric id reads Mail's `all headers` property over AppleScript, with the same mailbox-scoped fast path as `get-message`.
 
 ---
 

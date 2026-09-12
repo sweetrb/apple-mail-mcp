@@ -68,6 +68,7 @@ import {
   imapDeleteMailbox,
   imapRenameMailbox,
   imapGetMessage,
+  imapGetMessageHeaders,
   imapGetMessageSource,
   imapMarkRead,
   imapMarkUnread,
@@ -109,6 +110,7 @@ import {
 } from "@/schemas.js";
 import { normalizeSubject, subjectFromGetMessage } from "@/tools/thread.js";
 import { extractRfcMessageIdFromSource } from "@/utils/mimeParse.js";
+import { headersStructured, isoOrUndefined, parseHeaderBlock } from "@/utils/headers.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
 import { loadFileConfig } from "@/services/fileConfig.js";
 import { isOrphaned } from "@/utils/orphan.js";
@@ -638,7 +640,7 @@ registerTool(
   "get-message",
   {
     description:
-      'Use when: reading the full body of one message whose id you already have (numeric or imap:…); set preferHtml to get the HTML body instead of plain text.\nReturns: the message subject, body (plain text by default, HTML when preferHtml is true), and its stable RFC Message-ID (rfcMessageId) for dedup/threading.\nTip: pass the mailbox+account you got the id from (e.g. from search-messages) to fetch it directly — required for reliable reads of large folders like "Sent Items", which otherwise time out.\nDo not use when: you don\'t yet have an id (use search-messages or list-messages first), or you want the whole conversation (use get-thread).',
+      "Use when: reading the full body of one message whose id you already have (numeric or imap:…); set preferHtml to get the HTML body instead of plain text.\nReturns: the message subject, body (plain text by default, HTML when preferHtml is true), its stable RFC Message-ID (rfcMessageId) for dedup/threading, and two dates: dateSent (the author's Date: header — survives a migration/re-import) and dateReceived (arrival in the mailbox; this is the one a migration resets).\nTip: pass the mailbox+account you got the id from (e.g. from search-messages) to fetch it directly — required for reliable reads of large folders like \"Sent Items\", which otherwise time out.\nDo not use when: you don't yet have an id (use search-messages or list-messages first), you want the whole conversation (use get-thread), or you need the raw headers / Received: trace (use get-message-headers).",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       preferHtml: z
@@ -669,6 +671,18 @@ registerTool(
         .describe(
           "Stable RFC 5322 Message-ID (angle brackets stripped); empty when the message has none"
         ),
+      dateSent: z
+        .string()
+        .optional()
+        .describe(
+          "ISO 8601 send time from the message's Date: header (Mail's `date sent`). Absent when the message carries no parseable Date: header."
+        ),
+      dateReceived: z
+        .string()
+        .optional()
+        .describe(
+          "ISO 8601 arrival time in the mailbox (IMAP INTERNALDATE / Mail's `date received`). A migration or re-import resets this; compare with dateSent."
+        ),
     },
   },
   withErrorHandling(
@@ -686,7 +700,14 @@ registerTool(
             subject: subjectFromGetMessage(r.info),
             body: sep >= 0 ? r.info.slice(sep + 2) : r.info,
             isHtml: preferHtml === true,
-            rfcMessageId: extractRfcMessageIdFromSource(r.info),
+            // Prefer the envelope's Message-ID (#224 fix): `info` is subject +
+            // body with no header block, so parsing it yielded "" for every
+            // IMAP-sourced message from 2.2.0 through 2.18.1.
+            rfcMessageId:
+              (r.meta?.rfcMessageId as string | undefined) || extractRfcMessageIdFromSource(r.info),
+            // #224: envelope Date: header and INTERNALDATE, already ISO strings.
+            ...(r.meta?.dateSent ? { dateSent: r.meta.dateSent } : {}),
+            ...(r.meta?.dateReceived ? { dateReceived: r.meta.dateReceived } : {}),
           };
         },
         apple: () => {
@@ -704,18 +725,104 @@ registerTool(
           }
           const isHtml = preferHtml === true && !!content.htmlContent;
           const body = isHtml ? content.htmlContent! : content.plainText;
+          const dateSent = isoOrUndefined(content.dateSent);
+          const dateReceived = isoOrUndefined(content.dateReceived);
           return successResponse(`Subject: ${content.subject}\n\n${body}`, {
             id,
             subject: content.subject,
             body,
             isHtml,
             rfcMessageId: content.rfcMessageId ?? "",
+            ...(dateSent ? { dateSent } : {}),
+            ...(dateReceived ? { dateReceived } : {}),
           });
         },
         ok: "",
         fail: `Message with ID "${id}" not found`,
       }),
     "Error retrieving message"
+  )
+);
+
+// --- get-message-headers ---
+
+/** One zod shape for the header fields both backends return (#224). */
+const HEADER_FIELD_SCHEMA = z.object({
+  name: z.string().describe("Header name as written (case preserved)"),
+  value: z.string().describe("Unfolded value; RFC 2047 encoded-words left as-is"),
+});
+
+registerTool(
+  "get-message-headers",
+  {
+    description:
+      "Use when: you need a message's raw RFC 5322 headers — the author's Date: header (not the mailbox arrival time), Message-ID, In-Reply-To/References, the Received: hop trace, or any custom X- header — for a message whose id you already have (numeric or imap:…). Cheap: never downloads the body or attachments.\nReturns: the raw header block (text), every header as ordered {name, value} pairs with folding undone, and the decoded key fields: date (ISO 8601, from the Date: header), dateHeader (verbatim), dateReceived (mailbox arrival time — the value a migration or re-import resets, so compare it with date), messageId, subject, from, to, cc, replyTo, inReplyTo, references[], received[].\nTip: pass the mailbox+account you got the id from so a numeric id is fetched directly instead of scanning every mailbox.\nDo not use when: you want the body (use get-message), the conversation (use get-thread), or only the Message-ID (get-message already returns rfcMessageId).",
+    inputSchema: {
+      id: MESSAGE_ID_SCHEMA,
+      mailbox: z
+        .string()
+        .optional()
+        .describe(
+          "Mailbox that holds the message (numeric ids are unique per mailbox). With `account`, opens that mailbox directly instead of scanning every mailbox."
+        ),
+      account: z
+        .string()
+        .optional()
+        .describe("Account that holds the message. Pair with `mailbox` for a direct fetch."),
+    },
+    outputSchema: {
+      id: z.string().optional(),
+      raw: z.string().optional().describe("The raw header block, exactly as stored"),
+      headers: z.array(HEADER_FIELD_SCHEMA).optional(),
+      headerCount: z.number().optional(),
+      date: z
+        .string()
+        .optional()
+        .describe("ISO 8601 from the Date: header — the author's send time"),
+      dateHeader: z.string().optional().describe("The Date: header verbatim"),
+      dateReceived: z
+        .string()
+        .optional()
+        .describe("ISO 8601 mailbox arrival time (INTERNALDATE / Mail's `date received`)"),
+      messageId: z.string().optional().describe("Bare RFC 5322 Message-ID"),
+      subject: z.string().optional().describe("RFC 2047-decoded Subject:"),
+      from: z.string().optional(),
+      to: z.string().optional(),
+      cc: z.string().optional(),
+      replyTo: z.string().optional(),
+      inReplyTo: z.string().optional(),
+      references: z.array(z.string()).optional(),
+      received: z
+        .array(z.string())
+        .optional()
+        .describe("Every Received: header, as written (first = last hop)"),
+    },
+    annotations: { readOnlyHint: true },
+  },
+  withErrorHandling(
+    ({ id, mailbox, account }) =>
+      routeMessage(id, {
+        // imap: id → BODY.PEEK[HEADER] + INTERNALDATE, no body download.
+        imap: () => imapGetMessageHeaders(id, { account }),
+        structuredFromResult: (r) =>
+          r.info
+            ? headersStructured(id, parseHeaderBlock(r.info), r.meta?.dateReceived as string)
+            : undefined,
+        apple: () => {
+          const h = mailManager.getMessageHeaders(id, { account, mailbox });
+          if (!h) {
+            const lookupError = mailManager.consumeLastMessageLookupError();
+            return errorResponse(lookupError ?? `Message with ID "${id}" not found`);
+          }
+          return successResponse(
+            h.raw,
+            headersStructured(id, parseHeaderBlock(h.raw), h.dateReceived)
+          );
+        },
+        ok: "",
+        fail: `Message with ID "${id}" not found`,
+      }),
+    "Error retrieving message headers"
   )
 );
 

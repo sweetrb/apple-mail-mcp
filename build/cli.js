@@ -57771,6 +57771,18 @@ var init_mimeParse = __esm({
   }
 });
 
+// src/utils/headers.ts
+function isoOrUndefined(d) {
+  if (d === void 0 || d === "") return void 0;
+  const date = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(date.getTime()) ? void 0 : date.toISOString();
+}
+var init_headers = __esm({
+  "src/utils/headers.ts"() {
+    "use strict";
+  }
+});
+
 // src/services/auditLog.ts
 function classifyCountStatus(readable, expected, observed) {
   if (!readable) return { status: "unknown", unknownReason: "count-unreadable" };
@@ -57812,6 +57824,7 @@ __export(imapClient_exports, {
   imapFetchMessageId: () => imapFetchMessageId,
   imapFlagMessage: () => imapFlagMessage,
   imapGetMessage: () => imapGetMessage,
+  imapGetMessageHeaders: () => imapGetMessageHeaders,
   imapGetMessageSource: () => imapGetMessageSource,
   imapHealthCheck: () => imapHealthCheck,
   imapListAttachments: () => imapListAttachments,
@@ -58604,7 +58617,10 @@ async function imapGetMessage(id, preferHtml, deps = {}) {
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     const msg = await client.fetchOne(
       String(ref.uid),
-      { envelope: true, source: true },
+      // INTERNALDATE rides along so the read can report the server's arrival
+      // time beside the author's `Date:` header (#224). The envelope's `date`
+      // IS the `Date:` header — imapflow builds ENVELOPE from the header block.
+      { envelope: true, internalDate: true, source: true },
       { uid: true }
     );
     if (!msg)
@@ -58612,9 +58628,39 @@ async function imapGetMessage(id, preferHtml, deps = {}) {
     const subject = msg.envelope?.subject || "(no subject)";
     const src = msg.source ? msg.source.toString() : "";
     const body = (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ?? extractTextBody(src) ?? extractHtmlBody(src) ?? "(no readable body)";
-    return { success: true, info: `Subject: ${subject}
+    return {
+      success: true,
+      info: `Subject: ${subject}
 
-${body}` };
+${body}`,
+      meta: {
+        dateSent: isoOrUndefined(msg.envelope?.date),
+        dateReceived: isoOrUndefined(msg.internalDate),
+        // The envelope carries the Message-ID; `info` deliberately does not (it
+        // is subject + body), so the caller could never recover it from there.
+        rfcMessageId: msg.envelope?.messageId ? normalizeMessageId(msg.envelope.messageId) : ""
+      }
+    };
+  });
+}
+async function imapGetMessageHeaders(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(
+      String(ref.uid),
+      { envelope: true, internalDate: true, headers: true },
+      { uid: true }
+    );
+    if (!msg)
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    const raw = msg.headers ? msg.headers.toString() : "";
+    if (!raw.trim()) return { success: false, error: "IMAP returned no header block." };
+    return {
+      success: true,
+      info: raw,
+      meta: { dateReceived: isoOrUndefined(msg.internalDate) }
+    };
   });
 }
 function normalizeMessageId(mid) {
@@ -59054,6 +59100,7 @@ var init_imapClient = __esm({
     init_smtpMailer();
     init_docsUrls();
     init_mimeParse();
+    init_headers();
     init_auditLog();
     init_attachmentLimits();
     IMAP_ENV = {
