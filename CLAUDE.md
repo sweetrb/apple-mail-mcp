@@ -162,6 +162,7 @@ does not reattach original attachments.
 - `search-messages` searches all accounts when no `account` is specified
 - Use `list-accounts` to see available accounts
 - Pass `account` parameter to target specific account
+- **Two dates, and they can disagree (2.19.0, #224).** `get-message` returns `dateSent` (the `Date:` header — the author's send time) and `dateReceived` (arrival in the mailbox: IMAP `INTERNALDATE` / Mail's `date received`). A migration or re-import resets the arrival time, so on such a mailbox dozens of messages share one `dateReceived` while their `dateSent` values span years — use `dateSent` for chronology there. `get-message-headers` returns the raw header block (Message-ID, In-Reply-To/References, the `Received:` trace, custom `X-` headers) without downloading the body.
 - **Reads prefer direct IMAP when configured (v2.6.0).** When any `APPLE_MAIL_MCP_IMAP_*` account is configured, the read tools (`search-messages`, `get-thread`, `list-messages`, `list-mailboxes`, `get-unread-count`, `get-mail-stats`) go to IMAP instead of AppleScript:
   - explicit IMAP `account` → that account over IMAP (fast, server-side);
   - explicit non-IMAP `account` → AppleScript;

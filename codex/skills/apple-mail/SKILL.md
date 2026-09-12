@@ -30,6 +30,7 @@ Use this skill when the user:
 | `list-messages` | List messages in a mailbox (all mailboxes if omitted) |
 | `search-messages` | Find messages by sender, subject, or content |
 | `get-message` | Read the full content of a message |
+| `get-message-headers` | Read a message's raw RFC 5322 headers (author's `Date:`, Message-ID, threading ids, `Received:` trace) without the body |
 | `get-thread` | Get the full conversation thread for a message |
 | `send-email` | Send a new email immediately |
 | `send-serial-email` | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders) |

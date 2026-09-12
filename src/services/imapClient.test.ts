@@ -16,6 +16,7 @@ import {
   imapFetchMessageId,
   normalizeMessageId,
   imapGetMessage,
+  imapGetMessageHeaders,
   imapGetMessageSource,
   MAX_COMPOSE_SOURCE_BYTES,
   imapMarkRead,
@@ -2161,6 +2162,111 @@ describe("#181 IMAP batch operations reconcile the source mailbox count", () => 
       connect: async () => countingClient(0),
     });
     expect(unflag.countDelta).toBeUndefined();
+  });
+});
+
+describe("get-message dates and get-message-headers (#224)", () => {
+  const RAW_HEADERS =
+    "Received: from a.example (a.example [10.0.0.1])\r\n\tby b.example; Mon, 1 Jun 2020 10:00:02 +0000\r\n" +
+    "Date: Mon, 1 Jun 2020 09:59:58 +0000\r\n" +
+    "From: Sender <s@example.org>\r\n" +
+    "Subject: Hello\r\n" +
+    "Message-ID: <hello@example.org>\r\n";
+  const internalDate = new Date("2026-03-04T05:06:07Z");
+  const envelopeDate = new Date("2020-06-01T09:59:58Z");
+
+  function headerClient(overrides: Partial<{ headers: Buffer | string; found: boolean }> = {}) {
+    const rec: MsgRec = {};
+    const fetchOne = vi.fn(async () =>
+      overrides.found === false
+        ? false
+        : {
+            uid: 1,
+            envelope: { subject: "Hello", date: envelopeDate, messageId: "<hello@example.org>" },
+            internalDate,
+            headers: overrides.headers ?? Buffer.from(RAW_HEADERS),
+            source: Buffer.from("Content-Type: text/plain\r\n\r\nbody"),
+          }
+    );
+    const client = { ...makeMsgClient(rec), fetchOne };
+    return { fetchOne, deps: { config: cfg, connect: async () => client } };
+  }
+
+  it("get-message asks for INTERNALDATE and reports both dates in meta", async () => {
+    const c = headerClient();
+    const r = await imapGetMessage(MID, false, c.deps);
+    expect(r.success).toBe(true);
+    expect(c.fetchOne).toHaveBeenCalledWith(
+      "1",
+      { envelope: true, internalDate: true, source: true },
+      { uid: true }
+    );
+    expect(r.meta).toEqual({
+      dateSent: "2020-06-01T09:59:58.000Z",
+      dateReceived: "2026-03-04T05:06:07.000Z",
+      rfcMessageId: "hello@example.org",
+    });
+  });
+
+  it("get-message leaves a date undefined rather than inventing one", async () => {
+    const c = headerClient();
+    c.fetchOne.mockResolvedValueOnce({
+      uid: 1,
+      envelope: { subject: "Hello" },
+      source: Buffer.from("Content-Type: text/plain\r\n\r\nbody"),
+    });
+    const r = await imapGetMessage(MID, false, c.deps);
+    expect(r.success).toBe(true);
+    expect(r.meta).toEqual({ dateSent: undefined, dateReceived: undefined, rfcMessageId: "" });
+  });
+
+  it("headers: fetches only the header block plus INTERNALDATE, never the source", async () => {
+    const c = headerClient();
+    const r = await imapGetMessageHeaders(MID, c.deps);
+    expect(r.success).toBe(true);
+    expect(c.fetchOne).toHaveBeenCalledWith(
+      "1",
+      { envelope: true, internalDate: true, headers: true },
+      { uid: true }
+    );
+    expect(r.info).toBe(RAW_HEADERS);
+    expect(r.meta).toEqual({ dateReceived: "2026-03-04T05:06:07.000Z" });
+  });
+
+  it("headers: accepts a string header block", async () => {
+    const c = headerClient({ headers: "Subject: s\r\n" });
+    const r = await imapGetMessageHeaders(MID, c.deps);
+    expect(r.success).toBe(true);
+    expect(r.info).toBe("Subject: s\r\n");
+  });
+
+  it("headers: reports a missing message", async () => {
+    const c = headerClient({ found: false });
+    const r = await imapGetMessageHeaders(MID, c.deps);
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/UID 1 not found/);
+  });
+
+  it("headers: refuses an empty header block instead of returning success with nothing", async () => {
+    const c = headerClient({ headers: "" });
+    const r = await imapGetMessageHeaders(MID, c.deps);
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/no header block/);
+  });
+
+  it("headers: rejects a non-IMAP id without connecting", async () => {
+    const c = headerClient();
+    const r = await imapGetMessageHeaders("12345", c.deps);
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/Not an IMAP message id/);
+    expect(c.fetchOne).not.toHaveBeenCalled();
+  });
+
+  it("headers: rejects an account override that disagrees with the id", async () => {
+    const c = headerClient();
+    await expect(imapGetMessageHeaders(MID, { ...c.deps, account: "Work" })).rejects.toThrow(
+      /belongs to account/
+    );
   });
 });
 

@@ -1,5 +1,49 @@
 ## [Unreleased]
 
+## [2.19.0] - 2026-09-12
+
+### Added
+- `get-message-headers` tool (#224, requested by @j5pu): returns a message's raw
+  RFC 5322 header block **without fetching the body or attachments**, plus the
+  parsed fields chronological and threading work needs — `date` (ISO 8601, from
+  the `Date:` header), `dateHeader` verbatim, `dateReceived` (the mailbox
+  arrival time), `messageId`, `subject`/`from`/`to`/`cc`/`replyTo` with RFC 2047
+  encoded-words decoded, `inReplyTo`, `references[]`, `received[]` (the hop
+  trace, last hop first) and every header as ordered `{name, value}` pairs with
+  folding undone. Over IMAP it is a `BODY.PEEK[HEADER]` fetch; over AppleScript
+  it reads Mail's `all headers`, with the same mailbox-scoped fast path as
+  `get-message`.
+- `get-message` now returns `dateSent` and `dateReceived` in `structuredContent`
+  on both backends (#224). `dateSent` is the message's `Date:` header — Mail's
+  `date sent`, the IMAP ENVELOPE date — and is the author's send time.
+  `dateReceived` is arrival in the mailbox — Mail's `date received`, IMAP
+  `INTERNALDATE`. The distinction is the whole point: a migration or re-import
+  rewrites the arrival timestamp (the reporter's iCloud mailbox has clusters of
+  dozens of messages sharing one `INTERNALDATE` to the second while their real
+  send dates differ by years), so a caller doing chronology on such a mailbox
+  needs the header date, and `get-message` previously exposed neither. Either
+  field is omitted, never invented, when the backend cannot supply it.
+
+### Fixed
+- `get-message` over IMAP returned an **empty `rfcMessageId` for every message**
+  since the field was added in 2.2.0. The IMAP branch parsed the Message-ID out
+  of the tool's own `info` text, which is subject + body and never carried a
+  header block, so the extraction could not succeed. It now takes the Message-ID
+  from the IMAP ENVELOPE. Found by the live probe for #224, where
+  `get-message-headers` returned a `messageId` for a message whose `get-message`
+  said `""`. The AppleScript branch was unaffected.
+
+### Changed
+- The three AppleScript by-id reads (`getMessageContent`, `getRawSource` and the
+  new `getMessageHeaders`) now share one unscoped-scan script builder; the first
+  two previously carried byte-identical copies of it. No behaviour change.
+
+### Documentation
+- README: `get-message-headers` Tool Reference entry, the two-dates note on
+  `get-message`, and a "Read Headers" feature row. CLAUDE.md: when to trust
+  `dateSent` over `dateReceived`. `docs/IMAP-SETUP.md` and the bundled skill list
+  the new tool.
+
 ## [2.18.1] - 2026-09-10
 
 ### Fixed

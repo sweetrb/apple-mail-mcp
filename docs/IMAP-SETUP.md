@@ -28,7 +28,7 @@ When an account is IMAP-configured, these route to IMAP (otherwise AppleScript):
 | Capability | Tools |
 |------------|-------|
 | Server-side search / list | `search-messages`, `list-messages` |
-| Read a message | `get-message` |
+| Read a message | `get-message`, `get-message-headers` |
 | Message mutations | `mark-as-read`/`unread`, `flag`/`unflag-message`, `move-message`, `delete-message` |
 | Batch mutations | `batch-mark-as-read`/`unread`, `batch-flag`/`unflag-messages`, `batch-move-messages`, `batch-delete-messages` |
 | Folder ops | `create-mailbox`, `rename-mailbox`, `delete-mailbox` |

@@ -65092,6 +65092,122 @@ var require_imap_flow = __commonJS({
   }
 });
 
+// src/utils/headers.ts
+function decodeEncodedWords(value) {
+  if (!value.includes("=?")) return value;
+  const joined = value.replace(/(\?=)\s+(=\?)/g, "$1$2");
+  return joined.replace(
+    /=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g,
+    (whole, charset, enc, text) => {
+      try {
+        const bytes = enc.toUpperCase() === "B" ? Buffer.from(text, "base64") : Buffer.from(
+          text.replace(/_/g, " ").replace(
+            /=([0-9A-Fa-f]{2})/g,
+            (_m, h) => String.fromCharCode(parseInt(h, 16))
+          ),
+          "latin1"
+        );
+        return new TextDecoder(normalizeCharset(charset)).decode(bytes);
+      } catch {
+        return whole;
+      }
+    }
+  );
+}
+function normalizeCharset(charset) {
+  const bare = charset.split("*")[0].trim().toLowerCase();
+  try {
+    new TextDecoder(bare);
+    return bare;
+  } catch {
+    return "utf-8";
+  }
+}
+function bareId(raw) {
+  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
+function splitIds(raw) {
+  const bracketed = raw.match(/<[^>]+>/g);
+  if (bracketed) return bracketed.map(bareId).filter(Boolean);
+  return raw.split(/[\s,]+/).map(bareId).filter(Boolean);
+}
+function parseHeaderBlock(input) {
+  const text = (input ?? "").replace(/\r\n/g, "\n");
+  const blank = text.search(/\n\n/);
+  const raw = (blank === -1 ? text : text.slice(0, blank)).replace(/\n+$/, "");
+  const headers = [];
+  for (const line of raw.split("\n")) {
+    if (/^[ \t]/.test(line) && headers.length) {
+      headers[headers.length - 1].value += " " + line.trim();
+      continue;
+    }
+    const m = /^([!-9;-~]+):[ \t]?(.*)$/.exec(line);
+    if (!m) continue;
+    headers.push({ name: m[1], value: m[2].trim() });
+  }
+  const first = (name) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
+  const all = (name) => headers.filter((h) => h.name.toLowerCase() === name.toLowerCase()).map((h) => h.value);
+  const decoded = (name) => {
+    const v = first(name);
+    return v === void 0 ? void 0 : decodeEncodedWords(v);
+  };
+  const dateHeader = first("Date");
+  let date3;
+  if (dateHeader) {
+    const parsed = new Date(dateHeader.replace(/\s*\([^)]*\)\s*$/, ""));
+    if (!Number.isNaN(parsed.getTime())) date3 = parsed.toISOString();
+  }
+  const messageIdRaw = first("Message-ID") ?? first("Message-Id");
+  const inReplyToRaw = first("In-Reply-To");
+  const referencesRaw = first("References");
+  return {
+    raw,
+    headers,
+    date: date3,
+    dateHeader,
+    messageId: messageIdRaw ? bareId(messageIdRaw) || void 0 : void 0,
+    subject: decoded("Subject"),
+    from: decoded("From"),
+    to: decoded("To"),
+    cc: decoded("Cc"),
+    replyTo: decoded("Reply-To"),
+    inReplyTo: inReplyToRaw ? bareId(inReplyToRaw) || void 0 : void 0,
+    references: referencesRaw ? splitIds(referencesRaw) : [],
+    received: all("Received")
+  };
+}
+function headersStructured(id, parsed, dateReceived) {
+  const received = dateReceived instanceof Date ? Number.isNaN(dateReceived.getTime()) ? void 0 : dateReceived.toISOString() : dateReceived || void 0;
+  return {
+    id,
+    raw: parsed.raw,
+    headers: parsed.headers,
+    headerCount: parsed.headers.length,
+    ...parsed.date !== void 0 ? { date: parsed.date } : {},
+    ...parsed.dateHeader !== void 0 ? { dateHeader: parsed.dateHeader } : {},
+    ...received !== void 0 ? { dateReceived: received } : {},
+    ...parsed.messageId !== void 0 ? { messageId: parsed.messageId } : {},
+    ...parsed.subject !== void 0 ? { subject: parsed.subject } : {},
+    ...parsed.from !== void 0 ? { from: parsed.from } : {},
+    ...parsed.to !== void 0 ? { to: parsed.to } : {},
+    ...parsed.cc !== void 0 ? { cc: parsed.cc } : {},
+    ...parsed.replyTo !== void 0 ? { replyTo: parsed.replyTo } : {},
+    ...parsed.inReplyTo !== void 0 ? { inReplyTo: parsed.inReplyTo } : {},
+    references: parsed.references,
+    received: parsed.received
+  };
+}
+function isoOrUndefined(d) {
+  if (d === void 0 || d === "") return void 0;
+  const date3 = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(date3.getTime()) ? void 0 : date3.toISOString();
+}
+var init_headers = __esm({
+  "src/utils/headers.ts"() {
+    "use strict";
+  }
+});
+
 // src/services/imapClient.ts
 var imapClient_exports = {};
 __export(imapClient_exports, {
@@ -65118,6 +65234,7 @@ __export(imapClient_exports, {
   imapFetchMessageId: () => imapFetchMessageId,
   imapFlagMessage: () => imapFlagMessage,
   imapGetMessage: () => imapGetMessage,
+  imapGetMessageHeaders: () => imapGetMessageHeaders,
   imapGetMessageSource: () => imapGetMessageSource,
   imapHealthCheck: () => imapHealthCheck,
   imapListAttachments: () => imapListAttachments,
@@ -65910,7 +66027,10 @@ async function imapGetMessage(id, preferHtml, deps = {}) {
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     const msg = await client.fetchOne(
       String(ref.uid),
-      { envelope: true, source: true },
+      // INTERNALDATE rides along so the read can report the server's arrival
+      // time beside the author's `Date:` header (#224). The envelope's `date`
+      // IS the `Date:` header — imapflow builds ENVELOPE from the header block.
+      { envelope: true, internalDate: true, source: true },
       { uid: true }
     );
     if (!msg)
@@ -65918,9 +66038,39 @@ async function imapGetMessage(id, preferHtml, deps = {}) {
     const subject = msg.envelope?.subject || "(no subject)";
     const src = msg.source ? msg.source.toString() : "";
     const body = (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ?? extractTextBody(src) ?? extractHtmlBody(src) ?? "(no readable body)";
-    return { success: true, info: `Subject: ${subject}
+    return {
+      success: true,
+      info: `Subject: ${subject}
 
-${body}` };
+${body}`,
+      meta: {
+        dateSent: isoOrUndefined(msg.envelope?.date),
+        dateReceived: isoOrUndefined(msg.internalDate),
+        // The envelope carries the Message-ID; `info` deliberately does not (it
+        // is subject + body), so the caller could never recover it from there.
+        rfcMessageId: msg.envelope?.messageId ? normalizeMessageId(msg.envelope.messageId) : ""
+      }
+    };
+  });
+}
+async function imapGetMessageHeaders(id, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(
+      String(ref.uid),
+      { envelope: true, internalDate: true, headers: true },
+      { uid: true }
+    );
+    if (!msg)
+      return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+    const raw = msg.headers ? msg.headers.toString() : "";
+    if (!raw.trim()) return { success: false, error: "IMAP returned no header block." };
+    return {
+      success: true,
+      info: raw,
+      meta: { dateReceived: isoOrUndefined(msg.internalDate) }
+    };
   });
 }
 function normalizeMessageId(mid) {
@@ -66360,6 +66510,7 @@ var init_imapClient = __esm({
     init_smtpMailer();
     init_docsUrls();
     init_mimeParse();
+    init_headers();
     init_auditLog();
     init_attachmentLimits();
     IMAP_ENV = {
@@ -81688,6 +81839,7 @@ var DIAG_FIELD_SEP = "F";
 var DIAG_ITEM_SEP = "M";
 var CONTENT_MARKER = "CONTENT";
 var MSGID_MARKER = "MSGID";
+var DATES_MARKER = "DATES";
 var HTML_MARKER = "HTML";
 var LOOKUP_ERROR_MARKER = "ERR";
 var BATCH_FATAL = "FATAL";
@@ -81819,6 +81971,26 @@ function buildAttachmentCommands(attachments) {
   return commands;
 }
 var AS_DATE_TO_STRING = `((year of d) as string) & "-" & ((month of d as integer) as string) & "-" & ((day of d) as string) & "-" & ((hours of d) as string) & "-" & ((minutes of d) as string) & "-" & ((seconds of d) as string)`;
+var AS_MESSAGE_DATES_FRAGMENT = `set msgDateSent to ""
+                try
+                  set d to date sent of msg
+                  set msgDateSent to ${AS_DATE_TO_STRING}
+                end try
+                set msgDateRecv to ""
+                try
+                  set d to date received of msg
+                  set msgDateRecv to ${AS_DATE_TO_STRING}
+                end try
+                set msgDates to msgDateSent & "|" & msgDateRecv`;
+function parseMessageDates(pair) {
+  const [sent = "", received = ""] = pair.split("|");
+  const parse3 = (v) => {
+    if (!v.trim()) return void 0;
+    const d = parseAppleScriptDate(v.trim());
+    return Number.isNaN(d.getTime()) ? void 0 : d;
+  };
+  return { dateSent: parse3(sent), dateReceived: parse3(received) };
+}
 function buildMessageRowLoop(opts) {
   const { collection, limit, dedup, dateFilter, trailing = "", offset, withAttachments } = opts;
   const dedupOpen = dedup ? `if seenIds does not contain msgId then
@@ -83306,6 +83478,55 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     };
   }
   /**
+   * The unscoped by-id resolution: walk every mailbox of every account, then the
+   * local store (#183), and run `innerAction` with `msg` bound when EXACTLY one
+   * mailbox holds the id — `{LOOKUP_ERROR_MARKER}` prefixes both the not-found
+   * and the ambiguous outcome. Shared by getMessageContent, getRawSource and
+   * getMessageHeaders so the three reads cannot drift apart (the pre-#224 code
+   * carried two byte-identical copies).
+   */
+  unscopedByIdScript(id, innerAction) {
+    return buildAppLevelScript(`
+      try
+        set _hits to {}
+        set _names to ""
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
+              if (count of matchingMsgs) > 0 then
+                set end of _hits to item 1 of matchingMsgs
+                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
+              end if
+            end try
+          end repeat
+        end repeat
+        -- #183: local mailboxes belong to no account, so the walk above cannot
+        -- reach them. Collect into the SAME _hits/_names, which means an id
+        -- present both in an account and locally is now correctly reported as
+        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
+        repeat with mb in _mbs
+          try
+            set matchingMsgs to (messages of mb whose id is ${Number(id)})
+            if (count of matchingMsgs) > 0 then
+              set end of _hits to item 1 of matchingMsgs
+              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
+            end if
+          end try
+        end repeat
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
+        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
+        if (count of _hits) is 1 then
+          set msg to item 1 of _hits
+          ${innerAction}
+        end if
+        return ""
+      on error errMsg
+        return ""
+      end try
+    `);
+  }
+  /**
    * Build an app-level AppleScript that opens exactly one account+mailbox, finds
    * the message with numeric `id` in it, and runs `innerAction` (which may assume
    * `msg` is bound). Used by the by-id fast paths (getMessageContent/getRawSource)
@@ -83384,7 +83605,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 end try
                 set msgContent to content of msg
                 ${sourceFetch}
-                return msgSubject & "${MSGID_MARKER}" & msgRfcId & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource`;
+                ${AS_MESSAGE_DATES_FRAGMENT}
+                return msgSubject & "${MSGID_MARKER}" & msgRfcId & "${DATES_MARKER}" & msgDates & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource`;
     const loc = hint?.account && hint?.mailbox ? { account: hint.account, mailbox: hint.mailbox } : this.idLocationIndex.get(id.toString());
     if (loc) {
       const scopedScript = this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch);
@@ -83395,45 +83617,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       );
       if (scoped) return scoped;
     }
-    const script = buildAppLevelScript(`
-      try
-        set _hits to {}
-        set _names to ""
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set end of _hits to item 1 of matchingMsgs
-                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
-              end if
-            end try
-          end repeat
-        end repeat
-        -- #183: local mailboxes belong to no account, so the walk above cannot
-        -- reach them. Collect into the SAME _hits/_names, which means an id
-        -- present both in an account and locally is now correctly reported as
-        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
-        repeat with mb in _mbs
-          try
-            set matchingMsgs to (messages of mb whose id is ${Number(id)})
-            if (count of matchingMsgs) > 0 then
-              set end of _hits to item 1 of matchingMsgs
-              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
-            end if
-          end try
-        end repeat
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
-        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
-        if (count of _hits) is 1 then
-          set msg to item 1 of _hits
-          ${innerFetch}
-        end if
-        return ""
-      on error errMsg
-        return ""
-      end try
-    `);
+    const script = this.unscopedByIdScript(id, innerFetch);
     return this.parseMessageContent(
       id,
       executeAppleScript(script, { timeoutMs: 6e4 }),
@@ -83461,15 +83645,62 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (parts.length < 2) return null;
     const subjParts = parts[0].split(MSGID_MARKER);
     const subject = subjParts[0];
-    const rfcMessageId = normalizeRfcMessageId(subjParts.length > 1 ? subjParts[1] : "");
+    const idAndDates = (subjParts.length > 1 ? subjParts[1] : "").split(DATES_MARKER);
+    const rfcMessageId = normalizeRfcMessageId(idAndDates[0]);
+    const { dateSent, dateReceived } = parseMessageDates(idAndDates[1] ?? "");
     const htmlContent = includeHtml && rawSource ? extractHtmlBody(rawSource) || void 0 : void 0;
     return {
       id: id.toString(),
       subject,
       plainText: parts[1],
       htmlContent,
-      rfcMessageId
+      rfcMessageId,
+      ...dateSent ? { dateSent } : {},
+      ...dateReceived ? { dateReceived } : {}
     };
+  }
+  /**
+   * Fetch ONLY the raw RFC 5322 header block of a message (#224) — Mail's
+   * `all headers` property — plus its `date received`, so the caller can show the
+   * arrival timestamp beside the author's `Date:` header. Same scoped-fast-path /
+   * full-scan resolution as getMessageContent; never reads the body or source.
+   * Returns null (with `lastMessageLookupError` set when Mail said why) on a miss.
+   */
+  getMessageHeaders(id, hint) {
+    this.lastMessageLookupError = void 0;
+    const innerFetch = `
+                set msgHeaders to ""
+                try
+                  set msgHeaders to all headers of msg
+                end try
+                ${AS_MESSAGE_DATES_FRAGMENT}
+                return msgDates & "${DATES_MARKER}" & msgHeaders`;
+    const parse3 = (result) => {
+      if (!result.success || !result.output.trim()) {
+        if (!result.success) console.error(`Failed to get message headers: ${result.error}`);
+        return null;
+      }
+      if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+        this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
+        return null;
+      }
+      const idx = result.output.indexOf(DATES_MARKER);
+      if (idx === -1) return null;
+      const { dateReceived } = parseMessageDates(result.output.slice(0, idx));
+      const raw = result.output.slice(idx + DATES_MARKER.length);
+      if (!raw.trim()) return null;
+      return { raw, ...dateReceived ? { dateReceived } : {} };
+    };
+    const loc = hint?.account && hint?.mailbox ? { account: hint.account, mailbox: hint.mailbox } : this.idLocationIndex.get(id.toString());
+    if (loc) {
+      const scoped = parse3(
+        executeAppleScript(this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch), {
+          timeoutMs: 6e4
+        })
+      );
+      if (scoped) return scoped;
+    }
+    return parse3(executeAppleScript(this.unscopedByIdScript(id, innerFetch), { timeoutMs: 6e4 }));
   }
   /**
    * Get the raw MIME source of a message.
@@ -83498,45 +83729,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         this.lastMessageLookupError = scoped.output.slice(LOOKUP_ERROR_MARKER.length).trim();
       }
     }
-    const script = buildAppLevelScript(`
-      try
-        set _hits to {}
-        set _names to ""
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set end of _hits to item 1 of matchingMsgs
-                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
-              end if
-            end try
-          end repeat
-        end repeat
-        -- #183: local mailboxes belong to no account, so the walk above cannot
-        -- reach them. Collect into the SAME _hits/_names, which means an id
-        -- present both in an account and locally is now correctly reported as
-        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
-        repeat with mb in _mbs
-          try
-            set matchingMsgs to (messages of mb whose id is ${Number(id)})
-            if (count of matchingMsgs) > 0 then
-              set end of _hits to item 1 of matchingMsgs
-              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
-            end if
-          end try
-        end repeat
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
-        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
-        if (count of _hits) is 1 then
-          set msg to item 1 of _hits
-          return source of msg
-        end if
-        return ""
-      on error errMsg
-        return ""
-      end try
-    `);
+    const script = this.unscopedByIdScript(id, "return source of msg");
     const result = executeAppleScript(script, { timeoutMs: 12e4 });
     if (!result.success || !result.output.trim()) {
       return null;
@@ -87082,6 +87275,7 @@ function subjectFromGetMessage(info) {
 
 // src/index.ts
 init_mimeParse();
+init_headers();
 
 // src/services/imapIdle.ts
 var import_imapflow2 = __toESM(require_imap_flow(), 1);
@@ -87635,9 +87829,9 @@ registerTool(
   "get-message",
   {
     description: `Use when: reading the full body of one message whose id you already have (numeric or imap:\u2026); set preferHtml to get the HTML body instead of plain text.
-Returns: the message subject, body (plain text by default, HTML when preferHtml is true), and its stable RFC Message-ID (rfcMessageId) for dedup/threading.
+Returns: the message subject, body (plain text by default, HTML when preferHtml is true), its stable RFC Message-ID (rfcMessageId) for dedup/threading, and two dates: dateSent (the author's Date: header \u2014 survives a migration/re-import) and dateReceived (arrival in the mailbox; this is the one a migration resets).
 Tip: pass the mailbox+account you got the id from (e.g. from search-messages) to fetch it directly \u2014 required for reliable reads of large folders like "Sent Items", which otherwise time out.
-Do not use when: you don't yet have an id (use search-messages or list-messages first), or you want the whole conversation (use get-thread).`,
+Do not use when: you don't yet have an id (use search-messages or list-messages first), you want the whole conversation (use get-thread), or you need the raw headers / Received: trace (use get-message-headers).`,
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       preferHtml: external_exports.boolean().optional().describe("Return the HTML body (extracted from the message source) instead of plain text"),
@@ -87655,6 +87849,12 @@ Do not use when: you don't yet have an id (use search-messages or list-messages 
       isHtml: external_exports.boolean().optional(),
       rfcMessageId: external_exports.string().optional().describe(
         "Stable RFC 5322 Message-ID (angle brackets stripped); empty when the message has none"
+      ),
+      dateSent: external_exports.string().optional().describe(
+        "ISO 8601 send time from the message's Date: header (Mail's `date sent`). Absent when the message carries no parseable Date: header."
+      ),
+      dateReceived: external_exports.string().optional().describe(
+        "ISO 8601 arrival time in the mailbox (IMAP INTERNALDATE / Mail's `date received`). A migration or re-import resets this; compare with dateSent."
       )
     }
   },
@@ -87672,7 +87872,13 @@ Do not use when: you don't yet have an id (use search-messages or list-messages 
           subject: subjectFromGetMessage(r.info),
           body: sep3 >= 0 ? r.info.slice(sep3 + 2) : r.info,
           isHtml: preferHtml === true,
-          rfcMessageId: extractRfcMessageIdFromSource(r.info)
+          // Prefer the envelope's Message-ID (#224 fix): `info` is subject +
+          // body with no header block, so parsing it yielded "" for every
+          // IMAP-sourced message from 2.2.0 through 2.18.1.
+          rfcMessageId: r.meta?.rfcMessageId || extractRfcMessageIdFromSource(r.info),
+          // #224: envelope Date: header and INTERNALDATE, already ISO strings.
+          ...r.meta?.dateSent ? { dateSent: r.meta.dateSent } : {},
+          ...r.meta?.dateReceived ? { dateReceived: r.meta.dateReceived } : {}
         };
       },
       apple: () => {
@@ -87686,6 +87892,8 @@ Do not use when: you don't yet have an id (use search-messages or list-messages 
         }
         const isHtml = preferHtml === true && !!content.htmlContent;
         const body = isHtml ? content.htmlContent : content.plainText;
+        const dateSent = isoOrUndefined(content.dateSent);
+        const dateReceived = isoOrUndefined(content.dateReceived);
         return successResponse(`Subject: ${content.subject}
 
 ${body}`, {
@@ -87693,13 +87901,72 @@ ${body}`, {
           subject: content.subject,
           body,
           isHtml,
-          rfcMessageId: content.rfcMessageId ?? ""
+          rfcMessageId: content.rfcMessageId ?? "",
+          ...dateSent ? { dateSent } : {},
+          ...dateReceived ? { dateReceived } : {}
         });
       },
       ok: "",
       fail: `Message with ID "${id}" not found`
     }),
     "Error retrieving message"
+  )
+);
+var HEADER_FIELD_SCHEMA = external_exports.object({
+  name: external_exports.string().describe("Header name as written (case preserved)"),
+  value: external_exports.string().describe("Unfolded value; RFC 2047 encoded-words left as-is")
+});
+registerTool(
+  "get-message-headers",
+  {
+    description: "Use when: you need a message's raw RFC 5322 headers \u2014 the author's Date: header (not the mailbox arrival time), Message-ID, In-Reply-To/References, the Received: hop trace, or any custom X- header \u2014 for a message whose id you already have (numeric or imap:\u2026). Cheap: never downloads the body or attachments.\nReturns: the raw header block (text), every header as ordered {name, value} pairs with folding undone, and the decoded key fields: date (ISO 8601, from the Date: header), dateHeader (verbatim), dateReceived (mailbox arrival time \u2014 the value a migration or re-import resets, so compare it with date), messageId, subject, from, to, cc, replyTo, inReplyTo, references[], received[].\nTip: pass the mailbox+account you got the id from so a numeric id is fetched directly instead of scanning every mailbox.\nDo not use when: you want the body (use get-message), the conversation (use get-thread), or only the Message-ID (get-message already returns rfcMessageId).",
+    inputSchema: {
+      id: MESSAGE_ID_SCHEMA,
+      mailbox: external_exports.string().optional().describe(
+        "Mailbox that holds the message (numeric ids are unique per mailbox). With `account`, opens that mailbox directly instead of scanning every mailbox."
+      ),
+      account: external_exports.string().optional().describe("Account that holds the message. Pair with `mailbox` for a direct fetch.")
+    },
+    outputSchema: {
+      id: external_exports.string().optional(),
+      raw: external_exports.string().optional().describe("The raw header block, exactly as stored"),
+      headers: external_exports.array(HEADER_FIELD_SCHEMA).optional(),
+      headerCount: external_exports.number().optional(),
+      date: external_exports.string().optional().describe("ISO 8601 from the Date: header \u2014 the author's send time"),
+      dateHeader: external_exports.string().optional().describe("The Date: header verbatim"),
+      dateReceived: external_exports.string().optional().describe("ISO 8601 mailbox arrival time (INTERNALDATE / Mail's `date received`)"),
+      messageId: external_exports.string().optional().describe("Bare RFC 5322 Message-ID"),
+      subject: external_exports.string().optional().describe("RFC 2047-decoded Subject:"),
+      from: external_exports.string().optional(),
+      to: external_exports.string().optional(),
+      cc: external_exports.string().optional(),
+      replyTo: external_exports.string().optional(),
+      inReplyTo: external_exports.string().optional(),
+      references: external_exports.array(external_exports.string()).optional(),
+      received: external_exports.array(external_exports.string()).optional().describe("Every Received: header, as written (first = last hop)")
+    },
+    annotations: { readOnlyHint: true }
+  },
+  withErrorHandling(
+    ({ id, mailbox, account }) => routeMessage(id, {
+      // imap: id → BODY.PEEK[HEADER] + INTERNALDATE, no body download.
+      imap: () => imapGetMessageHeaders(id, { account }),
+      structuredFromResult: (r) => r.info ? headersStructured(id, parseHeaderBlock(r.info), r.meta?.dateReceived) : void 0,
+      apple: () => {
+        const h = mailManager.getMessageHeaders(id, { account, mailbox });
+        if (!h) {
+          const lookupError = mailManager.consumeLastMessageLookupError();
+          return errorResponse(lookupError ?? `Message with ID "${id}" not found`);
+        }
+        return successResponse(
+          h.raw,
+          headersStructured(id, parseHeaderBlock(h.raw), h.dateReceived)
+        );
+      },
+      ok: "",
+      fail: `Message with ID "${id}" not found`
+    }),
+    "Error retrieving message headers"
   )
 );
 registerTool(
