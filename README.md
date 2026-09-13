@@ -331,6 +331,16 @@ List messages in a mailbox.
 
 **Returns:** List of messages with ID, date, subject, and sender.
 
+⚠️ **Row dates differ by backend.** On the **IMAP** path each row carries both
+`dateSent` (the message's `Date:` header) and `dateReceived` (mailbox arrival —
+`INTERNALDATE`, falling back to the header date if the server withholds it).
+They differ legitimately by transit time; when they differ by **years**, the
+mailbox was migrated or re-imported and the arrival timestamp was reset — trust
+`dateSent` for chronology ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)).
+On the **AppleScript** path rows carry only `dateReceived` (Mail's `date
+received`); `dateSent` is not yet emitted there. Sort order keys on the header
+date on both backends, which is the stable one.
+
 ---
 
 #### `send-email`

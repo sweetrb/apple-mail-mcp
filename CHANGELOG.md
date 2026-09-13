@@ -1,5 +1,31 @@
 ## [Unreleased]
 
+## [2.19.2] - 2026-09-13
+
+### Fixed
+- IMAP list/search rows emitted the `Date:` header under the name
+  `dateReceived`, so the same field meant "sent" on the IMAP backend and
+  "arrived" on the AppleScript one, and no IMAP row carried `dateSent` at all
+  (follow-up to #224). imapflow builds `ENVELOPE` from the header block, so
+  `envelope.date` is the header date, never `INTERNALDATE`. The list/search
+  fetch now requests `INTERNALDATE` — in the same round trip, alongside
+  `BODYSTRUCTURE` — and `structuredRow` emits both fields under the name that
+  is true of each: `dateSent` (the `Date:` header) and `dateReceived`
+  (`INTERNALDATE`, falling back to the header date when a server withholds it,
+  which preserves the previous value rather than emitting an empty one).
+  A date that cannot be parsed now yields `""` instead of `Invalid Date`.
+
+  This matters most on exactly the mailbox #224 was reported against: a
+  migration or re-import rewrites `INTERNALDATE`, so arrival order and send
+  order disagree — sometimes by years — and a caller doing chronology needs the
+  header date to still be reachable. Verified against a live IMAP account: of
+  24 rows, 14 carry `dateSent` != `dateReceived` and none is blank.
+
+  ⚠️ The AppleScript list/search path still emits no `dateSent`; its rows are a
+  positional delimiter format built by `buildMessageRowLoop` across six call
+  sites with differing field counts, so adding a field there is a wire-format
+  change and is deliberately not bundled here.
+
 ## [2.19.1] - 2026-09-13
 
 ### Fixed
