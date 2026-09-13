@@ -65131,6 +65131,23 @@ function splitIds(raw) {
   if (bracketed) return bracketed.map(bareId).filter(Boolean);
   return raw.split(/[\s,]+/).map(bareId).filter(Boolean);
 }
+function parseDateHeader(value) {
+  const direct = new Date(value);
+  if (!Number.isNaN(direct.getTime())) return direct;
+  let replaced = value;
+  for (const [abbr, en] of Object.entries(LOCALE_MONTHS)) {
+    const re = new RegExp(`\\b${abbr}\\.?\\b`, "i");
+    if (re.test(replaced)) {
+      replaced = replaced.replace(re, en);
+      break;
+    }
+  }
+  if (replaced !== value) {
+    const viaMonth = new Date(replaced);
+    if (!Number.isNaN(viaMonth.getTime())) return viaMonth;
+  }
+  return void 0;
+}
 function parseHeaderBlock(input) {
   const text = (input ?? "").replace(/\r\n|\r/g, "\n");
   const blank = text.search(/\n\n/);
@@ -65154,8 +65171,8 @@ function parseHeaderBlock(input) {
   const dateHeader = first("Date");
   let date3;
   if (dateHeader) {
-    const parsed = new Date(dateHeader.replace(/\s*\([^)]*\)\s*$/, ""));
-    if (!Number.isNaN(parsed.getTime())) date3 = parsed.toISOString();
+    const parsed = parseDateHeader(dateHeader.replace(/\s*\([^)]*\)\s*$/, ""));
+    if (parsed) date3 = parsed.toISOString();
   }
   const messageIdRaw = first("Message-ID") ?? first("Message-Id");
   const inReplyToRaw = first("In-Reply-To");
@@ -65202,9 +65219,52 @@ function isoOrUndefined(d) {
   const date3 = d instanceof Date ? d : new Date(d);
   return Number.isNaN(date3.getTime()) ? void 0 : date3.toISOString();
 }
+var LOCALE_MONTHS;
 var init_headers = __esm({
   "src/utils/headers.ts"() {
     "use strict";
+    LOCALE_MONTHS = {
+      // Spanish
+      ene: "Jan",
+      feb: "Feb",
+      mar: "Mar",
+      abr: "Apr",
+      may: "May",
+      jun: "Jun",
+      jul: "Jul",
+      ago: "Aug",
+      sep: "Sep",
+      set: "Sep",
+      oct: "Oct",
+      nov: "Nov",
+      dic: "Dec",
+      // French
+      janv: "Jan",
+      f\u00E9vr: "Feb",
+      fevr: "Feb",
+      avr: "Apr",
+      mai: "May",
+      juin: "Jun",
+      juil: "Jul",
+      ao\u00FBt: "Aug",
+      aout: "Aug",
+      d\u00E9c: "Dec",
+      dec: "Dec",
+      // German
+      jan: "Jan",
+      m\u00E4r: "Mar",
+      maer: "Mar",
+      mrz: "Mar",
+      okt: "Oct",
+      dez: "Dec",
+      // Italian / Portuguese
+      gen: "Jan",
+      giu: "Jun",
+      lug: "Jul",
+      ott: "Oct",
+      out: "Oct",
+      fev: "Feb"
+    };
   }
 });
 

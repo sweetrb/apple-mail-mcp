@@ -123,6 +123,92 @@ function splitIds(raw: string): string[] {
 }
 
 /**
+ * Non-English month/weekday abbreviations seen in legacy `Date:` headers.
+ *
+ * Entourage and Outlook for Mac wrote the *system locale's* abbreviations
+ * instead of RFC 5322's English ones, so a mailbox migrated from them carries
+ * dates like `jue ago 30 13:55:12 2007` (Spanish). `Date.parse` rejects those,
+ * and the whole header date is then lost for every message in the mailbox.
+ *
+ * ⚠️ The failure is easy to miss because it is PARTIAL: months whose
+ * abbreviation happens to match English parse fine. Spanish `oct` works while
+ * `ago`/`ene`/`abr`/`dic` do not — which is why a spot check on one message can
+ * report the mailbox healthy. Reported as #229 by @j5pu.
+ *
+ * Only the MONTH is load-bearing; the weekday is decorative and V8 ignores an
+ * unrecognized leading token, so weekdays are stripped rather than mapped.
+ */
+const LOCALE_MONTHS: Record<string, string> = {
+  // Spanish
+  ene: "Jan",
+  feb: "Feb",
+  mar: "Mar",
+  abr: "Apr",
+  may: "May",
+  jun: "Jun",
+  jul: "Jul",
+  ago: "Aug",
+  sep: "Sep",
+  set: "Sep",
+  oct: "Oct",
+  nov: "Nov",
+  dic: "Dec",
+  // French
+  janv: "Jan",
+  févr: "Feb",
+  fevr: "Feb",
+  avr: "Apr",
+  mai: "May",
+  juin: "Jun",
+  juil: "Jul",
+  août: "Aug",
+  aout: "Aug",
+  déc: "Dec",
+  dec: "Dec",
+  // German
+  jan: "Jan",
+  mär: "Mar",
+  maer: "Mar",
+  mrz: "Mar",
+  okt: "Oct",
+  dez: "Dec",
+  // Italian / Portuguese
+  gen: "Jan",
+  giu: "Jun",
+  lug: "Jul",
+  ott: "Oct",
+  out: "Oct",
+  fev: "Feb",
+};
+
+/**
+ * Parse a `Date:` header, tolerating the non-English abbreviations above.
+ * Returns undefined rather than a fabricated date when the value is unusable —
+ * a date is omitted, never invented (same contract as the IMAP rows in 2.19.2).
+ */
+export function parseDateHeader(value: string): Date | undefined {
+  const direct = new Date(value);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
+  // Replace the first token that looks like a locale month abbreviation.
+  // Case-insensitive, accent-tolerant, and anchored on word boundaries so it
+  // cannot rewrite part of a timezone name or a day-of-month.
+  let replaced = value;
+  for (const [abbr, en] of Object.entries(LOCALE_MONTHS)) {
+    const re = new RegExp(`\\b${abbr}\\.?\\b`, "i");
+    if (re.test(replaced)) {
+      replaced = replaced.replace(re, en);
+      break;
+    }
+  }
+  if (replaced !== value) {
+    const viaMonth = new Date(replaced);
+    if (!Number.isNaN(viaMonth.getTime())) return viaMonth;
+  }
+  return undefined;
+}
+
+/**
  * Parse a raw RFC 5322 header block. Accepts CRLF, LF, or bare-CR line endings
  * and a block that still carries a body (everything after the first blank line
  * is dropped). Lines that are neither a `Name: value` field nor a folded
@@ -170,8 +256,8 @@ export function parseHeaderBlock(input: string): ParsedHeaders {
   let date: string | undefined;
   if (dateHeader) {
     // RFC 5322 allows a trailing `(comment)` zone name, which Date.parse rejects.
-    const parsed = new Date(dateHeader.replace(/\s*\([^)]*\)\s*$/, ""));
-    if (!Number.isNaN(parsed.getTime())) date = parsed.toISOString();
+    const parsed = parseDateHeader(dateHeader.replace(/\s*\([^)]*\)\s*$/, ""));
+    if (parsed) date = parsed.toISOString();
   }
 
   const messageIdRaw = first("Message-ID") ?? first("Message-Id");

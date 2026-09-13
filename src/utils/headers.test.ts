@@ -120,7 +120,12 @@ describe("parseHeaderBlock", () => {
     (_label, sep) => {
       const q = parseHeaderBlock(outlook2macRepro.join(sep));
       expect(q.dateHeader).toBe("jue ago 30 13:55:12 2007");
-      expect(q.date).toBeUndefined();
+      // Was `toBeUndefined()` until #229: this test's subject is header
+      // INTEGRITY, and the undefined `date` merely recorded the then-current
+      // limitation that `ago` (agosto) is not an English month abbreviation.
+      // parseDateHeader now maps it, which is what the reporter asked for; the
+      // integrity assertions below are unchanged and still the point.
+      expect(q.date).toBe(new Date("Thu Aug 30 13:55:12 2007").toISOString());
       expect(q.subject).toBe("diferencial");
       expect(q.headers.map((h) => h.name)).toEqual([
         "From",
@@ -212,5 +217,49 @@ describe("isoOrUndefined", () => {
     expect(isoOrUndefined("")).toBeUndefined();
     expect(isoOrUndefined(undefined)).toBeUndefined();
     expect(isoOrUndefined(new Date("nope"))).toBeUndefined();
+  });
+});
+
+describe("#229 — locale month abbreviations in legacy Date: headers", () => {
+  // Byte-exact header block supplied by @j5pu from `BODY.PEEK[HEADER]` on the
+  // reporting mailbox (message A, id 345559). From/To/Cc masked at his request;
+  // Date/Subject/MIME-Version/Content-Type are untouched. Legacy Entourage /
+  // Outlook for Mac wrote the system locale's month abbreviation.
+  const MSG_A =
+    "From: XXXX XXXXXX XXXXX XXXXX <xxxxx@xxxxx.net>\r\n" +
+    "To: 'XXXXX XXXXX XXXXXXX XXXXXXXX'\r\n" +
+    "Cc: 'XXXXXXX XXXXXXXXX, XXXXX'\r\n" +
+    "Date: jue ago 30 13:55:12 2007\r\n" +
+    "Subject: diferencial\r\n" +
+    "MIME-Version: 1.0\r\n" +
+    'Content-Type: multipart/mixed; boundary="OUTLOOK2MAC8473928"\r\n\r\n';
+
+  it("parses a Spanish-locale Date: header that Date.parse rejects", () => {
+    // `new Date("jue ago 30 13:55:12 2007")` is NaN — `ago` is agosto, not Aug.
+    expect(Number.isNaN(new Date("jue ago 30 13:55:12 2007").getTime())).toBe(true);
+    const h = parseHeaderBlock(MSG_A);
+    expect(h.date).toBe(new Date("Thu Aug 30 13:55:12 2007").toISOString());
+    expect(h.dateHeader).toBe("jue ago 30 13:55:12 2007");
+  });
+
+  it("covers the months that silently worked and the ones that did not", () => {
+    // ⚠️ The bug was PARTIAL: Spanish `oct` == English `Oct`, so a spot check on
+    // an October message reports the mailbox healthy. These four did not.
+    for (const [abbr, month] of [
+      ["ene", 0],
+      ["abr", 3],
+      ["ago", 7],
+      ["dic", 11],
+    ] as [string, number][]) {
+      const h = parseHeaderBlock(`Date: jue ${abbr} 30 13:55:12 2007\r\nSubject: s\r\n\r\n`);
+      expect(h.date, `${abbr} should parse`).toBeDefined();
+      expect(new Date(h.date!).getMonth(), `${abbr} -> month`).toBe(month);
+    }
+  });
+
+  it("still returns undefined for a genuinely unusable date", () => {
+    const h = parseHeaderBlock("Date: not a date at all\r\nSubject: s\r\n\r\n");
+    expect(h.date).toBeUndefined();
+    expect(h.dateHeader).toBe("not a date at all"); // verbatim, still visible
   });
 });
