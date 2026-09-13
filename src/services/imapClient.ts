@@ -670,13 +670,31 @@ function formatRow(m: ImapMessage, account: string, path: string): string {
  * AppleScript path's `messageSummary` shape so the search/list/thread tools emit
  * the same structured payload regardless of backend (A1).
  */
+/**
+ * A date field is omitted-as-empty, never invented: an unparseable or absent
+ * value yields "" rather than `Invalid Date`, which is what the row shape has
+ * always promised callers.
+ */
+function isoOrEmpty(d: Date | string | undefined | null): string {
+  if (!d) return "";
+  const parsed = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+}
+
 function structuredRow(m: ImapMessage, account: string, path: string): Record<string, unknown> {
   const env = m.envelope ?? {};
   return {
     id: encodeImapId(account, path, m.uid),
     subject: env.subject || "(no subject)",
     sender: senderName(env.from),
-    dateReceived: env.date ? new Date(env.date).toISOString() : "",
+    // ⚠️ `env.date` is the `Date:` HEADER — imapflow builds ENVELOPE from the
+    // header block — so emitting it as `dateReceived` made the same field name
+    // mean "sent" here and "arrived" on the AppleScript path. Both are now
+    // emitted under the name that is true of them, matching `messageSummary`.
+    // `dateReceived` falls back to the header date when the server withheld
+    // INTERNALDATE, which is the old behaviour and never invents a value.
+    dateSent: isoOrEmpty(env.date),
+    dateReceived: isoOrEmpty(m.internalDate ?? env.date),
     isRead: m.flags?.has("\\Seen") ?? false,
     isFlagged: m.flags?.has("\\Flagged") ?? false,
     flagColorIndex: mailFlagColorIndex(m.flags),
@@ -755,7 +773,11 @@ async function fetchMailboxMatches(
       // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
       // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
       // the fetch (~17%), same single round trip, no extra request.
-      { envelope: true, flags: true, bodyStructure: true },
+      //
+      // INTERNALDATE rides along for the same reason, and is why `dateReceived`
+      // can finally mean what it says: imapflow's `envelope.date` is built from
+      // the header block, so it IS the `Date:` header, not arrival time.
+      { envelope: true, flags: true, bodyStructure: true, internalDate: true },
       { uid: true }
     )) {
       byUid.set(msg.uid, msg);

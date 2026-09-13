@@ -600,6 +600,79 @@ describe("imapListMessages", () => {
   });
 });
 
+describe("row dates: dateSent is the header date, dateReceived is arrival (#224 follow-up)", () => {
+  const HEADER_DATE = "2026-06-01T00:00:00.000Z"; // what makeClient puts in envelope.date
+
+  it("requests INTERNALDATE in the list/search fetch", async () => {
+    let opts: Record<string, unknown> | undefined;
+    const base = makeClient([7], {});
+    const client: ImapClientLike = {
+      ...base,
+      fetch: async function* (range: string, o: Record<string, unknown>) {
+        opts = o;
+        yield* base.fetch(range, o);
+      },
+    };
+    await imapListMessages({ limit: 10 }, { config: cfg, connect: async () => client });
+    // Without this the server never sends INTERNALDATE and dateReceived can
+    // only ever be the header date — the defect this fixes.
+    expect(opts?.internalDate).toBe(true);
+  });
+
+  it("emits dateSent from the Date: header and dateReceived from INTERNALDATE", async () => {
+    const ARRIVED = new Date("2026-08-15T12:30:00Z"); // a migration-rewritten arrival
+    const base = makeClient([7], {});
+    const client: ImapClientLike = {
+      ...base,
+      fetch: async function* () {
+        yield {
+          uid: 7,
+          envelope: { subject: "S", date: new Date(HEADER_DATE), from: [] },
+          flags: new Set<string>(),
+          internalDate: ARRIVED,
+        };
+      },
+    };
+    const res = await imapListMessages({ limit: 10 }, { config: cfg, connect: async () => client });
+    const row = res.messages[0] as Record<string, unknown>;
+    expect(row.dateSent).toBe(HEADER_DATE);
+    expect(row.dateReceived).toBe(ARRIVED.toISOString());
+    // The whole point: on a mailbox whose INTERNALDATE was rewritten these
+    // disagree, and chronology needs the header date.
+    expect(row.dateSent).not.toBe(row.dateReceived);
+  });
+
+  it("falls back to the header date when the server withholds INTERNALDATE", async () => {
+    // makeClient yields no internalDate — the pre-2.19.x behaviour, preserved
+    // so a server that does not send it degrades rather than emitting "".
+    const res = await imapListMessages(
+      { limit: 10 },
+      { config: cfg, connect: async () => makeClient([7], {}) }
+    );
+    const row = res.messages[0] as Record<string, unknown>;
+    expect(row.dateSent).toBe(HEADER_DATE);
+    expect(row.dateReceived).toBe(HEADER_DATE);
+  });
+
+  it("emits empty strings rather than Invalid Date for an unparseable header", async () => {
+    const base = makeClient([7], {});
+    const client: ImapClientLike = {
+      ...base,
+      fetch: async function* () {
+        yield {
+          uid: 7,
+          envelope: { subject: "S", date: "not a date" as unknown as Date, from: [] },
+          flags: new Set<string>(),
+        };
+      },
+    };
+    const res = await imapListMessages({ limit: 10 }, { config: cfg, connect: async () => client });
+    const row = res.messages[0] as Record<string, unknown>;
+    expect(row.dateSent).toBe("");
+    expect(row.dateReceived).toBe("");
+  });
+});
+
 // --- Phase 2: folder operations -------------------------------------------
 
 interface FolderRec {
