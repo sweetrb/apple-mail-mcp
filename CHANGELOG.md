@@ -1,5 +1,32 @@
 ## [Unreleased]
 
+## [2.19.4] - 2026-09-13
+
+### Fixed
+- `Date:` headers written with a **non-English month abbreviation** were
+  unparseable, so the header date was lost for every affected message (#229,
+  reported by @j5pu with byte-exact `BODY.PEEK[HEADER]` output). Legacy
+  Entourage / Outlook for Mac wrote the *system locale's* abbreviation rather
+  than RFC 5322's English one, so a mailbox migrated from them carries dates
+  like `jue ago 30 13:55:12 2007`, which `Date.parse` rejects.
+
+  ⚠️ The failure was **partial**, which is what made it easy to miss: Spanish
+  `oct` is identical to English `Oct` and parsed fine, while `ago`, `ene`,
+  `abr` and `dic` did not. A spot check on an October message reports the
+  mailbox healthy.
+
+  `parseDateHeader` now tries `Date.parse` first, then maps a recognised
+  Spanish / French / German / Italian / Portuguese month abbreviation and
+  retries. A value that is still unusable yields `undefined` — the date is
+  omitted, never invented, matching the IMAP rows (2.19.2) and the AppleScript
+  path (2.19.3).
+
+  The same report also described `Date:` absorbing the following header line
+  and `Subject` disappearing. That does **not** reproduce from the supplied
+  bytes — `parseHeaderBlock` keeps the fields separate, and a regression test
+  covering exactly that block has existed since #226. It remains open pending
+  an artifact from the AppleScript (`all headers`) path.
+
 ## [2.19.3] - 2026-09-13
 
 ### Fixed
