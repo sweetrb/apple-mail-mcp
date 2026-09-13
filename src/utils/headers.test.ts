@@ -97,6 +97,63 @@ describe("parseHeaderBlock", () => {
     expect(q.headers).toEqual([{ name: "Subject", value: "ok" }]);
   });
 
+  // #226 — old Entourage/Outlook-for-Mac (~2005-2011, MIME boundary
+  // OUTLOOK2MACxxxxxxxx) wrote Date: using the OS locale instead of RFC 5322
+  // (e.g. Spanish "jue ago 30 13:55:12 2007" — "jue" = Thursday, "ago" =
+  // August). The reporter's literal minimal repro turns out to already parse
+  // correctly today (this pins that down as a regression guard); the real,
+  // previously-unguarded gap was bare-CR line endings, below.
+  const outlook2macRepro = [
+    "From: Test Sender <test@example.com>",
+    "To: 'Test Recipient'",
+    "Date: jue ago 30 13:55:12 2007",
+    "Subject: diferencial",
+    "MIME-Version: 1.0",
+    'Content-Type: multipart/mixed; boundary="OUTLOOK2MAC8473928"',
+  ];
+
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ])(
+    "never drops or merges a header just because Date: is an unparseable locale string (%s)",
+    (_label, sep) => {
+      const q = parseHeaderBlock(outlook2macRepro.join(sep));
+      expect(q.dateHeader).toBe("jue ago 30 13:55:12 2007");
+      expect(q.date).toBeUndefined();
+      expect(q.subject).toBe("diferencial");
+      expect(q.headers.map((h) => h.name)).toEqual([
+        "From",
+        "To",
+        "Date",
+        "Subject",
+        "MIME-Version",
+        "Content-Type",
+      ]);
+    }
+  );
+
+  it("parses bare-CR line endings the same as LF/CRLF (#226 — AppleScript's `all headers of msg` can return \\r-only text; previously this silently dropped every header)", () => {
+    const q = parseHeaderBlock(outlook2macRepro.join("\r"));
+    expect(q.dateHeader).toBe("jue ago 30 13:55:12 2007");
+    expect(q.subject).toBe("diferencial");
+    expect(q.headers).toHaveLength(6);
+  });
+
+  it("stops at the first blank line under bare-CR endings too (CRCR, not just LFLF)", () => {
+    const q = parseHeaderBlock(
+      [...outlook2macRepro, "", "Body text that must not be parsed as a header"].join("\r")
+    );
+    expect(q.headers.map((h) => h.name)).toEqual([
+      "From",
+      "To",
+      "Date",
+      "Subject",
+      "MIME-Version",
+      "Content-Type",
+    ]);
+  });
+
   it("returns an empty result for empty input", () => {
     const q = parseHeaderBlock("");
     expect(q.headers).toEqual([]);

@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+## [2.19.1] - 2026-09-13
+
+### Fixed
+- `get-message-headers`' header-block parser (`parseHeaderBlock`) had no
+  handling for bare-CR (`\r`-only) line endings, a real quirk of Mail's
+  `all headers of msg` AppleScript property that this codebase already
+  normalizes on the write side (`escapeForAppleScriptBody`) but never on
+  read-back (#226, reported by @j5pu — follow-up to #224/#225). Left
+  unhandled, a bare-CR header block silently returned **zero** headers: JS's
+  `.split("\n")` never splits it, and the per-line header regex's `.` does not
+  match `\r` either, so every field was dropped rather than merged.
+  `parseHeaderBlock` now normalizes CRLF, CR, and LF alike before splitting.
+  Also added regression coverage pinning down that an unparseable, OS-locale
+  `Date:` header (e.g. old Entourage/Outlook-for-Mac's Spanish
+  `jue ago 30 13:55:12 2007`, from the `OUTLOOK2MACxxxxxxxx`-boundary era)
+  never drops or merges an adjacent header, across LF, CRLF, and CR input —
+  the mechanism the reporter suspected, now verified never to trigger.
+
 ## [2.19.0] - 2026-09-12
 
 ### Added
