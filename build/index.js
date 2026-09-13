@@ -65132,7 +65132,7 @@ function splitIds(raw) {
   return raw.split(/[\s,]+/).map(bareId).filter(Boolean);
 }
 function parseHeaderBlock(input) {
-  const text = (input ?? "").replace(/\r\n/g, "\n");
+  const text = (input ?? "").replace(/\r\n|\r/g, "\n");
   const blank = text.search(/\n\n/);
   const raw = (blank === -1 ? text : text.slice(0, blank)).replace(/\n+$/, "");
   const headers = [];

@@ -123,14 +123,25 @@ function splitIds(raw: string): string[] {
 }
 
 /**
- * Parse a raw RFC 5322 header block. Accepts CRLF or LF line endings and a block
- * that still carries a body (everything after the first blank line is dropped).
- * Lines that are neither a `Name: value` field nor a folded continuation are
- * skipped rather than aborting the parse — Mail's `all headers` can carry a
- * trailing blank line and real-world mail is not always well-formed.
+ * Parse a raw RFC 5322 header block. Accepts CRLF, LF, or bare-CR line endings
+ * and a block that still carries a body (everything after the first blank line
+ * is dropped). Lines that are neither a `Name: value` field nor a folded
+ * continuation are skipped rather than aborting the parse — Mail's `all
+ * headers` can carry a trailing blank line and real-world mail is not always
+ * well-formed.
+ *
+ * Bare CR (`\r` with no following `\n`) is a real, previously-unhandled case
+ * (#226): Mail's `all headers of msg` AppleScript property is a multi-line
+ * text value, and this codebase already normalizes `\r\n|\r|\n` uniformly on
+ * the *write* side for exactly this quirk (see `escapeForAppleScriptBody`) —
+ * nothing did the equivalent on read-back. Left unhandled, a bare-CR block
+ * silently produced ZERO headers: `.split("\n")` never splits it (there is no
+ * `\n` to split on), so the whole block is treated as one "line", and JS's
+ * regex `.` does not match `\r` either, so the per-line header regex fails to
+ * match at all and every field is dropped — not merged, just gone.
  */
 export function parseHeaderBlock(input: string): ParsedHeaders {
-  const text = (input ?? "").replace(/\r\n/g, "\n");
+  const text = (input ?? "").replace(/\r\n|\r/g, "\n");
   const blank = text.search(/\n\n/);
   const raw = (blank === -1 ? text : text.slice(0, blank)).replace(/\n+$/, "");
 
