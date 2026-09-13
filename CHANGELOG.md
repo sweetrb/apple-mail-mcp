@@ -1,5 +1,28 @@
 ## [Unreleased]
 
+## [2.19.3] - 2026-09-13
+
+### Fixed
+- An AppleScript date that could not be parsed was replaced with **the current
+  time** rather than omitted (#229, reported by @j5pu). `parseAppleScriptDate`
+  returned `new Date()` on failure, which is indistinguishable from a real
+  timestamp — a message whose date the parser did not recognise silently
+  claimed to have been sent or received *now*.
+
+  It also made an existing guard dead code. `parseMessageDates` has always read
+  `Number.isNaN(d.getTime()) ? undefined : d`, which could never fire, because a
+  fabricated `new Date()` is perfectly valid — so `dateSent` was emitted as
+  today's date instead of being left out. It now returns an **Invalid Date**:
+  detectable by the caller, serialized as `null` rather than a plausible
+  fiction, and the guard is live again. Same principle as the IMAP row fix in
+  2.19.2 — a date is omitted, never invented.
+
+  ⚠️ Note for anyone chasing the same report: `new Date("mié oct 10 14:25:15
+  2007")` **succeeds** in V8, which reads it as 2007-10-10. The Spanish-locale
+  header shape in #229 therefore never reaches this failure path, and the
+  header-fusion symptom described there is a separate, still-unreproduced
+  issue.
+
 ## [2.19.2] - 2026-09-13
 
 ### Fixed
