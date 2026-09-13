@@ -656,7 +656,21 @@ function parseAppleScriptDate(dateStr: string): Date {
   const withoutPrefix = dateStr.replace(/^date\s+/, "");
   const normalized = withoutPrefix.replace(" at ", " ");
   const parsed = new Date(normalized);
-  return isNaN(parsed.getTime()) ? new Date() : parsed;
+
+  // ⛔ On failure return an INVALID Date, never `new Date()`.
+  //
+  // This used to fabricate the current time, which is indistinguishable from a
+  // real timestamp: a message whose date could not be parsed silently claimed
+  // to have arrived *now*. Worse, it made a guard downstream dead code —
+  // `parseMessageDates` has always read
+  //     Number.isNaN(d.getTime()) ? undefined : d
+  // which could never fire, because a fabricated `new Date()` is perfectly
+  // valid. So `dateSent` was emitted as today's date rather than omitted
+  // (#229, @j5pu: "a value with no relation to the message ... looks like a
+  // parse-failure fallback"). An Invalid Date makes the failure detectable,
+  // serializes to null in JSON, and turns that guard back into live code.
+  // Same principle as the IMAP row fix in 2.19.2: omitted, never invented.
+  return isNaN(parsed.getTime()) ? new Date(NaN) : parsed;
 }
 
 /**

@@ -82099,7 +82099,7 @@ function parseAppleScriptDate(dateStr) {
   const withoutPrefix = dateStr.replace(/^date\s+/, "");
   const normalized = withoutPrefix.replace(" at ", " ");
   const parsed = new Date(normalized);
-  return isNaN(parsed.getTime()) ? /* @__PURE__ */ new Date() : parsed;
+  return isNaN(parsed.getTime()) ? /* @__PURE__ */ new Date(NaN) : parsed;
 }
 function buildAppleScriptDate(varName, d) {
   return [
