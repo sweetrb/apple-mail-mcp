@@ -671,6 +671,53 @@ describe("row dates: dateSent is the header date, dateReceived is arrival (#224 
     expect(row.dateSent).toBe("");
     expect(row.dateReceived).toBe("");
   });
+
+  // #226 follow-up: @j5pu reported search-messages throwing "Invalid time
+  // value" on 2.19.1 (commit 736d571, before this describe block's fix
+  // landed in #228) against a mailbox migrated from Entourage/Outlook for
+  // Mac with Spanish-locale Date: headers like "jue ago 30 13:55:12 2007".
+  // structuredRow at 2.19.1 called `new Date(env.date).toISOString()`
+  // unguarded — exactly the shape this whole describe block now covers.
+  // These two confirm search-messages (query and subject-filter, the two
+  // forms the reporter hit) no longer throws for that byte-exact header on
+  // current main, as a side effect of isoOrEmpty landing in #228.
+  const SPANISH_DATE = "jue ago 30 13:55:12 2007";
+
+  function spanishDateClient(uids: number[]): ImapClientLike {
+    const base = makeClient(uids, {});
+    return {
+      ...base,
+      fetch: async function* () {
+        for (const u of uids) {
+          yield {
+            uid: u,
+            envelope: { subject: "diferencial de temperatura", date: SPANISH_DATE, from: [] },
+            flags: new Set<string>(),
+          };
+        }
+      },
+    };
+  }
+
+  it("search-messages (free-text query) does not throw on a Spanish-locale Date: header", async () => {
+    const res = await imapSearchMessages(
+      { query: "diferencial", limit: 10 },
+      { config: cfg, connect: async () => spanishDateClient([7]) }
+    );
+    const row = res.messages[0] as Record<string, unknown>;
+    expect(row.dateSent).toBe("");
+    expect(row.dateReceived).toBe("");
+  });
+
+  it("search-messages (subject filter) does not throw on a Spanish-locale Date: header", async () => {
+    const res = await imapSearchMessages(
+      { subject: "diferencial", limit: 10 },
+      { config: cfg, connect: async () => spanishDateClient([7]) }
+    );
+    const row = res.messages[0] as Record<string, unknown>;
+    expect(row.dateSent).toBe("");
+    expect(row.dateReceived).toBe("");
+  });
 });
 
 // --- Phase 2: folder operations -------------------------------------------
@@ -1208,6 +1255,46 @@ describe("true threading via References (I5)", () => {
 
   it("returns null for a non-IMAP id", async () => {
     expect(await imapThread("12345")).toBeNull();
+  });
+
+  // #226 follow-up: the thread's per-message `date` field called
+  // `new Date(m.envelope.date).toISOString()` unguarded — unlike
+  // structuredRow (search/list-messages), which was fixed in #228, this call
+  // was never touched and still threw `RangeError: Invalid time value` for
+  // any thread member carrying a truthy-but-unparseable envelope date, e.g.
+  // the reporter's Spanish-locale "jue ago 30 13:55:12 2007". Byte-exact
+  // repro from #229/#231.
+  it("omits (never throws on) an unparseable Date: header in a thread member", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 10,
+        envelope: { subject: "Re: Plan", messageId: "<b@x>", inReplyTo: "<a@x>" },
+        headers: Buffer.from("References: <a@x>\r\nIn-Reply-To: <a@x>\r\n"),
+      }),
+      search: async (q: Record<string, unknown>) => {
+        const h = (q.header as Record<string, string>) || {};
+        if (h["message-id"] === "<a@x>") return [9];
+        return [];
+      },
+      fetch: async function* (range: string) {
+        for (const u of range.split(",").map(Number)) {
+          yield {
+            uid: u,
+            envelope: {
+              subject: u === 9 ? "Plan" : "Re: Plan",
+              date: u === 9 ? "jue ago 30 13:55:12 2007" : new Date(2026, 0, u),
+              from: [{ address: `p${u}@x` }],
+            },
+            flags: new Set<string>(),
+          };
+        }
+      },
+    };
+    const t = await imapThread(MID, { config: cfg, connect: async () => client }, 50);
+    expect(t).not.toBeNull();
+    const ancestor = t?.structured.messages.find((m) => m.subject === "Plan");
+    expect(ancestor?.date).toBe("");
   });
 });
 

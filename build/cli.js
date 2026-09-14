@@ -59094,7 +59094,12 @@ async function imapThread(id, deps = {}, limit = 50) {
             id: encodeImapId(ref.account, ref.path, m.uid),
             subject: m.envelope?.subject || "(no subject)",
             sender: senderName(m.envelope?.from),
-            date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : "",
+            // Was `new Date(m.envelope.date).toISOString()`, unguarded — a
+            // truthy but unparseable `env.date` (e.g. a non-RFC-5322 header the
+            // IMAP server's own ENVELOPE parser couldn't normalize) threw
+            // `RangeError: Invalid time value` out of get-thread (#226 follow-up).
+            // Same omitted-not-invented contract as `structuredRow` (2.19.2).
+            date: isoOrEmpty(m.envelope?.date),
             isRead: m.flags?.has("\\Seen") ?? false
           }))
         };

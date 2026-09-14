@@ -66564,7 +66564,12 @@ async function imapThread(id, deps = {}, limit = 50) {
             id: encodeImapId(ref.account, ref.path, m.uid),
             subject: m.envelope?.subject || "(no subject)",
             sender: senderName(m.envelope?.from),
-            date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : "",
+            // Was `new Date(m.envelope.date).toISOString()`, unguarded — a
+            // truthy but unparseable `env.date` (e.g. a non-RFC-5322 header the
+            // IMAP server's own ENVELOPE parser couldn't normalize) threw
+            // `RangeError: Invalid time value` out of get-thread (#226 follow-up).
+            // Same omitted-not-invented contract as `structuredRow` (2.19.2).
+            date: isoOrEmpty(m.envelope?.date),
             isRead: m.flags?.has("\\Seen") ?? false
           }))
         };
@@ -86658,7 +86663,16 @@ function messageSummary(m) {
     id: m.id,
     subject: m.subject,
     sender: m.sender,
-    dateReceived: m.dateReceived instanceof Date ? m.dateReceived.toISOString() : m.dateReceived,
+    // `m.dateReceived` can be a genuine `Date` instance that is nonetheless
+    // INVALID: `parseAppleScriptDate` (appleMailManager.ts) returns `new
+    // Date(NaN)` rather than `undefined` when Mail's own "date received" /
+    // "date sent" property doesn't parse, and `instanceof Date` is true for an
+    // invalid Date too. Calling `.toISOString()` unconditionally threw
+    // `RangeError: Invalid time value` out of search-messages/list-messages for
+    // any AppleScript-backed row with an unparseable arrival date (#226
+    // follow-up) — omitted-as-empty, never invented, same contract as the IMAP
+    // rows' `isoOrEmpty`.
+    dateReceived: m.dateReceived instanceof Date ? Number.isNaN(m.dateReceived.getTime()) ? "" : m.dateReceived.toISOString() : m.dateReceived,
     isRead: m.isRead,
     isFlagged: m.isFlagged,
     mailbox: m.mailbox,

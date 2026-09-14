@@ -19,7 +19,21 @@ export function messageSummary(m: Message): Record<string, unknown> {
     id: m.id,
     subject: m.subject,
     sender: m.sender,
-    dateReceived: m.dateReceived instanceof Date ? m.dateReceived.toISOString() : m.dateReceived,
+    // `m.dateReceived` can be a genuine `Date` instance that is nonetheless
+    // INVALID: `parseAppleScriptDate` (appleMailManager.ts) returns `new
+    // Date(NaN)` rather than `undefined` when Mail's own "date received" /
+    // "date sent" property doesn't parse, and `instanceof Date` is true for an
+    // invalid Date too. Calling `.toISOString()` unconditionally threw
+    // `RangeError: Invalid time value` out of search-messages/list-messages for
+    // any AppleScript-backed row with an unparseable arrival date (#226
+    // follow-up) — omitted-as-empty, never invented, same contract as the IMAP
+    // rows' `isoOrEmpty`.
+    dateReceived:
+      m.dateReceived instanceof Date
+        ? Number.isNaN(m.dateReceived.getTime())
+          ? ""
+          : m.dateReceived.toISOString()
+        : m.dateReceived,
     isRead: m.isRead,
     isFlagged: m.isFlagged,
     mailbox: m.mailbox,
