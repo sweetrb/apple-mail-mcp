@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+## [2.19.5] - 2026-09-14
+
+### Fixed
+- **`get-thread`** threw `RangeError: Invalid time value` for any thread
+  member carrying a truthy-but-unparseable envelope date (#226 follow-up) —
+  its per-message `date` field called `new Date(m.envelope.date)
+  .toISOString()` unguarded, the same shape #228 fixed in `structuredRow` for
+  `search-messages`/`list-messages` but never applied here. Now uses the same
+  `isoOrEmpty` helper: the date is omitted, never invented.
+- **`search-messages`/`list-messages`/`get-thread`'s AppleScript-backed rows**
+  had the identical defect from the other backend: `Message.dateReceived` can
+  be a genuine `new Date(NaN)` (`parseAppleScriptDate` returns that, never
+  `undefined`, per #230), and `instanceof Date` is true for an invalid Date
+  too, so `messageSummary`'s unconditional `.toISOString()` threw for any row
+  whose arrival date Mail.app couldn't parse.
+
+  @j5pu's #226 follow-up report — `search-messages` throwing `Invalid time
+  value` against a mailbox migrated from Entourage/Outlook for Mac with
+  Spanish-locale `Date:` headers (`jue ago 30 13:55:12 2007`) — turned out to
+  already be fixed as a side effect of #228 landing 6 minutes after the
+  report (confirmed with a byte-exact regression test). These two are
+  separate, still-live bugs of the identical shape found while verifying
+  that.
+
 ## [2.19.4] - 2026-09-13
 
 ### Fixed
