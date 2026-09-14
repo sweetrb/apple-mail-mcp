@@ -30,7 +30,14 @@ import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
-import { isoOrUndefined } from "@/utils/headers.js";
+import {
+  decodeHeaderBytes,
+  headerBlockBytes,
+  isoOrUndefined,
+  parseDateHeader,
+  parseHeaderBlock,
+  plausibleDateSent,
+} from "@/utils/headers.js";
 import { classifyCountStatus, type CountDelta } from "@/services/auditLog.js";
 import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
 
@@ -649,6 +656,55 @@ function buildCriteria(a: ImapSearchArgs, listMode: boolean): Record<string, unk
   return c;
 }
 
+/** A valid Date from a Date or date string, else undefined. */
+function validDate(d: Date | string | undefined | null): Date | undefined {
+  if (!d) return undefined;
+  const parsed = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+/** Raw fetched bytes as a Buffer, whichever form imapflow (or a test) handed over. */
+function asBuffer(v: Buffer | string): Buffer {
+  return Buffer.isBuffer(v) ? v : Buffer.from(v);
+}
+
+/**
+ * The author's `Date:` header as a Date, recovered wherever it can be (#234 §3).
+ *
+ * imapflow's `envelope.date` is the SERVER's parse of the header. For a header
+ * the server cannot parse — legacy locale dates like `jue ago 30 13:55:12 2007`
+ * — imapflow hands back the raw string (iCloud passes it through verbatim,
+ * verified against the live server) or nothing at all (a server that sends NIL).
+ * Rows used to stop there, so search/list/get-message/get-thread reported no
+ * `dateSent` for a message whose date get-message-headers recovered in the same
+ * session. In order: the server's parse; our tolerant `parseDateHeader` over
+ * the raw envelope string; then the `Date:` field of a fetched header block
+ * (the list/search/thread FETCH now requests it, get-message already has the
+ * source).
+ */
+function headerDate(m: ImapMessage, headerText?: string): Date | undefined {
+  const env = m.envelope?.date as Date | string | undefined;
+  if (env instanceof Date) {
+    if (!Number.isNaN(env.getTime())) return env;
+  } else if (typeof env === "string" && env.trim()) {
+    // RFC 5322 allows a trailing `(comment)` zone name, which Date.parse rejects.
+    const parsed = parseDateHeader(env.replace(/\s*\([^)]*\)\s*$/, "").trim());
+    if (parsed) return parsed;
+  }
+  const block = headerText ?? (m.headers ? decodeHeaderBytes(asBuffer(m.headers)) : "");
+  const iso = block ? parseHeaderBlock(block).date : undefined;
+  return iso ? new Date(iso) : undefined;
+}
+
+/**
+ * {@link headerDate} minus a value that cannot be a real send time: one later
+ * than INTERNALDATE by more than the clock-skew tolerance (#234 §2b, the same
+ * helper the AppleScript path uses).
+ */
+function sentDate(m: ImapMessage, headerText?: string): Date | undefined {
+  return plausibleDateSent(headerDate(m, headerText), validDate(m.internalDate));
+}
+
 function formatRow(m: ImapMessage, account: string, path: string): string {
   const env = m.envelope ?? {};
   const subject = env.subject || "(no subject)";
@@ -658,7 +714,8 @@ function formatRow(m: ImapMessage, account: string, path: string): string {
       ? `${a.name} <${a.address ?? ""}>`
       : (a.address ?? "(unknown)")
     : "(unknown)";
-  const date = env.date ? new Date(env.date).toLocaleDateString() : "";
+  const shown = sentDate(m) ?? validDate(m.internalDate);
+  const date = shown ? shown.toLocaleDateString() : "";
   const read = m.flags?.has("\\Seen") ? "read" : "unread";
   // Emit the self-describing IMAP id so get-message and the message mutations
   // can route this row back to IMAP (Phase 3).
@@ -693,8 +750,10 @@ function structuredRow(m: ImapMessage, account: string, path: string): Record<st
     // emitted under the name that is true of them, matching `messageSummary`.
     // `dateReceived` falls back to the header date when the server withheld
     // INTERNALDATE, which is the old behaviour and never invents a value.
-    dateSent: isoOrEmpty(env.date),
-    dateReceived: isoOrEmpty(m.internalDate ?? env.date),
+    // #234: both now see the RECOVERED header date (see headerDate), and
+    // `dateSent` omits a value implausibly later than arrival (see sentDate).
+    dateSent: isoOrEmpty(sentDate(m)),
+    dateReceived: isoOrEmpty(validDate(m.internalDate) ?? headerDate(m)),
     isRead: m.flags?.has("\\Seen") ?? false,
     isFlagged: m.flags?.has("\\Flagged") ?? false,
     flagColorIndex: mailFlagColorIndex(m.flags),
@@ -739,10 +798,14 @@ function hasMailboxFlag(mailbox: ImapMailboxListing, wanted: string): boolean {
   return [...(mailbox.flags ?? [])].some((flag) => flag.toLowerCase() === normalized);
 }
 
+/**
+ * Sort key: the author's send time — recovered when the server's ENVELOPE could
+ * not parse it, so a mailbox of legacy locale-dated mail sorts by real date
+ * (#234) — falling back to arrival rather than sinking an undated message to
+ * the bottom as epoch 0.
+ */
 function messageDateEpoch(message: ImapMessage): number {
-  if (!message.envelope?.date) return 0;
-  const epoch = new Date(message.envelope.date).getTime();
-  return Number.isNaN(epoch) ? 0 : epoch;
+  return (sentDate(message) ?? validDate(message.internalDate))?.getTime() ?? 0;
 }
 
 function messageIdentity(entry: FetchedMailboxMessage): string {
@@ -777,7 +840,13 @@ async function fetchMailboxMatches(
       // INTERNALDATE rides along for the same reason, and is why `dateReceived`
       // can finally mean what it says: imapflow's `envelope.date` is built from
       // the header block, so it IS the `Date:` header, not arrival time.
-      { envelope: true, flags: true, bodyStructure: true, internalDate: true },
+      //
+      // The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the
+      // SAME FETCH command, so a date the server's ENVELOPE parser rejected can
+      // still be recovered (#234). Measured on 50 real messages, 6 alternating
+      // runs: median ~334ms without vs ~315ms with — inside the noise — for ~44
+      // bytes per message. Too cheap to hide behind an opt-in.
+      { envelope: true, flags: true, bodyStructure: true, internalDate: true, headers: ["date"] },
       { uid: true }
     )) {
       byUid.set(msg.uid, msg);
@@ -1624,18 +1693,40 @@ export async function imapGetMessage(
     );
     if (!msg)
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-    const subject = msg.envelope?.subject || "(no subject)";
-    const src = msg.source ? msg.source.toString() : "";
-    const body =
-      (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ??
-      extractTextBody(src) ??
-      extractHtmlBody(src) ??
-      "(no readable body)";
+    const sourceBytes = msg.source ? asBuffer(msg.source) : Buffer.alloc(0);
+    // ⚠️ latin1, not UTF-8: it is the byte-preserving string form. A UTF-8
+    // decode of the whole source destroyed every 8bit latin-1 byte (U+FFFD)
+    // before the MIME parser ever saw the part's charset (#234 §4).
+    const src = sourceBytes.toString("latin1");
+    const headerBytes = sourceBytes.length ? headerBlockBytes(sourceBytes, true) : undefined;
+    const headerText = headerBytes ? decodeHeaderBytes(headerBytes) : undefined;
+    // The subject from the source's own bytes first: iCloud rewrites 8-bit
+    // header bytes to `*` inside ENVELOPE, and only BODY[] keeps them (#234 §4).
+    const subject =
+      (headerText ? parseHeaderBlock(headerText).subject : undefined) ||
+      msg.envelope?.subject ||
+      "(no subject)";
+    // Report what was actually extracted. With no text/plain part the HTML part
+    // is returned, and that used to go out flagged `isHtml: false` (#234 §4).
+    let body: string | null;
+    let isHtml = false;
+    if (preferHtml) {
+      body = extractHtmlBody(src);
+      isHtml = body !== null;
+      body ??= extractTextBody(src);
+    } else {
+      body = extractTextBody(src);
+      if (body === null) {
+        body = extractHtmlBody(src);
+        isHtml = body !== null;
+      }
+    }
     return {
       success: true,
-      info: `Subject: ${subject}\n\n${body}`,
+      info: `Subject: ${subject}\n\n${body ?? "(no readable body)"}`,
       meta: {
-        dateSent: isoOrUndefined(msg.envelope?.date),
+        isHtml,
+        dateSent: isoOrUndefined(sentDate(msg, headerText)),
         dateReceived: isoOrUndefined(msg.internalDate),
         // The envelope carries the Message-ID; `info` deliberately does not (it
         // is subject + body), so the caller could never recover it from there.
@@ -1645,12 +1736,22 @@ export async function imapGetMessage(
   });
 }
 
+/** Bytes of BODY[] fetched to find a message's header block — see imapGetMessageHeaders. */
+export const HEADER_WINDOW_BYTES = 64 * 1024;
+
 /**
- * Fetch ONLY the RFC 5322 header block of a message by composite IMAP id (#224):
- * `BODY.PEEK[HEADER]` via imapflow's `headers: true`, plus INTERNALDATE so the
- * caller can show the server's arrival time next to the author's `Date:`. Never
- * downloads the body, so it is cheap even for a message with large attachments.
- * Returns the raw block in `info` and `dateReceived` in `meta`.
+ * Fetch ONLY the RFC 5322 header block of a message by composite IMAP id (#224),
+ * plus INTERNALDATE so the caller can show the server's arrival time next to the
+ * author's `Date:`. Returns the raw block in `info` and `dateReceived` in `meta`.
+ *
+ * ⚠️ Reads the first {@link HEADER_WINDOW_BYTES} of `BODY.PEEK[]` and cuts the
+ * block out, rather than `BODY.PEEK[HEADER]`. Verified against iCloud with a
+ * probe message carrying a raw latin-1 display name (#234 §4): the server
+ * rewrites every 8-bit header byte to `*` in ENVELOPE and in `BODY[HEADER]`, and
+ * to U+FFFD in `BODY[HEADER.FIELDS]`; only `BODY[]` returns the bytes as stored.
+ * No local decoding can recover a name from the first two. The window is still
+ * cheap for a message with large attachments; a header block too big for it (a
+ * very long Received: trace) falls back to the server's `BODY[HEADER]`.
  */
 export async function imapGetMessageHeaders(
   id: string,
@@ -1661,12 +1762,20 @@ export async function imapGetMessageHeaders(
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     const msg = await client.fetchOne(
       String(ref.uid),
-      { envelope: true, internalDate: true, headers: true },
+      { envelope: true, internalDate: true, source: { start: 0, maxLength: HEADER_WINDOW_BYTES } },
       { uid: true }
     );
     if (!msg)
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-    const raw = msg.headers ? msg.headers.toString() : "";
+    const window = msg.source ? asBuffer(msg.source) : Buffer.alloc(0);
+    const block = window.length
+      ? headerBlockBytes(window, window.length < HEADER_WINDOW_BYTES)
+      : undefined;
+    let raw = block ? decodeHeaderBytes(block) : "";
+    if (!raw.trim()) {
+      const h = await client.fetchOne(String(ref.uid), { headers: true }, { uid: true });
+      raw = h && h.headers ? decodeHeaderBytes(asBuffer(h.headers)) : "";
+    }
     if (!raw.trim()) return { success: false, error: "IMAP returned no header block." };
     return {
       success: true,
@@ -2382,7 +2491,7 @@ function senderName(from?: ImapAddress[]): string {
   return a.name ? `${a.name} <${a.address ?? ""}>` : (a.address ?? "(unknown)");
 }
 function dateMs(m: ImapMessage): number {
-  return m.envelope?.date ? new Date(m.envelope.date).getTime() : 0;
+  return messageDateEpoch(m);
 }
 
 export async function imapThread(
@@ -2431,7 +2540,16 @@ export async function imapThread(
           // Same reason as the list/search fetch: get-thread emits structured
           // rows too, so it needs BODYSTRUCTURE or its hasAttachments would
           // silently disagree with the same message seen via search.
-          { envelope: true, flags: true, bodyStructure: true },
+          // INTERNALDATE and the Date: header ride along for the same reason as
+          // the list/search fetch: the per-message date is recovered and
+          // sanity-checked exactly as a row's dateSent is (#234).
+          {
+            envelope: true,
+            flags: true,
+            bodyStructure: true,
+            internalDate: true,
+            headers: ["date"],
+          },
           { uid: true }
         )) {
           msgs.push(msg);
@@ -2450,7 +2568,7 @@ export async function imapThread(
             // IMAP server's own ENVELOPE parser couldn't normalize) threw
             // `RangeError: Invalid time value` out of get-thread (#226 follow-up).
             // Same omitted-not-invented contract as `structuredRow` (2.19.2).
-            date: isoOrEmpty(m.envelope?.date),
+            date: isoOrEmpty(sentDate(m)),
             isRead: m.flags?.has("\\Seen") ?? false,
           })),
         };

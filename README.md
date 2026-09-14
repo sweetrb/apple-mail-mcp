@@ -289,7 +289,7 @@ Get the full content of a message.
 | `mailbox` | string | No | Mailbox holding the message (e.g. `"Sent Items"`). With `account`, opens that mailbox directly instead of scanning every mailbox — this is the fix for timeouts on large folders |
 | `account` | string | No | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan |
 
-**Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available). `structuredContent` also carries `rfcMessageId` and, since 2.19.0, two dates: `dateSent` (the message's `Date:` header — Mail's `date sent`) and `dateReceived` (arrival in the mailbox — Mail's `date received` / IMAP `INTERNALDATE`). They differ legitimately by transit time; when they differ by **years**, the mailbox was migrated or re-imported and the arrival timestamp was reset — trust `dateSent` for chronology ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)).
+**Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available). `structuredContent` also carries `rfcMessageId` and, since 2.19.0, two dates: `dateSent` (the message's `Date:` header — Mail's `date sent`) and `dateReceived` (arrival in the mailbox — Mail's `date received` / IMAP `INTERNALDATE`). They differ legitimately by transit time; when they differ by **years**, the mailbox was migrated or re-imported and the arrival timestamp was reset — trust `dateSent` for chronology ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)). Since 2.19.6 `dateSent` is **omitted** when it is more than 7 days later than `dateReceived`: a message cannot be sent after it arrived, and Mail.app substitutes a timestamp of its own for a `Date:` header it cannot parse ([#234](https://github.com/sweetrb/apple-mail-mcp/issues/234)). `isHtml` reports what was actually returned — a message with no `text/plain` part returns its HTML part with `isHtml: true`. Bodies are decoded by each part's declared `charset`, falling back to windows-1252 for bytes that are not valid UTF-8.
 
 > **Large messages / attachments:** reading a full message routes through
 > `osascript`, whose captured output buffer defaults to **64 MB**. Override it
@@ -310,9 +310,9 @@ Return a message's raw RFC 5322 header block — without fetching the body or an
 | `mailbox` | string | No | Mailbox holding the message. With `account`, opens that mailbox directly instead of scanning every mailbox |
 | `account` | string | No | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan |
 
-**Returns:** The raw header block as text. `structuredContent` carries `raw`, every header as ordered `headers[]` (`{name, value}`, folded lines joined, duplicates such as `Received:` kept in wire order, values left RFC 2047-encoded), `headerCount`, and the decoded key fields: `date` (ISO 8601, from the `Date:` header), `dateHeader` (verbatim), `dateReceived` (mailbox arrival time — IMAP `INTERNALDATE` or Mail's `date received`), `messageId`, `subject`, `from`, `to`, `cc`, `replyTo`, `inReplyTo`, `references[]` and `received[]` (first entry = last hop). Fields the message does not carry are omitted.
+**Returns:** The raw header block as text. `structuredContent` carries `raw`, every header as ordered `headers[]` (`{name, value}`, folded lines joined, duplicates such as `Received:` kept in wire order, values left RFC 2047-encoded), `headerCount`, and the decoded key fields: `date` (ISO 8601, from the `Date:` header), `dateHeader` (verbatim), `dateReceived` (mailbox arrival time — IMAP `INTERNALDATE` or Mail's `date received`), `messageId`, `subject`, `from`, `to`, `cc`, `replyTo`, `inReplyTo`, `references[]` and `received[]` (first entry = last hop). Fields the message does not carry are omitted. `backend` says which backend read the block (`"imap"` or `"applescript"`), and `warnings[]` appears when a malformed block was repaired ([#234](https://github.com/sweetrb/apple-mail-mcp/issues/234)).
 
-**Backends:** an `imap:` id fetches `BODY.PEEK[HEADER]` over IMAP (cheap even for a 20 MB message); a numeric id reads Mail's `all headers` property over AppleScript, with the same mailbox-scoped fast path as `get-message`.
+**Backends:** an `imap:` id reads the first 64 KiB of `BODY.PEEK[]` over IMAP and cuts the header block out of it (cheap even for a 20 MB message). That is deliberate: iCloud rewrites 8-bit header bytes to `*` in ENVELOPE and `BODY[HEADER]`, and only `BODY[]` returns them as stored; each line is decoded as UTF-8, falling back to windows-1252, so a raw latin-1 display name survives. A header block larger than the window falls back to `BODY.PEEK[HEADER]`. A numeric id reads Mail's `all headers` property over AppleScript, with the same mailbox-scoped fast path as `get-message`. ⚠️ That property is Mail's own rendering, not the stored bytes: for a `Date:` value Mail cannot parse it drops the value and joins the next header onto the name (`Date: Subject: …`). The tool splits that back apart, reports the date as absent rather than as a Subject string, and says so in `warnings[]`; the `imap:` id for the same message has the real `Date:`.
 
 ---
 
@@ -337,6 +337,10 @@ List messages in a mailbox.
 They differ legitimately by transit time; when they differ by **years**, the
 mailbox was migrated or re-imported and the arrival timestamp was reset — trust
 `dateSent` for chronology ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)).
+Since 2.19.6 the IMAP `dateSent` is recovered even when the server's own parse of
+the `Date:` header failed (legacy locale dates such as `jue ago 30 13:55:12 2007`),
+and is omitted rather than reported when it is more than 7 days later than
+`dateReceived` ([#234](https://github.com/sweetrb/apple-mail-mcp/issues/234)).
 On the **AppleScript** path rows carry only `dateReceived` (Mail's `date
 received`); `dateSent` is not yet emitted there. Sort order keys on the header
 date on both backends, which is the stable one.

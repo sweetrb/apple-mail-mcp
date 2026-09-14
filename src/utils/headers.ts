@@ -60,6 +60,11 @@ export interface ParsedHeaders {
   references: string[];
   /** Every `Received:` header, first-written (= last hop) first, unfolded. */
   received: string[];
+  /**
+   * Repairs applied to a malformed block, in plain words — present only when one
+   * fired. `raw` is never rewritten; this says how `headers` differs from it.
+   */
+  warnings?: string[];
 }
 
 /**
@@ -209,6 +214,65 @@ export function parseDateHeader(value: string): Date | undefined {
 }
 
 /**
+ * Header names Mail.app has been seen to pull up onto an empty `Date:` (#234).
+ *
+ * For a `Date:` value it cannot parse (legacy Entourage / Outlook for Mac
+ * locale dates such as `jue ago 30 13:55:12 2007`), Mail's own `all headers of
+ * msg` property DROPS the value and joins the following header onto the name:
+ *
+ *     Date: Subject: diferencial
+ *
+ * @j5pu isolated this to Mail itself by running `all headers of msg` in Script
+ * Editor with no connector in the loop; the same message over IMAP has the
+ * Date: line intact. Parsed naively, that reports "Subject: diferencial" as the
+ * message's date and loses the Subject header entirely.
+ *
+ * Deliberately a closed list plus `X-`: a real `Date:` value never begins with
+ * `Word:` (its colons sit between digits — `13:55:12`), but a closed list keeps
+ * the repair from ever firing on something that merely looks like a name.
+ */
+const FUSABLE_HEADER_NAMES = new Set([
+  "subject",
+  "from",
+  "to",
+  "cc",
+  "bcc",
+  "sender",
+  "reply-to",
+  "message-id",
+  "in-reply-to",
+  "references",
+  "mime-version",
+  "content-type",
+  "content-transfer-encoding",
+  "content-disposition",
+  "return-path",
+  "received",
+  "importance",
+  "priority",
+  "thread-topic",
+  "thread-index",
+]);
+
+/**
+ * Undo the fusion described above, in place: the `Date:` entry keeps its
+ * position with an EMPTY value (the date is unknown — it never arrived) and the
+ * swallowed header is re-inserted right after it. Only `Date:` is examined; a
+ * `Subject: From: the desk of X` is ordinary text and stays untouched. Returns
+ * the swallowed header's name when a repair was made.
+ */
+function splitFusedDate(headers: HeaderField[]): string | undefined {
+  const i = headers.findIndex((h) => h.name.toLowerCase() === "date");
+  if (i === -1) return undefined;
+  const m = /^([A-Za-z][A-Za-z0-9-]*):[ \t]?(.*)$/.exec(headers[i].value);
+  if (!m) return undefined;
+  const name = m[1];
+  if (!FUSABLE_HEADER_NAMES.has(name.toLowerCase()) && !/^x-/i.test(name)) return undefined;
+  headers.splice(i, 1, { name: headers[i].name, value: "" }, { name, value: m[2].trim() });
+  return name;
+}
+
+/**
  * Parse a raw RFC 5322 header block. Accepts CRLF, LF, or bare-CR line endings
  * and a block that still carries a body (everything after the first blank line
  * is dropped). Lines that are neither a `Name: value` field nor a folded
@@ -243,6 +307,16 @@ export function parseHeaderBlock(input: string): ParsedHeaders {
     headers.push({ name: m[1], value: m[2].trim() });
   }
 
+  const warnings: string[] = [];
+  const fused = splitFusedDate(headers);
+  if (fused) {
+    warnings.push(
+      `The Date: header arrived with no value and the ${fused}: header joined onto it ` +
+        "(Mail.app's all-headers property does this for a Date: it cannot parse). " +
+        `Split back into Date: and ${fused}:; the send date is unknown from this source.`
+    );
+  }
+
   const first = (name: string): string | undefined =>
     headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
   const all = (name: string): string[] =>
@@ -252,7 +326,8 @@ export function parseHeaderBlock(input: string): ParsedHeaders {
     return v === undefined ? undefined : decodeEncodedWords(v);
   };
 
-  const dateHeader = first("Date");
+  // Empty (a repaired fusion, or a bare `Date:` line) means absent, not "".
+  const dateHeader = first("Date") || undefined;
   let date: string | undefined;
   if (dateHeader) {
     // RFC 5322 allows a trailing `(comment)` zone name, which Date.parse rejects.
@@ -278,6 +353,7 @@ export function parseHeaderBlock(input: string): ParsedHeaders {
     inReplyTo: inReplyToRaw ? bareId(inReplyToRaw) || undefined : undefined,
     references: referencesRaw ? splitIds(referencesRaw) : [],
     received: all("Received"),
+    ...(warnings.length ? { warnings } : {}),
   };
 }
 
@@ -290,7 +366,9 @@ export function parseHeaderBlock(input: string): ParsedHeaders {
 export function headersStructured(
   id: string,
   parsed: ParsedHeaders,
-  dateReceived?: Date | string
+  dateReceived?: Date | string,
+  /** Which backend produced the block — so a backend-specific defect is visible (#234). */
+  backend?: "imap" | "applescript"
 ): Record<string, unknown> {
   const received =
     dateReceived instanceof Date
@@ -300,6 +378,7 @@ export function headersStructured(
       : dateReceived || undefined;
   return {
     id,
+    ...(backend ? { backend } : {}),
     raw: parsed.raw,
     headers: parsed.headers,
     headerCount: parsed.headers.length,
@@ -315,7 +394,88 @@ export function headersStructured(
     ...(parsed.inReplyTo !== undefined ? { inReplyTo: parsed.inReplyTo } : {}),
     references: parsed.references,
     received: parsed.received,
+    ...(parsed.warnings?.length ? { warnings: parsed.warnings } : {}),
   };
+}
+
+/**
+ * How far a send time may run AHEAD of arrival before it is treated as invented
+ * rather than skewed (#234 §2b).
+ *
+ * A message cannot be sent after it arrived, but `Date:` is stamped by the
+ * sender's clock, so small inversions are routine: a clock minutes or hours
+ * fast, a local time written with the wrong zone offset (the whole UTC-12 to
+ * UTC+14 spread is 26 hours), a machine that went a day or two without a time
+ * sync. Seven days clears all of that with margin.
+ *
+ * What the guard exists to catch is on another scale entirely: Mail.app's own
+ * `date sent` for a `Date:` header it could not parse is a timestamp of Mail's
+ * choosing — 2024-08-24 against a 2014-01-14 arrival for a 2007 message in
+ * @j5pu's mailbox, 2025 against 2022 for another. Those are years. An
+ * inversion between a week and years has no benign explanation either, so
+ * nothing real is lost at this boundary.
+ */
+export const MAX_SENT_AFTER_RECEIVED_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The send time, or undefined when it cannot be real: absent, invalid, or later
+ * than the arrival time by more than {@link MAX_SENT_AFTER_RECEIVED_MS}.
+ *
+ * Cause-agnostic on purpose — it does not matter whether Mail substituted the
+ * value or a sender's clock said 2037; either way it is not when the message
+ * was sent, and the contract is parsed if possible, omitted if not, never
+ * invented. With no valid arrival time to compare against, the send time is
+ * kept: the check needs two independent timestamps and never guesses from one.
+ */
+export function plausibleDateSent(
+  sent: Date | undefined,
+  received: Date | undefined
+): Date | undefined {
+  if (!sent || Number.isNaN(sent.getTime())) return undefined;
+  if (!received || Number.isNaN(received.getTime())) return sent;
+  return sent.getTime() - received.getTime() > MAX_SENT_AFTER_RECEIVED_MS ? undefined : sent;
+}
+
+/**
+ * The header block of a raw message: the bytes before the first blank line.
+ * When there is no blank line, `whole` says whether `source` is the complete
+ * message (then it is all header) or a truncated window (then the block did not
+ * fit and undefined is returned).
+ */
+export function headerBlockBytes(source: Buffer, whole: boolean): Buffer | undefined {
+  const cuts = [source.indexOf("\r\n\r\n"), source.indexOf("\n\n")].filter((i) => i !== -1);
+  if (cuts.length) return source.subarray(0, Math.min(...cuts));
+  return whole ? source : undefined;
+}
+
+/**
+ * Decode raw header bytes to text, one line at a time: strict UTF-8 where the
+ * line is valid UTF-8, windows-1252 where it is not (#234 §4).
+ *
+ * Legacy mail (Entourage, Outlook for Mac, old webmail) wrote accented display
+ * names and subjects as bare 8-bit latin-1 — no RFC 2047 encoded-word, no
+ * charset anywhere. That is illegal but common, and a UTF-8 decode turns every
+ * such byte into U+FFFD. windows-1252 is the WHATWG decoder for the latin1 /
+ * iso-8859-1 labels and a superset of both, and an invalid-UTF-8 line has no
+ * better-evidenced reading. Per line, not per block, because one message can
+ * mix a UTF-8 header with a latin-1 one.
+ */
+export function decodeHeaderBytes(bytes: Buffer): string {
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  const cp1252 = new TextDecoder("windows-1252");
+  const lines: string[] = [];
+  let start = 0;
+  for (let i = 0; i <= bytes.length; i++) {
+    if (i < bytes.length && bytes[i] !== 0x0a) continue;
+    const line = bytes.subarray(start, i);
+    try {
+      lines.push(utf8.decode(line));
+    } catch {
+      lines.push(cp1252.decode(line));
+    }
+    start = i + 1;
+  }
+  return lines.join("\n");
 }
 
 /** ISO 8601 for a Date that may be absent or invalid; undefined otherwise. */

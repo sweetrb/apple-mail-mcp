@@ -57664,6 +57664,24 @@ function extractMimeType(headers) {
   const typeMatch = ctHeader.match(/^([^;\s]+)/);
   return typeMatch ? typeMatch[1].toLowerCase() : "application/octet-stream";
 }
+function extractCharset(headers) {
+  const ct = getHeader(headers, "Content-Type");
+  const m = ct?.match(/charset\s*=\s*"?([^";\s]+)"?/i);
+  return m ? m[1].toLowerCase() : null;
+}
+function decodePartText(bytes, charset) {
+  if (charset && !["utf-8", "utf8", "us-ascii", "ascii"].includes(charset)) {
+    try {
+      return new TextDecoder(charset).decode(bytes);
+    } catch {
+    }
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
 function splitMimeParts(source, boundary) {
   const parts = [];
   const boundaryDelim = `--${boundary}`;
@@ -57729,7 +57747,7 @@ function extractHtmlBody(source) {
     for (const part of walkLeafParts(source, boundary)) {
       if (extractMimeType(part.headers) === "text/html") {
         const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodeBody(part.body, encoding2).toString("utf8");
+        return decodePartText(decodeBody(part.body, encoding2), extractCharset(part.headers));
       }
     }
     return null;
@@ -57740,7 +57758,7 @@ function extractHtmlBody(source) {
   if (extractMimeType(headers) !== "text/html") return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
   const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodeBody(body, encoding).toString("utf8");
+  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
 }
 function extractTextBody(source) {
   if (!source || !source.trim()) return null;
@@ -57749,7 +57767,7 @@ function extractTextBody(source) {
     for (const part of walkLeafParts(source, boundary)) {
       if (extractMimeType(part.headers) === "text/plain") {
         const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodeBody(part.body, encoding2).toString("utf8");
+        return decodePartText(decodeBody(part.body, encoding2), extractCharset(part.headers));
       }
     }
     return null;
@@ -57761,7 +57779,7 @@ function extractTextBody(source) {
   if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
   const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodeBody(body, encoding).toString("utf8");
+  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
 }
 var MAX_MIME_DEPTH;
 var init_mimeParse = __esm({
@@ -57772,14 +57790,225 @@ var init_mimeParse = __esm({
 });
 
 // src/utils/headers.ts
+function decodeEncodedWords(value) {
+  if (!value.includes("=?")) return value;
+  const joined = value.replace(/(\?=)\s+(=\?)/g, "$1$2");
+  return joined.replace(
+    /=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g,
+    (whole, charset, enc, text) => {
+      try {
+        const bytes = enc.toUpperCase() === "B" ? Buffer.from(text, "base64") : Buffer.from(
+          text.replace(/_/g, " ").replace(
+            /=([0-9A-Fa-f]{2})/g,
+            (_m, h) => String.fromCharCode(parseInt(h, 16))
+          ),
+          "latin1"
+        );
+        return new TextDecoder(normalizeCharset(charset)).decode(bytes);
+      } catch {
+        return whole;
+      }
+    }
+  );
+}
+function normalizeCharset(charset) {
+  const bare = charset.split("*")[0].trim().toLowerCase();
+  try {
+    new TextDecoder(bare);
+    return bare;
+  } catch {
+    return "utf-8";
+  }
+}
+function bareId(raw) {
+  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
+function splitIds(raw) {
+  const bracketed = raw.match(/<[^>]+>/g);
+  if (bracketed) return bracketed.map(bareId).filter(Boolean);
+  return raw.split(/[\s,]+/).map(bareId).filter(Boolean);
+}
+function parseDateHeader(value) {
+  const direct = new Date(value);
+  if (!Number.isNaN(direct.getTime())) return direct;
+  let replaced = value;
+  for (const [abbr, en] of Object.entries(LOCALE_MONTHS)) {
+    const re = new RegExp(`\\b${abbr}\\.?\\b`, "i");
+    if (re.test(replaced)) {
+      replaced = replaced.replace(re, en);
+      break;
+    }
+  }
+  if (replaced !== value) {
+    const viaMonth = new Date(replaced);
+    if (!Number.isNaN(viaMonth.getTime())) return viaMonth;
+  }
+  return void 0;
+}
+function splitFusedDate(headers) {
+  const i = headers.findIndex((h) => h.name.toLowerCase() === "date");
+  if (i === -1) return void 0;
+  const m = /^([A-Za-z][A-Za-z0-9-]*):[ \t]?(.*)$/.exec(headers[i].value);
+  if (!m) return void 0;
+  const name = m[1];
+  if (!FUSABLE_HEADER_NAMES.has(name.toLowerCase()) && !/^x-/i.test(name)) return void 0;
+  headers.splice(i, 1, { name: headers[i].name, value: "" }, { name, value: m[2].trim() });
+  return name;
+}
+function parseHeaderBlock(input) {
+  const text = (input ?? "").replace(/\r\n|\r/g, "\n");
+  const blank = text.search(/\n\n/);
+  const raw = (blank === -1 ? text : text.slice(0, blank)).replace(/\n+$/, "");
+  const headers = [];
+  for (const line of raw.split("\n")) {
+    if (/^[ \t]/.test(line) && headers.length) {
+      headers[headers.length - 1].value += " " + line.trim();
+      continue;
+    }
+    const m = /^([!-9;-~]+):[ \t]?(.*)$/.exec(line);
+    if (!m) continue;
+    headers.push({ name: m[1], value: m[2].trim() });
+  }
+  const warnings = [];
+  const fused = splitFusedDate(headers);
+  if (fused) {
+    warnings.push(
+      `The Date: header arrived with no value and the ${fused}: header joined onto it (Mail.app's all-headers property does this for a Date: it cannot parse). Split back into Date: and ${fused}:; the send date is unknown from this source.`
+    );
+  }
+  const first = (name) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
+  const all = (name) => headers.filter((h) => h.name.toLowerCase() === name.toLowerCase()).map((h) => h.value);
+  const decoded = (name) => {
+    const v = first(name);
+    return v === void 0 ? void 0 : decodeEncodedWords(v);
+  };
+  const dateHeader = first("Date") || void 0;
+  let date;
+  if (dateHeader) {
+    const parsed = parseDateHeader(dateHeader.replace(/\s*\([^)]*\)\s*$/, ""));
+    if (parsed) date = parsed.toISOString();
+  }
+  const messageIdRaw = first("Message-ID") ?? first("Message-Id");
+  const inReplyToRaw = first("In-Reply-To");
+  const referencesRaw = first("References");
+  return {
+    raw,
+    headers,
+    date,
+    dateHeader,
+    messageId: messageIdRaw ? bareId(messageIdRaw) || void 0 : void 0,
+    subject: decoded("Subject"),
+    from: decoded("From"),
+    to: decoded("To"),
+    cc: decoded("Cc"),
+    replyTo: decoded("Reply-To"),
+    inReplyTo: inReplyToRaw ? bareId(inReplyToRaw) || void 0 : void 0,
+    references: referencesRaw ? splitIds(referencesRaw) : [],
+    received: all("Received"),
+    ...warnings.length ? { warnings } : {}
+  };
+}
+function plausibleDateSent(sent, received) {
+  if (!sent || Number.isNaN(sent.getTime())) return void 0;
+  if (!received || Number.isNaN(received.getTime())) return sent;
+  return sent.getTime() - received.getTime() > MAX_SENT_AFTER_RECEIVED_MS ? void 0 : sent;
+}
+function headerBlockBytes(source, whole) {
+  const cuts = [source.indexOf("\r\n\r\n"), source.indexOf("\n\n")].filter((i) => i !== -1);
+  if (cuts.length) return source.subarray(0, Math.min(...cuts));
+  return whole ? source : void 0;
+}
+function decodeHeaderBytes(bytes) {
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  const cp1252 = new TextDecoder("windows-1252");
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i <= bytes.length; i++) {
+    if (i < bytes.length && bytes[i] !== 10) continue;
+    const line = bytes.subarray(start, i);
+    try {
+      lines.push(utf8.decode(line));
+    } catch {
+      lines.push(cp1252.decode(line));
+    }
+    start = i + 1;
+  }
+  return lines.join("\n");
+}
 function isoOrUndefined(d) {
   if (d === void 0 || d === "") return void 0;
   const date = d instanceof Date ? d : new Date(d);
   return Number.isNaN(date.getTime()) ? void 0 : date.toISOString();
 }
+var LOCALE_MONTHS, FUSABLE_HEADER_NAMES, MAX_SENT_AFTER_RECEIVED_MS;
 var init_headers = __esm({
   "src/utils/headers.ts"() {
     "use strict";
+    LOCALE_MONTHS = {
+      // Spanish
+      ene: "Jan",
+      feb: "Feb",
+      mar: "Mar",
+      abr: "Apr",
+      may: "May",
+      jun: "Jun",
+      jul: "Jul",
+      ago: "Aug",
+      sep: "Sep",
+      set: "Sep",
+      oct: "Oct",
+      nov: "Nov",
+      dic: "Dec",
+      // French
+      janv: "Jan",
+      f\u00E9vr: "Feb",
+      fevr: "Feb",
+      avr: "Apr",
+      mai: "May",
+      juin: "Jun",
+      juil: "Jul",
+      ao\u00FBt: "Aug",
+      aout: "Aug",
+      d\u00E9c: "Dec",
+      dec: "Dec",
+      // German
+      jan: "Jan",
+      m\u00E4r: "Mar",
+      maer: "Mar",
+      mrz: "Mar",
+      okt: "Oct",
+      dez: "Dec",
+      // Italian / Portuguese
+      gen: "Jan",
+      giu: "Jun",
+      lug: "Jul",
+      ott: "Oct",
+      out: "Oct",
+      fev: "Feb"
+    };
+    FUSABLE_HEADER_NAMES = /* @__PURE__ */ new Set([
+      "subject",
+      "from",
+      "to",
+      "cc",
+      "bcc",
+      "sender",
+      "reply-to",
+      "message-id",
+      "in-reply-to",
+      "references",
+      "mime-version",
+      "content-type",
+      "content-transfer-encoding",
+      "content-disposition",
+      "return-path",
+      "received",
+      "importance",
+      "priority",
+      "thread-topic",
+      "thread-index"
+    ]);
+    MAX_SENT_AFTER_RECEIVED_MS = 7 * 24 * 60 * 60 * 1e3;
   }
 });
 
@@ -57801,6 +58030,7 @@ var init_auditLog = __esm({
 // src/services/imapClient.ts
 var imapClient_exports = {};
 __export(imapClient_exports, {
+  HEADER_WINDOW_BYTES: () => HEADER_WINDOW_BYTES,
   IMAP_ENV: () => IMAP_ENV,
   MAX_COMPOSE_SOURCE_BYTES: () => MAX_COMPOSE_SOURCE_BYTES,
   __resetPool: () => __resetPool,
@@ -58084,12 +58314,36 @@ function buildCriteria(a, listMode) {
   if (Object.keys(c).length === 0) c.all = true;
   return c;
 }
+function validDate(d) {
+  if (!d) return void 0;
+  const parsed = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(parsed.getTime()) ? void 0 : parsed;
+}
+function asBuffer(v) {
+  return Buffer.isBuffer(v) ? v : Buffer.from(v);
+}
+function headerDate(m, headerText) {
+  const env = m.envelope?.date;
+  if (env instanceof Date) {
+    if (!Number.isNaN(env.getTime())) return env;
+  } else if (typeof env === "string" && env.trim()) {
+    const parsed = parseDateHeader(env.replace(/\s*\([^)]*\)\s*$/, "").trim());
+    if (parsed) return parsed;
+  }
+  const block = headerText ?? (m.headers ? decodeHeaderBytes(asBuffer(m.headers)) : "");
+  const iso = block ? parseHeaderBlock(block).date : void 0;
+  return iso ? new Date(iso) : void 0;
+}
+function sentDate(m, headerText) {
+  return plausibleDateSent(headerDate(m, headerText), validDate(m.internalDate));
+}
 function formatRow(m, account, path) {
   const env = m.envelope ?? {};
   const subject = env.subject || "(no subject)";
   const a = env.from?.[0];
   const from = a ? a.name ? `${a.name} <${a.address ?? ""}>` : a.address ?? "(unknown)" : "(unknown)";
-  const date = env.date ? new Date(env.date).toLocaleDateString() : "";
+  const shown = sentDate(m) ?? validDate(m.internalDate);
+  const date = shown ? shown.toLocaleDateString() : "";
   const read = m.flags?.has("\\Seen") ? "read" : "unread";
   return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]`;
 }
@@ -58110,8 +58364,10 @@ function structuredRow(m, account, path) {
     // emitted under the name that is true of them, matching `messageSummary`.
     // `dateReceived` falls back to the header date when the server withheld
     // INTERNALDATE, which is the old behaviour and never invents a value.
-    dateSent: isoOrEmpty(env.date),
-    dateReceived: isoOrEmpty(m.internalDate ?? env.date),
+    // #234: both now see the RECOVERED header date (see headerDate), and
+    // `dateSent` omits a value implausibly later than arrival (see sentDate).
+    dateSent: isoOrEmpty(sentDate(m)),
+    dateReceived: isoOrEmpty(validDate(m.internalDate) ?? headerDate(m)),
     isRead: m.flags?.has("\\Seen") ?? false,
     isFlagged: m.flags?.has("\\Flagged") ?? false,
     flagColorIndex: mailFlagColorIndex(m.flags),
@@ -58135,9 +58391,7 @@ function hasMailboxFlag(mailbox, wanted) {
   return [...mailbox.flags ?? []].some((flag) => flag.toLowerCase() === normalized);
 }
 function messageDateEpoch(message) {
-  if (!message.envelope?.date) return 0;
-  const epoch = new Date(message.envelope.date).getTime();
-  return Number.isNaN(epoch) ? 0 : epoch;
+  return (sentDate(message) ?? validDate(message.internalDate))?.getTime() ?? 0;
 }
 function messageIdentity(entry) {
   const raw = entry.message.envelope?.messageId?.trim() ?? "";
@@ -58161,7 +58415,13 @@ async function fetchMailboxMatches(client, path, criteria, newestCount) {
       // INTERNALDATE rides along for the same reason, and is why `dateReceived`
       // can finally mean what it says: imapflow's `envelope.date` is built from
       // the header block, so it IS the `Date:` header, not arrival time.
-      { envelope: true, flags: true, bodyStructure: true, internalDate: true },
+      //
+      // The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the
+      // SAME FETCH command, so a date the server's ENVELOPE parser rejected can
+      // still be recovered (#234). Measured on 50 real messages, 6 alternating
+      // runs: median ~334ms without vs ~315ms with — inside the noise — for ~44
+      // bytes per message. Too cheap to hide behind an opt-in.
+      { envelope: true, flags: true, bodyStructure: true, internalDate: true, headers: ["date"] },
       { uid: true }
     )) {
       byUid.set(msg.uid, msg);
@@ -58641,16 +58901,32 @@ async function imapGetMessage(id, preferHtml, deps = {}) {
     );
     if (!msg)
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-    const subject = msg.envelope?.subject || "(no subject)";
-    const src = msg.source ? msg.source.toString() : "";
-    const body = (preferHtml ? extractHtmlBody(src) : extractTextBody(src)) ?? extractTextBody(src) ?? extractHtmlBody(src) ?? "(no readable body)";
+    const sourceBytes = msg.source ? asBuffer(msg.source) : Buffer.alloc(0);
+    const src = sourceBytes.toString("latin1");
+    const headerBytes = sourceBytes.length ? headerBlockBytes(sourceBytes, true) : void 0;
+    const headerText = headerBytes ? decodeHeaderBytes(headerBytes) : void 0;
+    const subject = (headerText ? parseHeaderBlock(headerText).subject : void 0) || msg.envelope?.subject || "(no subject)";
+    let body;
+    let isHtml = false;
+    if (preferHtml) {
+      body = extractHtmlBody(src);
+      isHtml = body !== null;
+      body ??= extractTextBody(src);
+    } else {
+      body = extractTextBody(src);
+      if (body === null) {
+        body = extractHtmlBody(src);
+        isHtml = body !== null;
+      }
+    }
     return {
       success: true,
       info: `Subject: ${subject}
 
-${body}`,
+${body ?? "(no readable body)"}`,
       meta: {
-        dateSent: isoOrUndefined(msg.envelope?.date),
+        isHtml,
+        dateSent: isoOrUndefined(sentDate(msg, headerText)),
         dateReceived: isoOrUndefined(msg.internalDate),
         // The envelope carries the Message-ID; `info` deliberately does not (it
         // is subject + body), so the caller could never recover it from there.
@@ -58665,12 +58941,18 @@ async function imapGetMessageHeaders(id, deps = {}) {
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
     const msg = await client.fetchOne(
       String(ref.uid),
-      { envelope: true, internalDate: true, headers: true },
+      { envelope: true, internalDate: true, source: { start: 0, maxLength: HEADER_WINDOW_BYTES } },
       { uid: true }
     );
     if (!msg)
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
-    const raw = msg.headers ? msg.headers.toString() : "";
+    const window = msg.source ? asBuffer(msg.source) : Buffer.alloc(0);
+    const block = window.length ? headerBlockBytes(window, window.length < HEADER_WINDOW_BYTES) : void 0;
+    let raw = block ? decodeHeaderBytes(block) : "";
+    if (!raw.trim()) {
+      const h = await client.fetchOne(String(ref.uid), { headers: true }, { uid: true });
+      raw = h && h.headers ? decodeHeaderBytes(asBuffer(h.headers)) : "";
+    }
     if (!raw.trim()) return { success: false, error: "IMAP returned no header block." };
     return {
       success: true,
@@ -59040,7 +59322,7 @@ function senderName(from) {
   return a.name ? `${a.name} <${a.address ?? ""}>` : a.address ?? "(unknown)";
 }
 function dateMs(m) {
-  return m.envelope?.date ? new Date(m.envelope.date).getTime() : 0;
+  return messageDateEpoch(m);
 }
 async function imapThread(id, deps = {}, limit = 50) {
   const ref = decodeImapId(id);
@@ -59080,7 +59362,16 @@ async function imapThread(id, deps = {}, limit = 50) {
           // Same reason as the list/search fetch: get-thread emits structured
           // rows too, so it needs BODYSTRUCTURE or its hasAttachments would
           // silently disagree with the same message seen via search.
-          { envelope: true, flags: true, bodyStructure: true },
+          // INTERNALDATE and the Date: header ride along for the same reason as
+          // the list/search fetch: the per-message date is recovered and
+          // sanity-checked exactly as a row's dateSent is (#234).
+          {
+            envelope: true,
+            flags: true,
+            bodyStructure: true,
+            internalDate: true,
+            headers: ["date"]
+          },
           { uid: true }
         )) {
           msgs.push(msg);
@@ -59099,7 +59390,7 @@ async function imapThread(id, deps = {}, limit = 50) {
             // IMAP server's own ENVELOPE parser couldn't normalize) threw
             // `RangeError: Invalid time value` out of get-thread (#226 follow-up).
             // Same omitted-not-invented contract as `structuredRow` (2.19.2).
-            date: isoOrEmpty(m.envelope?.date),
+            date: isoOrEmpty(sentDate(m)),
             isRead: m.flags?.has("\\Seen") ?? false
           }))
         };
@@ -59113,7 +59404,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -59169,6 +59460,7 @@ var init_imapClient = __esm({
     pools = /* @__PURE__ */ new Map();
     connecting = /* @__PURE__ */ new Map();
     MAX_COMPOSE_SOURCE_BYTES = 25 * 1024 * 1024;
+    HEADER_WINDOW_BYTES = 64 * 1024;
     MAIL_FLAG_BITS = ["$MailFlagBit0", "$MailFlagBit1", "$MailFlagBit2"];
     imapMarkRead = (id, deps = {}) => flagOp(id, "\\Seen", true, deps);
     imapMarkUnread = (id, deps = {}) => flagOp(id, "\\Seen", false, deps);

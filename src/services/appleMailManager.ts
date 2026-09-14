@@ -35,6 +35,7 @@ import { randomUUID } from "crypto";
 import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
+import { plausibleDateSent } from "@/utils/headers.js";
 import { TemplateStore } from "@/services/templateStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
 import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
@@ -2897,7 +2898,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     // (#224); a script that predates the marker simply yields no dates.
     const idAndDates = (subjParts.length > 1 ? subjParts[1] : "").split(DATES_MARKER);
     const rfcMessageId = normalizeRfcMessageId(idAndDates[0]);
-    const { dateSent, dateReceived } = parseMessageDates(idAndDates[1] ?? "");
+    const { dateSent: mailDateSent, dateReceived } = parseMessageDates(idAndDates[1] ?? "");
+    // #234 §2b: Mail's `date sent` is not always the Date: header. For a header
+    // it cannot parse, Mail substitutes a timestamp of its own — 2024-08-24 for a
+    // 2007 message that arrived 2014-01-14 in @j5pu's mailbox. A send time years
+    // after arrival is impossible, so it is omitted rather than passed off as the
+    // author's; ordinary sender clock skew is well inside the tolerance.
+    const dateSent = plausibleDateSent(mailDateSent, dateReceived);
 
     // Extract the actual text/html body from the raw MIME source rather than
     // returning the whole source. Falls back to undefined when the message has

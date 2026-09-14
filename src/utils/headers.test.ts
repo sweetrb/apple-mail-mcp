@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   decodeEncodedWords,
+  decodeHeaderBytes,
   headersStructured,
   isoOrUndefined,
+  MAX_SENT_AFTER_RECEIVED_MS,
   parseHeaderBlock,
+  plausibleDateSent,
 } from "./headers.js";
 
 const BLOCK = [
@@ -261,5 +264,140 @@ describe("#229 — locale month abbreviations in legacy Date: headers", () => {
     const h = parseHeaderBlock("Date: not a date at all\r\nSubject: s\r\n\r\n");
     expect(h.date).toBeUndefined();
     expect(h.dateHeader).toBe("not a date at all"); // verbatim, still visible
+  });
+});
+
+describe("#234 — Mail.app hands back `all headers` with the next header fused onto Date:", () => {
+  // Byte-exact (From/To/Cc masked) output of Mail's own `all headers of msg` for
+  // @j5pu's message A, captured in Script Editor with no connector in the loop and
+  // posted as base64 in #234. Bare LF, no CR, no folding: the Date: VALUE never
+  // arrives at all, and Mail pulled the Subject: line up onto the Date: name.
+  const FUSED_B64 =
+    "RnJvbTogeHh4eHggeHh4eHh4eCB4eHh4eHh4eHh4IHh4eHh4eHh4eHggPHh4eHh4eHh4eEB4eHh4" +
+    "eC54eHg+ClRvOiAneHh4eHggeHh4eHggeHh4eHh4eCB4eHh4eHh4eCcKQ2M6ICd4eHh4eHggeHh4" +
+    "eHh4eHh4LCB4eHh4eCcKRGF0ZTogU3ViamVjdDogZGlmZXJlbmNpYWwKTWltZS1WZXJzaW9uOiAx" +
+    "LjAKQ29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PSJPVVRMT09LMk1BQzg0" +
+    "NzM5MjgiCgo=";
+  const FUSED = Buffer.from(FUSED_B64, "base64").toString("utf8");
+
+  it("the fixture really is the fused block (guards against a mangled fixture)", () => {
+    expect(FUSED).toContain("\nDate: Subject: diferencial\nMime-Version: 1.0\n");
+    expect(FUSED).not.toContain("\r");
+  });
+
+  it("splits the fused line back apart and reports the date as ABSENT, not a Subject string", () => {
+    const h = parseHeaderBlock(FUSED);
+    expect(h.dateHeader).toBeUndefined();
+    expect(h.date).toBeUndefined();
+    expect(h.subject).toBe("diferencial");
+    expect(h.headers.map((x) => x.name)).toEqual([
+      "From",
+      "To",
+      "Cc",
+      "Date",
+      "Subject",
+      "Mime-Version",
+      "Content-Type",
+    ]);
+    expect(h.headers.find((x) => x.name === "Date")?.value).toBe("");
+    expect(h.warnings?.join(" ")).toMatch(/Date:.*Subject:/);
+    // The forensic record is never rewritten.
+    expect(h.raw).toContain("Date: Subject: diferencial");
+  });
+
+  it("leaves colon-bearing values alone: a real Date with 13:55:12 and a Subject of `Re: foo: bar`", () => {
+    const h = parseHeaderBlock(
+      "Date: Thu, 30 Aug 2007 13:55:12 +0200\nSubject: Re: foo: bar\nFrom: a <a@b.c>\n\n"
+    );
+    expect(h.dateHeader).toBe("Thu, 30 Aug 2007 13:55:12 +0200");
+    expect(h.date).toBe("2007-08-30T11:55:12.000Z");
+    expect(h.subject).toBe("Re: foo: bar");
+    expect(h.headers).toHaveLength(3);
+    expect(h.warnings).toBeUndefined();
+  });
+
+  it("does not split a Date value whose leading word is not a header name", () => {
+    const h = parseHeaderBlock("Date: Note: unparseable\nSubject: s\n\n");
+    expect(h.dateHeader).toBe("Note: unparseable");
+    expect(h.headers).toHaveLength(2);
+    expect(h.warnings).toBeUndefined();
+  });
+
+  it("only repairs Date: — a Subject whose text starts with a header name is left intact", () => {
+    const h = parseHeaderBlock(
+      "Date: Thu, 30 Aug 2007 13:55:12 +0200\nSubject: From: the desk of X\n\n"
+    );
+    expect(h.subject).toBe("From: the desk of X");
+    expect(h.headers).toHaveLength(2);
+    expect(h.warnings).toBeUndefined();
+  });
+
+  it("headersStructured names the backend and carries the repair warning (self-diagnosing)", () => {
+    const s = headersStructured("345559", parseHeaderBlock(FUSED), undefined, "applescript");
+    expect(s.backend).toBe("applescript");
+    expect(s).not.toHaveProperty("dateHeader");
+    expect(s).not.toHaveProperty("date");
+    expect(s.subject).toBe("diferencial");
+    expect(Array.isArray(s.warnings)).toBe(true);
+    const clean = headersStructured(
+      "imap:x",
+      parseHeaderBlock("Subject: s\n\n"),
+      undefined,
+      "imap"
+    );
+    expect(clean.backend).toBe("imap");
+    expect(clean).not.toHaveProperty("warnings");
+  });
+});
+
+describe("#234 §2b — plausibleDateSent: a send time after arrival is invented, not skewed", () => {
+  const RECEIVED = new Date("2014-01-14T12:53:59.000Z");
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("drops the reporter's decade-scale inversion (Mail's date sent 2024 vs arrival 2014)", () => {
+    expect(plausibleDateSent(new Date("2024-08-24T00:26:38.000Z"), RECEIVED)).toBeUndefined();
+  });
+
+  it("keeps ordinary sender clock skew — hours ahead of arrival is normal", () => {
+    const skewed = new Date(RECEIVED.getTime() + 9 * 60 * 60 * 1000);
+    expect(plausibleDateSent(skewed, RECEIVED)).toEqual(skewed);
+  });
+
+  it("boundary: exactly the tolerance is kept, one second past it is dropped", () => {
+    expect(MAX_SENT_AFTER_RECEIVED_MS).toBe(7 * DAY);
+    const atLimit = new Date(RECEIVED.getTime() + MAX_SENT_AFTER_RECEIVED_MS);
+    const past = new Date(RECEIVED.getTime() + MAX_SENT_AFTER_RECEIVED_MS + 1000);
+    expect(plausibleDateSent(atLimit, RECEIVED)).toEqual(atLimit);
+    expect(plausibleDateSent(past, RECEIVED)).toBeUndefined();
+  });
+
+  it("keeps a send time with no arrival to compare against, and drops an invalid one", () => {
+    const sent = new Date("2007-08-30T11:55:12.000Z");
+    expect(plausibleDateSent(sent, undefined)).toEqual(sent);
+    expect(plausibleDateSent(sent, new Date(NaN))).toEqual(sent);
+    expect(plausibleDateSent(new Date(NaN), RECEIVED)).toBeUndefined();
+    expect(plausibleDateSent(undefined, RECEIVED)).toBeUndefined();
+  });
+});
+
+describe("#234 §4 — decodeHeaderBytes: unencoded 8-bit header bytes", () => {
+  it("decodes a raw latin-1 display name as windows-1252 instead of destroying it", () => {
+    const bytes = Buffer.from(
+      'From: "Jos\xe9 Pu\xf1ez" <j@example.org>\r\nSubject: s\r\n',
+      "latin1"
+    );
+    const text = decodeHeaderBytes(bytes);
+    expect(text).toContain('From: "José Puñez" <j@example.org>');
+    expect(text).not.toContain("\ufffd");
+  });
+
+  it("leaves valid UTF-8 lines as UTF-8, deciding per line", () => {
+    const bytes = Buffer.concat([
+      Buffer.from("Subject: Jos\u00e9 (utf-8)\r\n", "utf8"),
+      Buffer.from("From: Pu\xf1ez <p@example.org>\r\n", "latin1"),
+    ]);
+    const h = parseHeaderBlock(decodeHeaderBytes(bytes));
+    expect(h.subject).toBe("José (utf-8)");
+    expect(h.from).toBe("Puñez <p@example.org>");
   });
 });

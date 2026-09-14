@@ -1,5 +1,63 @@
 ## [Unreleased]
 
+## [2.19.6] - 2026-09-14
+
+All four findings from @j5pu's #234 (tested on 2.19.5).
+
+### Fixed
+- **`get-message` no longer reports an invented `dateSent`** (#234 §2b). On the
+  AppleScript path `dateSent` is Mail's own `date sent` property, and for a
+  `Date:` header Mail cannot parse that is a timestamp of Mail's choosing: the
+  reporter saw `2024-08-24` for a 2007 message that *arrived* `2014-01-14` — a
+  send time a decade after arrival. A `dateSent` more than **7 days** later than
+  `dateReceived` is now omitted, on both backends, through one shared helper
+  (`plausibleDateSent`). Seven days clears real sender clock skew (minutes,
+  hours, a wrong zone offset) with margin; the inversions it exists to catch are
+  years.
+- **IMAP `search-messages` / `list-messages` / `get-message` / `get-thread`
+  recover a `Date:` the server could not parse** (#234 §3). They read only the
+  server's ENVELOPE parse, which for a legacy locale date such as
+  `jue ago 30 13:55:12 2007` is the raw string or nothing, so `dateSent` was
+  empty while `get-message-headers` recovered `2007-08-30` for the same message
+  in the same session. They now run the same tolerant parser over the envelope
+  string and, failing that, over the `Date:` header — which rides in the **same**
+  FETCH command as the envelope (measured on 50 real messages: no detectable
+  latency, ~44 bytes each, so it is unconditional rather than opt-in). An
+  unscoped IMAP search now sorts these messages by that recovered date instead
+  of sinking them to the bottom.
+- **`get-message-headers` splits a `Date:` header Mail.app pre-fused with the
+  next header** (#234 §2). For a `Date:` value it cannot parse, Mail's
+  `all headers` property drops the value and joins the following line onto the
+  name — `Date: Subject: diferencial` — so the tool reported a Subject string as
+  the date and lost the Subject. The reporter isolated this to Mail itself in
+  Script Editor. The date is now reported **absent**, the swallowed header is
+  restored, and `warnings[]` says what was repaired. Only a `Date:` value that
+  begins with a known header name is touched; `raw` is never rewritten.
+- **8-bit header and body bytes on the IMAP path** (#234 §4). Verified against
+  iCloud with a probe message: the **server** rewrites each non-ASCII header byte
+  to `*` in ENVELOPE and in `BODY[HEADER]` (and to U+FFFD in
+  `BODY[HEADER.FIELDS]`); only `BODY[]` returns the stored bytes.
+  `get-message-headers` therefore reads its header block from a bounded
+  `BODY[]` window (64 KiB, falling back to `BODY[HEADER]` if the block is larger)
+  and decodes each line as UTF-8, falling back to windows-1252 — a raw latin-1
+  display name now comes back intact. `get-message` takes its subject from the
+  source the same way. Message bodies honour the part's declared `charset`
+  (falling back to windows-1252 for invalid UTF-8) instead of decoding every
+  part as UTF-8, and a returned HTML part is flagged `isHtml: true` rather than
+  `false`.
+
+### Added
+- `get-message-headers` returns `backend` (`"imap"` or `"applescript"`), so a
+  backend-specific defect like the §2 fusion is visible in the response, and
+  `warnings[]` when a malformed block was repaired.
+
+### Known limitations
+- `search-messages` / `list-messages` rows on **iCloud** still show `*` in a
+  `sender` display name written as raw 8-bit bytes. That value is the server's
+  ENVELOPE, already rewritten before it reaches the client, and recovering it
+  would mean downloading every row's full source. `get-message-headers` returns
+  the real name.
+
 ## [2.19.5] - 2026-09-14
 
 ### Fixed

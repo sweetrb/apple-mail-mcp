@@ -675,7 +675,7 @@ registerTool(
         .string()
         .optional()
         .describe(
-          "ISO 8601 send time from the message's Date: header (Mail's `date sent`). Absent when the message carries no parseable Date: header."
+          "ISO 8601 send time from the message's Date: header (Mail's `date sent`). Absent when the message carries no parseable Date: header, or when the value is more than 7 days later than dateReceived — a send time after arrival is not a real one."
         ),
       dateReceived: z
         .string()
@@ -699,7 +699,9 @@ registerTool(
             id,
             subject: subjectFromGetMessage(r.info),
             body: sep >= 0 ? r.info.slice(sep + 2) : r.info,
-            isHtml: preferHtml === true,
+            // What the IMAP read actually extracted (#234): with no text/plain
+            // part it returns the HTML part, which must not claim to be text.
+            isHtml: typeof r.meta?.isHtml === "boolean" ? r.meta.isHtml : preferHtml === true,
             // Prefer the envelope's Message-ID (#224 fix): `info` is subject +
             // body with no header block, so parsing it yielded "" for every
             // IMAP-sourced message from 2.2.0 through 2.18.1.
@@ -756,7 +758,7 @@ registerTool(
   "get-message-headers",
   {
     description:
-      "Use when: you need a message's raw RFC 5322 headers — the author's Date: header (not the mailbox arrival time), Message-ID, In-Reply-To/References, the Received: hop trace, or any custom X- header — for a message whose id you already have (numeric or imap:…). Cheap: never downloads the body or attachments.\nReturns: the raw header block (text), every header as ordered {name, value} pairs with folding undone, and the decoded key fields: date (ISO 8601, from the Date: header), dateHeader (verbatim), dateReceived (mailbox arrival time — the value a migration or re-import resets, so compare it with date), messageId, subject, from, to, cc, replyTo, inReplyTo, references[], received[].\nTip: pass the mailbox+account you got the id from so a numeric id is fetched directly instead of scanning every mailbox.\nDo not use when: you want the body (use get-message), the conversation (use get-thread), or only the Message-ID (get-message already returns rfcMessageId).",
+      "Use when: you need a message's raw RFC 5322 headers — the author's Date: header (not the mailbox arrival time), Message-ID, In-Reply-To/References, the Received: hop trace, or any custom X- header — for a message whose id you already have (numeric or imap:…). Cheap: never downloads the body or attachments.\nReturns: the raw header block (text), every header as ordered {name, value} pairs with folding undone, and the decoded key fields: date (ISO 8601, from the Date: header), dateHeader (verbatim), dateReceived (mailbox arrival time — the value a migration or re-import resets, so compare it with date), messageId, subject, from, to, cc, replyTo, inReplyTo, references[], received[], backend (imap or applescript), and warnings[] when a malformed block was repaired.\nTip: pass the mailbox+account you got the id from so a numeric id is fetched directly instead of scanning every mailbox.\nDo not use when: you want the body (use get-message), the conversation (use get-thread), or only the Message-ID (get-message already returns rfcMessageId).",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       mailbox: z
@@ -772,6 +774,18 @@ registerTool(
     },
     outputSchema: {
       id: z.string().optional(),
+      backend: z
+        .string()
+        .optional()
+        .describe(
+          'Which backend read the headers: "imap" (the stored bytes over IMAP) or "applescript" (Mail\'s `all headers` property, which Mail renders itself and can alter)'
+        ),
+      warnings: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Repairs applied to a malformed header block, in plain words — e.g. a Date: value Mail.app dropped with the next header joined onto it. Absent when none fired; `raw` is never rewritten."
+        ),
       raw: z.string().optional().describe("The raw header block, exactly as stored"),
       headers: z.array(HEADER_FIELD_SCHEMA).optional(),
       headerCount: z.number().optional(),
@@ -806,7 +820,12 @@ registerTool(
         imap: () => imapGetMessageHeaders(id, { account }),
         structuredFromResult: (r) =>
           r.info
-            ? headersStructured(id, parseHeaderBlock(r.info), r.meta?.dateReceived as string)
+            ? headersStructured(
+                id,
+                parseHeaderBlock(r.info),
+                r.meta?.dateReceived as string,
+                "imap"
+              )
             : undefined,
         apple: () => {
           const h = mailManager.getMessageHeaders(id, { account, mailbox });
@@ -816,7 +835,7 @@ registerTool(
           }
           return successResponse(
             h.raw,
-            headersStructured(id, parseHeaderBlock(h.raw), h.dateReceived)
+            headersStructured(id, parseHeaderBlock(h.raw), h.dateReceived, "applescript")
           );
         },
         ok: "",

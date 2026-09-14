@@ -18,6 +18,7 @@ import {
   imapGetMessage,
   imapGetMessageHeaders,
   imapGetMessageSource,
+  HEADER_WINDOW_BYTES,
   MAX_COMPOSE_SOURCE_BYTES,
   imapMarkRead,
   imapMarkUnread,
@@ -682,6 +683,10 @@ describe("row dates: dateSent is the header date, dateReceived is arrival (#224 
   // forms the reporter hit) no longer throws for that byte-exact header on
   // current main, as a side effect of isoOrEmpty landing in #228.
   const SPANISH_DATE = "jue ago 30 13:55:12 2007";
+  // #234: these rows now RECOVER the date through parseDateHeader (the server's
+  // ENVELOPE parse failed, so imapflow handed back the raw string). With no
+  // INTERNALDATE in the mock, dateReceived falls back to that same header date.
+  const SPANISH_ISO = new Date("Thu Aug 30 13:55:12 2007").toISOString();
 
   function spanishDateClient(uids: number[]): ImapClientLike {
     const base = makeClient(uids, {});
@@ -705,8 +710,8 @@ describe("row dates: dateSent is the header date, dateReceived is arrival (#224 
       { config: cfg, connect: async () => spanishDateClient([7]) }
     );
     const row = res.messages[0] as Record<string, unknown>;
-    expect(row.dateSent).toBe("");
-    expect(row.dateReceived).toBe("");
+    expect(row.dateSent).toBe(SPANISH_ISO);
+    expect(row.dateReceived).toBe(SPANISH_ISO);
   });
 
   it("search-messages (subject filter) does not throw on a Spanish-locale Date: header", async () => {
@@ -715,8 +720,8 @@ describe("row dates: dateSent is the header date, dateReceived is arrival (#224 
       { config: cfg, connect: async () => spanishDateClient([7]) }
     );
     const row = res.messages[0] as Record<string, unknown>;
-    expect(row.dateSent).toBe("");
-    expect(row.dateReceived).toBe("");
+    expect(row.dateSent).toBe(SPANISH_ISO);
+    expect(row.dateReceived).toBe(SPANISH_ISO);
   });
 });
 
@@ -1264,7 +1269,7 @@ describe("true threading via References (I5)", () => {
   // any thread member carrying a truthy-but-unparseable envelope date, e.g.
   // the reporter's Spanish-locale "jue ago 30 13:55:12 2007". Byte-exact
   // repro from #229/#231.
-  it("omits (never throws on) an unparseable Date: header in a thread member", async () => {
+  it("recovers (never throws on) a locale Date: header in a thread member (#234)", async () => {
     const client: ImapClientLike = {
       ...makeClient([], {}),
       fetchOne: async () => ({
@@ -1294,7 +1299,7 @@ describe("true threading via References (I5)", () => {
     const t = await imapThread(MID, { config: cfg, connect: async () => client }, 50);
     expect(t).not.toBeNull();
     const ancestor = t?.structured.messages.find((m) => m.subject === "Plan");
-    expect(ancestor?.date).toBe("");
+    expect(ancestor?.date).toBe(new Date("Thu Aug 30 13:55:12 2007").toISOString());
   });
 });
 
@@ -2335,17 +2340,27 @@ describe("get-message dates and get-message-headers (#224)", () => {
   const internalDate = new Date("2026-03-04T05:06:07Z");
   const envelopeDate = new Date("2020-06-01T09:59:58Z");
 
-  function headerClient(overrides: Partial<{ headers: Buffer | string; found: boolean }> = {}) {
+  // Like a real server, the mock returns only what the query asked for:
+  // `source` for BODY[] (full or a window), `headers` for BODY[HEADER].
+  function headerClient(
+    overrides: Partial<{ headers: Buffer | string; source: Buffer | string; found: boolean }> = {}
+  ) {
     const rec: MsgRec = {};
-    const fetchOne = vi.fn(async () =>
+    const fetchOne = vi.fn(async (_uid: string, q: Record<string, unknown>) =>
       overrides.found === false
         ? false
         : {
             uid: 1,
             envelope: { subject: "Hello", date: envelopeDate, messageId: "<hello@example.org>" },
             internalDate,
-            headers: overrides.headers ?? Buffer.from(RAW_HEADERS),
-            source: Buffer.from("Content-Type: text/plain\r\n\r\nbody"),
+            ...(q.headers ? { headers: overrides.headers ?? Buffer.from(RAW_HEADERS) } : {}),
+            ...(q.source
+              ? {
+                  source:
+                    overrides.source ??
+                    Buffer.from(RAW_HEADERS + "Content-Type: text/plain\r\n\r\nbody"),
+                }
+              : {}),
           }
     );
     const client = { ...makeMsgClient(rec), fetchOne };
@@ -2362,6 +2377,7 @@ describe("get-message dates and get-message-headers (#224)", () => {
       { uid: true }
     );
     expect(r.meta).toEqual({
+      isHtml: false,
       dateSent: "2020-06-01T09:59:58.000Z",
       dateReceived: "2026-03-04T05:06:07.000Z",
       rfcMessageId: "hello@example.org",
@@ -2377,26 +2393,48 @@ describe("get-message dates and get-message-headers (#224)", () => {
     });
     const r = await imapGetMessage(MID, false, c.deps);
     expect(r.success).toBe(true);
-    expect(r.meta).toEqual({ dateSent: undefined, dateReceived: undefined, rfcMessageId: "" });
+    expect(r.meta).toEqual({
+      isHtml: false,
+      dateSent: undefined,
+      dateReceived: undefined,
+      rfcMessageId: "",
+    });
   });
 
-  it("headers: fetches only the header block plus INTERNALDATE, never the source", async () => {
+  it("headers: reads a bounded BODY[] window plus INTERNALDATE, never the whole source (#234)", async () => {
+    // BODY[] rather than BODY[HEADER]: iCloud rewrites 8-bit header bytes to `*`
+    // in BODY[HEADER]; only BODY[] returns them as stored. Bounded, so a message
+    // with a 20 MB attachment still costs one small window.
     const c = headerClient();
     const r = await imapGetMessageHeaders(MID, c.deps);
     expect(r.success).toBe(true);
+    expect(c.fetchOne).toHaveBeenCalledTimes(1);
     expect(c.fetchOne).toHaveBeenCalledWith(
       "1",
-      { envelope: true, internalDate: true, headers: true },
+      { envelope: true, internalDate: true, source: { start: 0, maxLength: HEADER_WINDOW_BYTES } },
       { uid: true }
     );
-    expect(r.info).toBe(RAW_HEADERS);
+    // The block ends at the blank line; the body is never part of it.
+    expect(r.info).toBe(RAW_HEADERS + "Content-Type: text/plain");
     expect(r.meta).toEqual({ dateReceived: "2026-03-04T05:06:07.000Z" });
   });
 
-  it("headers: accepts a string header block", async () => {
-    const c = headerClient({ headers: "Subject: s\r\n" });
+  it("headers: accepts a string source", async () => {
+    const c = headerClient({ source: "Subject: s\r\n\r\nbody" });
     const r = await imapGetMessageHeaders(MID, c.deps);
     expect(r.success).toBe(true);
+    expect(r.info).toBe("Subject: s");
+  });
+
+  it("headers: falls back to BODY[HEADER] when the header block overflows the window", async () => {
+    const c = headerClient({
+      source: "X-Huge: " + "a".repeat(HEADER_WINDOW_BYTES),
+      headers: "Subject: s\r\n",
+    });
+    const r = await imapGetMessageHeaders(MID, c.deps);
+    expect(r.success).toBe(true);
+    expect(c.fetchOne).toHaveBeenCalledTimes(2);
+    expect(c.fetchOne).toHaveBeenLastCalledWith("1", { headers: true }, { uid: true });
     expect(r.info).toBe("Subject: s\r\n");
   });
 
@@ -2408,7 +2446,7 @@ describe("get-message dates and get-message-headers (#224)", () => {
   });
 
   it("headers: refuses an empty header block instead of returning success with nothing", async () => {
-    const c = headerClient({ headers: "" });
+    const c = headerClient({ source: "", headers: "" });
     const r = await imapGetMessageHeaders(MID, c.deps);
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/no header block/);

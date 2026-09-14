@@ -98,6 +98,40 @@ function extractMimeType(headers: string): string {
   return typeMatch ? typeMatch[1].toLowerCase() : "application/octet-stream";
 }
 
+/** The `charset` parameter of a part's Content-Type, lower-cased, or null. */
+function extractCharset(headers: string): string | null {
+  const ct = getHeader(headers, "Content-Type");
+  const m = ct?.match(/charset\s*=\s*"?([^";\s]+)"?/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * Turn a text part's decoded bytes into a string, honouring its declared
+ * charset (#234 §4).
+ *
+ * This used to be `.toString("utf8")` for every part whatever its `charset=`,
+ * so an 8bit ISO-8859-1 body — the normal shape of legacy Entourage / Outlook
+ * for Mac mail — came back with U+FFFD for every accented character. A known
+ * non-UTF-8 label is decoded with that label. UTF-8, US-ASCII, no label, or a
+ * label TextDecoder does not know are tried as strict UTF-8, and bytes that are
+ * not valid UTF-8 fall back to windows-1252: mislabelled or unlabelled 8-bit
+ * text is overwhelmingly latin-1, and U+FFFD is never a better answer.
+ */
+function decodePartText(bytes: Buffer, charset: string | null): string {
+  if (charset && !["utf-8", "utf8", "us-ascii", "ascii"].includes(charset)) {
+    try {
+      return new TextDecoder(charset).decode(bytes);
+    } catch {
+      // Unknown label: fall through to the UTF-8 / windows-1252 heuristic.
+    }
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+
 /**
  * Estimate decoded size from base64 content length.
  */
@@ -260,8 +294,9 @@ export function parseMimeAttachments(source: string): MimeAttachmentInfo[] {
  * both wrong and enormous (#32). Handles both multipart messages (walks leaf
  * parts, descending into nested multipart/* containers) and a non-multipart
  * message whose top-level Content-Type is text/html. Bodies are decoded per
- * Content-Transfer-Encoding (base64 / quoted-printable / raw) and returned as
- * UTF-8 text.
+ * Content-Transfer-Encoding (base64 / quoted-printable / raw) and then to text
+ * by the part's declared charset (see decodePartText). Pass a byte-preserving
+ * source — a latin1 string of the raw bytes — or 8bit parts are already lost.
  *
  * @param source - Raw MIME source of the email
  * @returns The decoded HTML body, or null if the message has no text/html part
@@ -275,7 +310,7 @@ export function extractHtmlBody(source: string): string | null {
     for (const part of walkLeafParts(source, boundary)) {
       if (extractMimeType(part.headers) === "text/html") {
         const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodeBody(part.body, encoding).toString("utf8");
+        return decodePartText(decodeBody(part.body, encoding), extractCharset(part.headers));
       }
     }
     return null;
@@ -288,7 +323,7 @@ export function extractHtmlBody(source: string): string | null {
   if (extractMimeType(headers) !== "text/html") return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
   const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodeBody(body, encoding).toString("utf8");
+  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
 }
 
 /**
@@ -304,7 +339,7 @@ export function extractTextBody(source: string): string | null {
     for (const part of walkLeafParts(source, boundary)) {
       if (extractMimeType(part.headers) === "text/plain") {
         const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodeBody(part.body, encoding).toString("utf8");
+        return decodePartText(decodeBody(part.body, encoding), extractCharset(part.headers));
       }
     }
     return null;
@@ -318,7 +353,7 @@ export function extractTextBody(source: string): string | null {
   if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
   const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodeBody(body, encoding).toString("utf8");
+  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
 }
 
 /**
