@@ -74,7 +74,7 @@ beforeEach(() => {
 
 describe("#203 Bug 1: scoped search on an underscore-prefixed mailbox", () => {
   it("finds it by iterate-and-match, never a named specifier, and scans only that mailbox", () => {
-    const row = ["5001", "Hi", "a@b.com", "2026-8-20-9-0-0", "false", "false"].join(FIELD_SEP);
+    const row = ["5001", "Hi", "a@b.com", "2026-8-20-9-0-0", "", "false", "false"].join(FIELD_SEP);
     h.router.fn = makeRouter({ mailboxNames: ICLOUD_MAILBOXES_WITH_UNDERSCORE, searchOutput: row });
     const mgr = new AppleMailManager();
 
@@ -108,12 +108,19 @@ describe("#203 Bug 2: fully unscoped search-messages (mailbox omitted)", () => {
     // Two rows from two different real mailboxes, including Sent Messages —
     // the exact companion effect the issue called out.
     const rows = [
-      ["10", "Newsletter", "x@y.com", "2026-8-20-9-0-0", "true", "false", "Archive"].join(
+      ["10", "Newsletter", "x@y.com", "2026-8-20-9-0-0", "", "true", "false", "Archive"].join(
         FIELD_SEP
       ),
-      ["11", "Re: Hi", "me@icloud.com", "2026-8-19-9-0-0", "true", "false", "Sent Messages"].join(
-        FIELD_SEP
-      ),
+      [
+        "11",
+        "Re: Hi",
+        "me@icloud.com",
+        "2026-8-19-9-0-0",
+        "",
+        "true",
+        "false",
+        "Sent Messages",
+      ].join(FIELD_SEP),
     ].join(String.fromCharCode(30)); // RS between records
     h.router.fn = makeRouter({
       mailboxNames: ["INBOX", "Archive", "Sent Messages"],

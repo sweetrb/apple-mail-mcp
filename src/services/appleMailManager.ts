@@ -489,11 +489,20 @@ function buildAttachmentCommands(attachments?: string[]): string {
 }
 
 /**
+ * AppleScript snippet that converts a date variable named `varName` into a
+ * locale-independent numeric string: "YYYY-M-D-H-m-s".
+ * Use: set <varName> to date received of msg, then inline this snippet.
+ */
+function asDateToString(varName: string): string {
+  return `((year of ${varName}) as string) & "-" & ((month of ${varName} as integer) as string) & "-" & ((day of ${varName}) as string) & "-" & ((hours of ${varName}) as string) & "-" & ((minutes of ${varName}) as string) & "-" & ((seconds of ${varName}) as string)`;
+}
+
+/**
  * AppleScript snippet that converts a date variable `d` into a
  * locale-independent numeric string: "YYYY-M-D-H-m-s".
  * Use: set d to date received of msg, then inline this snippet.
  */
-const AS_DATE_TO_STRING = `((year of d) as string) & "-" & ((month of d as integer) as string) & "-" & ((day of d) as string) & "-" & ((hours of d) as string) & "-" & ((minutes of d) as string) & "-" & ((seconds of d) as string)`;
+const AS_DATE_TO_STRING = asDateToString("d");
 
 /**
  * AppleScript fragment that reads a bound `msg`'s `date sent` (the `Date:`
@@ -535,6 +544,18 @@ function parseMessageDates(pair: string): { dateSent?: Date; dateReceived?: Date
  * malformed-message isolation (#13): one bad message can't abort the batch,
  * and if a bulk read throws (the audit's regression worry) we degrade to the
  * safe per-message path automatically.
+ *
+ * `date sent` (the `Date:` header) is bulk-read separately (`_sentDates` /
+ * `_sentBulkOK`), not folded into the main bulk `try` — a message with no
+ * `Date:` header can make the bulk `date sent of _msgs` read throw, and that
+ * must not degrade the whole row (id/subject/sender/etc.) to the slow
+ * per-message path just because one message lacks a send date. The per-item
+ * read is additionally wrapped in its own `try` (same individually-guarded
+ * style as {@link AS_MESSAGE_DATES_FRAGMENT}), so a missing `date sent`
+ * yields an empty field rather than aborting the row (#224/#234 lineage).
+ * Emitted unconditionally as one more field right after the `dateReceived`
+ * field, so the row shape stays uniform across all six call sites and
+ * `parseMessageList`'s length-based disambiguation just shifts by one.
  *
  * Expects `outputText`, `msgCount` (and, when `dedup`, `seenIds`) already in
  * scope at the call site; appends rows and advances `msgCount` up to `limit`.
@@ -590,6 +611,12 @@ function buildMessageRowLoop(opts: {
       on error
         set _bulkOK to false
       end try
+      set _sentBulkOK to true
+      try
+        set _sentDates to date sent of _msgs
+      on error
+        set _sentBulkOK to false
+      end try
       repeat with _i from 1 to (count of _msgs)
         if msgCount >= ${limit} then exit repeat
         try
@@ -619,8 +646,17 @@ function buildMessageRowLoop(opts: {
             set msgFlagged to flagged status of _m as string
           end if${attRow}
           set msgDateStr to ${AS_DATE_TO_STRING}
+          set msgDateSentStr to ""
+          try
+            if _bulkOK and _sentBulkOK then
+              set dSent to item _i of _sentDates
+            else
+              set dSent to date sent of (item _i of _msgs)
+            end if
+            set msgDateSentStr to ${asDateToString("dSent")}
+          end try
           if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-          set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged${trailing}${attField}
+          set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgDateSentStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged${trailing}${attField}
           set msgCount to msgCount + 1
           ${dateClose}
           ${offsetClose}
@@ -3254,9 +3290,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   /**
    * Parse message list output from AppleScript.
    *
+   * Row shape (since the dateSent field was added — see buildMessageRowLoop):
+   *   id|subject|sender|dateReceived|dateSent|read|flagged[|mailbox][|hasAtt]
+   *
    * Two emission schemas, disambiguated by length:
-   *   7 fields: single-mailbox — ...|hasAtt (mailbox from caller)
-   *   8 fields: all-mailboxes — ...|mailbox|hasAtt
+   *   8 fields: single-mailbox — ...|hasAtt (mailbox from caller)
+   *   9 fields: all-mailboxes — ...|mailbox|hasAtt
    *
    * `hasAttachments` here is the fast-path AppleScript count only; it will
    * false-negative for MIME-embedded attachments (a known AppleScript
@@ -3273,26 +3312,32 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     for (const item of items) {
       const parts = item.split(FIELD_SEP);
-      if (parts.length < 6) continue;
+      if (parts.length < 7) continue;
 
       let msgMailbox = mailbox;
       let hasAttachments = false;
-      if (rowsIncludeMailbox && parts.length >= 7) {
-        msgMailbox = parts[6];
-        hasAttachments = parts.length >= 8 ? parts[7] === "true" : false;
-      } else if (parts.length === 7) {
-        hasAttachments = parts[6] === "true";
+      if (rowsIncludeMailbox && parts.length >= 8) {
+        msgMailbox = parts[7];
+        hasAttachments = parts.length >= 9 ? parts[8] === "true" : false;
+      } else if (parts.length === 8) {
+        hasAttachments = parts[7] === "true";
       }
 
       const msgId = parts[0].trim();
+      const dateReceived = parseAppleScriptDate(parts[3]);
+      // Same omitted-not-invented contract as the IMAP rows and get-message
+      // (#224/#234): a message with no `Date:` header, or one Mail invented a
+      // date for, must not surface as a real dateSent.
+      const dateSent = plausibleDateSent(parseAppleScriptDate(parts[4]), dateReceived);
       messages.push({
         id: msgId,
         subject: parts[1],
         sender: parts[2],
         recipients: [],
-        dateReceived: parseAppleScriptDate(parts[3]),
-        isRead: parts[4] === "true",
-        isFlagged: parts[5] === "true",
+        dateReceived,
+        ...(dateSent ? { dateSent } : {}),
+        isRead: parts[5] === "true",
+        isFlagged: parts[6] === "true",
         isJunk: false,
         isDeleted: false,
         mailbox: msgMailbox,

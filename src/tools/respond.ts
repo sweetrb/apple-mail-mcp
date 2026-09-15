@@ -34,6 +34,18 @@ export function messageSummary(m: Message): Record<string, unknown> {
           ? ""
           : m.dateReceived.toISOString()
         : m.dateReceived,
+    // Same omitted-as-empty-string contract as dateReceived above, and the
+    // same shape the IMAP path's `structuredRow` already emits for
+    // `dateSent`. `m.dateSent` is only ever set to an already-plausible, valid
+    // Date here (appleMailManager.ts's `parseMessageList` applies the
+    // `plausibleDateSent` guard before populating it), so this mainly covers
+    // the "absent" case, but stays defensive against an invalid Date too.
+    dateSent:
+      m.dateSent instanceof Date
+        ? Number.isNaN(m.dateSent.getTime())
+          ? ""
+          : m.dateSent.toISOString()
+        : "",
     isRead: m.isRead,
     isFlagged: m.isFlagged,
     mailbox: m.mailbox,

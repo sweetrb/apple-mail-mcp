@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+## [2.19.7] - 2026-09-15
+
+### Added
+- **`search-messages` and `list-messages` rows now carry `dateSent`** on the
+  AppleScript backend, matching what the IMAP backend has emitted since 2.19.2
+  and what `get-message` has emitted since 2.19.0/2.19.6. Every row now reports
+  both `dateSent` (the message's `Date:` header) and `dateReceived` (mailbox
+  arrival), so a mailbox whose `INTERNALDATE`/`date received` was reset by a
+  migration or re-import no longer loses its real chronology on these two
+  tools — the last two AppleScript-backed tools that only had the arrival time.
+  `buildMessageRowLoop` bulk-reads `date sent of _msgs` as one additional Apple
+  Event per batch (not per message), separately guarded from the existing bulk
+  read so a message with no `Date:` header can't force the whole row — id,
+  subject, sender, etc. — down the slow per-message fallback path; the same
+  `plausibleDateSent` guard already used by `get-message` and the IMAP rows
+  omits (never invents) a `dateSent` that is absent or implausibly later than
+  `dateReceived` (#234 lineage). Tracked as the AppleScript half of
+  [#224](https://github.com/sweetrb/apple-mail-mcp/issues/224).
+
 ## [2.19.6] - 2026-09-14
 
 All four findings from @j5pu's #234 (tested on 2.19.5).

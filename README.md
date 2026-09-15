@@ -236,6 +236,19 @@ Search for messages matching criteria. Searches all accounts by default.
 | `dateTo` | string | No | End date filter (e.g., "March 1, 2026") |
 | `limit` | number | No | Max results, 1–500 (default: 50) |
 
+**Returns:** List of matching messages with ID, date, subject, sender, and read state.
+
+⚠️ **Row dates.** Since 2.19.7 every row — on both the IMAP and AppleScript
+backends — carries both `dateSent` (the message's `Date:` header) and
+`dateReceived` (mailbox arrival — IMAP `INTERNALDATE` or Mail's `date received`).
+They differ legitimately by transit time; when they differ by **years**, the
+mailbox was migrated or re-imported and the arrival timestamp was reset — trust
+`dateSent` for chronology ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)).
+`dateSent` is omitted (not invented) when the message carries no parseable
+`Date:` header, or when it is more than 7 days later than `dateReceived` — Mail
+substitutes a timestamp of its own for a `Date:` header it cannot parse
+([#234](https://github.com/sweetrb/apple-mail-mcp/issues/234)).
+
 **Large mailboxes & partial results.** Apple Mail's AppleScript bridge cannot
 search very large IMAP/Gmail mailboxes (tens of thousands of messages) before
 the Apple Event times out — empirically even reading the newest 20 messages of
@@ -331,19 +344,20 @@ List messages in a mailbox.
 
 **Returns:** List of messages with ID, date, subject, and sender.
 
-⚠️ **Row dates differ by backend.** On the **IMAP** path each row carries both
-`dateSent` (the message's `Date:` header) and `dateReceived` (mailbox arrival —
-`INTERNALDATE`, falling back to the header date if the server withholds it).
-They differ legitimately by transit time; when they differ by **years**, the
-mailbox was migrated or re-imported and the arrival timestamp was reset — trust
-`dateSent` for chronology ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)).
-Since 2.19.6 the IMAP `dateSent` is recovered even when the server's own parse of
-the `Date:` header failed (legacy locale dates such as `jue ago 30 13:55:12 2007`),
-and is omitted rather than reported when it is more than 7 days later than
-`dateReceived` ([#234](https://github.com/sweetrb/apple-mail-mcp/issues/234)).
-On the **AppleScript** path rows carry only `dateReceived` (Mail's `date
-received`); `dateSent` is not yet emitted there. Sort order keys on the header
-date on both backends, which is the stable one.
+⚠️ **Row dates.** Since 2.19.7 every row — on both the **IMAP** and
+**AppleScript** backends — carries both `dateSent` (the message's `Date:`
+header) and `dateReceived` (mailbox arrival — IMAP `INTERNALDATE`, falling back
+to the header date if the server withholds it; Mail's `date received` on the
+AppleScript path). They differ legitimately by transit time; when they differ
+by **years**, the mailbox was migrated or re-imported and the arrival timestamp
+was reset — trust `dateSent` for chronology
+([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)). Since 2.19.6 the
+IMAP `dateSent` is recovered even when the server's own parse of the `Date:`
+header failed (legacy locale dates such as `jue ago 30 13:55:12 2007`); both
+backends omit `dateSent` (rather than reporting it) when it is more than 7 days
+later than `dateReceived` ([#234](https://github.com/sweetrb/apple-mail-mcp/issues/234)).
+Before 2.19.7 the AppleScript path carried only `dateReceived`. Sort order keys
+on the header date on both backends, which is the stable one.
 
 ---
 

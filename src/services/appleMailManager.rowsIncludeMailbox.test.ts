@@ -65,12 +65,13 @@ beforeEach(() => {
 
 describe("listMessages(mailbox: '') takes the all-mailboxes row shape", () => {
   it("reports the real per-message mailbox and attachment flag, not a fallback", () => {
-    // 8-field all-mailboxes row: id|subject|sender|date|read|flagged|mailbox|hasAtt
+    // 9-field all-mailboxes row: id|subject|sender|dateReceived|dateSent|read|flagged|mailbox|hasAtt
     const row = [
       "77",
       "Invoice",
       "billing@example.com",
       "2026-8-20-9-0-0",
+      "2026-8-19-22-0-0",
       "false",
       "false",
       "Work/Receipts",
@@ -92,6 +93,7 @@ describe("listMessages(mailbox: '') takes the all-mailboxes row shape", () => {
       "Invoice",
       "billing@example.com",
       "2026-8-20-9-0-0",
+      "2026-8-19-22-0-0",
       "false",
       "false",
       "Work/Receipts",
@@ -113,13 +115,14 @@ describe("listMessages(mailbox: '') takes the all-mailboxes row shape", () => {
 
 describe("searchMessages(mailbox: '') takes the all-mailboxes row shape", () => {
   it("reports the real per-message mailbox, not the 'INBOX' fallback", () => {
-    // 7-field all-mailboxes row (search never requests attachments):
-    // id|subject|sender|date|read|flagged|mailbox
+    // 8-field all-mailboxes row (search never requests attachments):
+    // id|subject|sender|dateReceived|dateSent|read|flagged|mailbox
     const row = [
       "88",
       "Statement",
       "billing@example.com",
       "2026-8-20-9-0-0",
+      "2026-8-19-22-0-0",
       "false",
       "false",
       "Work/Receipts",

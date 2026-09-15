@@ -117,7 +117,7 @@ function asMailWouldRenderId(id: string): string {
   return n.toExponential().replace("e", "E");
 }
 
-/** A list-messages payload: the ids, six fields each. */
+/** A list-messages payload: the ids, seven fields each. */
 function listPayload(ids: string[]): string {
   const rows = ids
     .map((id) =>
@@ -126,6 +126,7 @@ function listPayload(ids: string[]): string {
         "Subject",
         "sender@example.com",
         "Monday, January 1, 2026 at 0:00:00",
+        "",
         "false",
         "false",
       ].join(FIELD_SEP)
