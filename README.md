@@ -745,10 +745,27 @@ Save an email to Drafts without sending.
 | `body` | string | Yes | Email body (plain text) |
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
-| `account` | string | No | Account for draft |
+| `account` | string | No | Exact enabled account name or one of its email addresses |
+| `sender` | string | No | Exact From address, including an alias; must belong to the selected account |
+| `signature` | string | No | Exact existing signature name from `list-signatures`; omit for no signature |
 | `attachments` | (string \| {filename, contentBase64})[] | No | Up to 20 attachments: absolute file paths inside the configured read roots and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 
-**Returns:** Confirmation that draft was created.
+**Returns:** `saved`, actual `sender` and `signature`, recipients, attachment count, and `composeId`. The compose ID is not a stored message locator; use `list-messages` in Drafts for subsequent operations.
+
+Selections are validated before creating the message. The draft is explicitly saved, its body and selections checked, and its compose window closed. Creation is never automatically retried: if an error or timeout occurs, inspect Drafts before repeating the request. Account names resolve to their first configured address; `sender` selects a specific alias.
+
+
+#### `send-saved-draft`
+
+`send-saved-draft` validates a persisted Drafts message against its original `composeId` from `create-draft`. Pass `account`, fresh `draftId`, `composeId`, exact `sender`, single `recipient`, `subject`, `signature`, and the approved `body` without the signature. `dryRun` defaults to `true`; only explicit `dryRun: false` submits a real email, after user authorization. The native signature and formatting are retained.
+
+The original outgoing object must still exist in the current Mail session. Missing objects, identity/content mismatches, CC/BCC, or attachments fail closed. This does not reopen arbitrary drafts or recreate a message. Sending is never automatically retried. A submission receipt is not delivery confirmation: verify Sent and check Drafts afterward, and never retry an uncertain result without inspecting those folders.
+
+
+#### `list-signatures`
+
+Read the names of existing Apple Mail signatures. No parameters. Returns `signatures: string[]`; a failed read returns an error, not an empty list. This does not change global signature preferences.
+
 
 #### `get-thread`
 

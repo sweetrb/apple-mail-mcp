@@ -67075,6 +67075,330 @@ var init_smtpMailer = __esm({
 // src/index.ts
 import { createRequire } from "module";
 
+// src/utils/applescript.ts
+import { execSync, spawnSync } from "child_process";
+var DEFAULT_TIMEOUT_MS = 3e4;
+var DEFAULT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+function getMaxBuffer() {
+  const raw = process.env.APPLE_MAIL_MCP_MAX_BUFFER;
+  if (raw !== void 0) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return DEFAULT_MAX_BUFFER_BYTES;
+}
+var DEFAULT_MAX_RETRIES = 1;
+var DEFAULT_RETRY_DELAY_MS = 1e3;
+var isDebugEnabled = () => {
+  const debug = process.env.DEBUG;
+  const verbose = process.env.VERBOSE;
+  return debug === "1" || debug === "true" || verbose === "1" || verbose === "true";
+};
+function debugLog(message, data) {
+  if (!isDebugEnabled()) return;
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+  if (data !== void 0) {
+    console.error(`[DEBUG ${timestamp}] ${message}`, data);
+  } else {
+    console.error(`[DEBUG ${timestamp}] ${message}`);
+  }
+}
+function escapeForShell(script) {
+  return script.replace(/'/g, "'\\''");
+}
+var SCRIPT_TIMEOUT_HEADROOM_MS = 5e3;
+function wrapWithTimeout(script, processTimeoutMs) {
+  const seconds = Math.max(1, Math.ceil((processTimeoutMs - SCRIPT_TIMEOUT_HEADROOM_MS) / 1e3));
+  return `with timeout of ${seconds} seconds
+${script}
+end timeout`;
+}
+function isTimeoutError(error2) {
+  if (error2 instanceof Error) {
+    const execError = error2;
+    return execError.killed === true || execError.signal === "SIGTERM" || execError.signal === "SIGKILL";
+  }
+  return false;
+}
+var RETRYABLE_ERROR_PATTERNS = [
+  /timed? out/i,
+  /not responding/i,
+  /connection.*invalid/i,
+  /lost connection/i,
+  /busy/i
+];
+function isRetryableError(errorMessage) {
+  return RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage));
+}
+function sleep(ms) {
+  const seconds = ms / 1e3;
+  const result = spawnSync("sleep", [seconds.toString()], { stdio: "ignore" });
+  if (result.error) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+    }
+  }
+}
+var PERMISSION_DENIED_PATTERN = /not author(?:i[sz])ed|not permitted|access.*denied|\(-1743\)/i;
+var PERMISSION_DENIED_MESSAGE = "Permission denied. Grant automation access in System Settings > Privacy & Security > Automation.";
+function isPermissionDenied(error2) {
+  if (!error2) return false;
+  return PERMISSION_DENIED_PATTERN.test(error2) || error2.includes(PERMISSION_DENIED_MESSAGE);
+}
+var ERROR_MAPPINGS = [
+  // Permission errors
+  {
+    pattern: PERMISSION_DENIED_PATTERN,
+    message: PERMISSION_DENIED_MESSAGE
+  },
+  // Application not running
+  {
+    pattern: /application isn't running|not running/i,
+    message: "Mail.app is not responding. Try opening Mail.app manually."
+  },
+  // Connection errors
+  {
+    pattern: /connection is invalid|lost connection/i,
+    message: "Lost connection to Mail.app. The app may have crashed or been restarted."
+  },
+  // Message not found
+  {
+    pattern: /can't get message/i,
+    message: "Message not found. The message may have been deleted or moved."
+  },
+  // Mailbox not found
+  {
+    pattern: /can't get mailbox "([^"]+)"/i,
+    message: 'Mailbox "$1" not found. Use list-mailboxes to see available mailboxes.'
+  },
+  // Account not found
+  {
+    pattern: /can't get account "([^"]+)"/i,
+    message: 'Account "$1" not found. Use list-accounts to see available accounts.'
+  },
+  // Send failed
+  {
+    pattern: /couldn't send|send failed|cannot send/i,
+    message: "Failed to send email. Check your network connection and Mail.app settings."
+  },
+  // Offline
+  {
+    pattern: /offline|no connection/i,
+    message: "Mail.app is offline. Check your network connection."
+  },
+  // Cannot delete (various reasons)
+  {
+    pattern: /can't delete|cannot delete/i,
+    message: "Cannot delete. The message may be locked or in use."
+  },
+  // Syntax/script errors (usually programming bugs)
+  {
+    pattern: /syntax error|expected/i,
+    message: "Internal error. Please report this issue."
+  }
+];
+function parseErrorMessage(errorOutput) {
+  let coreError = errorOutput;
+  const executionError = errorOutput.match(/execution error: (.+?)(?:\s*\(-?\d+\))?$/m);
+  if (executionError) {
+    coreError = executionError[1].trim();
+  }
+  if (PERMISSION_DENIED_PATTERN.test(errorOutput)) {
+    return PERMISSION_DENIED_MESSAGE;
+  }
+  for (const { pattern, message } of ERROR_MAPPINGS) {
+    const match = coreError.match(pattern);
+    if (match) {
+      let result = message;
+      for (let i = 1; i < match.length; i++) {
+        result = result.replace(`$${i}`, match[i] || "");
+      }
+      return result;
+    }
+  }
+  const notFoundError = coreError.match(/Can't get (.+?)\./);
+  if (notFoundError) {
+    return `Not found: ${notFoundError[1]}`;
+  }
+  if (/^Command failed:\s*osascript/.test(coreError.trim())) {
+    return "Mail.app scripting failed (osascript exited abnormally). Mail may be unresponsive or relaunching, or Automation permission was denied \u2014 check System Settings > Privacy & Security > Automation, and try again.";
+  }
+  return coreError.trim() || "Unknown AppleScript error";
+}
+function executeAppleScript(script, options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+  if (!script || !script.trim()) {
+    return {
+      success: false,
+      output: "",
+      error: "Cannot execute empty AppleScript"
+    };
+  }
+  const preparedScript = escapeForShell(wrapWithTimeout(script.trim(), timeoutMs));
+  const command = `osascript -e '${preparedScript}'`;
+  debugLog("Executing AppleScript", {
+    scriptPreview: script.trim().substring(0, 200) + (script.length > 200 ? "..." : ""),
+    timeout: timeoutMs,
+    maxRetries
+  });
+  let lastError = null;
+  const startTime = Date.now();
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const attemptStart = Date.now();
+    try {
+      const output = execSync(command, {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        // SIGKILL (not the default SIGTERM): a wedged osascript blocked on an
+        // unresponsive Mail.app can ignore SIGTERM, leaking processes that pile
+        // up and worsen the contention. SIGKILL guarantees the process is reaped
+        // when the timeout fires. (#11)
+        killSignal: "SIGKILL",
+        // Raise the output cap well above Node's 1 MB default so large message
+        // sources / attachment payloads aren't truncated into an ENOBUFS
+        // failure. (#27)
+        maxBuffer: getMaxBuffer(),
+        // Capture stderr separately to get error details
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const duration3 = Date.now() - attemptStart;
+      debugLog("AppleScript succeeded", {
+        attempt,
+        duration: `${duration3}ms`,
+        outputLength: output.length,
+        outputPreview: output.substring(0, 100) + (output.length > 100 ? "..." : "")
+      });
+      return {
+        success: true,
+        output: output.trim()
+      };
+    } catch (error2) {
+      const attemptDuration = Date.now() - attemptStart;
+      let errorMessage;
+      let isTimeout = false;
+      let rawError;
+      if (isTimeoutError(error2)) {
+        isTimeout = true;
+        const timeoutSecs = Math.round(timeoutMs / 1e3);
+        errorMessage = `Operation timed out after ${timeoutSecs} seconds. Mail.app may be unresponsive or the operation involves too many messages.`;
+      } else if (error2 instanceof Error) {
+        rawError = error2.message;
+        errorMessage = parseErrorMessage(error2.message);
+      } else if (typeof error2 === "string") {
+        rawError = error2;
+        errorMessage = parseErrorMessage(error2);
+      } else {
+        errorMessage = "AppleScript execution failed with unknown error";
+      }
+      debugLog("AppleScript failed", {
+        attempt,
+        duration: `${attemptDuration}ms`,
+        totalElapsed: `${Date.now() - startTime}ms`,
+        isTimeout,
+        errorMessage,
+        rawError: rawError?.substring(0, 500)
+      });
+      lastError = {
+        success: false,
+        output: "",
+        error: errorMessage
+      };
+      const canRetry = isTimeout || isRetryableError(errorMessage);
+      const hasAttemptsLeft = attempt < maxRetries;
+      if (canRetry && hasAttemptsLeft) {
+        const delayMs = retryDelayMs * Math.pow(2, attempt - 1);
+        console.error(
+          `AppleScript retry: Attempt ${attempt}/${maxRetries} failed with "${errorMessage}". Retrying in ${delayMs}ms...`
+        );
+        sleep(delayMs);
+      } else {
+        if (isTimeout) {
+          console.error(`AppleScript timeout: ${errorMessage}`);
+        } else {
+          console.error(`AppleScript error: ${errorMessage}`);
+        }
+        return lastError;
+      }
+    }
+  }
+  return lastError;
+}
+
+// src/utils/appleScriptText.ts
+function escapeForAppleScript(text) {
+  if (!text) return "";
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, "");
+}
+function escapeForAppleScriptBody(text) {
+  if (!text) return "";
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r\n|\r|\n/g, "\\n").replace(/\t/g, "\\t").replace(/[\x00-\x1f\x7f]/g, "");
+}
+function buildAppLevelScript(command) {
+  return `
+    tell application "Mail"
+      ${command}
+    end tell
+  `;
+}
+
+// src/services/draftSend.ts
+var DRAFT_TEXT_NORMALIZER = `
+on compactDraftText(valueText)
+  set priorDelimiters to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to {space, tab, return, linefeed, character id 160, character id 8239}
+  set textParts to text items of valueText
+  set AppleScript's text item delimiters to ""
+  set compactValue to textParts as text
+  set AppleScript's text item delimiters to priorDelimiters
+  return compactValue
+end compactDraftText
+`;
+function buildSavedDraftSendScript(input) {
+  if (!/^\d+$/.test(input.draftId) || !/^\d+$/.test(input.composeId))
+    throw new Error("Invalid draft identifiers");
+  const e = escapeForAppleScript;
+  return DRAFT_TEXT_NORMALIZER + buildAppLevelScript(`
+    set sourceAccount to account "${e(input.account)}"
+    set sourceMessage to first message of mailbox "Drafts" of sourceAccount whose id is ${input.draftId}
+    if subject of sourceMessage is not "${e(input.subject)}" then error "Stored draft subject mismatch"
+    if (address of every to recipient of sourceMessage) is not {"${e(input.recipient)}"} then error "Stored draft recipient mismatch"
+    if sender of sourceMessage is not "${e(input.sender)}" then error "Stored draft sender mismatch"
+    set candidateMessages to every outgoing message whose id is ${input.composeId}
+    if (count of candidateMessages) is not 1 then error "Original composer unavailable; no send performed"
+    set targetMessage to item 1 of candidateMessages
+    if subject of targetMessage is not "${e(input.subject)}" then error "Composer subject mismatch"
+    if sender of targetMessage is not "${e(input.sender)}" then error "Composer sender mismatch"
+    if (address of every to recipient of targetMessage) is not {"${e(input.recipient)}"} then error "Composer recipient mismatch"
+    if (count of cc recipients of targetMessage) is not 0 or (count of bcc recipients of targetMessage) is not 0 then error "Unexpected CC/BCC"
+    if (count of attachments of content of targetMessage) is not 0 then error "Unexpected attachment"
+    if message signature of targetMessage is missing value then error "Missing signature"
+    if name of message signature of targetMessage is not "${e(input.signature)}" then error "Signature mismatch"
+    set expectedBody to "${escapeForAppleScriptBody(input.body)}"
+    set composeBody to content of targetMessage as text
+    set storedBody to content of sourceMessage as text
+    considering case, diacriticals, punctuation
+    if my compactDraftText(composeBody) is not my compactDraftText(expectedBody) then error "Composer body differs from approved content"
+    set expectedFullText to expectedBody & return & (content of message signature of targetMessage as text)
+    if my compactDraftText(storedBody) is not my compactDraftText(expectedFullText) then error "Stored body differs from approved content"
+    end considering
+    ${input.dryRun ? 'return "validated"' : 'if send targetMessage then\n      return "submitted"\n    else\n      error "Mail did not confirm submission; inspect Sent before retrying"\n    end if'}
+  `);
+}
+function sendSavedDraft(input) {
+  const result = executeAppleScript(buildSavedDraftSendScript(input), {
+    timeoutMs: 6e4,
+    maxRetries: 1
+  });
+  if (!result.success)
+    throw new Error(result.error ?? "Unknown send outcome; inspect Sent before retrying");
+  const expected = input.dryRun ? "validated" : "submitted";
+  if (result.output !== expected)
+    throw new Error("Unknown send outcome; inspect Sent before retrying");
+  return { status: expected };
+}
+
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
@@ -81555,6 +81879,107 @@ var StdioServerTransport = class {
   }
 };
 
+// src/services/draftCompose.ts
+var RECEIPT_SEPARATOR = "";
+function buildDraftScript(input) {
+  const account = escapeForAppleScript(input.account ?? "");
+  const sender = escapeForAppleScript(input.sender ?? "");
+  const signature = escapeForAppleScript(input.signature ?? "");
+  const acquireMessage = `
+    if selectedSender is "" then
+      set newMessage to make new outgoing message with properties {subject:"${input.safeSubject}", visible:false}
+    else
+      set newMessage to make new outgoing message with properties {subject:"${input.safeSubject}", sender:selectedSender, visible:false}
+    end if
+  `;
+  return buildAppLevelScript(`
+    set requestedAccount to "${account}"
+    set requestedSender to "${sender}"
+    set requestedSignatureName to "${signature}"
+    set selectedSignature to missing value
+    if requestedSignatureName is not "" then
+      set matchingSignatures to every signature whose name is requestedSignatureName
+      if (count of matchingSignatures) is not 1 then error "Signature missing or ambiguous: " & requestedSignatureName
+      set selectedSignature to item 1 of matchingSignatures
+    end if
+
+    set selectedSender to ""
+    if requestedAccount is not "" or requestedSender is not "" then
+      set matchingAccounts to {}
+      repeat with candidate in accounts
+        if enabled of candidate then
+          set candidateAddresses to email addresses of candidate
+          set accountMatches to (requestedAccount is "" or name of candidate is requestedAccount or candidateAddresses contains requestedAccount)
+          set senderMatches to (requestedSender is "" or candidateAddresses contains requestedSender)
+          if accountMatches and senderMatches then set end of matchingAccounts to contents of candidate
+        end if
+      end repeat
+      if (count of matchingAccounts) is not 1 then error "Account/sender missing, disabled, mismatched or ambiguous"
+      set selectedAccount to item 1 of matchingAccounts
+      set selectedAddresses to email addresses of selectedAccount
+      if (count of selectedAddresses) is 0 then error "Selected account has no sender address"
+      if requestedSender is not "" then
+        set selectedSender to requestedSender
+      else if selectedAddresses contains requestedAccount then
+        set selectedSender to requestedAccount
+      else
+        set selectedSender to item 1 of selectedAddresses
+      end if
+    end if
+
+    set desiredBody to "${input.safeBody}"
+    ${acquireMessage}
+    tell newMessage
+      ${input.recipientCommands}
+      set message signature to missing value
+      set content to desiredBody
+      ${input.attachmentCommands}
+    end tell
+    if selectedSignature is not missing value then set message signature of newMessage to selectedSignature
+    save newMessage
+
+    set actualSender to sender of newMessage
+    if selectedSender is not "" then
+      if actualSender is not selectedSender and actualSender does not end with ("<" & selectedSender & ">") then error "Draft sender verification failed; inspect Drafts before retrying"
+    end if
+    set actualSignature to ""
+    if message signature of newMessage is not missing value then set actualSignature to name of message signature of newMessage
+    if actualSignature is not requestedSignatureName then error "Draft signature verification failed; inspect Drafts before retrying"
+    set savedBody to content of newMessage as text
+    repeat with bodyParagraph in paragraphs of desiredBody
+      if (bodyParagraph as text) is not "" and savedBody does not contain (bodyParagraph as text) then error "Draft body verification failed; inspect Drafts before retrying"
+    end repeat
+    set composeId to id of newMessage as text
+    close newMessage saving yes
+    return "saved" & ASCII character 31 & composeId & ASCII character 31 & actualSender & ASCII character 31 & actualSignature
+  `);
+}
+function createSavedDraft(input) {
+  const result = executeAppleScript(buildDraftScript(input), { timeoutMs: 6e4, maxRetries: 1 });
+  if (!result.success) {
+    return {
+      success: false,
+      error: `${result.error ?? "Draft creation failed"}. A draft may already exist; inspect Drafts before retrying.`
+    };
+  }
+  const [status, composeId, sender, signature = "", ...extra] = result.output.split(RECEIPT_SEPARATOR);
+  if (status !== "saved" || !/^\d+$/.test(composeId ?? "") || !sender || extra.length) {
+    return { success: false, error: "Invalid draft receipt; inspect Drafts before retrying." };
+  }
+  return { success: true, composeId, sender, signature };
+}
+function listMailSignatures() {
+  const result = executeAppleScript(
+    buildAppLevelScript(`
+    set signatureNames to name of every signature
+    set AppleScript's text item delimiters to ASCII character 31
+    return signatureNames as text
+  `)
+  );
+  if (!result.success) throw new Error(result.error ?? "Could not read Mail signatures");
+  return result.output ? result.output.split(RECEIPT_SEPARATOR) : [];
+}
+
 // src/services/appleMailManager.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import {
@@ -81575,259 +82000,6 @@ import {
 import { resolve as resolve2, sep as sep2, join as join5 } from "path";
 import { homedir as homedir4 } from "os";
 import { randomUUID } from "crypto";
-
-// src/utils/applescript.ts
-import { execSync, spawnSync } from "child_process";
-var DEFAULT_TIMEOUT_MS = 3e4;
-var DEFAULT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-function getMaxBuffer() {
-  const raw = process.env.APPLE_MAIL_MCP_MAX_BUFFER;
-  if (raw !== void 0) {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return DEFAULT_MAX_BUFFER_BYTES;
-}
-var DEFAULT_MAX_RETRIES = 1;
-var DEFAULT_RETRY_DELAY_MS = 1e3;
-var isDebugEnabled = () => {
-  const debug = process.env.DEBUG;
-  const verbose = process.env.VERBOSE;
-  return debug === "1" || debug === "true" || verbose === "1" || verbose === "true";
-};
-function debugLog(message, data) {
-  if (!isDebugEnabled()) return;
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  if (data !== void 0) {
-    console.error(`[DEBUG ${timestamp}] ${message}`, data);
-  } else {
-    console.error(`[DEBUG ${timestamp}] ${message}`);
-  }
-}
-function escapeForShell(script) {
-  return script.replace(/'/g, "'\\''");
-}
-var SCRIPT_TIMEOUT_HEADROOM_MS = 5e3;
-function wrapWithTimeout(script, processTimeoutMs) {
-  const seconds = Math.max(1, Math.ceil((processTimeoutMs - SCRIPT_TIMEOUT_HEADROOM_MS) / 1e3));
-  return `with timeout of ${seconds} seconds
-${script}
-end timeout`;
-}
-function isTimeoutError(error2) {
-  if (error2 instanceof Error) {
-    const execError = error2;
-    return execError.killed === true || execError.signal === "SIGTERM" || execError.signal === "SIGKILL";
-  }
-  return false;
-}
-var RETRYABLE_ERROR_PATTERNS = [
-  /timed? out/i,
-  /not responding/i,
-  /connection.*invalid/i,
-  /lost connection/i,
-  /busy/i
-];
-function isRetryableError(errorMessage) {
-  return RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage));
-}
-function sleep(ms) {
-  const seconds = ms / 1e3;
-  const result = spawnSync("sleep", [seconds.toString()], { stdio: "ignore" });
-  if (result.error) {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {
-    }
-  }
-}
-var PERMISSION_DENIED_PATTERN = /not author(?:i[sz])ed|not permitted|access.*denied|\(-1743\)/i;
-var PERMISSION_DENIED_MESSAGE = "Permission denied. Grant automation access in System Settings > Privacy & Security > Automation.";
-function isPermissionDenied(error2) {
-  if (!error2) return false;
-  return PERMISSION_DENIED_PATTERN.test(error2) || error2.includes(PERMISSION_DENIED_MESSAGE);
-}
-var ERROR_MAPPINGS = [
-  // Permission errors
-  {
-    pattern: PERMISSION_DENIED_PATTERN,
-    message: PERMISSION_DENIED_MESSAGE
-  },
-  // Application not running
-  {
-    pattern: /application isn't running|not running/i,
-    message: "Mail.app is not responding. Try opening Mail.app manually."
-  },
-  // Connection errors
-  {
-    pattern: /connection is invalid|lost connection/i,
-    message: "Lost connection to Mail.app. The app may have crashed or been restarted."
-  },
-  // Message not found
-  {
-    pattern: /can't get message/i,
-    message: "Message not found. The message may have been deleted or moved."
-  },
-  // Mailbox not found
-  {
-    pattern: /can't get mailbox "([^"]+)"/i,
-    message: 'Mailbox "$1" not found. Use list-mailboxes to see available mailboxes.'
-  },
-  // Account not found
-  {
-    pattern: /can't get account "([^"]+)"/i,
-    message: 'Account "$1" not found. Use list-accounts to see available accounts.'
-  },
-  // Send failed
-  {
-    pattern: /couldn't send|send failed|cannot send/i,
-    message: "Failed to send email. Check your network connection and Mail.app settings."
-  },
-  // Offline
-  {
-    pattern: /offline|no connection/i,
-    message: "Mail.app is offline. Check your network connection."
-  },
-  // Cannot delete (various reasons)
-  {
-    pattern: /can't delete|cannot delete/i,
-    message: "Cannot delete. The message may be locked or in use."
-  },
-  // Syntax/script errors (usually programming bugs)
-  {
-    pattern: /syntax error|expected/i,
-    message: "Internal error. Please report this issue."
-  }
-];
-function parseErrorMessage(errorOutput) {
-  let coreError = errorOutput;
-  const executionError = errorOutput.match(/execution error: (.+?)(?:\s*\(-?\d+\))?$/m);
-  if (executionError) {
-    coreError = executionError[1].trim();
-  }
-  if (PERMISSION_DENIED_PATTERN.test(errorOutput)) {
-    return PERMISSION_DENIED_MESSAGE;
-  }
-  for (const { pattern, message } of ERROR_MAPPINGS) {
-    const match = coreError.match(pattern);
-    if (match) {
-      let result = message;
-      for (let i = 1; i < match.length; i++) {
-        result = result.replace(`$${i}`, match[i] || "");
-      }
-      return result;
-    }
-  }
-  const notFoundError = coreError.match(/Can't get (.+?)\./);
-  if (notFoundError) {
-    return `Not found: ${notFoundError[1]}`;
-  }
-  if (/^Command failed:\s*osascript/.test(coreError.trim())) {
-    return "Mail.app scripting failed (osascript exited abnormally). Mail may be unresponsive or relaunching, or Automation permission was denied \u2014 check System Settings > Privacy & Security > Automation, and try again.";
-  }
-  return coreError.trim() || "Unknown AppleScript error";
-}
-function executeAppleScript(script, options = {}) {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
-  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-  if (!script || !script.trim()) {
-    return {
-      success: false,
-      output: "",
-      error: "Cannot execute empty AppleScript"
-    };
-  }
-  const preparedScript = escapeForShell(wrapWithTimeout(script.trim(), timeoutMs));
-  const command = `osascript -e '${preparedScript}'`;
-  debugLog("Executing AppleScript", {
-    scriptPreview: script.trim().substring(0, 200) + (script.length > 200 ? "..." : ""),
-    timeout: timeoutMs,
-    maxRetries
-  });
-  let lastError = null;
-  const startTime = Date.now();
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const attemptStart = Date.now();
-    try {
-      const output = execSync(command, {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        // SIGKILL (not the default SIGTERM): a wedged osascript blocked on an
-        // unresponsive Mail.app can ignore SIGTERM, leaking processes that pile
-        // up and worsen the contention. SIGKILL guarantees the process is reaped
-        // when the timeout fires. (#11)
-        killSignal: "SIGKILL",
-        // Raise the output cap well above Node's 1 MB default so large message
-        // sources / attachment payloads aren't truncated into an ENOBUFS
-        // failure. (#27)
-        maxBuffer: getMaxBuffer(),
-        // Capture stderr separately to get error details
-        stdio: ["pipe", "pipe", "pipe"]
-      });
-      const duration3 = Date.now() - attemptStart;
-      debugLog("AppleScript succeeded", {
-        attempt,
-        duration: `${duration3}ms`,
-        outputLength: output.length,
-        outputPreview: output.substring(0, 100) + (output.length > 100 ? "..." : "")
-      });
-      return {
-        success: true,
-        output: output.trim()
-      };
-    } catch (error2) {
-      const attemptDuration = Date.now() - attemptStart;
-      let errorMessage;
-      let isTimeout = false;
-      let rawError;
-      if (isTimeoutError(error2)) {
-        isTimeout = true;
-        const timeoutSecs = Math.round(timeoutMs / 1e3);
-        errorMessage = `Operation timed out after ${timeoutSecs} seconds. Mail.app may be unresponsive or the operation involves too many messages.`;
-      } else if (error2 instanceof Error) {
-        rawError = error2.message;
-        errorMessage = parseErrorMessage(error2.message);
-      } else if (typeof error2 === "string") {
-        rawError = error2;
-        errorMessage = parseErrorMessage(error2);
-      } else {
-        errorMessage = "AppleScript execution failed with unknown error";
-      }
-      debugLog("AppleScript failed", {
-        attempt,
-        duration: `${attemptDuration}ms`,
-        totalElapsed: `${Date.now() - startTime}ms`,
-        isTimeout,
-        errorMessage,
-        rawError: rawError?.substring(0, 500)
-      });
-      lastError = {
-        success: false,
-        output: "",
-        error: errorMessage
-      };
-      const canRetry = isTimeout || isRetryableError(errorMessage);
-      const hasAttemptsLeft = attempt < maxRetries;
-      if (canRetry && hasAttemptsLeft) {
-        const delayMs = retryDelayMs * Math.pow(2, attempt - 1);
-        console.error(
-          `AppleScript retry: Attempt ${attempt}/${maxRetries} failed with "${errorMessage}". Retrying in ${delayMs}ms...`
-        );
-        sleep(delayMs);
-      } else {
-        if (isTimeout) {
-          console.error(`AppleScript timeout: ${errorMessage}`);
-        } else {
-          console.error(`AppleScript error: ${errorMessage}`);
-        }
-        return lastError;
-      }
-    }
-  }
-  return lastError;
-}
-
-// src/services/appleMailManager.ts
 init_docsUrls();
 init_mimeParse();
 init_headers();
@@ -82184,14 +82356,6 @@ function chooseDefaultAccount(accounts, opts = {}) {
   if (firstEnabled) return firstEnabled.name;
   return accounts[0]?.name ?? null;
 }
-function escapeForAppleScript(text) {
-  if (!text) return "";
-  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, "");
-}
-function escapeForAppleScriptBody(text) {
-  if (!text) return "";
-  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r\n|\r|\n/g, "\\n").replace(/\t/g, "\\t").replace(/[\x00-\x1f\x7f]/g, "");
-}
 function buildAttachmentCommands(attachments) {
   if (!attachments || attachments.length === 0) return "";
   const readablePaths = attachments.map((filePath) => resolveAttachmentReadPath(filePath));
@@ -82409,13 +82573,6 @@ function crossCheckRenumbered(disappeared, appeared) {
     out.push({ messageId: mid, before: before.id, after: after.id });
   }
   return out;
-}
-function buildAppLevelScript(command) {
-  return `
-    tell application "Mail"
-      ${command}
-    end tell
-  `;
 }
 function mailboxPathFragment(mailboxVar, outputVar) {
   return `
@@ -84373,9 +84530,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param cc - CC recipients
    * @param bcc - BCC recipients
    * @param account - Account to create draft in
-   * @returns true if draft created successfully
+   * @returns Checked save receipt or an error; a failed attempt may have left a draft
    */
-  createDraft(to, subject, body, cc, bcc, account, attachments) {
+  createDraft(to, subject, body, cc, bcc, account, attachments, options = {}) {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
     let recipientCommands = "";
@@ -84403,42 +84560,25 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         safeSubject,
         safeBody,
         account,
-        attachmentCommands
+        attachmentCommands,
+        options
       );
     } finally {
       mat.cleanup();
     }
   }
-  createDraftWithCommands(recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
-    let draftCommand;
-    if (account) {
-      const safeAccount = escapeForAppleScript(account);
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          set sender to "${safeAccount}"
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    } else {
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    }
-    const script = buildAppLevelScript(draftCommand);
-    const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 2 });
-    if (!result.success) {
-      console.error(`Failed to create draft: ${result.error}`);
-      return false;
-    }
-    return result.output.includes("draft created");
+  createDraftWithCommands(recipientCommands, safeSubject, safeBody, account, attachmentCommands, options) {
+    return createSavedDraft({
+      recipientCommands,
+      safeSubject,
+      safeBody,
+      account,
+      attachmentCommands,
+      ...options
+    });
+  }
+  listSignatures() {
+    return listMailSignatures();
   }
   /**
    * Reply to a message.
@@ -86421,7 +86561,7 @@ ${actionStmts.join("\n")}
     const subject = overrides?.subject ?? template.subject;
     const body = overrides?.body ?? template.body;
     if (to.length === 0) return false;
-    return this.createDraft(to, subject, body, cc);
+    return this.createDraft(to, subject, body, cc).success;
   }
   // ===========================================================================
   // Diagnostics
@@ -88450,6 +88590,28 @@ var SENT_COPY_SCHEMA = external_exports.boolean().optional().describe(
 );
 var SENT_COPY_ERROR_SCHEMA = external_exports.string().optional().describe("Present only when sentCopy is false: why the Sent-folder copy failed.");
 registerTool(
+  "send-saved-draft",
+  {
+    description: "Use when: validating or submitting an existing MCP-created draft with its original composeId and a fresh stored Drafts id.\nReturns: validated for dryRun (the default), or submitted after Mail accepts sending.\nDo not use when: the original composer is unavailable, or the draft has CC/BCC or attachments. Never recreates messages.\nSafety: dryRun:false sends real email and requires explicit user authorization. Never retry uncertain sends; verify Sent first.",
+    outputSchema: { status: external_exports.enum(["validated", "submitted"]).optional() },
+    inputSchema: {
+      account: external_exports.string().min(1),
+      draftId: external_exports.string().regex(/^\d+$/),
+      composeId: external_exports.string().regex(/^\d+$/),
+      sender: external_exports.string().email(),
+      recipient: external_exports.string().email(),
+      subject: external_exports.string().min(1),
+      signature: external_exports.string().min(1),
+      body: external_exports.string().min(1),
+      dryRun: external_exports.boolean().default(true)
+    }
+  },
+  withErrorHandling((input) => {
+    const result = sendSavedDraft(input);
+    return successResponse(`Draft ${result.status}`, result);
+  }, "Error sending saved draft")
+);
+registerTool(
   "send-email",
   {
     description: "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent \u2014 require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
@@ -88577,36 +88739,66 @@ ${details}`,
   }, "Error sending serial emails")
 );
 registerTool(
+  "list-signatures",
+  {
+    description: "Use when: choosing a native signature for create-draft.\nReturns: existing signature names.\nDo not use when: modifying signatures or Mail preferences. Read-only.",
+    inputSchema: {},
+    outputSchema: { signatures: external_exports.array(external_exports.string()).optional() }
+  },
+  withErrorHandling(() => {
+    const signatures = mailManager.listSignatures();
+    return successResponse(signatures.join("\n") || "No signatures configured", { signatures });
+  }, "Error listing signatures")
+);
+registerTool(
   "create-draft",
   {
-    description: "Use when: composing an email the user should review in Mail.app before sending \u2014 the safe default for any new message (to/cc/bcc are arrays, optional attachments).\nReturns: a confirmation that the draft was created, with recipients and attachment count.\nDo not use when: the user has already confirmed they want it sent now (use send-email).\nSafety: low risk \u2014 creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
+    description: "Use when: composing and explicitly saving an unsent Apple Mail draft. Supports an account name or address, an exact sender address (including aliases), and a named existing signature from list-signatures. Invalid or ambiguous selections fail instead of silently falling back. \nReturns: the actual compose sender/signature after save; composeId is not a stored message locator. \nDo not use when: immediate sending is requested (use send-email).\nSafety: never sends mail. A failed or timed-out call may leave a draft: inspect Drafts before retrying.",
     inputSchema: {
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       subject: external_exports.string().min(1, "Subject is required"),
       body: external_exports.string().min(1, "Body is required"),
       cc: external_exports.array(external_exports.string()).optional().describe("CC recipients"),
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
-      account: external_exports.string().optional().describe("Account to create draft in"),
+      account: external_exports.string().min(1).optional().describe("Exact enabled Mail account name or one of its email addresses"),
+      sender: external_exports.string().email().optional().describe(
+        "Exact From email address. Must belong to an enabled Mail account and match account if supplied."
+      ),
+      signature: external_exports.string().min(1).optional().describe(
+        "Exact existing signature name from list-signatures. Omit for no signature; body should not repeat the signature."
+      ),
       attachments: ATTACHMENTS_SCHEMA
     },
     outputSchema: {
       ok: external_exports.boolean().optional(),
       recipients: external_exports.array(external_exports.string()).optional(),
-      attachmentCount: external_exports.number().optional()
+      attachmentCount: external_exports.number().optional(),
+      saved: external_exports.boolean().optional(),
+      composeId: external_exports.string().optional(),
+      sender: external_exports.string().optional(),
+      signature: external_exports.string().optional()
     }
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
-    const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
-    if (!success) {
-      return errorResponse("Failed to create draft. Check Mail.app configuration.");
-    }
-    const attachmentCount = attachments?.length ?? 0;
-    const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-    return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
-      ok: true,
-      recipients: to,
-      attachmentCount
+  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments, sender, signature }) => {
+    const result = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments, {
+      sender,
+      signature
     });
+    if (!result.success) {
+      return errorResponse(result.error);
+    }
+    return successResponse(
+      `Draft saved for ${to.join(", ")} from ${result.sender}; signature: ${result.signature || "none"}`,
+      {
+        ok: true,
+        recipients: to,
+        attachmentCount: attachments?.length ?? 0,
+        saved: true,
+        composeId: result.composeId,
+        sender: result.sender,
+        signature: result.signature
+      }
+    );
   }, "Error creating draft")
 );
 function resolveSmtpOrFallback() {

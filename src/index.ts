@@ -21,6 +21,7 @@
  */
 
 import { createRequire } from "module";
+import { sendSavedDraft } from "@/services/draftSend.js";
 import {
   McpServer,
   type RegisteredTool,
@@ -1113,6 +1114,30 @@ const SENT_COPY_ERROR_SCHEMA = z
   .optional()
   .describe("Present only when sentCopy is false: why the Sent-folder copy failed.");
 
+registerTool(
+  "send-saved-draft",
+  {
+    description:
+      "Use when: validating or submitting an existing MCP-created draft with its original composeId and a fresh stored Drafts id.\nReturns: validated for dryRun (the default), or submitted after Mail accepts sending.\nDo not use when: the original composer is unavailable, or the draft has CC/BCC or attachments. Never recreates messages.\nSafety: dryRun:false sends real email and requires explicit user authorization. Never retry uncertain sends; verify Sent first.",
+    outputSchema: { status: z.enum(["validated", "submitted"]).optional() },
+    inputSchema: {
+      account: z.string().min(1),
+      draftId: z.string().regex(/^\d+$/),
+      composeId: z.string().regex(/^\d+$/),
+      sender: z.string().email(),
+      recipient: z.string().email(),
+      subject: z.string().min(1),
+      signature: z.string().min(1),
+      body: z.string().min(1),
+      dryRun: z.boolean().default(true),
+    },
+  },
+  withErrorHandling((input) => {
+    const result = sendSavedDraft(input);
+    return successResponse(`Draft ${result.status}`, result);
+  }, "Error sending saved draft")
+);
+
 // --- send-email ---
 
 registerTool(
@@ -1309,39 +1334,81 @@ registerTool(
 // --- create-draft ---
 
 registerTool(
+  "list-signatures",
+  {
+    description:
+      "Use when: choosing a native signature for create-draft.\nReturns: existing signature names.\nDo not use when: modifying signatures or Mail preferences. Read-only.",
+    inputSchema: {},
+    outputSchema: { signatures: z.array(z.string()).optional() },
+  },
+  withErrorHandling(() => {
+    const signatures = mailManager.listSignatures();
+    return successResponse(signatures.join("\n") || "No signatures configured", { signatures });
+  }, "Error listing signatures")
+);
+
+registerTool(
   "create-draft",
   {
     description:
-      "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message (to/cc/bcc are arrays, optional attachments).\nReturns: a confirmation that the draft was created, with recipients and attachment count.\nDo not use when: the user has already confirmed they want it sent now (use send-email).\nSafety: low risk — creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
+      "Use when: composing and explicitly saving an unsent Apple Mail draft. Supports an account name or address, an exact sender address (including aliases), and a named existing signature from list-signatures. Invalid or ambiguous selections fail instead of silently falling back. \nReturns: the actual compose sender/signature after save; composeId is not a stored message locator. \nDo not use when: immediate sending is requested (use send-email).\nSafety: never sends mail. A failed or timed-out call may leave a draft: inspect Drafts before retrying.",
     inputSchema: {
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       subject: z.string().min(1, "Subject is required"),
       body: z.string().min(1, "Body is required"),
       cc: z.array(z.string()).optional().describe("CC recipients"),
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
-      account: z.string().optional().describe("Account to create draft in"),
+      account: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Exact enabled Mail account name or one of its email addresses"),
+      sender: z
+        .string()
+        .email()
+        .optional()
+        .describe(
+          "Exact From email address. Must belong to an enabled Mail account and match account if supplied."
+        ),
+      signature: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "Exact existing signature name from list-signatures. Omit for no signature; body should not repeat the signature."
+        ),
       attachments: ATTACHMENTS_SCHEMA,
     },
     outputSchema: {
       ok: z.boolean().optional(),
       recipients: z.array(z.string()).optional(),
       attachmentCount: z.number().optional(),
+      saved: z.boolean().optional(),
+      composeId: z.string().optional(),
+      sender: z.string().optional(),
+      signature: z.string().optional(),
     },
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
-    const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
-
-    if (!success) {
-      return errorResponse("Failed to create draft. Check Mail.app configuration.");
-    }
-
-    const attachmentCount = attachments?.length ?? 0;
-    const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-    return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
-      ok: true,
-      recipients: to,
-      attachmentCount,
+  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments, sender, signature }) => {
+    const result = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments, {
+      sender,
+      signature,
     });
+    if (!result.success) {
+      return errorResponse(result.error);
+    }
+    return successResponse(
+      `Draft saved for ${to.join(", ")} from ${result.sender}; signature: ${result.signature || "none"}`,
+      {
+        ok: true,
+        recipients: to,
+        attachmentCount: attachments?.length ?? 0,
+        saved: true,
+        composeId: result.composeId,
+        sender: result.sender,
+        signature: result.signature,
+      }
+    );
   }, "Error creating draft")
 );
 

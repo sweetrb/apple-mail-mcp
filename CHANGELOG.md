@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [2.19.8] - 2026-09-18
+
+### Added
+- Explicit `sender` and native `signature` selection for `create-draft`, with `list-signatures` for discovery. Account names resolve to actual enabled sender addresses; mismatched or ambiguous selections fail before composition.
+- `send-saved-draft` validates and submits a previously MCP-created draft while its original composer still exists in the same Mail session. Preview is the default; sending requires `dryRun: false`. The initial implementation deliberately supports single-recipient drafts without CC/BCC or attachments.
+
+### Fixed
+- Draft creation explicitly saves and checks the sender, signature, and body before returning a structured receipt. Compose mutations are not automatically retried, avoiding duplicate drafts after uncertain outcomes.
+
 ## [2.19.7] - 2026-09-15
 
 ### Added

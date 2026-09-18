@@ -34,7 +34,8 @@ Use this skill when the user:
 | `get-thread` | Get the full conversation thread for a message |
 | `send-email` | Send a new email immediately |
 | `send-serial-email` | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders) |
-| `create-draft` | Save an email to Drafts for review |
+| `create-draft` | Save a draft with an explicit sender and optional named signature |
+| `list-signatures` | List existing signature names (read-only) |
 | `reply-to-message` | Reply to a message (supports reply-all) |
 | `forward-message` | Forward a message to new recipients |
 | `mark-as-read` | Mark a message as read |
@@ -271,3 +272,16 @@ failed Mail.app body reads are rejected before sending, so the original content
 cannot silently disappear. Explicit AppleScript forwarding remains available;
 do not retry through it automatically. Original attachments are not reattached
 by the plain-text SMTP forward path.
+
+### Explicit draft sender and signature
+
+For `create-draft`, pass `account` as the exact account name or address, `sender` as the desired From email (including aliases), and `signature` as an exact name from `list-signatures`. Omit `signature` for no signature. Do not duplicate the signature in `body`. Unknown, disabled, ambiguous, or mismatched account selections fail.
+
+The response confirms explicit save and checked compose values. `composeId` is not a stored message ID. Resolve the saved draft through `list-messages` before reading it. An error may leave a draft; do not retry blindly. No message is sent and no global Mail preference is changed.
+
+
+### Send an existing MCP-created draft
+
+`send-saved-draft` validates a persisted Drafts message against its original `composeId` from `create-draft`. Pass `account`, fresh `draftId`, `composeId`, exact `sender`, single `recipient`, `subject`, `signature`, and the approved `body` without the signature. `dryRun` defaults to `true`; only explicit `dryRun: false` submits a real email, after user authorization. The native signature and formatting are retained.
+
+The original outgoing object must still exist in the current Mail session. Missing objects, identity/content mismatches, CC/BCC, or attachments fail closed. This does not reopen arbitrary drafts or recreate a message. Sending is never automatically retried. A submission receipt is not delivery confirmation: verify Sent and check Drafts afterward, and never retry an uncertain result without inspecting those folders.
