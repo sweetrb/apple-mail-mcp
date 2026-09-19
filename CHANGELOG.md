@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [2.19.8] - 2026-09-19
+
+### Fixed
+- **`send-email` (AppleScript transport) and `create-draft` no longer retry a
+  timed-out compose.** Both ran `executeAppleScript` with `maxRetries: 2`, and
+  that helper retries on a timeout and on Mail's "timed out" / "busy" error
+  strings — so a `send newMessage` that Mail had already accepted before the
+  Apple Event timed out was composed and submitted a second time, and a slow
+  draft save could leave a duplicate in Drafts. Both paths now make exactly one
+  attempt and report the failure; the caller inspects Sent/Outbox or Drafts
+  before repeating, the same contract `reply-to-message` and `forward-message`
+  already had. `send-serial-email` goes through the same send path and inherits
+  the fix. Surfaced while reviewing #241, whose new draft tools deliberately
+  use a single attempt.
+
 ## [2.19.7] - 2026-09-15
 
 ### Added

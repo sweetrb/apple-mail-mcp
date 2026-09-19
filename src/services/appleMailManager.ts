@@ -3464,7 +3464,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
 
     const script = buildAppLevelScript(sendCommand);
-    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 2 });
+    // Exactly one attempt. `executeAppleScript` retries on a timeout, and a
+    // `send` that timed out may already have been accepted by Mail — a retry
+    // would compose and submit a second copy. A send is not idempotent, so the
+    // caller gets the failure and inspects Sent/Outbox instead.
+    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 1 });
 
     if (!result.success) {
       console.error(`Failed to send email: ${result.error}`);
@@ -3627,7 +3631,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
 
     const script = buildAppLevelScript(draftCommand);
-    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 2 });
+    // Exactly one attempt, for the same reason as sendEmailWithPaths: a
+    // compose that timed out may already have produced the draft, and a retry
+    // would leave a duplicate in Drafts.
+    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 1 });
 
     if (!result.success) {
       console.error(`Failed to create draft: ${result.error}`);

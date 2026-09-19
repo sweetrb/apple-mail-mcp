@@ -84304,7 +84304,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       `;
     }
     const script = buildAppLevelScript(sendCommand);
-    const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 2 });
+    const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 1 });
     if (!result.success) {
       console.error(`Failed to send email: ${result.error}`);
       return false;
@@ -84433,7 +84433,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       `;
     }
     const script = buildAppLevelScript(draftCommand);
-    const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 2 });
+    const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 1 });
     if (!result.success) {
       console.error(`Failed to create draft: ${result.error}`);
       return false;
