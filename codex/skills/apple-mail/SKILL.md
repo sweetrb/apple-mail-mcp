@@ -31,6 +31,7 @@ Use this skill when the user:
 | `search-messages` | Find messages by sender or subject (`query`), or by body text (`body`, IMAP backend) |
 | `get-message` | Read the full content of a message |
 | `get-message-headers` | Read a message's raw RFC 5322 headers (author's `Date:`, Message-ID, threading ids, `Received:` trace) without the body |
+| `get-message-rfc822` | Acquire the complete original RFC 822 bytes over IMAP — untouched, with `uid`/`uidValidity`/`internalDate`/`flags`/`RFC822.SIZE` and a SHA-256 — for an archival or forensic `.eml` (imap: ids only; read-only: `EXAMINE` + `BODY.PEEK[]`; inline up to 6 MiB, `savePath` up to 25 MiB) |
 | `get-thread` | Get the full conversation thread for a message |
 | `send-email` | Send a new email immediately |
 | `send-serial-email` | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders) |

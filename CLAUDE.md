@@ -25,7 +25,7 @@ Keychain gotchas). Verify with the `doctor` tool.
 The MCP protocol uses JSON for parameters. In JSON, `\` is an escape character. To include a literal backslash:
 
 | You want            | Send in JSON parameter |
-|---------------------|------------------------|
+| ------------------- | ---------------------- |
 | `\`                 | `\\`                   |
 | `\\`                | `\\\\`                 |
 | `Mobile\ Documents` | `Mobile\\ Documents`   |
@@ -69,7 +69,7 @@ body: "Run: cp ~/Library/Mobile\ Documents/report.pdf ~/Desktop/"
 All message operations require an `id` parameter. **Always get IDs first** using `list-messages` or `search-messages`:
 
 **A bare numeric ID is only meaningful together with the mailbox it came from.** Mail.app numbers
-messages per mailbox, and a label store (Gmail, iCloud) reports the *same* message under the *same*
+messages per mailbox, and a label store (Gmail, iCloud) reports the _same_ message under the _same_
 id in several mailboxes at once — `INBOX`, `Important` and `All Mail` will all answer to id `75815`.
 Moving or deleting the `All Mail` copy is a different operation from moving or deleting the `INBOX`
 copy, so the server binds each id to the mailbox you listed it from and operates only there.
@@ -168,6 +168,7 @@ does not reattach original attachments.
   - explicit non-IMAP `account` → AppleScript;
   - **no `account` → merge across all accounts**: the query fans out over every configured IMAP account, and AppleScript runs **only for the accounts no IMAP config covers** (the account list is partitioned — IMAP-served accounts aren't re-scanned; if all accounts are IMAP, AppleScript is skipped entirely). Message lists de-dup messages seen in both backends (preferring the IMAP copy and its `imap:` id) and sort newest-first; count tools count each account via exactly one backend so a coverage mismatch can never double-count.
   - With IMAP unconfigured, reads behave exactly as before (pure AppleScript). The mailbox-write ops (`create`/`delete`/`rename-mailbox`) still route to IMAP only for an explicitly-named IMAP account.
+  - **`get-message-rfc822` is IMAP-only (2.19.10, #244).** It returns the stored bytes untouched with `uid`/`uidValidity`/`internalDate`/`flags`/`RFC822.SIZE` and a SHA-256, opened with `EXAMINE` and fetched with `BODY.PEEK[]`. A numeric id is refused: Mail's AppleScript bridge hands out its own rendering, not the original message, so there is nothing forensic to serve from it. Inline results are capped at 6 MiB of raw bytes (the base64 rides only in `structuredContent`, never in the text block) — point large messages at `savePath` (25 MiB) instead.
 
 ### Connection footprint (playing nice with Gmail)
 
@@ -180,14 +181,14 @@ IMAP connections are capped: **Gmail allows at most 15 simultaneous IMAP connect
 
 ## Error Handling
 
-| Error                    | Likely Cause                                  |
-|--------------------------|-----------------------------------------------|
-| "Mail.app not responding" | Mail.app frozen or not running               |
-| "Message not found"      | Message ID is invalid or message was deleted/moved |
-| "Permission denied"      | macOS automation permission needed            |
-| "Account not found"      | Account name doesn't match exactly (case-sensitive) |
-| "Failed to send email"   | Network issue or Mail.app configuration problem |
-| Silent failure           | Backslash not escaped in content              |
+| Error                     | Likely Cause                                        |
+| ------------------------- | --------------------------------------------------- |
+| "Mail.app not responding" | Mail.app frozen or not running                      |
+| "Message not found"       | Message ID is invalid or message was deleted/moved  |
+| "Permission denied"       | macOS automation permission needed                  |
+| "Account not found"       | Account name doesn't match exactly (case-sensitive) |
+| "Failed to send email"    | Network issue or Mail.app configuration problem     |
+| Silent failure            | Backslash not escaped in content                    |
 
 ## Security Considerations
 
@@ -392,14 +393,14 @@ Replaced `with opening window` with `without opening window` for both `reply` an
 
 ### Approaches That Were Tested and Failed
 
-| Approach | Result |
-|----------|--------|
-| `delay 1` / `delay 2` before `set content` | Body still empty from background process (works interactively) |
-| `reply msg without opening window` (old attempt) | Previously dismissed, but actually works — `set content` is reliable without the window |
-| `set html content` on reply object | AppleScript error — not a valid property |
-| System Events UI scripting (keystroke) | Blocked: "osascript is not allowed to send keystrokes" from background process |
-| `make new outgoing message` with same subject | Body arrives, but no `In-Reply-To`/`References` headers (can't set `reply id` on outgoing messages) |
-| Manual headers on `outgoing message` | Not possible — Mail.app's `outgoing message` class doesn't expose a `headers` property |
+| Approach                                         | Result                                                                                              |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `delay 1` / `delay 2` before `set content`       | Body still empty from background process (works interactively)                                      |
+| `reply msg without opening window` (old attempt) | Previously dismissed, but actually works — `set content` is reliable without the window             |
+| `set html content` on reply object               | AppleScript error — not a valid property                                                            |
+| System Events UI scripting (keystroke)           | Blocked: "osascript is not allowed to send keystrokes" from background process                      |
+| `make new outgoing message` with same subject    | Body arrives, but no `In-Reply-To`/`References` headers (can't set `reply id` on outgoing messages) |
+| Manual headers on `outgoing message`             | Not possible — Mail.app's `outgoing message` class doesn't expose a `headers` property              |
 
 ### References
 

@@ -26,6 +26,7 @@
  *
  * @module services/imapClient
  */
+import { createHash } from "node:crypto";
 import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
@@ -120,6 +121,9 @@ interface ImapMessage {
   headers?: Buffer | string;
   /** Server arrival time (IMAP INTERNALDATE) — NOT the author's `Date:` header. */
   internalDate?: Date | string;
+  /** `RFC822.SIZE` — the server's own byte count for the stored message,
+   *  present when the fetch asked for `size: true`. */
+  size?: number;
 }
 interface ImapDownload {
   meta?: { filename?: string; contentType?: string };
@@ -150,7 +154,12 @@ export interface ImapMoveResult {
 }
 export interface ImapClientLike {
   connect(): Promise<void>;
-  getMailboxLock(path: string): Promise<MailboxLock>;
+  /** `readOnly: true` opens the mailbox with EXAMINE instead of SELECT. Test
+   *  mocks may ignore the options argument. */
+  getMailboxLock(path: string, options?: { readOnly?: boolean }): Promise<MailboxLock>;
+  /** The currently open mailbox, as imapflow exposes it after a lock is taken.
+   *  Only `uidValidity` is read here; optional so mocks needn't provide it. */
+  mailbox?: { path?: string; uidValidity?: bigint; readOnly?: boolean } | false;
   search(query: Record<string, unknown>, opts: { uid: true }): Promise<number[] | false>;
   fetch(
     range: string,
@@ -1678,6 +1687,147 @@ export async function imapGetMessageSource(
 }
 
 /** Read a message by composite IMAP id; returns "Subject: …\n\n<body>". */
+/**
+ * Inline ceiling for get-message-rfc822 (#244): 6 MiB of raw bytes is 8 MiB of
+ * base64, which keeps the whole JSON-RPC result under the MCP stdio client's
+ * 10 MB hard cap (it drops the connection above that with no error text) with
+ * room for the metadata around it.
+ */
+export const MAX_RFC822_INLINE_BYTES = 6 * 1024 * 1024;
+/**
+ * Ceiling when the bytes go to a file (`savePath`) instead of the result. Same
+ * bound as the reply/forward source fetch: the fetch buffers in memory either
+ * way, and this is the size the rest of the server already tolerates.
+ */
+export const MAX_RFC822_FILE_BYTES = MAX_COMPOSE_SOURCE_BYTES;
+
+export interface ImapRfc822Acquisition {
+  account: string;
+  mailbox: string;
+  uid: number;
+  /** Mailbox `UIDVALIDITY` as a decimal string. With `uid` it is the durable
+   *  identity of the source message; a UID alone is meaningful only for one
+   *  UIDVALIDITY. Absent when the server did not report one. */
+  uidValidity?: string;
+  /** ISO 8601 `INTERNALDATE` — arrival, not the `Date:` header. */
+  internalDate?: string;
+  flags: string[];
+  /** `RFC822.SIZE` as the server reported it, when it did. */
+  size?: number;
+  /** The stored bytes, exactly as received — no decoding, no re-serialization. */
+  bytes: Buffer;
+  /** Hex SHA-256 over exactly `bytes`. */
+  sha256: string;
+  /** Bare `Message-ID` from ENVELOPE, for convenience; the authoritative copy is in `bytes`. */
+  messageId?: string;
+  /** The IMAP commands used, for the acquisition record. */
+  readMethod: string;
+  warnings: string[];
+}
+
+export type ImapRfc822Result =
+  { success: true; acquisition: ImapRfc822Acquisition } | { success: false; error: string };
+
+/**
+ * Acquire a message's stored RFC 822 bytes exactly as the server holds them
+ * (#244). Read-only by construction: the mailbox is opened with EXAMINE
+ * (`readOnly: true`) and the body is fetched with `BODY.PEEK[]`, so `\Seen`
+ * is not set and no STORE, COPY, MOVE, APPEND or EXPUNGE is issued. Nothing is
+ * decoded, charset-converted or re-serialized — `bytes` is the wire payload,
+ * and `sha256` is computed over exactly those bytes.
+ *
+ * `maxBytes` is a refusal ceiling, never a truncation point: one extra byte is
+ * requested so an exact-limit message is distinguishable from a truncated one
+ * (the same trick as imapGetMessageSource), and anything larger is refused
+ * with the server's `RFC822.SIZE` so the caller can choose `savePath`.
+ */
+export async function imapGetMessageRfc822(
+  id: string,
+  opts: { maxBytes?: number } = {},
+  deps: ImapDeps = {}
+): Promise<ImapRfc822Result> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  const requested = Math.floor(opts.maxBytes ?? MAX_RFC822_INLINE_BYTES);
+  const limit = Math.min(Math.max(1, requested), MAX_RFC822_FILE_BYTES);
+  return withClient(depsForMessageRef(ref, deps), async (client) => {
+    const lock = await client.getMailboxLock(ref.path, { readOnly: true });
+    try {
+      const mb = client.mailbox;
+      const uidValidity =
+        mb && mb.uidValidity !== undefined && mb.uidValidity !== null
+          ? String(mb.uidValidity)
+          : undefined;
+      const msg = await client.fetchOne(
+        String(ref.uid),
+        {
+          uid: true,
+          flags: true,
+          internalDate: true,
+          size: true,
+          envelope: true,
+          source: { start: 0, maxLength: limit + 1 },
+        },
+        { uid: true }
+      );
+      if (!msg) {
+        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+      }
+      if (!msg.source || !msg.source.length) {
+        return { success: false, error: "IMAP returned no message source." };
+      }
+      const bytes = asBuffer(msg.source);
+      const size = typeof msg.size === "number" ? msg.size : undefined;
+      if (bytes.length > limit) {
+        return {
+          success: false,
+          error:
+            `Message UID ${ref.uid} in "${ref.path}" is larger than ${limit} bytes` +
+            (size !== undefined ? ` (RFC822.SIZE ${size})` : "") +
+            `; nothing was acquired (the ceiling refuses, it never truncates). ` +
+            `Raise maxBytes — inline ceiling ${MAX_RFC822_INLINE_BYTES} — or pass savePath ` +
+            `to write up to ${MAX_RFC822_FILE_BYTES} bytes to disk.`,
+        };
+      }
+      const warnings: string[] = [];
+      if (size !== undefined && size !== bytes.length) {
+        warnings.push(
+          `RFC822.SIZE is ${size} but ${bytes.length} bytes were acquired: the server's size ` +
+            `accounting and its stored bytes disagree. sha256 covers what was received.`
+        );
+      }
+      if (uidValidity === undefined) {
+        warnings.push(
+          "The server did not report UIDVALIDITY for this mailbox; uid alone is not a durable identity."
+        );
+      }
+      return {
+        success: true,
+        acquisition: {
+          account: ref.account,
+          mailbox: ref.path,
+          uid: ref.uid,
+          uidValidity,
+          internalDate: isoOrUndefined(msg.internalDate),
+          flags: msg.flags ? Array.from(msg.flags) : [],
+          size,
+          bytes,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          messageId: msg.envelope?.messageId
+            ? normalizeMessageId(msg.envelope.messageId)
+            : undefined,
+          readMethod:
+            `EXAMINE "${ref.path}"; UID FETCH ${ref.uid} ` +
+            `(UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY.PEEK[]<0.${limit + 1}>)`,
+          warnings,
+        },
+      };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
 export async function imapGetMessage(
   id: string,
   preferHtml: boolean,

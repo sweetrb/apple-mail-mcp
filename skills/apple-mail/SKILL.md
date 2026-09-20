@@ -25,54 +25,55 @@ Use this skill when the user:
 
 ### Message Operations
 
-| Tool | Purpose |
-|------|---------|
-| `list-messages` | List messages in a mailbox (all mailboxes if omitted) |
-| `search-messages` | Find messages by sender or subject (`query`), or by body text (`body`, IMAP backend) |
-| `get-message` | Read the full content of a message |
-| `get-message-headers` | Read a message's raw RFC 5322 headers (author's `Date:`, Message-ID, threading ids, `Received:` trace) without the body |
-| `get-thread` | Get the full conversation thread for a message |
-| `send-email` | Send a new email immediately |
-| `send-serial-email` | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders) |
-| `create-draft` | Save an email to Drafts for review |
-| `reply-to-message` | Reply to a message (supports reply-all) |
-| `forward-message` | Forward a message to new recipients |
-| `mark-as-read` | Mark a message as read |
-| `mark-as-unread` | Mark a message as unread |
-| `flag-message` | Flag a message for follow-up (optional color) |
-| `unflag-message` | Remove flag from a message |
-| `delete-message` | Move a message to Trash |
-| `move-message` | Move a message to a different mailbox |
-| `resolve-message-id` | Convert `imap:` ids to numeric Mail.app ids for the AppleScript reply/forward path. Direct SMTP replies and forwards accept `imap:` ids without conversion. **Not** needed for flag colors: since 2.10.0 `flag-message`/`batch-flag-messages` write the color over IMAP directly |
-| `list-attachments` | List a message's attachments (name, MIME type, size) |
-| `save-attachment` | Save an attachment to disk |
-| `fetch-attachment` | Fetch an attachment's bytes inline as base64 |
+| Tool                  | Purpose                                                                                                                                                                                                                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-messages`       | List messages in a mailbox (all mailboxes if omitted)                                                                                                                                                                                                                                   |
+| `search-messages`     | Find messages by sender or subject (`query`), or by body text (`body`, IMAP backend)                                                                                                                                                                                                    |
+| `get-message`         | Read the full content of a message                                                                                                                                                                                                                                                      |
+| `get-message-headers` | Read a message's raw RFC 5322 headers (author's `Date:`, Message-ID, threading ids, `Received:` trace) without the body                                                                                                                                                                 |
+| `get-message-rfc822`  | Acquire the complete original RFC 822 bytes over IMAP — untouched, with `uid`/`uidValidity`/`internalDate`/`flags`/`RFC822.SIZE` and a SHA-256 — for an archival or forensic `.eml` (imap: ids only; read-only: `EXAMINE` + `BODY.PEEK[]`; inline up to 6 MiB, `savePath` up to 25 MiB) |
+| `get-thread`          | Get the full conversation thread for a message                                                                                                                                                                                                                                          |
+| `send-email`          | Send a new email immediately                                                                                                                                                                                                                                                            |
+| `send-serial-email`   | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders)                                                                                                                                                                                                    |
+| `create-draft`        | Save an email to Drafts for review                                                                                                                                                                                                                                                      |
+| `reply-to-message`    | Reply to a message (supports reply-all)                                                                                                                                                                                                                                                 |
+| `forward-message`     | Forward a message to new recipients                                                                                                                                                                                                                                                     |
+| `mark-as-read`        | Mark a message as read                                                                                                                                                                                                                                                                  |
+| `mark-as-unread`      | Mark a message as unread                                                                                                                                                                                                                                                                |
+| `flag-message`        | Flag a message for follow-up (optional color)                                                                                                                                                                                                                                           |
+| `unflag-message`      | Remove flag from a message                                                                                                                                                                                                                                                              |
+| `delete-message`      | Move a message to Trash                                                                                                                                                                                                                                                                 |
+| `move-message`        | Move a message to a different mailbox                                                                                                                                                                                                                                                   |
+| `resolve-message-id`  | Convert `imap:` ids to numeric Mail.app ids for the AppleScript reply/forward path. Direct SMTP replies and forwards accept `imap:` ids without conversion. **Not** needed for flag colors: since 2.10.0 `flag-message`/`batch-flag-messages` write the color over IMAP directly        |
+| `list-attachments`    | List a message's attachments (name, MIME type, size)                                                                                                                                                                                                                                    |
+| `save-attachment`     | Save an attachment to disk                                                                                                                                                                                                                                                              |
+| `fetch-attachment`    | Fetch an attachment's bytes inline as base64                                                                                                                                                                                                                                            |
 
 ### Batch Operations (1-100 ids per call)
 
-| Tool | Purpose |
-|------|---------|
-| `batch-delete-messages` | Move multiple messages to Trash |
-| `batch-move-messages` | Move multiple messages to a mailbox |
-| `batch-mark-as-read` | Mark multiple messages as read |
-| `batch-mark-as-unread` | Mark multiple messages as unread |
-| `batch-flag-messages` | Flag multiple messages (optional color) |
-| `batch-unflag-messages` | Remove flags from multiple messages |
+| Tool                    | Purpose                                 |
+| ----------------------- | --------------------------------------- |
+| `batch-delete-messages` | Move multiple messages to Trash         |
+| `batch-move-messages`   | Move multiple messages to a mailbox     |
+| `batch-mark-as-read`    | Mark multiple messages as read          |
+| `batch-mark-as-unread`  | Mark multiple messages as unread        |
+| `batch-flag-messages`   | Flag multiple messages (optional color) |
+| `batch-unflag-messages` | Remove flags from multiple messages     |
 
 ### Mailbox Operations
 
-| Tool | Purpose |
-|------|---------|
-| `list-mailboxes` | List all mailboxes/folders in an account |
-| `get-unread-count` | Get count of unread messages |
-| `create-mailbox` | Create a new mailbox/folder |
-| `delete-mailbox` | Delete a mailbox |
-| `rename-mailbox` | Rename a mailbox |
+| Tool               | Purpose                                  |
+| ------------------ | ---------------------------------------- |
+| `list-mailboxes`   | List all mailboxes/folders in an account |
+| `get-unread-count` | Get count of unread messages             |
+| `create-mailbox`   | Create a new mailbox/folder              |
+| `delete-mailbox`   | Delete a mailbox                         |
+| `rename-mailbox`   | Rename a mailbox                         |
 
 ### Account Operations
 
-| Tool | Purpose |
-|------|---------|
+| Tool            | Purpose                        |
+| --------------- | ------------------------------ |
 | `list-accounts` | List configured email accounts |
 
 ### Smart Mailbox Operations
@@ -82,11 +83,11 @@ when the user wants a saved filter/search rather than moving mail. They work on
 localized macOS because they edit `SyncedSmartMailboxes.plist` directly (backed up
 and atomic; existing smart mailboxes are never rewritten).
 
-| Tool | Purpose |
-|------|---------|
-| `list-smart-mailboxes` | List smart mailboxes and their criteria |
-| `create-smart-mailbox` | Create one (needs at least one of fromContains / subjectContains / bodyContains) |
-| `delete-smart-mailbox` | Delete one by name |
+| Tool                                | Purpose                                                                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `list-smart-mailboxes`              | List smart mailboxes and their criteria                                                                                            |
+| `create-smart-mailbox`              | Create one (needs at least one of fromContains / subjectContains / bodyContains)                                                   |
+| `delete-smart-mailbox`              | Delete one by name                                                                                                                 |
 | `create-newsletter-smart-mailboxes` | Propose "NL: <sender>" views for newsletter senders — **defaults to `dryRun: true`**; pass `dryRun: false` to actually create them |
 
 Requires Full Disk Access for the Node runtime (`~/Library/Mail` is TCC-protected);
@@ -96,38 +97,38 @@ for reliable results. These tools never quit or restart Mail themselves.
 
 ### Rules
 
-| Tool | Purpose |
-|------|---------|
-| `list-rules` | List Mail rules and their enabled state |
-| `create-rule` | Create a Mail rule (conditions + actions) |
-| `enable-rule` | Enable a rule by name |
-| `disable-rule` | Disable a rule by name |
-| `delete-rule` | Delete a rule by name |
+| Tool           | Purpose                                   |
+| -------------- | ----------------------------------------- |
+| `list-rules`   | List Mail rules and their enabled state   |
+| `create-rule`  | Create a Mail rule (conditions + actions) |
+| `enable-rule`  | Enable a rule by name                     |
+| `disable-rule` | Disable a rule by name                    |
+| `delete-rule`  | Delete a rule by name                     |
 
 ### Contacts
 
-| Tool | Purpose |
-|------|---------|
+| Tool              | Purpose                                                        |
+| ----------------- | -------------------------------------------------------------- |
 | `search-contacts` | Look up people in macOS Contacts to find their email addresses |
 
 ### Templates
 
-| Tool | Purpose |
-|------|---------|
-| `save-template` | Create or update a reusable email template |
-| `list-templates` | List saved templates |
-| `get-template` | Read a template's full contents |
-| `use-template` | Compose a draft from a template (with overrides) |
-| `delete-template` | Delete a template |
+| Tool              | Purpose                                          |
+| ----------------- | ------------------------------------------------ |
+| `save-template`   | Create or update a reusable email template       |
+| `list-templates`  | List saved templates                             |
+| `get-template`    | Read a template's full contents                  |
+| `use-template`    | Compose a draft from a template (with overrides) |
+| `delete-template` | Delete a template                                |
 
 ### Diagnostics
 
-| Tool | Purpose |
-|------|---------|
-| `health-check` | Verify Mail.app connectivity |
-| `doctor` | Diagnose setup problems (permissions, accounts, IMAP/SMTP) with remediation steps |
-| `get-mail-stats` | Get message and unread statistics (one IMAP `STATUS` per mailbox — the priciest read; a `partial: true` result means the totals are floors, see `failedAccounts`) |
-| `get-sync-status` | Check whether Mail.app is running and syncing |
+| Tool              | Purpose                                                                                                                                                           |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `health-check`    | Verify Mail.app connectivity                                                                                                                                      |
+| `doctor`          | Diagnose setup problems (permissions, accounts, IMAP/SMTP) with remediation steps                                                                                 |
+| `get-mail-stats`  | Get message and unread statistics (one IMAP `STATUS` per mailbox — the priciest read; a `partial: true` result means the totals are floors, see `failedAccounts`) |
+| `get-sync-status` | Check whether Mail.app is running and syncing                                                                                                                     |
 
 ## Usage Patterns
 
@@ -225,6 +226,7 @@ Action: Use delete-message with the message ID
 ## Examples
 
 ### Quick inbox check
+
 ```
 User: "Any important emails today?"
 → list-messages to see recent messages
@@ -232,6 +234,7 @@ User: "Any important emails today?"
 ```
 
 ### Email workflow
+
 ```
 User: "Reply to Sarah's email about the budget"
 → 1. search-messages query="Sarah budget"
@@ -240,6 +243,7 @@ User: "Reply to Sarah's email about the budget"
 ```
 
 ### Safe sending pattern
+
 ```
 User: "Send an email to the client about the delay"
 → 1. create-draft with the composed email
@@ -247,12 +251,12 @@ User: "Send an email to the client about the delay"
 ```
 
 ### Multi-account usage
+
 ```
 User: "Check my work email"
 → 1. list-accounts to find work account name
 → 2. list-messages with account="Work Exchange"
 ```
-
 
 ### Preserve reply threading and delivery format
 

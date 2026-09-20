@@ -18,6 +18,9 @@ import {
   imapGetMessage,
   imapGetMessageHeaders,
   imapGetMessageSource,
+  imapGetMessageRfc822,
+  MAX_RFC822_INLINE_BYTES,
+  MAX_RFC822_FILE_BYTES,
   HEADER_WINDOW_BYTES,
   MAX_COMPOSE_SOURCE_BYTES,
   imapMarkRead,
@@ -47,6 +50,7 @@ import {
   type ImapConfig,
 } from "@/services/imapClient.js";
 import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
+import { createHash } from "node:crypto";
 
 const cfg: ImapConfig = {
   host: "imap.gmail.com",
@@ -2562,5 +2566,150 @@ describe("imapGetMessageSource", () => {
     const tooBig = sourceClient(Buffer.alloc(MAX_COMPOSE_SOURCE_BYTES + 1, 65));
     await expect(imapGetMessageSource(id, tooBig.deps)).rejects.toThrow("25 MiB");
     expect(tooBig.release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("imapGetMessageRfc822 (#244 — raw bytes with IMAP identity)", () => {
+  const id = encodeImapId(cfg.accountLabel, "Archive/Inbox", 42);
+  const raw = Buffer.from(
+    "Message-ID: <evidence@example.com>\r\nSubject: =?ISO-8859-1?Q?caf=E9?=\r\n\r\nBody é\r\n",
+    "latin1"
+  );
+  function rfcClient(
+    source: Buffer | string = raw,
+    overrides: Record<string, unknown> = {},
+    withMailbox = true
+  ) {
+    const release = vi.fn();
+    const client = {
+      ...makeClient([], {}),
+      ...(withMailbox
+        ? { mailbox: { path: "Archive/Inbox", uidValidity: 1234567890n, readOnly: true } }
+        : {}),
+      getMailboxLock: vi.fn(async () => ({ release })),
+      fetchOne: vi.fn(async () => ({
+        uid: 42,
+        source,
+        flags: new Set(["\\Seen", "$Forwarded"]),
+        internalDate: new Date("2026-06-01T12:00:00Z"),
+        size: Buffer.byteLength(source),
+        envelope: { messageId: "<evidence@example.com>" },
+        ...overrides,
+      })),
+    };
+    const connect = vi.fn(async () => client);
+    return { client, release, connect, deps: { config: cfg, connect } };
+  }
+
+  it("opens the mailbox read-only, fetches BODY.PEEK[] and returns identity + sha256", async () => {
+    const d = rfcClient();
+    const r = await imapGetMessageRfc822(id, {}, d.deps);
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(d.connect).toHaveBeenCalledWith(cfg);
+    expect(d.client.getMailboxLock).toHaveBeenCalledWith("Archive/Inbox", { readOnly: true });
+    expect(d.client.fetchOne).toHaveBeenCalledWith(
+      "42",
+      {
+        uid: true,
+        flags: true,
+        internalDate: true,
+        size: true,
+        envelope: true,
+        source: { start: 0, maxLength: MAX_RFC822_INLINE_BYTES + 1 },
+      },
+      { uid: true }
+    );
+    // Bytes are the wire payload, untouched — the latin-1 é survives as 0xE9.
+    expect(r.acquisition.bytes.equals(raw)).toBe(true);
+    expect(r.acquisition.sha256).toBe(createHash("sha256").update(raw).digest("hex"));
+    expect(r.acquisition).toMatchObject({
+      account: cfg.accountLabel,
+      mailbox: "Archive/Inbox",
+      uid: 42,
+      uidValidity: "1234567890",
+      internalDate: "2026-06-01T12:00:00.000Z",
+      flags: ["\\Seen", "$Forwarded"],
+      size: raw.length,
+      messageId: "evidence@example.com",
+      warnings: [],
+    });
+    expect(r.acquisition.readMethod).toContain("EXAMINE");
+    expect(r.acquisition.readMethod).toContain("BODY.PEEK[]");
+    expect(d.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a numeric id without connecting", async () => {
+    const d = rfcClient();
+    const r = await imapGetMessageRfc822("42", {}, d.deps);
+    expect(r).toEqual({ success: false, error: expect.stringContaining("Not an IMAP") });
+    expect(d.connect).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing message and releases the lock", async () => {
+    const d = rfcClient();
+    d.client.fetchOne.mockResolvedValue(false);
+    const r = await imapGetMessageRfc822(id, {}, d.deps);
+    expect(r).toEqual({ success: false, error: expect.stringContaining("not found") });
+    expect(d.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a message over maxBytes instead of truncating, and accepts one at the limit", async () => {
+    const exact = rfcClient(Buffer.alloc(10, 65));
+    const ok = await imapGetMessageRfc822(id, { maxBytes: 10 }, exact.deps);
+    expect(ok.success).toBe(true);
+    if (ok.success) expect(ok.acquisition.bytes.length).toBe(10);
+    expect(exact.client.fetchOne).toHaveBeenCalledWith(
+      "42",
+      expect.objectContaining({ source: { start: 0, maxLength: 11 } }),
+      { uid: true }
+    );
+
+    const tooBig = rfcClient(Buffer.alloc(11, 65), { size: 5000 });
+    const r = await imapGetMessageRfc822(id, { maxBytes: 10 }, tooBig.deps);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toContain("larger than 10 bytes");
+      expect(r.error).toContain("RFC822.SIZE 5000");
+      expect(r.error).toContain("savePath");
+    }
+    expect(tooBig.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps maxBytes to the file ceiling", async () => {
+    const d = rfcClient();
+    await imapGetMessageRfc822(id, { maxBytes: MAX_RFC822_FILE_BYTES * 4 }, d.deps);
+    expect(d.client.fetchOne).toHaveBeenCalledWith(
+      "42",
+      expect.objectContaining({ source: { start: 0, maxLength: MAX_RFC822_FILE_BYTES + 1 } }),
+      { uid: true }
+    );
+  });
+
+  it("warns when RFC822.SIZE disagrees with the bytes received, and when UIDVALIDITY is absent", async () => {
+    const mismatch = rfcClient(raw, { size: raw.length + 7 });
+    const r = await imapGetMessageRfc822(id, {}, mismatch.deps);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.acquisition.size).toBe(raw.length + 7);
+      expect(r.acquisition.warnings).toEqual([expect.stringContaining("RFC822.SIZE is")]);
+      // The hash is still over what was received, never over the claimed size.
+      expect(r.acquisition.sha256).toBe(createHash("sha256").update(raw).digest("hex"));
+    }
+
+    const noValidity = rfcClient(raw, {}, false);
+    const r2 = await imapGetMessageRfc822(id, {}, noValidity.deps);
+    expect(r2.success).toBe(true);
+    if (r2.success) {
+      expect(r2.acquisition.uidValidity).toBeUndefined();
+      expect(r2.acquisition.warnings).toEqual([expect.stringContaining("UIDVALIDITY")]);
+    }
+  });
+
+  it("refuses an empty source rather than hashing nothing", async () => {
+    const d = rfcClient("");
+    const r = await imapGetMessageRfc822(id, {}, d.deps);
+    expect(r).toEqual({ success: false, error: expect.stringContaining("no message source") });
+    expect(d.release).toHaveBeenCalledTimes(1);
   });
 });

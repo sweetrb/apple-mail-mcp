@@ -49269,7 +49269,7 @@ var require_tools2 = __commonJS({
     var libmime = require_libmime();
     var { resolveCharset } = require_charsets2();
     var { compiler } = require_imap_handler();
-    var { createHash } = __require("crypto");
+    var { createHash: createHash2 } = __require("crypto");
     var { JPDecoder } = require_jp_decoder();
     var iconv = require_lib();
     var FLAG_COLORS = ["red", "orange", "yellow", "green", "blue", "purple", "grey"];
@@ -49899,7 +49899,7 @@ var require_tools2 = __commonJS({
             } catch {
             }
           }
-          map.id = map.emailId || createHash("md5").update([path, mailbox.uidValidity?.toString() || "", map.uid.toString()].join(":")).digest("hex");
+          map.id = map.emailId || createHash2("md5").update([path, mailbox.uidValidity?.toString() || "", map.uid.toString()].join(":")).digest("hex");
         }
         if (map.flags) {
           let flagColor = tools.getFlagColor(map.flags);
@@ -58033,6 +58033,8 @@ __export(imapClient_exports, {
   HEADER_WINDOW_BYTES: () => HEADER_WINDOW_BYTES,
   IMAP_ENV: () => IMAP_ENV,
   MAX_COMPOSE_SOURCE_BYTES: () => MAX_COMPOSE_SOURCE_BYTES,
+  MAX_RFC822_FILE_BYTES: () => MAX_RFC822_FILE_BYTES,
+  MAX_RFC822_INLINE_BYTES: () => MAX_RFC822_INLINE_BYTES,
   __resetPool: () => __resetPool,
   __setPoolConnect: () => __setPoolConnect,
   bodyStructureHasAttachments: () => bodyStructureHasAttachments,
@@ -58055,6 +58057,7 @@ __export(imapClient_exports, {
   imapFlagMessage: () => imapFlagMessage,
   imapGetMessage: () => imapGetMessage,
   imapGetMessageHeaders: () => imapGetMessageHeaders,
+  imapGetMessageRfc822: () => imapGetMessageRfc822,
   imapGetMessageSource: () => imapGetMessageSource,
   imapHealthCheck: () => imapHealthCheck,
   imapListAttachments: () => imapListAttachments,
@@ -58079,6 +58082,7 @@ __export(imapClient_exports, {
   resolveMailboxPath: () => resolveMailboxPath,
   shouldUseImap: () => shouldUseImap
 });
+import { createHash } from "node:crypto";
 function encodeImapId(account, path, uid) {
   const payload = Buffer.from(JSON.stringify({ a: account, p: path, u: uid }), "utf8").toString(
     "base64url"
@@ -58888,6 +58892,75 @@ async function imapGetMessageSource(id, deps = {}) {
     }
   });
 }
+async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  const requested = Math.floor(opts.maxBytes ?? MAX_RFC822_INLINE_BYTES);
+  const limit = Math.min(Math.max(1, requested), MAX_RFC822_FILE_BYTES);
+  return withClient(depsForMessageRef(ref, deps), async (client) => {
+    const lock = await client.getMailboxLock(ref.path, { readOnly: true });
+    try {
+      const mb = client.mailbox;
+      const uidValidity = mb && mb.uidValidity !== void 0 && mb.uidValidity !== null ? String(mb.uidValidity) : void 0;
+      const msg = await client.fetchOne(
+        String(ref.uid),
+        {
+          uid: true,
+          flags: true,
+          internalDate: true,
+          size: true,
+          envelope: true,
+          source: { start: 0, maxLength: limit + 1 }
+        },
+        { uid: true }
+      );
+      if (!msg) {
+        return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
+      }
+      if (!msg.source || !msg.source.length) {
+        return { success: false, error: "IMAP returned no message source." };
+      }
+      const bytes = asBuffer(msg.source);
+      const size = typeof msg.size === "number" ? msg.size : void 0;
+      if (bytes.length > limit) {
+        return {
+          success: false,
+          error: `Message UID ${ref.uid} in "${ref.path}" is larger than ${limit} bytes` + (size !== void 0 ? ` (RFC822.SIZE ${size})` : "") + `; nothing was acquired (the ceiling refuses, it never truncates). Raise maxBytes \u2014 inline ceiling ${MAX_RFC822_INLINE_BYTES} \u2014 or pass savePath to write up to ${MAX_RFC822_FILE_BYTES} bytes to disk.`
+        };
+      }
+      const warnings = [];
+      if (size !== void 0 && size !== bytes.length) {
+        warnings.push(
+          `RFC822.SIZE is ${size} but ${bytes.length} bytes were acquired: the server's size accounting and its stored bytes disagree. sha256 covers what was received.`
+        );
+      }
+      if (uidValidity === void 0) {
+        warnings.push(
+          "The server did not report UIDVALIDITY for this mailbox; uid alone is not a durable identity."
+        );
+      }
+      return {
+        success: true,
+        acquisition: {
+          account: ref.account,
+          mailbox: ref.path,
+          uid: ref.uid,
+          uidValidity,
+          internalDate: isoOrUndefined(msg.internalDate),
+          flags: msg.flags ? Array.from(msg.flags) : [],
+          size,
+          bytes,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          messageId: msg.envelope?.messageId ? normalizeMessageId(msg.envelope.messageId) : void 0,
+          readMethod: `EXAMINE "${ref.path}"; UID FETCH ${ref.uid} (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY.PEEK[]<0.${limit + 1}>)`,
+          warnings
+        }
+      };
+    } finally {
+      lock.release();
+    }
+  });
+}
 async function imapGetMessage(id, preferHtml, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
@@ -59405,7 +59478,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -59461,6 +59534,8 @@ var init_imapClient = __esm({
     pools = /* @__PURE__ */ new Map();
     connecting = /* @__PURE__ */ new Map();
     MAX_COMPOSE_SOURCE_BYTES = 25 * 1024 * 1024;
+    MAX_RFC822_INLINE_BYTES = 6 * 1024 * 1024;
+    MAX_RFC822_FILE_BYTES = MAX_COMPOSE_SOURCE_BYTES;
     HEADER_WINDOW_BYTES = 64 * 1024;
     MAIL_FLAG_BITS = ["$MailFlagBit0", "$MailFlagBit1", "$MailFlagBit2"];
     imapMarkRead = (id, deps = {}) => flagOp(id, "\\Seen", true, deps);
