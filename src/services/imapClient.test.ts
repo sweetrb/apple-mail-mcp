@@ -454,6 +454,29 @@ describe("resolveMailboxPath", () => {
 });
 
 describe("imapSearchMessages", () => {
+  it("body adds a server-side IMAP BODY criterion", async () => {
+    const rec: Rec = {};
+    await imapSearchMessages(
+      { body: "Alfred", limit: 5 },
+      { config: cfg, connect: async () => makeClient([1, 2, 3], rec) }
+    );
+    expect(rec.criteria).toEqual({ body: "Alfred" });
+  });
+
+  it("body combines with query and the other filters (all ANDed)", async () => {
+    const rec: Rec = {};
+    await imapSearchMessages(
+      { query: "accounts", body: "dividend", from: "jla", dateFrom: "2026-01-01", limit: 5 },
+      { config: cfg, connect: async () => makeClient([1, 2, 3], rec) }
+    );
+    expect(rec.criteria).toEqual({
+      or: [{ subject: "accounts" }, { from: "accounts" }],
+      body: "dividend",
+      from: "jla",
+      since: new Date("2026-01-01"),
+    });
+  });
+
   it("server-side searches, formats UID rows, newest-first, with limit", async () => {
     const rec: Rec = {};
     const res = await imapSearchMessages(

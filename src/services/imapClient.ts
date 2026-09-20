@@ -68,6 +68,8 @@ export interface ImapConfig {
 
 export interface ImapSearchArgs {
   query?: string;
+  /** Text to match in the message body (IMAP `BODY` criterion). */
+  body?: string;
   account?: string;
   from?: string;
   subject?: string;
@@ -643,6 +645,7 @@ export async function resolveMailboxPath(
 function buildCriteria(a: ImapSearchArgs, listMode: boolean): Record<string, unknown> {
   const c: Record<string, unknown> = {};
   if (a.query) c.or = [{ subject: a.query }, { from: a.query }];
+  if (a.body) c.body = a.body;
   if (a.from) c.from = a.from;
   if (a.subject) c.subject = a.subject;
   if (a.isRead === true) c.seen = true;

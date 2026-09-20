@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+## [2.19.9] - 2026-09-20
+
+### Added
+- **`search-messages` gains a `body` parameter for server-side body search.**
+  On an IMAP-configured account it adds an IMAP `BODY` criterion, ANDed with
+  the other filters, so a word that appears only in the text of a message can
+  be found in one call instead of listing a sender's mail and reading each
+  message. `query` still matches subject and sender only; its schema
+  description claimed "subject, sender, or content" and now says what it does.
+  Body search is IMAP-only because AppleScript's `content contains` has to pull
+  every body through the Apple Event bridge. An explicit AppleScript account
+  returns an error naming the IMAP requirement, and an unscoped search reports
+  AppleScript-only accounts under `notSearchedMailboxes` rather than silently
+  returning subject/sender matches as if they were body matches. Verified
+  against iCloud (`imap.mail.me.com`), which honours `SEARCH BODY`.
+
 ## [2.19.8] - 2026-09-19
 
 ### Fixed

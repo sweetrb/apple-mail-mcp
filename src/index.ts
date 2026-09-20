@@ -498,7 +498,13 @@ registerTool(
     description:
       "Use when: finding messages by query/sender/subject/date/read/flag filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, and read state (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.",
     inputSchema: {
-      query: z.string().optional().describe("Text to search for in subject, sender, or content"),
+      query: z.string().optional().describe("Text to search for in subject or sender"),
+      body: z
+        .string()
+        .optional()
+        .describe(
+          "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched; AppleScript-only accounts cannot search bodies and are reported as not searched."
+        ),
       from: z
         .string()
         .optional()
@@ -528,6 +534,7 @@ registerTool(
   withErrorHandling(
     async ({
       query,
+      body,
       mailbox,
       account,
       limit = 50,
@@ -548,6 +555,7 @@ registerTool(
       if (shouldUseImap(account)) {
         const imapArgs = {
           query,
+          body,
           mailbox,
           limit,
           dateFrom,
@@ -571,6 +579,24 @@ registerTool(
           mailManager.listAccounts(),
           resolveImapConfigs()
         );
+        // Body search is IMAP-only: AppleScript's `content contains` has to pull
+        // every message body through the Apple Event bridge and times out on
+        // real mailboxes. Rather than silently drop the body filter (and return
+        // subject/sender matches as if they were body matches), AppleScript-only
+        // accounts are skipped and reported as not searched.
+        if (body) {
+          const apple: AppleScan = {
+            rows: [],
+            diagnostics: {
+              ...emptyDiagnostics(),
+              partial: appleScriptOnly.length > 0,
+              notSearchedMailboxes: appleScriptOnly.map(
+                (a) => `${a.name} (body search requires the IMAP backend)`
+              ),
+            },
+          };
+          return mergedMessageResponse(fan, apple, limit, "matched");
+        }
         const apple = appleScanForAccounts(appleScriptOnly, (acctName) =>
           mailManager.searchMessagesWithDiagnostics(
             query,
@@ -586,6 +612,14 @@ registerTool(
           )
         );
         return mergedMessageResponse(fan, apple, limit, "matched");
+      }
+
+      if (body) {
+        return errorResponse(
+          `Body search requires the IMAP backend, which is not configured for ${
+            account ? `account "${account}"` : "any account"
+          }. Configure IMAP (see the IMAP backend section of the README) or search by query/subject/from instead.`
+        );
       }
 
       const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(

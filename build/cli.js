@@ -58302,6 +58302,7 @@ async function resolveMailboxPath(client, mailbox, _mode) {
 function buildCriteria(a, listMode) {
   const c = {};
   if (a.query) c.or = [{ subject: a.query }, { from: a.query }];
+  if (a.body) c.body = a.body;
   if (a.from) c.from = a.from;
   if (a.subject) c.subject = a.subject;
   if (a.isRead === true) c.seen = true;

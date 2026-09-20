@@ -226,6 +226,7 @@ Search for messages matching criteria. Searches all accounts by default.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string | No | Text to search in subject/sender |
+| `body` | string | No | Text to search in the message body. IMAP backend only (server-side `BODY` search); AppleScript-only accounts are reported as not searched |
 | `from` | string | No | Filter by sender email address |
 | `subject` | string | No | Filter by subject line |
 | `mailbox` | string | No | Mailbox to search in (omit to search all mailboxes) |
