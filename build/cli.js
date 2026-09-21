@@ -58409,6 +58409,12 @@ async function fetchMailboxMatches(client, path, criteria, newestCount) {
     const found = await client.search(criteria, { uid: true });
     const uids = Array.isArray(found) ? found : [];
     if (uids.length === 0 || newestCount === 0) return { messages: [], total: uids.length };
+    const status = await client.status(path, { messages: true });
+    if (typeof status.messages === "number" && uids.length > status.messages) {
+      throw new Error(
+        `IMAP SEARCH on "${path}" reported ${uids.length} matches, more than the mailbox's own ${status.messages} messages \u2014 discarding as corrupted rather than trusting it (see #246).`
+      );
+    }
     const newest = uids.slice().reverse().slice(0, newestCount);
     const byUid = /* @__PURE__ */ new Map();
     for await (const msg of client.fetch(

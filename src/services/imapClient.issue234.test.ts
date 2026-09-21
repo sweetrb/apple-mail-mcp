@@ -56,7 +56,8 @@ function client(
       return (msgs[0] as never) ?? false;
     },
     list: async () => [{ path: "INBOX", name: "INBOX", specialUse: "\\Inbox" }],
-    status: async (path: string) => ({ path, messages: 0, unseen: 0, recent: 0 }),
+    // #246 guard: a search total can never exceed STATUS's own message count.
+    status: async (path: string) => ({ path, messages: msgs.length, unseen: 0, recent: 0 }),
     download: async () => ({ meta: {}, content: (async function* () {})() }),
     mailboxCreate: async (path: string) => ({ path, created: true }),
     mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),

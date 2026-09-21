@@ -841,6 +841,38 @@ async function fetchMailboxMatches(
     const uids = Array.isArray(found) ? found : [];
     if (uids.length === 0 || newestCount === 0) return { messages: [], total: uids.length };
 
+    // A SEARCH match count can never exceed the mailbox's own total message
+    // count — no criteria can match more messages than exist. Cross-check
+    // against STATUS (a fresh server round trip, the same call list-mailboxes
+    // relies on) before trusting `uids.length` as the reported total.
+    //
+    // This guards a real defect reproduced against the vendored imapflow
+    // (1.7.8, node_modules/imapflow/lib/commands/search.js): even though we
+    // never pass `returnOptions` (so `useEsearch` is false and the "legacy"
+    // SEARCH path runs), that path still registers an untagged ESEARCH
+    // handler alongside SEARCH — "IMAP4rev2 servers answer even a plain
+    // SEARCH with an untagged ESEARCH response" per imapflow's own comment.
+    // When the server's ESEARCH `ALL` attribute is a compact sequence-set
+    // range (e.g. "4:739330"), imapflow expands it in a loop bounded by
+    // `connection.mailbox.exists` — NOT by the range's own content. If that
+    // cached count is wrong at the moment the response is parsed (stale
+    // reuse of an already-selected mailbox, or an out-of-band untagged
+    // EXISTS landing mid-command; see imap-flow.js `untaggedExists`, which
+    // overwrites it with zero bounds-checking), the loop fabricates
+    // sequential "matches" up to that wrong count — never real search hits.
+    // Confirmed by direct reproduction: a stale `exists` of 100085 against a
+    // true 14-message mailbox turns a `SEARCH ALL` into exactly 100085
+    // bogus results (#246). Reported upstream candidate for a fix, but we
+    // guard here regardless since we cannot control the installed version
+    // or the server's exact wire behavior.
+    const status = await client.status(path, { messages: true });
+    if (typeof status.messages === "number" && uids.length > status.messages) {
+      throw new Error(
+        `IMAP SEARCH on "${path}" reported ${uids.length} matches, more than the mailbox's own ` +
+          `${status.messages} messages — discarding as corrupted rather than trusting it (see #246).`
+      );
+    }
+
     const newest = uids.slice().reverse().slice(0, newestCount);
     const byUid = new Map<number, ImapMessage>();
     for await (const msg of client.fetch(

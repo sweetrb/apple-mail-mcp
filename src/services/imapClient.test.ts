@@ -94,7 +94,10 @@ function makeClient(uids: number[], rec: Rec): ImapClientLike {
     },
     fetchOne: async () => false,
     list: async () => [{ path: "[Gmail]/All Mail", name: "All Mail", specialUse: "\\All" }],
-    status: async (path: string) => ({ path, messages: 0, unseen: 0, recent: 0 }),
+    // Defaults to the mock's own uid count so the #246 search-vs-STATUS guard
+    // (a search total can never exceed the mailbox's own STATUS count) does
+    // not trip on every existing test that doesn't care about it.
+    status: async (path: string) => ({ path, messages: uids.length, unseen: 0, recent: 0 }),
     download: async () => ({
       meta: { filename: "file.bin" },
       content: (async function* () {
@@ -548,6 +551,7 @@ describe("imapSearchMessages", () => {
         return { release: () => undefined };
       },
       search: async () => matches[selected] ?? [],
+      status: async (path: string) => ({ path, messages: (matches[path] ?? []).length }),
       fetch: async function* (range: string) {
         for (const uid of range.split(",").map(Number)) {
           yield {
@@ -593,6 +597,7 @@ describe("imapSearchMessages", () => {
         return { release: () => undefined };
       },
       search: async () => (selected === "INBOX" ? [7] : []),
+      status: async (path: string) => ({ path, messages: path === "INBOX" ? 1 : 0 }),
     };
 
     const res = await imapSearchMessages(
@@ -607,6 +612,52 @@ describe("imapSearchMessages", () => {
     expect(res.partial).toBe(true);
     expect(res.failedMailboxes).toEqual(["Archive"]);
     expect(res.text).toContain('Could not search mailbox(es): "Archive"');
+  });
+});
+
+// #246 (@j5pu): imapflow (vendored 1.7.8) can register an untagged ESEARCH
+// handler even for a plain "legacy" SEARCH (no returnOptions) — servers may
+// answer with an ESEARCH whose compact "ALL" sequence-set range gets expanded
+// bounded by connection.mailbox.exists, not by the range's real content.
+// Reproduced directly against node_modules/imapflow/lib/commands/search.js: a
+// stale/wrong exists of 100085 turned a true 14-message "SEARCH ALL" into
+// exactly 100085 fabricated matches. Whatever corrupts imapflow's internal
+// state, a SEARCH match count can never legitimately exceed the mailbox's own
+// message count — cross-checking against STATUS (a fresh round trip,
+// independent of imapflow's cached state) catches it before a fabricated
+// total or a fetch of nonexistent UIDs ever reaches the caller.
+describe("#246 search total is cross-checked against STATUS before being trusted", () => {
+  it("rejects a search total wildly exceeding the mailbox's own STATUS count", async () => {
+    const rec: Rec = {};
+    const client: ImapClientLike = {
+      ...makeClient([], rec),
+      // Simulates the fabricated result: imapflow's ESEARCH range-expansion
+      // handed back ~100085 sequential "matches" for a mailbox that STATUS
+      // (and a direct IMAP check) says holds only 14 messages.
+      search: async () => Array.from({ length: 100085 }, (_, i) => i + 4),
+      status: async (path: string) => ({ path, messages: 14 }),
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // Fails loud rather than reporting a fabricated "100085 total listed" —
+    // this repo's established idiom (failedMailboxes, surfaced here as a
+    // thrown error since INBOX is the only requested mailbox) for "don't
+    // trust it" beats silently returning a corrupted count.
+    await expect(
+      imapListMessages({ mailbox: "INBOX", limit: 1 }, { config: cfg, connect: async () => client })
+    ).rejects.toThrow(/IMAP list failed in every requested mailbox.*INBOX/);
+    expect(errSpy.mock.calls.join("\n")).toMatch(
+      /reported 100085 matches, more than the mailbox's own 14 messages/
+    );
+    errSpy.mockRestore();
+  });
+
+  it("still trusts a search total that stays within the mailbox's real size", async () => {
+    const res = await imapListMessages(
+      { mailbox: "INBOX", limit: 10 },
+      { config: cfg, connect: async () => makeClient([7, 8], {}) }
+    );
+    expect(res.count).toBe(2);
+    expect(res.text).toContain("2 total listed");
   });
 });
 

@@ -36,7 +36,8 @@ function makeClient(uids: number[], messageIdByUid?: Record<number, string>): Im
     },
     fetchOne: async () => false,
     list: async () => [{ path: "[Gmail]/All Mail", name: "All Mail", specialUse: "\\All" }],
-    status: async (path: string) => ({ path, messages: 0, unseen: 0, recent: 0 }),
+    // #246 guard: a search total can never exceed STATUS's own message count.
+    status: async (path: string) => ({ path, messages: uids.length, unseen: 0, recent: 0 }),
     download: async () => ({ meta: {}, content: (async function* () {})() }),
     mailboxCreate: async (path: string) => ({ path, created: true }),
     mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),
