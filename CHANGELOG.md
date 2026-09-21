@@ -1,5 +1,46 @@
 ## [Unreleased]
 
+## [2.19.11] - 2026-09-21
+
+### Fixed
+
+- **`list-messages`/`search-messages` no longer trust an IMAP search total
+  that exceeds the mailbox's own message count**
+  ([#246](https://github.com/sweetrb/apple-mail-mcp/issues/246), reported by
+  @j5pu): on their `j5pu@icloud.com` account, `list-messages` on `INBOX`
+  reported `100085` total listed against a mailbox `list-mailboxes` and a
+  direct IMAP `SEARCH ALL` both agreed held exactly 14 messages, and paginated
+  `list-messages` calls beyond offset 0 silently returned zero messages with
+  no error. Reproduced directly against the vendored `imapflow` dependency
+  (1.7.8, `node_modules/imapflow/lib/commands/search.js`): even though this
+  server never requests `returnOptions` (the "legacy" SEARCH path), that path
+  still registers an untagged `ESEARCH` handler alongside `SEARCH` — some
+  servers answer even a plain `SEARCH` with an `ESEARCH` response — and when
+  the server's `ESEARCH` `ALL` attribute is a compact sequence-set range
+  (e.g. `"4:739330"`), `imapflow` expands it in a loop bounded by
+  `connection.mailbox.exists` rather than by the range's actual content. If
+  that cached count is wrong at the moment the response is parsed, the loop
+  fabricates that many sequential "matches" that were never real search hits.
+  A crafted reproduction against the exact shipped `search.js` confirmed this:
+  a stale/wrong `exists` of 100085 against a true 14-message mailbox produces
+  exactly 100085 bogus results, and reversing/paging into that fabricated,
+  mostly-sequential list explains both the wrong total and why only messages
+  near offset 0 (where the fabricated range coincidentally overlaps real
+  UIDs) resolved to real messages while every deeper page came back empty.
+  `list-messages`/`search-messages` now cross-check the search-derived match
+  count against a fresh `STATUS` call — the same one `list-mailboxes` already
+  relies on, and always a live server round trip independent of `imapflow`'s
+  cached mailbox state — before trusting it: a mailbox whose search total
+  exceeds its own `STATUS` message count is now treated as a failed mailbox
+  (surfaced via the existing `failedMailboxes` reporting) rather than
+  returning a fabricated total or paging into nonexistent UIDs. The exact
+  trigger for the corrupted `exists` value in this account's live session
+  (stale reuse of an already-selected mailbox, an out-of-band untagged
+  `EXISTS` landing mid-command, or an iCloud-specific `ESEARCH` quirk) was not
+  independently confirmed against a live server or a raw protocol capture —
+  this guard is a defensive invariant that holds regardless of the root
+  cause, not a claim about which mechanism produced it.
+
 ## [2.19.10] - 2026-09-20
 
 ### Added
