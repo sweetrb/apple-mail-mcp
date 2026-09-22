@@ -298,38 +298,68 @@ describe("reply and forward transport routing", () => {
     expect(d.mail.replyToMessage).not.toHaveBeenCalled();
   });
 
-  it.each(["reply", "forward"] as const)(
-    "keeps %s drafts on AppleScript even with SMTP configured",
-    async (kind) => {
-      const d = fixture();
-      const result =
-        kind === "reply"
-          ? await runReply(d, { ...args, send: false })
-          : await runForward(d, { id, to: ["colleague@example.com"], send: false });
-      expect(result.structuredContent).toMatchObject({ sent: false, transport: "applescript" });
-      expect(d.numericId).toHaveBeenCalledWith(id);
-      expect(d.smtpConfig).not.toHaveBeenCalled();
-      expect(d.smtpSend).not.toHaveBeenCalled();
-      expect(d.imapSource).not.toHaveBeenCalled();
-      if (kind === "reply")
-        expect(d.mail.replyToMessage).toHaveBeenCalledWith("84", args.body, false, false);
-      else
-        expect(d.mail.forwardMessage).toHaveBeenCalledWith(
-          "84",
-          ["colleague@example.com"],
-          undefined,
-          false
-        );
-    }
-  );
+  it("quotes the original on an AppleScript reply draft (issue #249)", async () => {
+    const d = fixture();
+    const result = await runReply(d, { ...args, send: false });
+    expect(result.structuredContent).toMatchObject({ sent: false, transport: "applescript" });
+    expect(d.numericId).toHaveBeenCalledWith(id);
+    expect(d.smtpConfig).not.toHaveBeenCalled();
+    expect(d.smtpSend).not.toHaveBeenCalled();
+    expect(d.imapSource).toHaveBeenCalledWith(id);
+    const [, composedBody, replyAll, sent] = d.mail.replyToMessage.mock.calls[0];
+    expect(composedBody).toMatch(/^New first line\.\n\nNew second paragraph\./);
+    expect(composedBody).toContain("> Original ✓ body.");
+    expect(replyAll).toBe(false);
+    expect(sent).toBe(false);
+  });
 
-  it("honors explicit AppleScript without resolving SMTP credentials", async () => {
+  it("does not fetch or quote a forward draft with no body to prepend", async () => {
+    const d = fixture();
+    const result = await runForward(d, { id, to: ["colleague@example.com"], send: false });
+    expect(result.structuredContent).toMatchObject({ sent: false, transport: "applescript" });
+    expect(d.numericId).toHaveBeenCalledWith(id);
+    expect(d.smtpConfig).not.toHaveBeenCalled();
+    expect(d.smtpSend).not.toHaveBeenCalled();
+    expect(d.imapSource).not.toHaveBeenCalled();
+    expect(d.mail.forwardMessage).toHaveBeenCalledWith(
+      "84",
+      ["colleague@example.com"],
+      undefined,
+      false
+    );
+  });
+
+  it("quotes the original on an AppleScript forward draft with a prepended body", async () => {
+    const d = fixture();
+    const result = await runForward(d, {
+      id,
+      to: ["colleague@example.com"],
+      body: "For review.",
+      send: false,
+    });
+    expect(result.structuredContent).toMatchObject({ sent: false, transport: "applescript" });
+    expect(d.imapSource).toHaveBeenCalledWith(id);
+    const [, , composedBody] = d.mail.forwardMessage.mock.calls[0];
+    expect(composedBody).toMatch(/^For review\.\n\n---------- Forwarded message ----------/);
+    expect(composedBody).toContain("Original ✓ body.");
+  });
+
+  it("falls back to the plain body when the AppleScript source can't be read", async () => {
+    const d = fixture();
+    d.imapSource.mockRejectedValue(new Error("IMAP connection reset"));
+    const result = await runReply(d, { ...args, send: false });
+    expect(result.structuredContent).toMatchObject({ sent: false, transport: "applescript" });
+    expect(d.mail.replyToMessage).toHaveBeenCalledWith("84", args.body, false, false);
+  });
+
+  it("honors explicit AppleScript without resolving SMTP credentials, quoting via IMAP", async () => {
     const d = fixture();
     expect(
       (await runReply(d, { ...args, transport: "applescript" })).structuredContent?.transport
     ).toBe("applescript");
     expect(d.smtpConfig).not.toHaveBeenCalled();
-    expect(d.imapSource).not.toHaveBeenCalled();
+    expect(d.imapSource).toHaveBeenCalledWith(id);
+    expect(d.mail.replyToMessage.mock.calls[0][1]).toContain("> Original ✓ body.");
   });
 
   it("keeps the unconfigured default on AppleScript", async () => {

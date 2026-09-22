@@ -161,11 +161,6 @@ export function buildReplyOptions(args: {
     cc = extra.length ? extra : undefined;
   }
 
-  const attribution = buildAttribution(original);
-  const quoted = originalPlainText.trim()
-    ? `\n\n${attribution}${quoteBody(originalPlainText)}`
-    : "";
-
   const references = dedupe(
     original.messageId ? [...original.references, original.messageId] : original.references
   );
@@ -174,11 +169,32 @@ export function buildReplyOptions(args: {
     to,
     cc,
     subject: withSubjectPrefix(original.subject, "Re:"),
-    body: `${body}${quoted}`,
+    body: buildReplyBody(body, original, originalPlainText),
     inReplyTo: original.messageId,
     references: references.length ? references : undefined,
     from,
   };
+}
+
+/**
+ * The new text, then a blank line, an attribution line ("On <date>, <sender>
+ * wrote:") and the quoted original — the reply body format shared by the SMTP
+ * send path ({@link buildReplyOptions}) and the AppleScript draft/send path
+ * (`reply-to-message`'s `applescript` transport). The AppleScript `content`
+ * property can't hold "our text" and "Mail's own quote" independently — Mail
+ * generates a quote internally but exposes no way to read it back via
+ * AppleScript, so whatever this function doesn't build, the caller won't have.
+ */
+export function buildReplyBody(
+  body: string,
+  original: OriginalHeaders,
+  originalPlainText: string
+): string {
+  const attribution = buildAttribution(original);
+  const quoted = originalPlainText.trim()
+    ? `\n\n${attribution}${quoteBody(originalPlainText)}`
+    : "";
+  return `${body}${quoted}`;
 }
 
 /** "On <date>, <sender> wrote:\n" — omits the date clause when unknown. */
@@ -201,6 +217,26 @@ export function buildForwardOptions(args: {
 }): SmtpSendOptions {
   const { original, originalPlainText, to, body, from } = args;
 
+  return {
+    to: dedupe(to),
+    subject: withSubjectPrefix(original.subject, "Fwd:"),
+    body: buildForwardBody(original, originalPlainText, body),
+    from,
+  };
+}
+
+/**
+ * The forwarded-message header block + original body, with an optional
+ * prepended note — the forward body format shared by the SMTP send path
+ * ({@link buildForwardOptions}) and the AppleScript draft/send path
+ * (`forward-message`'s `applescript` transport). See {@link buildReplyBody}
+ * for why the AppleScript path needs this built in TypeScript too.
+ */
+export function buildForwardBody(
+  original: OriginalHeaders,
+  originalPlainText: string,
+  body?: string
+): string {
   const headerBlock = [
     "---------- Forwarded message ----------",
     original.from.length ? `From: ${original.from.join(", ")}` : "",
@@ -213,11 +249,5 @@ export function buildForwardOptions(args: {
     .join("\n");
 
   const prefix = body?.trim() ? `${body}\n\n` : "";
-
-  return {
-    to: dedupe(to),
-    subject: withSubjectPrefix(original.subject, "Fwd:"),
-    body: `${prefix}${headerBlock}\n\n${originalPlainText}`,
-    from,
-  };
+  return `${prefix}${headerBlock}\n\n${originalPlainText}`;
 }

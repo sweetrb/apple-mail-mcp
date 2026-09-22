@@ -1599,7 +1599,10 @@ registerTool(
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
-      body: z.string().min(1, "Reply body is required"),
+      body: z
+        .string()
+        .min(1, "Reply body is required")
+        .describe("Reply body (plain text; HTML tags such as <br> are not rendered)"),
       replyAll: z.boolean().optional().default(false).describe("Reply to all recipients"),
       send: z
         .boolean()
@@ -1631,7 +1634,7 @@ registerTool(
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
       to: z.array(z.string()).min(1, "At least one recipient is required"),
-      body: z.string().optional().describe("Optional message to prepend"),
+      body: z.string().optional().describe("Optional message to prepend (plain text)"),
       send: z
         .boolean()
         .optional()

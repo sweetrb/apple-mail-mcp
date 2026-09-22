@@ -86847,10 +86847,6 @@ function buildReplyOptions(args) {
     );
     cc = extra.length ? extra : void 0;
   }
-  const attribution = buildAttribution(original);
-  const quoted = originalPlainText.trim() ? `
-
-${attribution}${quoteBody(originalPlainText)}` : "";
   const references = dedupe(
     original.messageId ? [...original.references, original.messageId] : original.references
   );
@@ -86858,11 +86854,18 @@ ${attribution}${quoteBody(originalPlainText)}` : "";
     to,
     cc,
     subject: withSubjectPrefix(original.subject, "Re:"),
-    body: `${body}${quoted}`,
+    body: buildReplyBody(body, original, originalPlainText),
     inReplyTo: original.messageId,
     references: references.length ? references : void 0,
     from
   };
+}
+function buildReplyBody(body, original, originalPlainText) {
+  const attribution = buildAttribution(original);
+  const quoted = originalPlainText.trim() ? `
+
+${attribution}${quoteBody(originalPlainText)}` : "";
+  return `${body}${quoted}`;
 }
 function buildAttribution(original) {
   const who = original.from[0] ?? original.replyTo[0] ?? "the sender";
@@ -86872,6 +86875,14 @@ function buildAttribution(original) {
 }
 function buildForwardOptions(args) {
   const { original, originalPlainText, to, body, from } = args;
+  return {
+    to: dedupe(to),
+    subject: withSubjectPrefix(original.subject, "Fwd:"),
+    body: buildForwardBody(original, originalPlainText, body),
+    from
+  };
+}
+function buildForwardBody(original, originalPlainText, body) {
   const headerBlock = [
     "---------- Forwarded message ----------",
     original.from.length ? `From: ${original.from.join(", ")}` : "",
@@ -86883,14 +86894,9 @@ function buildForwardOptions(args) {
   const prefix = body?.trim() ? `${body}
 
 ` : "";
-  return {
-    to: dedupe(to),
-    subject: withSubjectPrefix(original.subject, "Fwd:"),
-    body: `${prefix}${headerBlock}
+  return `${prefix}${headerBlock}
 
-${originalPlainText}`,
-    from
-  };
+${originalPlainText}`;
 }
 
 // src/tools/compose.ts
@@ -87028,6 +87034,31 @@ async function readOriginal(deps, id, cfg) {
   const content = deps.mail.getMessageContent(id);
   return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? null };
 }
+async function readOriginalForQuote(deps, id) {
+  if (decodeImapId(id)) {
+    try {
+      const source = await deps.imapSource(id);
+      const original = parseOriginalHeaders(source.raw);
+      if (source.subject !== void 0) original.subject = source.subject;
+      return { original, plainText: extractTextBody(source.raw) ?? "" };
+    } catch {
+      return null;
+    }
+  }
+  const raw = deps.mail.getRawSource(id);
+  if (!raw) return null;
+  const content = deps.mail.getMessageContent(id);
+  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? "" };
+}
+async function replyComposeBody(deps, id, body) {
+  const source = await readOriginalForQuote(deps, id);
+  return source ? buildReplyBody(body, source.original, source.plainText) : body;
+}
+async function forwardComposeBody(deps, id, body) {
+  if (!body) return body;
+  const source = await readOriginalForQuote(deps, id);
+  return source ? buildForwardBody(source.original, source.plainText, body) : body;
+}
 async function runCompose(deps, args) {
   const { id, send, transport: transport2 } = args;
   const verb = args.kind === "reply" ? "reply to" : "forward";
@@ -87098,7 +87129,17 @@ async function runCompose(deps, args) {
     return errorResponse(
       `Failed to ${verb} message "${id}": ${resolved.error ?? "message not found"}`
     );
-  const outcome = args.kind === "reply" ? deps.mail.replyToMessage(resolved.numericId, args.body, args.replyAll, send) : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send);
+  const outcome = args.kind === "reply" ? deps.mail.replyToMessage(
+    resolved.numericId,
+    await replyComposeBody(deps, id, args.body),
+    args.replyAll,
+    send
+  ) : deps.mail.forwardMessage(
+    resolved.numericId,
+    args.to,
+    await forwardComposeBody(deps, id, args.body),
+    send
+  );
   if (!outcome.success)
     return errorResponse(
       `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
@@ -88858,7 +88899,7 @@ registerTool(
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
-      body: external_exports.string().min(1, "Reply body is required"),
+      body: external_exports.string().min(1, "Reply body is required").describe("Reply body (plain text; HTML tags such as <br> are not rendered)"),
       replyAll: external_exports.boolean().optional().default(false).describe("Reply to all recipients"),
       send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)")
     },
@@ -88882,7 +88923,7 @@ registerTool(
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
-      body: external_exports.string().optional().describe("Optional message to prepend"),
+      body: external_exports.string().optional().describe("Optional message to prepend (plain text)"),
       send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)")
     },
     outputSchema: {

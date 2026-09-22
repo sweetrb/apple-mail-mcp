@@ -5,7 +5,10 @@ import type { SmtpConfig, SmtpSendOptions, SmtpSendResult } from "@/services/smt
 import {
   buildReplyOptions,
   buildForwardOptions,
+  buildReplyBody,
+  buildForwardBody,
   parseOriginalHeaders,
+  type OriginalHeaders,
 } from "@/services/replyForward.js";
 import { extractTextBody } from "@/utils/mimeParse.js";
 import { successResponse, errorResponse, type ToolResponse } from "@/tools/respond.js";
@@ -66,6 +69,55 @@ async function readOriginal(deps: ComposeDeps, id: string, cfg: SmtpConfig) {
     );
   const content = deps.mail.getMessageContent(id);
   return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? null };
+}
+
+/**
+ * Fetch the original message's headers + plain text to quote on the
+ * AppleScript draft/send path — same sources as {@link readOriginal}, but
+ * without the SMTP-identity check: nothing is being sent from an identity
+ * here, the quote is just content inside a message Mail.app itself submits.
+ * Returns null when the source can't be read, so the caller falls back to
+ * the un-quoted body rather than failing an operation that used to succeed.
+ */
+async function readOriginalForQuote(
+  deps: ComposeDeps,
+  id: string
+): Promise<{ original: OriginalHeaders; plainText: string } | null> {
+  if (decodeImapId(id)) {
+    try {
+      const source = await deps.imapSource(id);
+      const original = parseOriginalHeaders(source.raw);
+      if (source.subject !== undefined) original.subject = source.subject;
+      return { original, plainText: extractTextBody(source.raw) ?? "" };
+    } catch {
+      return null;
+    }
+  }
+  const raw = deps.mail.getRawSource(id);
+  if (!raw) return null;
+  const content = deps.mail.getMessageContent(id);
+  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? "" };
+}
+
+/** Reply body for the AppleScript path: always quotes the original when it can be read. */
+async function replyComposeBody(deps: ComposeDeps, id: string, body: string): Promise<string> {
+  const source = await readOriginalForQuote(deps, id);
+  return source ? buildReplyBody(body, source.original, source.plainText) : body;
+}
+
+/**
+ * Forward body for the AppleScript path: only rebuilds content when a body
+ * was passed to prepend — matching the pre-fix behavior of leaving Mail's own
+ * forward content untouched when there's nothing of ours to merge into it.
+ */
+async function forwardComposeBody(
+  deps: ComposeDeps,
+  id: string,
+  body: string | undefined
+): Promise<string | undefined> {
+  if (!body) return body;
+  const source = await readOriginalForQuote(deps, id);
+  return source ? buildForwardBody(source.original, source.plainText, body) : body;
 }
 
 async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolResponse> {
@@ -149,8 +201,18 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
     );
   const outcome =
     args.kind === "reply"
-      ? deps.mail.replyToMessage(resolved.numericId, args.body, args.replyAll, send)
-      : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send);
+      ? deps.mail.replyToMessage(
+          resolved.numericId,
+          await replyComposeBody(deps, id, args.body),
+          args.replyAll,
+          send
+        )
+      : deps.mail.forwardMessage(
+          resolved.numericId,
+          args.to,
+          await forwardComposeBody(deps, id, args.body),
+          send
+        );
   if (!outcome.success)
     return errorResponse(
       `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
