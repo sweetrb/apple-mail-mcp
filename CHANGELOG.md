@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+## [2.19.12] - 2026-09-22
+
+### Fixed
+
+- **`reply-to-message`/`forward-message` no longer drop the quoted original
+  on the AppleScript transport**
+  ([#249](https://github.com/sweetrb/apple-mail-mcp/issues/249), reported by
+  @Sealjay): a saved draft (`send: false`) — and any send that falls back to
+  AppleScript because SMTP isn't configured — set Mail's `content` property to
+  just the new text, discarding the "On \<date\>, \<sender\> wrote:" quote Mail
+  normally adds. The reporter traced this precisely: `content of theReply`
+  reads back as empty immediately after `reply`, and still after `save`, so
+  the quote Mail builds internally is real (a draft saved *without* touching
+  `content` shows it) but unreadable through AppleScript — there is nothing to
+  read back and prepend to. `replyToMessage`/`forwardMessage` now build the
+  quoted body in TypeScript, reusing the same `quoteBody`/attribution/
+  forwarded-message-header helpers the SMTP transport already uses, so an
+  AppleScript-transport draft or send matches what SMTP sends. A forward with
+  no `body` to prepend is left untouched, matching its pre-existing (already
+  correct) behavior.
+- **`reply-to-message`'s `body` parameter now documents that it's plain
+  text** (`send-email`/`create-draft` already said so; `reply-to-message`
+  didn't, and the reporter sent literal `<br>` tags expecting HTML rendering).
+  `forward-message`'s `body` now says the same.
+
 ## [2.19.11] - 2026-09-21
 
 ### Fixed

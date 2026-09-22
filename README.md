@@ -826,7 +826,7 @@ Reply to an existing message.
 | Parameter   | Type    | Required | Description                                                                                    |
 | ----------- | ------- | -------- | ---------------------------------------------------------------------------------------------- |
 | `id`        | string  | Yes      | Message ID to reply to                                                                         |
-| `body`      | string  | Yes      | Reply body                                                                                     |
+| `body`      | string  | Yes      | Reply body (plain text; HTML tags such as `<br>` are not rendered)                              |
 | `replyAll`  | boolean | No       | Reply to all recipients (default: false)                                                       |
 | `send`      | boolean | No       | Send immediately (default: true, false = save as draft)                                        |
 | `transport` | string  | No       | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript. |
@@ -853,6 +853,8 @@ Reply to an existing message.
 
 **Delivery:** `imap:` IDs are read directly from their encoded account, mailbox, and UID. Numeric IDs are read through Mail.app. With SMTP configured, replies use clean MIME with the original `Message-ID` in `In-Reply-To` and the full `References` chain. Only the original plain-text body is quoted; the new text is not. Pass `transport: "smtp"` to require this path, or `transport: "applescript"` to use Mail.app explicitly.
 
+**AppleScript transport quoting (v2.19.12):** every draft (`send: false`) and any send that falls back to AppleScript (SMTP not configured) also gets the original quoted — an "On \<date\>, \<sender\> wrote:" attribution line followed by the `> `-prefixed original body, built the same way as the SMTP path. Mail's own `reply`/`forward` AppleScript commands generate this quote internally but expose no way to read it back, so it's built here instead of relying on Mail's (unreadable) copy. Unlike SMTP, this path has no sending-identity restriction — it's read-only source lookup, not sending.
+
 **Failure behavior:** once SMTP is selected, a missing password, unreadable source, missing reply address or `Message-ID`, or SMTP failure returns an error. It does not silently switch to AppleScript or create an unthreaded new message. With SMTP unconfigured and transport omitted, AppleScript remains available. `send: false` saves a Mail.app draft; combining it with `transport: "smtp"` is rejected before composing.
 
 The direct IMAP source read is bounded to 25 MiB, including MIME attachments. Its account login must match the SMTP login, configured From, or an explicitly configured `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` identity; otherwise the call fails rather than sending from an unrelated account. The SMTP configuration still represents a single sending identity, not a per-account SMTP registry.
@@ -871,11 +873,11 @@ Forward a message to new recipients.
 | ----------- | -------- | -------- | ---------------------------------------------------------------------------------------------- |
 | `id`        | string   | Yes      | Message ID to forward                                                                          |
 | `to`        | string[] | Yes      | Recipients to forward to                                                                       |
-| `body`      | string   | No       | Message to prepend                                                                             |
+| `body`      | string   | No       | Message to prepend (plain text)                                                                |
 | `send`      | boolean  | No       | Send immediately (default: true, false = save as draft)                                        |
 | `transport` | string   | No       | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript. |
 
-**Delivery:** uses the same source lookup, transport selection, 25 MiB source limit, account-identity check, and failure behavior as `reply-to-message`. A forward deliberately starts a new conversation, so it has no `In-Reply-To` or `References` headers. The existing plain-text forwarding behavior is unchanged: original attachments are not reattached. See [SMTP transport](#smtp-transport).
+**Delivery:** uses the same source lookup, transport selection, 25 MiB source limit, account-identity check, and failure behavior as `reply-to-message`. A forward deliberately starts a new conversation, so it has no `In-Reply-To` or `References` headers. The existing plain-text forwarding behavior is unchanged: original attachments are not reattached. See [SMTP transport](#smtp-transport). On the AppleScript transport, a `body` is merged with the forwarded-message header block and original text the same way the SMTP path builds it (see `reply-to-message`'s AppleScript transport quoting note); with no `body`, Mail's own forward content is left untouched.
 
 SMTP forwarding requires a readable plain-text original. HTML-only IMAP messages and failed Mail.app body reads return an error before sending instead of silently omitting the original content. Explicitly select `transport: "applescript"` to forward these with Mail.app; no automatic fallback occurs. An intentionally empty plain-text message is still valid.
 
