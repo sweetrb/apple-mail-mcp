@@ -147,6 +147,7 @@ describe("fanOutImapMessages", () => {
     expect(res.accountsQueried.sort()).toEqual(["Personal", "Work"]);
     expect(res.accountsFailed).toEqual([]);
     expect(res.failedMailboxes).toEqual([]);
+    expect(res.failedMailboxReasons).toEqual({});
     expect(res.rows).toHaveLength(2);
     expect(res.rows.map((r) => r.account).sort()).toEqual(["Personal", "Work"]);
   });
@@ -166,6 +167,36 @@ describe("fanOutImapMessages", () => {
     expect(res.accountsQueried).toEqual(["Personal"]);
     expect(res.accountsFailed).toEqual(["Work"]);
     expect(res.rows).toHaveLength(1);
+  });
+
+  // #246 follow-up (@j5pu): a per-mailbox (not whole-account) failure inside
+  // one account's fan-out must still carry its reason, keyed the same way
+  // `failedMailboxes` already prefixes with the account label.
+  it("carries the per-mailbox failure reason through, prefixed with the account label", async () => {
+    const res = await fanOutImapMessages(
+      { query: "x", limit: 50 },
+      "search",
+      {
+        connect: async (cfg) => {
+          const client = makeClient([1]);
+          if (cfg.accountLabel === "Work") {
+            client.list = async () => [
+              { path: "INBOX", name: "INBOX" },
+              { path: "Archive", name: "Archive" },
+            ];
+            client.getMailboxLock = async (path: string) => {
+              if (path === "Archive") throw new Error("cannot select Archive");
+              return { release: () => undefined };
+            };
+          }
+          return client;
+        },
+      },
+      [cfgA, cfgB]
+    );
+    expect(res.accountsFailed).toEqual([]);
+    expect(res.failedMailboxes).toEqual(["Work / Archive"]);
+    expect(res.failedMailboxReasons).toEqual({ "Work / Archive": "cannot select Archive" });
   });
 
   it("lets each server resolve an omitted search mailbox from its advertised hierarchy", async () => {
