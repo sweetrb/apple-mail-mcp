@@ -123,6 +123,25 @@ function prepare(acquisition: ImapRfc822Acquisition, draftId: string) {
   const cc = addressFields(parsed.headers, "cc");
   const bcc = addressFields(parsed.headers, "bcc");
   const replyTo = addressFields(parsed.headers, "reply-to");
+  if (!acquisition.envelopeRecipients) {
+    throw new Error("IMAP did not report draft envelope recipients; no send performed.");
+  }
+  const same = (left: string[], right: string[]) =>
+    left
+      .map((address) => address.toLowerCase())
+      .sort()
+      .join("\u0000") ===
+    right
+      .map((address) => address.toLowerCase())
+      .sort()
+      .join("\u0000");
+  if (
+    !same(to, acquisition.envelopeRecipients.to) ||
+    !same(cc, acquisition.envelopeRecipients.cc) ||
+    !same(bcc, acquisition.envelopeRecipients.bcc)
+  ) {
+    throw new Error("Draft MIME recipients differ from the IMAP envelope; no send performed.");
+  }
   if (from.length !== 1 || to.length + cc.length + bcc.length === 0) {
     throw new Error("Draft needs exactly one From address and at least one recipient.");
   }

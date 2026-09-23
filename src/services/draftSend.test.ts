@@ -25,6 +25,11 @@ const sha256 = createHash("sha256").update(raw).digest("hex");
 const acquisition: ImapRfc822Acquisition = {
   account: "Work",
   accountUser: "sender@example.com",
+  envelopeRecipients: {
+    to: ["ada@example.com"],
+    cc: ["review@example.com"],
+    bcc: ["secret@example.com"],
+  },
   mailbox: "Drafts",
   uid: 42,
   uidValidity: "100",
@@ -154,5 +159,27 @@ describe("send-saved-draft", () => {
     expect(d.submit).toHaveBeenCalledTimes(1);
     expect(d.appendSent).not.toHaveBeenCalled();
     expect(d.removeDraft).not.toHaveBeenCalled();
+  });
+
+  it("refuses a hidden recipient that the MIME preview cannot show", async () => {
+    const d = deps({
+      ...acquisition,
+      envelopeRecipients: {
+        to: ["ada@example.com"],
+        cc: ["review@example.com"],
+        bcc: ["secret@example.com", "hidden@example.com"],
+      },
+    });
+    await expect(sendSavedDraft({ draftId, dryRun: true }, d.injected)).rejects.toThrow(
+      "IMAP envelope"
+    );
+    expect(d.submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a draft when the IMAP recipient envelope is unavailable", async () => {
+    const d = deps({ ...acquisition, envelopeRecipients: undefined });
+    await expect(sendSavedDraft({ draftId, dryRun: true }, d.injected)).rejects.toThrow(
+      "did not report draft envelope recipients"
+    );
   });
 });

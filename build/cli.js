@@ -61714,6 +61714,11 @@ async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
         acquisition: {
           account: ref.account,
           accountUser: cfg.user,
+          envelopeRecipients: msg.envelope?.to || msg.envelope?.cc || msg.envelope?.bcc ? {
+            to: msg.envelope.to?.map((address) => address.address ?? "") ?? [],
+            cc: msg.envelope.cc?.map((address) => address.address ?? "") ?? [],
+            bcc: msg.envelope.bcc?.map((address) => address.address ?? "") ?? []
+          } : void 0,
           mailbox: ref.path,
           uid: ref.uid,
           uidValidity,

@@ -113,6 +113,9 @@ interface ImapEnvelope {
   subject?: string;
   date?: Date | string;
   from?: ImapAddress[];
+  to?: ImapAddress[];
+  cc?: ImapAddress[];
+  bcc?: ImapAddress[];
   messageId?: string;
   inReplyTo?: string;
 }
@@ -3044,6 +3047,8 @@ export interface ImapRfc822Acquisition {
   account: string;
   /** Login identity of the account that supplied these bytes. */
   accountUser: string;
+  /** Server envelope addresses, when supplied, for checking hidden Bcc recipients. */
+  envelopeRecipients?: { to: string[]; cc: string[]; bcc: string[] };
   mailbox: string;
   uid: number;
   /** Mailbox `UIDVALIDITY` as a decimal string. With `uid` it is the durable
@@ -3154,6 +3159,14 @@ export async function imapGetMessageRfc822(
         acquisition: {
           account: ref.account,
           accountUser: cfg.user,
+          envelopeRecipients:
+            msg.envelope?.to || msg.envelope?.cc || msg.envelope?.bcc
+              ? {
+                  to: msg.envelope.to?.map((address) => address.address ?? "") ?? [],
+                  cc: msg.envelope.cc?.map((address) => address.address ?? "") ?? [],
+                  bcc: msg.envelope.bcc?.map((address) => address.address ?? "") ?? [],
+                }
+              : undefined,
           mailbox: ref.path,
           uid: ref.uid,
           uidValidity,

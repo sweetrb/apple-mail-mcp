@@ -3388,7 +3388,11 @@ describe("imapGetMessageRfc822 (#244 — raw bytes with IMAP identity)", () => {
         flags: new Set(["\\Seen", "$Forwarded"]),
         internalDate: new Date("2026-06-01T12:00:00Z"),
         size: Buffer.byteLength(source),
-        envelope: { messageId: "<evidence@example.com>" },
+        envelope: {
+          messageId: "<evidence@example.com>",
+          to: [{ address: "ada@example.com" }],
+          bcc: [{ address: "hidden@example.com" }],
+        },
         ...overrides,
       })),
     };
@@ -3420,6 +3424,12 @@ describe("imapGetMessageRfc822 (#244 — raw bytes with IMAP identity)", () => {
     expect(r.acquisition.sha256).toBe(createHash("sha256").update(raw).digest("hex"));
     expect(r.acquisition).toMatchObject({
       account: cfg.accountLabel,
+      accountUser: cfg.user,
+      envelopeRecipients: {
+        to: ["ada@example.com"],
+        cc: [],
+        bcc: ["hidden@example.com"],
+      },
       mailbox: "Archive/Inbox",
       uid: 42,
       uidValidity: "1234567890",
