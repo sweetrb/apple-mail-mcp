@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+## [2.19.14] - 2026-09-23
+
+### Fixed
+
+- **A failed IMAP mailbox now reports WHY, not just that it failed**
+  ([#246](https://github.com/sweetrb/apple-mail-mcp/issues/246) follow-up,
+  reported by @j5pu): after the STATUS cross-check guard shipped in 2.19.11,
+  @j5pu confirmed `list-mailboxes` now correctly reports their real INBOX
+  count (the original fabricated-count bug is fixed) — but `list-messages`
+  started failing outright with `IMAP list failed in every requested mailbox
+  for account j5pu@icloud.com: INBOX.` and no further detail. The per-mailbox
+  error was logged server-side and then discarded before reaching the tool
+  response, so neither the reporter nor a maintainer could tell a SELECT
+  failure from anything else. A new `failedMailboxReasons` map (keyed the
+  same as the existing `failedMailboxes`) now carries the underlying IMAP
+  error text, and both the thrown all-mailboxes-failed error and the
+  partial-failure note include it inline. Per-mailbox errors here are always
+  post-authentication, but as defense in depth, anything that looks like it
+  might carry a credential is redacted rather than passed through raw.
+
 ## [2.19.13] - 2026-09-23
 
 ### Fixed
