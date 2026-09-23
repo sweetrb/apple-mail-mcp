@@ -142,11 +142,13 @@ export async function fanOutImapMessages(
   accountsQueried: string[];
   accountsFailed: string[];
   failedMailboxes: string[];
+  failedMailboxReasons: Record<string, string>;
 }> {
   const rows: MessageRow[] = [];
   const accountsQueried: string[] = [];
   const accountsFailed: string[] = [];
   const failedMailboxes: string[] = [];
+  const failedMailboxReasons: Record<string, string> = {};
   for (const config of configs) {
     // Keep an omitted mailbox omitted. The per-account search discovers an RFC
     // 6154 `\\All` mailbox when available (Gmail), otherwise it searches every
@@ -163,12 +165,15 @@ export async function fanOutImapMessages(
       failedMailboxes.push(
         ...res.failedMailboxes.map((mailbox) => `${config.accountLabel} / ${mailbox}`)
       );
+      for (const [mailbox, reason] of Object.entries(res.failedMailboxReasons)) {
+        failedMailboxReasons[`${config.accountLabel} / ${mailbox}`] = reason;
+      }
     } catch (e) {
       accountsFailed.push(config.accountLabel);
       console.error(`IMAP fan-out failed for account "${config.accountLabel}": ${String(e)}`);
     }
   }
-  return { rows, accountsQueried, accountsFailed, failedMailboxes };
+  return { rows, accountsQueried, accountsFailed, failedMailboxes, failedMailboxReasons };
 }
 
 // ---------------------------------------------------------------------------

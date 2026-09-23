@@ -58391,6 +58391,13 @@ function structuredRow(m, account, path) {
     ...env.messageId ? { messageId: env.messageId } : {}
   };
 }
+function describeMailboxFailure(error) {
+  const raw = error instanceof Error ? error.message : String(error);
+  const oneLine = raw.split("\n")[0].trim();
+  const looksSensitive = /pass(word)?\s*[:=]|authorization:\s*\S|bearer\s+\S{10,}/i.test(oneLine);
+  const safe = looksSensitive ? "IMAP error (detail redacted \u2014 response text looked like it might contain a credential)" : oneLine || "unknown error";
+  return safe.length > 300 ? `${safe.slice(0, 300)}\u2026` : safe;
+}
 function hasMailboxFlag(mailbox, wanted) {
   const normalized = wanted.toLowerCase();
   return [...mailbox.flags ?? []].some((flag) => flag.toLowerCase() === normalized);
@@ -58472,6 +58479,7 @@ async function run(args, listMode, deps) {
       const newestPerMailbox = offset + limit;
       const fetched = [];
       const failedMailboxes = [];
+      const failedMailboxReasons = {};
       let totalMatched = 0;
       for (const path of paths) {
         try {
@@ -58480,14 +58488,16 @@ async function run(args, listMode, deps) {
           fetched.push(...result.messages.map((message) => ({ message, path })));
         } catch (error) {
           failedMailboxes.push(path);
+          failedMailboxReasons[path] = describeMailboxFailure(error);
           console.error(
             `IMAP ${listMode ? "list" : "search"} failed for account "${cfg.accountLabel}", mailbox "${path}": ${String(error)}`
           );
         }
       }
       if (failedMailboxes.length === paths.length) {
+        const detail = failedMailboxes.map((path) => `${path} (${failedMailboxReasons[path]})`).join(", ");
         throw new Error(
-          `IMAP ${listMode ? "list" : "search"} failed in every requested mailbox for account ${cfg.accountLabel}: ${failedMailboxes.join(", ")}.`
+          `IMAP ${listMode ? "list" : "search"} failed in every requested mailbox for account ${cfg.accountLabel}: ${detail}.`
         );
       }
       let ordered = fetched;
@@ -58509,7 +58519,7 @@ async function run(args, listMode, deps) {
       const partial = failedMailboxes.length > 0;
       const failureNote = partial ? `
 
-Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}"`).join(", ")}.` : "";
+Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}" (${failedMailboxReasons[path]})`).join(", ")}.` : "";
       const verb = listMode ? "listed" : "matched";
       const scope = unscopedSearch ? allMailboxCount === 1 ? `mailbox "${paths[0]}"` : `${allMailboxCount} selectable mailboxes` : `mailbox "${paths[0]}"`;
       if (messages.length === 0) {
@@ -58518,14 +58528,22 @@ Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"
           messages,
           count: 0,
           partial,
-          failedMailboxes
+          failedMailboxes,
+          failedMailboxReasons
         };
       }
       const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalMatched} total ${verb}):
 ` + rows.join("\n") + `
 
 Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.` + failureNote;
-      return { text, messages, count: messages.length, partial, failedMailboxes };
+      return {
+        text,
+        messages,
+        count: messages.length,
+        partial,
+        failedMailboxes,
+        failedMailboxReasons
+      };
     },
     true
   );

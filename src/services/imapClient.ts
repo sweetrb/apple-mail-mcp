@@ -798,11 +798,37 @@ export interface ImapListResult {
   partial: boolean;
   /** Mailboxes omitted from an unscoped IMAP search because SELECT/SEARCH failed. */
   failedMailboxes: string[];
+  /** The underlying error text for each entry in `failedMailboxes`, keyed by the
+   *  same mailbox path (#246 follow-up, @j5pu): the bare path list gave a caller
+   *  no way to tell a real "IMAP list failed in every requested mailbox" from
+   *  anything else — WHY it failed matters as much as THAT it failed. */
+  failedMailboxReasons: Record<string, string>;
 }
 
 interface FetchedMailboxMessage {
   message: ImapMessage;
   path: string;
+}
+
+/**
+ * Turn a per-mailbox IMAP failure (SELECT/SEARCH/STATUS/FETCH inside
+ * `fetchMailboxMatches` — always AFTER authentication, since that happens once
+ * in `connect()` before `run()`'s per-mailbox loop even starts) into safe text
+ * for a tool response. imapflow itself redacts credentials from the LOGIN/
+ * AUTHENTICATE command strings it logs (see RAW_SENSITIVE_COMMANDS in
+ * imap-flow.js), but that redaction can't cover a server's own NO/BAD response
+ * text, which this server doesn't control — so, defense in depth, anything
+ * that looks like it might carry a credential is redacted rather than passed
+ * through raw.
+ */
+function describeMailboxFailure(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const oneLine = raw.split("\n")[0].trim();
+  const looksSensitive = /pass(word)?\s*[:=]|authorization:\s*\S|bearer\s+\S{10,}/i.test(oneLine);
+  const safe = looksSensitive
+    ? "IMAP error (detail redacted — response text looked like it might contain a credential)"
+    : oneLine || "unknown error";
+  return safe.length > 300 ? `${safe.slice(0, 300)}…` : safe;
 }
 
 function hasMailboxFlag(mailbox: ImapMailboxListing, wanted: string): boolean {
@@ -940,6 +966,7 @@ async function run(
       const newestPerMailbox = offset + limit;
       const fetched: FetchedMailboxMessage[] = [];
       const failedMailboxes: string[] = [];
+      const failedMailboxReasons: Record<string, string> = {};
       let totalMatched = 0;
 
       for (const path of paths) {
@@ -949,6 +976,7 @@ async function run(
           fetched.push(...result.messages.map((message) => ({ message, path })));
         } catch (error) {
           failedMailboxes.push(path);
+          failedMailboxReasons[path] = describeMailboxFailure(error);
           console.error(
             `IMAP ${listMode ? "list" : "search"} failed for account "${cfg.accountLabel}", mailbox "${path}": ${String(error)}`
           );
@@ -956,8 +984,11 @@ async function run(
       }
 
       if (failedMailboxes.length === paths.length) {
+        const detail = failedMailboxes
+          .map((path) => `${path} (${failedMailboxReasons[path]})`)
+          .join(", ");
         throw new Error(
-          `IMAP ${listMode ? "list" : "search"} failed in every requested mailbox for account ${cfg.accountLabel}: ${failedMailboxes.join(", ")}.`
+          `IMAP ${listMode ? "list" : "search"} failed in every requested mailbox for account ${cfg.accountLabel}: ${detail}.`
         );
       }
 
@@ -982,7 +1013,9 @@ async function run(
       );
       const partial = failedMailboxes.length > 0;
       const failureNote = partial
-        ? `\n\nPartial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}"`).join(", ")}.`
+        ? `\n\nPartial result. Could not search mailbox(es): ${failedMailboxes
+            .map((path) => `"${path}" (${failedMailboxReasons[path]})`)
+            .join(", ")}.`
         : "";
       const verb = listMode ? "listed" : "matched";
       const scope = unscopedSearch
@@ -998,6 +1031,7 @@ async function run(
           count: 0,
           partial,
           failedMailboxes,
+          failedMailboxReasons,
         };
       }
 
@@ -1006,7 +1040,14 @@ async function run(
         rows.join("\n") +
         `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.` +
         failureNote;
-      return { text, messages, count: messages.length, partial, failedMailboxes };
+      return {
+        text,
+        messages,
+        count: messages.length,
+        partial,
+        failedMailboxes,
+        failedMailboxReasons,
+      };
     },
     true
   );

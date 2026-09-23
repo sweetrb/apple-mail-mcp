@@ -611,7 +611,11 @@ describe("imapSearchMessages", () => {
     expect(res.count).toBe(1);
     expect(res.partial).toBe(true);
     expect(res.failedMailboxes).toEqual(["Archive"]);
-    expect(res.text).toContain('Could not search mailbox(es): "Archive"');
+    // #246 follow-up (@j5pu): a bare failed-mailbox path gives no way to tell
+    // WHY it failed — the underlying error must ride along, both structured
+    // (keyed the same as failedMailboxes) and in the prose failure note.
+    expect(res.failedMailboxReasons).toEqual({ Archive: "cannot select" });
+    expect(res.text).toContain('Could not search mailbox(es): "Archive" (cannot select)');
   });
 });
 
@@ -644,7 +648,13 @@ describe("#246 search total is cross-checked against STATUS before being trusted
     // trust it" beats silently returning a corrupted count.
     await expect(
       imapListMessages({ mailbox: "INBOX", limit: 1 }, { config: cfg, connect: async () => client })
-    ).rejects.toThrow(/IMAP list failed in every requested mailbox.*INBOX/);
+    ).rejects.toThrow(
+      // #246 follow-up (@j5pu): the underlying reason must ride along in the
+      // thrown message too — a bare "failed in every requested mailbox: INBOX"
+      // left the reporter with nothing to act on when their own repro hit this
+      // same all-failed path for a different underlying cause.
+      /IMAP list failed in every requested mailbox.*INBOX \(.*reported 100085 matches, more than the mailbox's own 14 messages.*\)\./
+    );
     expect(errSpy.mock.calls.join("\n")).toMatch(
       /reported 100085 matches, more than the mailbox's own 14 messages/
     );
@@ -658,6 +668,49 @@ describe("#246 search total is cross-checked against STATUS before being trusted
     );
     expect(res.count).toBe(2);
     expect(res.text).toContain("2 total listed");
+  });
+});
+
+// #246 follow-up (@j5pu): after the STATUS cross-check above shipped (2.19.11),
+// list-messages started failing loud on their account instead of fabricating a
+// count — real progress — but the failure swallowed WHY: `failedMailboxes` was
+// a bare path, so neither the reporter nor a maintainer could tell a SELECT
+// failure from anything else. The underlying error must now ride along, both
+// in the thrown/prose text and as a structured `failedMailboxReasons` map.
+describe("#246 follow-up: surfaces the underlying reason for a mailbox failure", () => {
+  it("includes the reason when every requested mailbox fails", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      getMailboxLock: async () => {
+        throw new Error("Mailbox does not exist");
+      },
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(
+      imapListMessages({ mailbox: "INBOX", limit: 1 }, { config: cfg, connect: async () => client })
+    ).rejects.toThrow(
+      /IMAP list failed in every requested mailbox for account .*: INBOX \(Mailbox does not exist\)\./
+    );
+    errSpy.mockRestore();
+  });
+
+  it("redacts a per-mailbox error that looks like it might carry a credential", async () => {
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      getMailboxLock: async () => {
+        throw new Error("NO [AUTHENTICATIONFAILED] password=hunter2 rejected");
+      },
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(
+      imapListMessages({ mailbox: "INBOX", limit: 1 }, { config: cfg, connect: async () => client })
+    ).rejects.toThrow(/detail redacted/);
+    const thrown = await imapListMessages(
+      { mailbox: "INBOX", limit: 1 },
+      { config: cfg, connect: async () => client }
+    ).catch((e: Error) => e);
+    expect(String(thrown)).not.toContain("hunter2");
+    errSpy.mockRestore();
   });
 });
 

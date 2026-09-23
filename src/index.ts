@@ -199,6 +199,9 @@ const LIST_OUTPUT_SCHEMA = {
   notSearchedMailboxes: z.array(z.string()).optional(),
   timedOutAccounts: z.array(z.string()).optional(),
   failedMailboxes: z.array(z.string()).optional(),
+  // Underlying error text per entry in `failedMailboxes`, same keys (#246
+  // follow-up) — declared so a client can rely on it rather than parse text.
+  failedMailboxReasons: z.record(z.string(), z.string()).optional(),
 };
 
 /** Shape returned by the batch count tools. */
@@ -345,6 +348,7 @@ function mergedMessageResponse(
     accountsQueried: string[];
     accountsFailed: string[];
     failedMailboxes: string[];
+    failedMailboxReasons: Record<string, string>;
   },
   apple: AppleScan,
   limit: number,
@@ -368,6 +372,7 @@ function mergedMessageResponse(
     notSearchedMailboxes: diagnostics.notSearchedMailboxes,
     timedOutAccounts: diagnostics.timedOutAccounts,
     failedMailboxes: fan.failedMailboxes,
+    failedMailboxReasons: fan.failedMailboxReasons,
   };
   const coverageBlock = partialCoverageBlock(diagnostics);
   if (merged.length === 0) {
@@ -575,6 +580,7 @@ registerTool(
             count: r.count,
             partial: r.partial,
             failedMailboxes: r.failedMailboxes,
+            failedMailboxReasons: r.failedMailboxReasons,
           });
         }
         const fan = await fanOutImapMessages(imapArgs, "search");
@@ -1087,6 +1093,7 @@ registerTool(
           count: r.count,
           partial: r.partial,
           failedMailboxes: r.failedMailboxes,
+          failedMailboxReasons: r.failedMailboxReasons,
         });
       }
       const fan = await fanOutImapMessages({ subject: base, mailbox, limit }, "search");
@@ -1132,6 +1139,7 @@ registerTool(
         count: orderedRows.length,
         partial,
         failedMailboxes: fan.failedMailboxes,
+        failedMailboxReasons: fan.failedMailboxReasons,
       };
       if (orderedRows.length === 0) {
         return successResponse(`No messages found in thread "${base}".${coverage}`, structured);
@@ -1227,6 +1235,7 @@ registerTool(
           count: r.count,
           partial: r.partial,
           failedMailboxes: r.failedMailboxes,
+          failedMailboxReasons: r.failedMailboxReasons,
         });
       }
       const fan = await fanOutImapMessages({ mailbox, limit, offset, from, unreadOnly }, "list");
