@@ -177,6 +177,10 @@ describe("reply/forward draft safety", () => {
     mgr.replyToMessage("42", "body", false, false);
     const script = lastScript();
     expect(script).toContain("save theReply");
+    expect(script).toContain("close theReply saving yes");
+    expect(script.indexOf("save theReply")).toBeLessThan(
+      script.indexOf("close theReply saving yes")
+    );
     expect(script).not.toContain("send theReply");
   });
 
@@ -184,6 +188,10 @@ describe("reply/forward draft safety", () => {
     mgr.forwardMessage("42", ["someone@example.com"], "body", false);
     const script = lastScript();
     expect(script).toContain("save theForward");
+    expect(script).toContain("close theForward saving yes");
+    expect(script.indexOf("save theForward")).toBeLessThan(
+      script.indexOf("close theForward saving yes")
+    );
     expect(script).not.toContain("send theForward");
   });
 
@@ -192,12 +200,14 @@ describe("reply/forward draft safety", () => {
     let script = lastScript();
     expect(script).toContain("send theReply");
     expect(script).not.toContain("save theReply");
+    expect(script).not.toContain("close theReply");
 
     h.calls.length = 0;
     mgr.forwardMessage("42", ["someone@example.com"], "body", true);
     script = lastScript();
     expect(script).toContain("send theForward");
     expect(script).not.toContain("save theForward");
+    expect(script).not.toContain("close theForward");
   });
 
   // The failure this hid: Mail's real reason ("present in more than one

@@ -3661,13 +3661,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   ): { success: boolean; error?: string } {
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
-    // `save` is NOT optional on the draft path. Without it the script creates
-    // the outgoing message, sets its content and abandons it, leaving Mail.app
-    // holding an unsaved compose window — pre-addressed, pre-filled, one click
-    // from sending — while this method reports success. `send: false` is the
-    // REVIEW-FIRST option, so leaving a live compose window is the one outcome
-    // it must never produce.
-    const finalAction = send ? "send theReply" : "save theReply";
+    // Mail can show a compose window even for `without opening window`.
+    // Save before closing so the draft remains available in Drafts.
+    const finalAction = send
+      ? "send theReply"
+      : "save theReply\n          close theReply saving yes";
 
     const script = this.findMessageScript(
       id,
@@ -3696,9 +3694,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     send = true
   ): { success: boolean; error?: string } {
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
-    // See replyToMessage: the draft path MUST save, or Mail is left with a live
-    // compose window while this reports success.
-    const finalAction = send ? "send theForward" : "save theForward";
+    // See replyToMessage: save the draft and close any compose window Mail opens.
+    const finalAction = send
+      ? "send theForward"
+      : "save theForward\n          close theForward saving yes";
 
     // Build recipient additions
     let recipientCommands = "";

@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [2.19.13] - 2026-09-23
+
+### Fixed
+
+- **`reply-to-message`/`forward-message` no longer leave a saved draft's
+  compose window open in Mail.app** ([#251](https://github.com/sweetrb/apple-mail-mcp/pull/251),
+  contributed by @maxschuetz06): on a `send: false` reply/forward, AppleScript
+  can still display a compose window for the reply/forward even though it was
+  created "without opening window" — so `save theReply`/`save theForward`
+  alone left Mail holding that window open even though the draft was safely
+  saved. The fix appends `close theReply saving yes`/`close theForward saving
+  yes` after the existing save, closing the window without discarding the
+  save. New regression tests pin the save-before-close ordering and confirm
+  the send path (`send: true`) is untouched.
+
 ## [2.19.12] - 2026-09-22
 
 ### Fixed

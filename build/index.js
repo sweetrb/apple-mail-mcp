@@ -84534,7 +84534,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   replyToMessage(id, body, replyAll = false, send = true) {
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
-    const finalAction = send ? "send theReply" : "save theReply";
+    const finalAction = send ? "send theReply" : "save theReply\n          close theReply saving yes";
     const script = this.findMessageScript(
       id,
       `
@@ -84555,7 +84555,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   forwardMessage(id, to, body, send = true) {
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
-    const finalAction = send ? "send theForward" : "save theForward";
+    const finalAction = send ? "send theForward" : "save theForward\n          close theForward saving yes";
     let recipientCommands = "";
     for (const addr of to) {
       recipientCommands += `make new to recipient at end of to recipients of theForward with properties {address:"${escapeForAppleScript(addr)}"}
