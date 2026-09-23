@@ -125,8 +125,9 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 
 - Use `send-email` for immediate sending
 - Use `create-draft` when the user should review first
+- Use `send-saved-draft` with its default preview to show the current stored draft in Codex; send only after explicit approval with the matching SHA-256 and UIDVALIDITY. This requires matching IMAP and SMTP configuration.
 - Both support optional `attachments` parameter (array of absolute file paths)
-- **Recommendation**: For important emails, use `create-draft` and tell the user to review in Mail.app
+- **Recommendation**: For important emails, use `create-draft`, then preview the saved draft in Codex before any send
 
 ### send-serial-email (mail merge)
 

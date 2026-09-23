@@ -36,6 +36,8 @@ Use this skill when the user:
 | `send-email`          | Send a new email immediately                                                                                                                                                                                                                                                            |
 | `send-serial-email`   | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders)                                                                                                                                                                                                    |
 | `create-draft`        | Save an email to Drafts for review                                                                                                                                                                                                                                                      |
+| `list-signatures`     | List native Mail signature names for an explicit draft                                                                                                                                                                                                                                  |
+| `send-saved-draft`    | Preview a current IMAP Drafts message in Codex, then send the exact approved version over matching SMTP                                                                                                                                                                                |
 | `reply-to-message`    | Reply to a message (supports reply-all)                                                                                                                                                                                                                                                 |
 | `forward-message`     | Forward a message to new recipients                                                                                                                                                                                                                                                     |
 | `mark-as-read`        | Mark a message as read                                                                                                                                                                                                                                                                  |
@@ -174,7 +176,7 @@ User: "Send an email to bob@example.com about the meeting"
 Action: Use send-email with to=["bob@example.com"], appropriate subject and body
 
 User: "Draft an email to the team" (wants to review first)
-Action: Use create-draft, then tell user to review in Mail.app
+Action: Use create-draft, then preview the current saved draft in Codex with send-saved-draft (dryRun=true) when IMAP/SMTP is configured
 ```
 
 ### Replying and Forwarding
@@ -212,7 +214,7 @@ Action: Use delete-message with the message ID
 1. **Message IDs**: All message operations require an ID. Get IDs from `list-messages` or `search-messages` first.
 2. **Recipient Arrays**: The `to`, `cc`, and `bcc` parameters must be arrays, even for single recipients: `["email@example.com"]`
 3. **Account Selection**: Read tools (`list-messages`, `search-messages`) cover all accounts when `account` is omitted; other operations default to Mail's default account (first enabled account as fallback). Use the `account` parameter to target a specific one.
-4. **Draft vs Send**: Use `create-draft` when the user wants to review before sending. Recommend this for important emails.
+4. **Draft vs Send**: Use `create-draft` when the user wants to review before sending. For a saved-draft send, show the full `send-saved-draft` preview in Codex, obtain explicit approval, then pass the preview's SHA-256 and UIDVALIDITY with `dryRun: false`. The tool requires an `imap:` Drafts ID and a matching SMTP identity; never retry an uncertain send.
 5. **Backslash Escaping**: When email content contains backslashes, escape them as `\\` in the JSON.
 6. **macOS Only**: This skill only works on macOS systems.
 
@@ -247,7 +249,8 @@ User: "Reply to Sarah's email about the budget"
 ```
 User: "Send an email to the client about the delay"
 → 1. create-draft with the composed email
-→ 2. Tell user: "I've created a draft. Please review it in Mail.app before sending."
+→ 2. Preview the stored draft in Codex with send-saved-draft dryRun=true if IMAP/SMTP is configured
+→ 3. Show sender, recipients, subject, body, and attachments to the user and ask for approval before any send
 ```
 
 ### Multi-account usage

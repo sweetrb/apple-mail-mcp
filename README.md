@@ -775,9 +775,28 @@ Save an email to Drafts without sending.
 | `cc`          | string[]                                | No       | CC recipients                                                                                                                                          |
 | `bcc`         | string[]                                | No       | BCC recipients                                                                                                                                         |
 | `account`     | string                                  | No       | Account for draft                                                                                                                                      |
+| `sender`      | string                                  | No       | Exact From address, including an alias of the selected account                                                                                         |
+| `signature`   | string                                  | No       | Exact name from `list-signatures`; omitted means no native Mail signature                                                                             |
 | `attachments` | (string \| {filename, contentBase64})[] | No       | Up to 20 attachments: absolute file paths inside the configured read roots and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 
-**Returns:** Confirmation that draft was created.
+**Returns:** The saved composer ID and the actual sender/signature. The composer ID is not a stored Drafts message ID.
+
+#### `list-signatures`
+
+List native Apple Mail signature names before selecting one for `create-draft`. This read-only tool takes no parameters and returns the available names.
+
+#### `send-saved-draft`
+
+Preview the current stored draft in Codex, then send its approved MIME content after approval. This path needs a configured IMAP account and matching SMTP identity. First use `list-messages` on Drafts for that IMAP-configured account and pass its `imap:` ID to a preview call. Show the returned sender, all recipients (including Bcc and Reply-To), subject, body, HTML alternative, and attachment list in Codex. After the user explicitly approves that content, call again with `dryRun: false` and the preview's SHA-256 and UIDVALIDITY. An edit or replacement since preview blocks the send. The wire copy omits Bcc and Mail's draft-only headers while preserving the MIME body. A successful send files a best-effort Sent copy and moves the original draft to Trash; if either cleanup fails, the result reports it without resending.
+
+| Parameter             | Type    | Required | Description |
+| --------------------- | ------- | -------- | ----------- |
+| `draftId`             | string  | Yes      | `imap:` ID from the account's Drafts mailbox |
+| `dryRun`              | boolean | No       | `true` by default: return the current preview without sending |
+| `approvedSha256`      | string  | For send | SHA-256 returned by the approved preview |
+| `approvedUidValidity` | string  | For send | UIDVALIDITY returned by the approved preview |
+
+**⚠️ Safety:** `dryRun: false` sends real mail immediately and cannot be undone. Confirm the exact preview in Codex before sending. A timeout or uncertain SMTP result must be checked in Sent before any new attempt.
 
 #### `get-thread`
 

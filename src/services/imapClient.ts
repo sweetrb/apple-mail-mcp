@@ -92,6 +92,9 @@ interface ImapEnvelope {
   subject?: string;
   date?: Date | string;
   from?: ImapAddress[];
+  to?: ImapAddress[];
+  cc?: ImapAddress[];
+  bcc?: ImapAddress[];
   messageId?: string;
   inReplyTo?: string;
 }
@@ -1735,6 +1738,10 @@ export const MAX_RFC822_FILE_BYTES = MAX_COMPOSE_SOURCE_BYTES;
 
 export interface ImapRfc822Acquisition {
   account: string;
+  /** Login identity of the account that supplied these bytes. */
+  accountUser: string;
+  /** Server envelope addresses, when supplied, for checking hidden Bcc recipients. */
+  envelopeRecipients?: { to: string[]; cc: string[]; bcc: string[] };
   mailbox: string;
   uid: number;
   /** Mailbox `UIDVALIDITY` as a decimal string. With `uid` it is the durable
@@ -1775,14 +1782,21 @@ export type ImapRfc822Result =
  */
 export async function imapGetMessageRfc822(
   id: string,
-  opts: { maxBytes?: number } = {},
+  opts: { maxBytes?: number; requireDraftMailbox?: boolean } = {},
   deps: ImapDeps = {}
 ): Promise<ImapRfc822Result> {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   const requested = Math.floor(opts.maxBytes ?? MAX_RFC822_INLINE_BYTES);
   const limit = Math.min(Math.max(1, requested), MAX_RFC822_FILE_BYTES);
-  return withClient(depsForMessageRef(ref, deps), async (client) => {
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    if (opts.requireDraftMailbox) {
+      const boxes = await client.list();
+      const draftPath = boxes.find((box) => box.specialUse?.toLowerCase() === "\\drafts")?.path;
+      if (!draftPath || draftPath !== ref.path) {
+        return { success: false, error: `"${ref.path}" is not the account's Drafts mailbox.` };
+      }
+    }
     const lock = await client.getMailboxLock(ref.path, { readOnly: true });
     try {
       const mb = client.mailbox;
@@ -1837,6 +1851,15 @@ export async function imapGetMessageRfc822(
         success: true,
         acquisition: {
           account: ref.account,
+          accountUser: cfg.user,
+          envelopeRecipients:
+            msg.envelope?.to || msg.envelope?.cc || msg.envelope?.bcc
+              ? {
+                  to: msg.envelope.to?.map((address) => address.address ?? "") ?? [],
+                  cc: msg.envelope.cc?.map((address) => address.address ?? "") ?? [],
+                  bcc: msg.envelope.bcc?.map((address) => address.address ?? "") ?? [],
+                }
+              : undefined,
           mailbox: ref.path,
           uid: ref.uid,
           uidValidity,

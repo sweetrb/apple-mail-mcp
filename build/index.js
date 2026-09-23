@@ -7202,700 +7202,6 @@ var require_dist = __commonJS({
   }
 });
 
-// src/utils/docsUrls.ts
-var SETUP_GUIDE_URL, SETUP_HINT;
-var init_docsUrls = __esm({
-  "src/utils/docsUrls.ts"() {
-    "use strict";
-    SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
-    SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
-  }
-});
-
-// src/utils/mimeParse.ts
-function extractBoundary(source) {
-  const match = source.match(/boundary="?([^";\s\r\n]+)"?/i);
-  return match ? match[1] : null;
-}
-function getHeader(headers, name) {
-  const regex = new RegExp(`^${name}:\\s*(.+(?:\\r?\\n[ \\t]+.+)*)`, "im");
-  const match = headers.match(regex);
-  if (!match) return null;
-  return match[1].replace(/\r?\n[ \t]+/g, " ").trim();
-}
-function extractFilename(headers) {
-  const dispHeader = getHeader(headers, "Content-Disposition");
-  if (dispHeader) {
-    const fnMatch = dispHeader.match(/filename="?([^";\r\n]+)"?/i);
-    if (fnMatch) return fnMatch[1].trim();
-  }
-  const ctHeader = getHeader(headers, "Content-Type");
-  if (ctHeader) {
-    const nameMatch = ctHeader.match(/name="?([^";\r\n]+)"?/i);
-    if (nameMatch) return nameMatch[1].trim();
-  }
-  return null;
-}
-function isInlineDisposition(headers) {
-  const dispHeader = getHeader(headers, "Content-Disposition");
-  if (!dispHeader) return false;
-  return dispHeader.toLowerCase().startsWith("inline");
-}
-function extractSize(headers) {
-  const dispHeader = getHeader(headers, "Content-Disposition");
-  if (dispHeader) {
-    const sizeMatch = dispHeader.match(/size=(\d+)/i);
-    if (sizeMatch) return parseInt(sizeMatch[1], 10);
-  }
-  return 0;
-}
-function extractMimeType(headers) {
-  const ctHeader = getHeader(headers, "Content-Type");
-  if (!ctHeader) return "application/octet-stream";
-  const typeMatch = ctHeader.match(/^([^;\s]+)/);
-  return typeMatch ? typeMatch[1].toLowerCase() : "application/octet-stream";
-}
-function extractCharset(headers) {
-  const ct = getHeader(headers, "Content-Type");
-  const m = ct?.match(/charset\s*=\s*"?([^";\s]+)"?/i);
-  return m ? m[1].toLowerCase() : null;
-}
-function decodePartText(bytes, charset) {
-  if (charset && !["utf-8", "utf8", "us-ascii", "ascii"].includes(charset)) {
-    try {
-      return new TextDecoder(charset).decode(bytes);
-    } catch {
-    }
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return new TextDecoder("windows-1252").decode(bytes);
-  }
-}
-function estimateBase64Size(base64Body) {
-  const cleaned = base64Body.replace(/[\s\r\n]/g, "");
-  return Math.floor(cleaned.length * 3 / 4);
-}
-function splitMimeParts(source, boundary) {
-  const parts = [];
-  const boundaryDelim = `--${boundary}`;
-  const sections = source.split(boundaryDelim);
-  for (const section of sections) {
-    const trimmed = section.trim();
-    if (!trimmed || trimmed.startsWith("--")) continue;
-    const blankLineIdx = trimmed.search(/\r?\n\r?\n/);
-    if (blankLineIdx === -1) continue;
-    const headers = trimmed.substring(0, blankLineIdx);
-    const body = trimmed.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-    parts.push({ headers, body });
-  }
-  return parts;
-}
-function walkLeafParts(source, boundary, depth = 0) {
-  const result = [];
-  const parts = splitMimeParts(source, boundary);
-  for (const part of parts) {
-    const ct = getHeader(part.headers, "Content-Type");
-    if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
-      const nestedBoundary = extractBoundary(ct);
-      if (nestedBoundary) {
-        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1));
-        continue;
-      }
-    }
-    result.push(part);
-  }
-  return result;
-}
-function decodeBody(body, encoding) {
-  const enc = (encoding || "").toLowerCase().trim();
-  if (enc === "base64") {
-    return Buffer.from(body.replace(/[\s\r\n]/g, ""), "base64");
-  }
-  if (enc === "quoted-printable") {
-    return decodeQuotedPrintable(body);
-  }
-  return Buffer.from(body, "binary");
-}
-function decodeQuotedPrintable(body) {
-  const noSoft = body.replace(/=\r?\n/g, "");
-  const bytes = [];
-  for (let i = 0; i < noSoft.length; i++) {
-    const c = noSoft[i];
-    if (c === "=" && i + 2 < noSoft.length) {
-      const hex = noSoft.substring(i + 1, i + 3);
-      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
-        bytes.push(parseInt(hex, 16));
-        i += 2;
-        continue;
-      }
-    }
-    bytes.push(c.charCodeAt(0) & 255);
-  }
-  return Buffer.from(bytes);
-}
-function estimateSize(body, encoding) {
-  const enc = (encoding || "").toLowerCase().trim();
-  if (enc === "base64") return estimateBase64Size(body);
-  return body.length;
-}
-function parseMimeAttachments(source) {
-  if (!source || !source.trim()) return [];
-  const boundary = extractBoundary(source);
-  if (!boundary) return [];
-  const parts = walkLeafParts(source, boundary);
-  const attachments = [];
-  for (const part of parts) {
-    const filename = extractFilename(part.headers);
-    if (!filename) continue;
-    if (isInlineDisposition(part.headers)) continue;
-    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
-    attachments.push({
-      name: filename,
-      mimeType: extractMimeType(part.headers),
-      size: extractSize(part.headers) || estimateSize(part.body, encoding)
-    });
-  }
-  return attachments;
-}
-function extractHtmlBody(source) {
-  if (!source || !source.trim()) return null;
-  const boundary = extractBoundary(source);
-  if (boundary) {
-    for (const part of walkLeafParts(source, boundary)) {
-      if (extractMimeType(part.headers) === "text/html") {
-        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodePartText(decodeBody(part.body, encoding2), extractCharset(part.headers));
-      }
-    }
-    return null;
-  }
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  if (blankLineIdx === -1) return null;
-  const headers = source.substring(0, blankLineIdx);
-  if (extractMimeType(headers) !== "text/html") return null;
-  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
-}
-function extractTextBody(source) {
-  if (!source || !source.trim()) return null;
-  const boundary = extractBoundary(source);
-  if (boundary) {
-    for (const part of walkLeafParts(source, boundary)) {
-      if (extractMimeType(part.headers) === "text/plain") {
-        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodePartText(decodeBody(part.body, encoding2), extractCharset(part.headers));
-      }
-    }
-    return null;
-  }
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  if (blankLineIdx === -1) return null;
-  const headers = source.substring(0, blankLineIdx);
-  const ct = extractMimeType(headers);
-  if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
-  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
-}
-function extractRfcMessageIdFromSource(source) {
-  if (!source || !source.trim()) return "";
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  const headers = blankLineIdx === -1 ? source : source.substring(0, blankLineIdx);
-  const raw = getHeader(headers, "Message-ID") ?? getHeader(headers, "Message-Id");
-  if (!raw) return "";
-  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
-}
-function extractMimeAttachment(source, attachmentName) {
-  if (!source || !source.trim()) return null;
-  const boundary = extractBoundary(source);
-  if (!boundary) return null;
-  const parts = walkLeafParts(source, boundary);
-  for (const part of parts) {
-    const filename = extractFilename(part.headers);
-    if (filename !== attachmentName) continue;
-    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
-    const data = decodeBody(part.body, encoding);
-    return {
-      name: filename,
-      mimeType: extractMimeType(part.headers),
-      size: extractSize(part.headers) || data.length,
-      data
-    };
-  }
-  return null;
-}
-var MAX_MIME_DEPTH;
-var init_mimeParse = __esm({
-  "src/utils/mimeParse.ts"() {
-    "use strict";
-    MAX_MIME_DEPTH = 20;
-  }
-});
-
-// src/utils/headers.ts
-function decodeEncodedWords(value) {
-  if (!value.includes("=?")) return value;
-  const joined = value.replace(/(\?=)\s+(=\?)/g, "$1$2");
-  return joined.replace(
-    /=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g,
-    (whole, charset, enc, text) => {
-      try {
-        const bytes = enc.toUpperCase() === "B" ? Buffer.from(text, "base64") : Buffer.from(
-          text.replace(/_/g, " ").replace(
-            /=([0-9A-Fa-f]{2})/g,
-            (_m, h) => String.fromCharCode(parseInt(h, 16))
-          ),
-          "latin1"
-        );
-        return new TextDecoder(normalizeCharset(charset)).decode(bytes);
-      } catch {
-        return whole;
-      }
-    }
-  );
-}
-function normalizeCharset(charset) {
-  const bare = charset.split("*")[0].trim().toLowerCase();
-  try {
-    new TextDecoder(bare);
-    return bare;
-  } catch {
-    return "utf-8";
-  }
-}
-function bareId(raw) {
-  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
-}
-function splitIds(raw) {
-  const bracketed = raw.match(/<[^>]+>/g);
-  if (bracketed) return bracketed.map(bareId).filter(Boolean);
-  return raw.split(/[\s,]+/).map(bareId).filter(Boolean);
-}
-function parseDateHeader(value) {
-  const direct = new Date(value);
-  if (!Number.isNaN(direct.getTime())) return direct;
-  let replaced = value;
-  for (const [abbr, en] of Object.entries(LOCALE_MONTHS)) {
-    const re = new RegExp(`\\b${abbr}\\.?\\b`, "i");
-    if (re.test(replaced)) {
-      replaced = replaced.replace(re, en);
-      break;
-    }
-  }
-  if (replaced !== value) {
-    const viaMonth = new Date(replaced);
-    if (!Number.isNaN(viaMonth.getTime())) return viaMonth;
-  }
-  return void 0;
-}
-function splitFusedDate(headers) {
-  const i = headers.findIndex((h) => h.name.toLowerCase() === "date");
-  if (i === -1) return void 0;
-  const m = /^([A-Za-z][A-Za-z0-9-]*):[ \t]?(.*)$/.exec(headers[i].value);
-  if (!m) return void 0;
-  const name = m[1];
-  if (!FUSABLE_HEADER_NAMES.has(name.toLowerCase()) && !/^x-/i.test(name)) return void 0;
-  headers.splice(i, 1, { name: headers[i].name, value: "" }, { name, value: m[2].trim() });
-  return name;
-}
-function parseHeaderBlock(input) {
-  const text = (input ?? "").replace(/\r\n|\r/g, "\n");
-  const blank = text.search(/\n\n/);
-  const raw = (blank === -1 ? text : text.slice(0, blank)).replace(/\n+$/, "");
-  const headers = [];
-  for (const line of raw.split("\n")) {
-    if (/^[ \t]/.test(line) && headers.length) {
-      headers[headers.length - 1].value += " " + line.trim();
-      continue;
-    }
-    const m = /^([!-9;-~]+):[ \t]?(.*)$/.exec(line);
-    if (!m) continue;
-    headers.push({ name: m[1], value: m[2].trim() });
-  }
-  const warnings = [];
-  const fused = splitFusedDate(headers);
-  if (fused) {
-    warnings.push(
-      `The Date: header arrived with no value and the ${fused}: header joined onto it (Mail.app's all-headers property does this for a Date: it cannot parse). Split back into Date: and ${fused}:; the send date is unknown from this source.`
-    );
-  }
-  const first = (name) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
-  const all = (name) => headers.filter((h) => h.name.toLowerCase() === name.toLowerCase()).map((h) => h.value);
-  const decoded = (name) => {
-    const v = first(name);
-    return v === void 0 ? void 0 : decodeEncodedWords(v);
-  };
-  const dateHeader = first("Date") || void 0;
-  let date3;
-  if (dateHeader) {
-    const parsed = parseDateHeader(dateHeader.replace(/\s*\([^)]*\)\s*$/, ""));
-    if (parsed) date3 = parsed.toISOString();
-  }
-  const messageIdRaw = first("Message-ID") ?? first("Message-Id");
-  const inReplyToRaw = first("In-Reply-To");
-  const referencesRaw = first("References");
-  return {
-    raw,
-    headers,
-    date: date3,
-    dateHeader,
-    messageId: messageIdRaw ? bareId(messageIdRaw) || void 0 : void 0,
-    subject: decoded("Subject"),
-    from: decoded("From"),
-    to: decoded("To"),
-    cc: decoded("Cc"),
-    replyTo: decoded("Reply-To"),
-    inReplyTo: inReplyToRaw ? bareId(inReplyToRaw) || void 0 : void 0,
-    references: referencesRaw ? splitIds(referencesRaw) : [],
-    received: all("Received"),
-    ...warnings.length ? { warnings } : {}
-  };
-}
-function headersStructured(id, parsed, dateReceived, backend) {
-  const received = dateReceived instanceof Date ? Number.isNaN(dateReceived.getTime()) ? void 0 : dateReceived.toISOString() : dateReceived || void 0;
-  return {
-    id,
-    ...backend ? { backend } : {},
-    raw: parsed.raw,
-    headers: parsed.headers,
-    headerCount: parsed.headers.length,
-    ...parsed.date !== void 0 ? { date: parsed.date } : {},
-    ...parsed.dateHeader !== void 0 ? { dateHeader: parsed.dateHeader } : {},
-    ...received !== void 0 ? { dateReceived: received } : {},
-    ...parsed.messageId !== void 0 ? { messageId: parsed.messageId } : {},
-    ...parsed.subject !== void 0 ? { subject: parsed.subject } : {},
-    ...parsed.from !== void 0 ? { from: parsed.from } : {},
-    ...parsed.to !== void 0 ? { to: parsed.to } : {},
-    ...parsed.cc !== void 0 ? { cc: parsed.cc } : {},
-    ...parsed.replyTo !== void 0 ? { replyTo: parsed.replyTo } : {},
-    ...parsed.inReplyTo !== void 0 ? { inReplyTo: parsed.inReplyTo } : {},
-    references: parsed.references,
-    received: parsed.received,
-    ...parsed.warnings?.length ? { warnings: parsed.warnings } : {}
-  };
-}
-function plausibleDateSent(sent, received) {
-  if (!sent || Number.isNaN(sent.getTime())) return void 0;
-  if (!received || Number.isNaN(received.getTime())) return sent;
-  return sent.getTime() - received.getTime() > MAX_SENT_AFTER_RECEIVED_MS ? void 0 : sent;
-}
-function headerBlockBytes(source, whole) {
-  const cuts = [source.indexOf("\r\n\r\n"), source.indexOf("\n\n")].filter((i) => i !== -1);
-  if (cuts.length) return source.subarray(0, Math.min(...cuts));
-  return whole ? source : void 0;
-}
-function decodeHeaderBytes(bytes) {
-  const utf8 = new TextDecoder("utf-8", { fatal: true });
-  const cp1252 = new TextDecoder("windows-1252");
-  const lines = [];
-  let start = 0;
-  for (let i = 0; i <= bytes.length; i++) {
-    if (i < bytes.length && bytes[i] !== 10) continue;
-    const line = bytes.subarray(start, i);
-    try {
-      lines.push(utf8.decode(line));
-    } catch {
-      lines.push(cp1252.decode(line));
-    }
-    start = i + 1;
-  }
-  return lines.join("\n");
-}
-function isoOrUndefined(d) {
-  if (d === void 0 || d === "") return void 0;
-  const date3 = d instanceof Date ? d : new Date(d);
-  return Number.isNaN(date3.getTime()) ? void 0 : date3.toISOString();
-}
-var LOCALE_MONTHS, FUSABLE_HEADER_NAMES, MAX_SENT_AFTER_RECEIVED_MS;
-var init_headers = __esm({
-  "src/utils/headers.ts"() {
-    "use strict";
-    LOCALE_MONTHS = {
-      // Spanish
-      ene: "Jan",
-      feb: "Feb",
-      mar: "Mar",
-      abr: "Apr",
-      may: "May",
-      jun: "Jun",
-      jul: "Jul",
-      ago: "Aug",
-      sep: "Sep",
-      set: "Sep",
-      oct: "Oct",
-      nov: "Nov",
-      dic: "Dec",
-      // French
-      janv: "Jan",
-      f\u00E9vr: "Feb",
-      fevr: "Feb",
-      avr: "Apr",
-      mai: "May",
-      juin: "Jun",
-      juil: "Jul",
-      ao\u00FBt: "Aug",
-      aout: "Aug",
-      d\u00E9c: "Dec",
-      dec: "Dec",
-      // German
-      jan: "Jan",
-      m\u00E4r: "Mar",
-      maer: "Mar",
-      mrz: "Mar",
-      okt: "Oct",
-      dez: "Dec",
-      // Italian / Portuguese
-      gen: "Jan",
-      giu: "Jun",
-      lug: "Jul",
-      ott: "Oct",
-      out: "Oct",
-      fev: "Feb"
-    };
-    FUSABLE_HEADER_NAMES = /* @__PURE__ */ new Set([
-      "subject",
-      "from",
-      "to",
-      "cc",
-      "bcc",
-      "sender",
-      "reply-to",
-      "message-id",
-      "in-reply-to",
-      "references",
-      "mime-version",
-      "content-type",
-      "content-transfer-encoding",
-      "content-disposition",
-      "return-path",
-      "received",
-      "importance",
-      "priority",
-      "thread-topic",
-      "thread-index"
-    ]);
-    MAX_SENT_AFTER_RECEIVED_MS = 7 * 24 * 60 * 60 * 1e3;
-  }
-});
-
-// src/utils/attachmentLimits.ts
-function isInlineAttachmentBase64WithinLimit(contentBase64) {
-  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS) return false;
-  let encodedChars = 0;
-  for (const char of contentBase64) {
-    if (!/\s/u.test(char) && ++encodedChars > MAX_INLINE_ATTACHMENT_BASE64_CHARS) return false;
-  }
-  return true;
-}
-function decodeInlineAttachment(contentBase64) {
-  if (!isInlineAttachmentBase64WithinLimit(contentBase64)) {
-    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
-  }
-  const content = Buffer.from(contentBase64, "base64");
-  if (content.length > MAX_INLINE_ATTACHMENT_BYTES) {
-    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
-  }
-  return content;
-}
-var MAX_INLINE_ATTACHMENT_BYTES, MAX_IMAP_ATTACHMENT_BYTES, MAX_INLINE_ATTACHMENT_BASE64_CHARS, MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS;
-var init_attachmentLimits = __esm({
-  "src/utils/attachmentLimits.ts"() {
-    "use strict";
-    MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-    MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
-    MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
-    MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
-  }
-});
-
-// src/utils/attachmentReadPolicy.ts
-import { realpathSync, statSync } from "fs";
-import { homedir as homedir2, tmpdir } from "os";
-import { delimiter, isAbsolute, join as join2, resolve, sep } from "path";
-function canonicalize(path) {
-  return realpathSync.native(path);
-}
-function sensitiveRoots() {
-  return SENSITIVE_HOME_ROOTS.map((root) => {
-    try {
-      return canonicalize(root);
-    } catch {
-      return root;
-    }
-  });
-}
-function isWithinRoot(candidate, root) {
-  return candidate === root || candidate.startsWith(root + sep);
-}
-function hasHiddenPathSegment(candidate) {
-  return candidate.split(sep).some((segment) => segment.startsWith(".") && segment.length > 1);
-}
-function isProtectedPath(candidate) {
-  if (hasHiddenPathSegment(candidate)) return true;
-  if (sensitiveRoots().some((root) => isWithinRoot(candidate, root))) return true;
-  let home;
-  try {
-    home = canonicalize(homedir2());
-  } catch {
-    home = resolve(homedir2());
-  }
-  if (!isWithinRoot(candidate, home)) return false;
-  const relative = candidate.slice(home.length).split(sep).filter(Boolean);
-  return relative.length >= 4 && relative[0].toLowerCase() === "library" && relative[1].toLowerCase() === "application support" && relative.at(-1)?.toLowerCase() === "config.json";
-}
-function configuredRoots(env) {
-  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
-  const extraRoots = raw === void 0 ? [] : raw.split(delimiter).map((root) => root.trim()).filter(Boolean);
-  const requested = [...DEFAULT_ATTACHMENT_READ_ROOTS, ...extraRoots];
-  for (const root of requested) {
-    if (!isAbsolute(root)) {
-      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
-    }
-  }
-  const resolved = [];
-  for (const root of requested) {
-    try {
-      const canonical = canonicalize(resolve(root));
-      if (!resolved.includes(canonical)) resolved.push(canonical);
-    } catch {
-    }
-  }
-  return resolved;
-}
-function resolveAttachmentReadPath(filePath, env = process.env) {
-  if (!isAbsolute(filePath)) {
-    throw new Error(`Attachment path must be absolute: "${filePath}"`);
-  }
-  let canonical;
-  try {
-    canonical = canonicalize(filePath);
-  } catch {
-    throw new Error(`Attachment file not found: "${filePath}"`);
-  }
-  try {
-    if (!statSync(canonical).isFile()) {
-      throw new Error(`Attachment path is not a regular file: "${filePath}"`);
-    }
-  } catch (error2) {
-    if (error2 instanceof Error && error2.message.includes("not a regular file")) throw error2;
-    throw new Error(`Attachment file not found: "${filePath}"`);
-  }
-  if (isProtectedPath(canonical)) {
-    throw new Error(
-      `Attachment path is in a protected location: "${filePath}". Hidden files and credential/configuration locations cannot be sent as attachments.`
-    );
-  }
-  if (!configuredRoots(env).some((root) => isWithinRoot(canonical, root))) {
-    throw new Error(
-      `Attachment path is outside the allowed read roots: "${filePath}". Use an ordinary home-directory, /Volumes, or temporary path, or configure ${ATTACHMENT_READ_ROOTS_ENV} for an additional explicit root.`
-    );
-  }
-  return canonical;
-}
-var ATTACHMENT_READ_ROOTS_ENV, DEFAULT_ATTACHMENT_READ_ROOTS, SENSITIVE_HOME_ROOTS;
-var init_attachmentReadPolicy = __esm({
-  "src/utils/attachmentReadPolicy.ts"() {
-    "use strict";
-    ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
-    DEFAULT_ATTACHMENT_READ_ROOTS = [homedir2(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
-    SENSITIVE_HOME_ROOTS = [
-      join2(homedir2(), ".ssh"),
-      join2(homedir2(), ".aws"),
-      join2(homedir2(), ".config", "gh"),
-      join2(homedir2(), "Library", "Keychains")
-    ];
-  }
-});
-
-// src/services/auditLog.ts
-import { appendFileSync } from "node:fs";
-function isOn(raw) {
-  return /^(1|true|yes|on)$/i.test((raw ?? "").trim());
-}
-function auditLogPath() {
-  const raw = process.env[AUDIT_LOG_ENV]?.trim();
-  return raw ? raw : null;
-}
-function isAuditEnabled() {
-  return auditLogPath() !== null;
-}
-function auditSubjectsEnabled() {
-  return isAuditEnabled() && isOn(process.env[AUDIT_SUBJECTS_ENV]);
-}
-function auditSnapshotMax() {
-  const raw = process.env[AUDIT_SNAPSHOT_MAX_ENV]?.trim();
-  if (raw === void 0 || raw === "") return DEFAULT_SNAPSHOT_MAX;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return DEFAULT_SNAPSHOT_MAX;
-  return Math.floor(n);
-}
-function auditSnapshotChunk() {
-  const raw = process.env[AUDIT_SNAPSHOT_CHUNK_ENV]?.trim();
-  if (raw === void 0 || raw === "") return DEFAULT_SNAPSHOT_CHUNK;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 1) return DEFAULT_SNAPSHOT_CHUNK;
-  return Math.floor(n);
-}
-function classifyCountStatus(readable, expected, observed) {
-  if (!readable) return { status: "unknown", unknownReason: "count-unreadable" };
-  if (expected === null) return { status: "unknown", unknownReason: "no-expectation" };
-  if (observed === expected) return { status: "match" };
-  if ((observed ?? 0) > expected) return { status: "over" };
-  if (observed === 0) return { status: "unknown", unknownReason: "count-did-not-move" };
-  return { status: "unknown", unknownReason: "count-partial" };
-}
-function writeAuditRecord(record2) {
-  const path = auditLogPath();
-  if (!path) return;
-  try {
-    appendFileSync(path, `${JSON.stringify(record2)}
-`, "utf8");
-  } catch (err) {
-    console.error(
-      `[apple-mail-mcp] audit log write failed (${path}): ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-}
-function writeDestructiveAudit(ctx, report) {
-  if (!isAuditEnabled()) return;
-  writeAuditRecord({
-    ts: (/* @__PURE__ */ new Date()).toISOString(),
-    tool: ctx.tool,
-    serverVersion: ctx.serverVersion,
-    args: ctx.args,
-    preImages: report.preImages,
-    outcomes: report.outcomes,
-    countDeltas: report.countDeltas,
-    collateral: report.collateral,
-    subjectsLogged: auditSubjectsEnabled()
-  });
-}
-function countDeltaWarning(d) {
-  if (d.status !== "over" || d.expected === null) return null;
-  const extra = (d.observed ?? 0) - d.expected;
-  const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
-  return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. Anything else removing mail from this mailbox at the same moment \u2014 a Mail rule, a server-side filter, another client, an IMAP expunge \u2014 reads the same way, so rule that out first. If nothing else was touching it, this is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
-}
-function reconciliationWarnings(report) {
-  return report.countDeltas.map((d) => countDeltaWarning(d)).filter((w) => w !== null);
-}
-var AUDIT_LOG_ENV, AUDIT_SUBJECTS_ENV, AUDIT_SNAPSHOT_MAX_ENV, AUDIT_SNAPSHOT_CHUNK_ENV, DEFAULT_SNAPSHOT_MAX, DEFAULT_SNAPSHOT_CHUNK, SNAPSHOT_SLICE_ATTEMPTS;
-var init_auditLog = __esm({
-  "src/services/auditLog.ts"() {
-    "use strict";
-    AUDIT_LOG_ENV = "APPLE_MAIL_MCP_AUDIT_LOG";
-    AUDIT_SUBJECTS_ENV = "APPLE_MAIL_MCP_AUDIT_SUBJECTS";
-    AUDIT_SNAPSHOT_MAX_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX";
-    AUDIT_SNAPSHOT_CHUNK_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK";
-    DEFAULT_SNAPSHOT_MAX = 2e3;
-    DEFAULT_SNAPSHOT_CHUNK = 250;
-    SNAPSHOT_SLICE_ATTEMPTS = 2;
-  }
-});
-
 // node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/punycode/index.js
 var require_punycode = __commonJS({
   "node_modules/.pnpm/nodemailer@9.1.1/node_modules/nodemailer/lib/punycode/index.js"(exports, module) {
@@ -12424,7 +11730,7 @@ var require_addressparser = __commonJS({
         data.text = data.text.join(" ");
         let groupMembers = [];
         if (data.group.length) {
-          const parsedGroup = addressparser(data.group.join(","), { _depth: depth + 1 });
+          const parsedGroup = addressparser2(data.group.join(","), { _depth: depth + 1 });
           parsedGroup.forEach((member) => {
             if (member.group) {
               groupMembers = groupMembers.concat(member.group);
@@ -12596,7 +11902,7 @@ var require_addressparser = __commonJS({
       }
     };
     var MAX_NESTED_GROUP_DEPTH = 50;
-    function addressparser(str2, options) {
+    function addressparser2(str2, options) {
       options = options || {};
       const depth = options._depth || 0;
       if (depth > MAX_NESTED_GROUP_DEPTH) {
@@ -12653,7 +11959,7 @@ var require_addressparser = __commonJS({
       }
       return parsedAddresses;
     }
-    module.exports = addressparser;
+    module.exports = addressparser2;
   }
 });
 
@@ -12780,7 +12086,7 @@ var require_mime_node = __commonJS({
     var mimeFuncs = require_mime_funcs();
     var qp = require_qp();
     var base642 = require_base64();
-    var addressparser = require_addressparser();
+    var addressparser2 = require_addressparser();
     var nmfetch = require_fetch();
     var errors = require_errors2();
     var LastNewline = require_last_newline();
@@ -13576,7 +12882,7 @@ var require_mime_node = __commonJS({
             flattened.push(copy);
             return;
           }
-          const parsed = this._normalizeParsedAddresses(addressparser(address));
+          const parsed = this._normalizeParsedAddresses(addressparser2(address));
           for (let i = 0; i < parsed.length; i++) {
             flattened.push(parsed[i]);
           }
@@ -65356,6 +64662,934 @@ var require_imap_flow = __commonJS({
   }
 });
 
+// src/utils/attachmentLimits.ts
+function isInlineAttachmentBase64WithinLimit(contentBase64) {
+  if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS) return false;
+  let encodedChars = 0;
+  for (const char of contentBase64) {
+    if (!/\s/u.test(char) && ++encodedChars > MAX_INLINE_ATTACHMENT_BASE64_CHARS) return false;
+  }
+  return true;
+}
+function decodeInlineAttachment(contentBase64) {
+  if (!isInlineAttachmentBase64WithinLimit(contentBase64)) {
+    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
+  }
+  const content = Buffer.from(contentBase64, "base64");
+  if (content.length > MAX_INLINE_ATTACHMENT_BYTES) {
+    throw new Error("Inline attachment exceeds the 25 MiB decoded size limit.");
+  }
+  return content;
+}
+var MAX_INLINE_ATTACHMENT_BYTES, MAX_IMAP_ATTACHMENT_BYTES, MAX_INLINE_ATTACHMENT_BASE64_CHARS, MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS;
+var init_attachmentLimits = __esm({
+  "src/utils/attachmentLimits.ts"() {
+    "use strict";
+    MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+    MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
+    MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
+    MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
+  }
+});
+
+// src/utils/attachmentReadPolicy.ts
+import { realpathSync, statSync } from "fs";
+import { homedir, tmpdir } from "os";
+import { delimiter, isAbsolute, join, resolve, sep } from "path";
+function canonicalize(path) {
+  return realpathSync.native(path);
+}
+function sensitiveRoots() {
+  return SENSITIVE_HOME_ROOTS.map((root) => {
+    try {
+      return canonicalize(root);
+    } catch {
+      return root;
+    }
+  });
+}
+function isWithinRoot(candidate, root) {
+  return candidate === root || candidate.startsWith(root + sep);
+}
+function hasHiddenPathSegment(candidate) {
+  return candidate.split(sep).some((segment) => segment.startsWith(".") && segment.length > 1);
+}
+function isProtectedPath(candidate) {
+  if (hasHiddenPathSegment(candidate)) return true;
+  if (sensitiveRoots().some((root) => isWithinRoot(candidate, root))) return true;
+  let home;
+  try {
+    home = canonicalize(homedir());
+  } catch {
+    home = resolve(homedir());
+  }
+  if (!isWithinRoot(candidate, home)) return false;
+  const relative = candidate.slice(home.length).split(sep).filter(Boolean);
+  return relative.length >= 4 && relative[0].toLowerCase() === "library" && relative[1].toLowerCase() === "application support" && relative.at(-1)?.toLowerCase() === "config.json";
+}
+function configuredRoots(env) {
+  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
+  const extraRoots = raw === void 0 ? [] : raw.split(delimiter).map((root) => root.trim()).filter(Boolean);
+  const requested = [...DEFAULT_ATTACHMENT_READ_ROOTS, ...extraRoots];
+  for (const root of requested) {
+    if (!isAbsolute(root)) {
+      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
+    }
+  }
+  const resolved = [];
+  for (const root of requested) {
+    try {
+      const canonical = canonicalize(resolve(root));
+      if (!resolved.includes(canonical)) resolved.push(canonical);
+    } catch {
+    }
+  }
+  return resolved;
+}
+function resolveAttachmentReadPath(filePath, env = process.env) {
+  if (!isAbsolute(filePath)) {
+    throw new Error(`Attachment path must be absolute: "${filePath}"`);
+  }
+  let canonical;
+  try {
+    canonical = canonicalize(filePath);
+  } catch {
+    throw new Error(`Attachment file not found: "${filePath}"`);
+  }
+  try {
+    if (!statSync(canonical).isFile()) {
+      throw new Error(`Attachment path is not a regular file: "${filePath}"`);
+    }
+  } catch (error2) {
+    if (error2 instanceof Error && error2.message.includes("not a regular file")) throw error2;
+    throw new Error(`Attachment file not found: "${filePath}"`);
+  }
+  if (isProtectedPath(canonical)) {
+    throw new Error(
+      `Attachment path is in a protected location: "${filePath}". Hidden files and credential/configuration locations cannot be sent as attachments.`
+    );
+  }
+  if (!configuredRoots(env).some((root) => isWithinRoot(canonical, root))) {
+    throw new Error(
+      `Attachment path is outside the allowed read roots: "${filePath}". Use an ordinary home-directory, /Volumes, or temporary path, or configure ${ATTACHMENT_READ_ROOTS_ENV} for an additional explicit root.`
+    );
+  }
+  return canonical;
+}
+var ATTACHMENT_READ_ROOTS_ENV, DEFAULT_ATTACHMENT_READ_ROOTS, SENSITIVE_HOME_ROOTS;
+var init_attachmentReadPolicy = __esm({
+  "src/utils/attachmentReadPolicy.ts"() {
+    "use strict";
+    ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
+    DEFAULT_ATTACHMENT_READ_ROOTS = [homedir(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
+    SENSITIVE_HOME_ROOTS = [
+      join(homedir(), ".ssh"),
+      join(homedir(), ".aws"),
+      join(homedir(), ".config", "gh"),
+      join(homedir(), "Library", "Keychains")
+    ];
+  }
+});
+
+// src/utils/docsUrls.ts
+var SETUP_GUIDE_URL, SETUP_HINT;
+var init_docsUrls = __esm({
+  "src/utils/docsUrls.ts"() {
+    "use strict";
+    SETUP_GUIDE_URL = "https://github.com/sweetrb/apple-mail-mcp/blob/main/docs/IMAP-SETUP.md";
+    SETUP_HINT = `Setup guide: ${SETUP_GUIDE_URL} \u2014 run the "doctor" tool to check your setup.`;
+  }
+});
+
+// src/services/smtpMailer.ts
+import { execFileSync } from "child_process";
+function errText(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+async function defaultAppendSentCopy(smtpUser, raw) {
+  const { imapAppendSentCopy: imapAppendSentCopy2 } = await Promise.resolve().then(() => (init_imapClient(), imapClient_exports));
+  const result = await imapAppendSentCopy2(smtpUser, raw);
+  if (!result.attempted) return {};
+  return result.success ? { sentCopy: true } : { sentCopy: false, sentCopyError: result.error };
+}
+function buildRawMime(mail) {
+  return new import_mail_composer.default(mail).compile().build();
+}
+function isSmtpConfigured(env = process.env) {
+  return Boolean(env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim());
+}
+function shouldUseSmtp(transport2, account, configured = isSmtpConfigured()) {
+  if (transport2 === "smtp") return true;
+  if (transport2 === "applescript") return false;
+  if (!configured) return false;
+  const isAccountLabel = Boolean(account && !account.includes("@"));
+  return !isAccountLabel;
+}
+function readKeychainPassword(service, account) {
+  for (const kind of ["find-internet-password", "find-generic-password"]) {
+    try {
+      const out = execFileSync("security", [kind, "-s", service, "-a", account, "-w"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      const pass = out.replace(/\n$/, "");
+      if (pass) return pass;
+    } catch {
+    }
+  }
+  return null;
+}
+function resolveSmtpConfig(env = process.env) {
+  const host = env[SMTP_ENV.host]?.trim();
+  const user = env[SMTP_ENV.user]?.trim();
+  const missing = [];
+  if (!host) missing.push(SMTP_ENV.host);
+  if (!user) missing.push(SMTP_ENV.user);
+  if (missing.length > 0) {
+    throw new Error(
+      `SMTP transport is not configured. Set ${missing.join(" and ")} (plus a password via ${SMTP_ENV.password} or the Keychain). ` + SETUP_HINT
+    );
+  }
+  const secure = /^(1|true|yes)$/i.test(env[SMTP_ENV.secure]?.trim() ?? "");
+  const port = env[SMTP_ENV.port] ? Number.parseInt(env[SMTP_ENV.port], 10) : secure ? 465 : 587;
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error(`Invalid ${SMTP_ENV.port}: "${env[SMTP_ENV.port]}" is not a valid port.`);
+  }
+  const from = env[SMTP_ENV.from]?.trim() || user;
+  const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  let pass = env[SMTP_ENV.password];
+  if (!pass) {
+    const service = env[SMTP_ENV.keychainService]?.trim() || host;
+    const account = env[SMTP_ENV.keychainAccount]?.trim() || user;
+    pass = readKeychainPassword(service, account) ?? void 0;
+  }
+  if (!pass) {
+    throw new Error(
+      `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
+    );
+  }
+  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
+  return {
+    host,
+    port,
+    secure,
+    allowPlaintext,
+    user,
+    pass,
+    from,
+    allowedFrom
+  };
+}
+function buildAttachments(attachments) {
+  if (!attachments || attachments.length === 0) return void 0;
+  return attachments.map((a) => {
+    if (typeof a === "string") {
+      return { path: resolveAttachmentReadPath(a) };
+    }
+    if (!a.filename || !a.contentBase64) {
+      throw new Error("Inline attachment requires both filename and contentBase64.");
+    }
+    return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
+  });
+}
+async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.default.createTransport, appendSentCopy = defaultAppendSentCopy) {
+  let cfg;
+  try {
+    cfg = config2 ?? resolveSmtpConfig();
+  } catch (error2) {
+    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
+  }
+  const requestedFrom = opts.from?.trim();
+  const allowedFrom = new Set(
+    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((value) => value.trim().toLowerCase())
+  );
+  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
+    return {
+      success: false,
+      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`
+    };
+  }
+  let attachments;
+  try {
+    attachments = buildAttachments(opts.attachments);
+  } catch (error2) {
+    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
+  }
+  const requireTLS = !cfg.secure && !cfg.allowPlaintext;
+  if (!cfg.secure && cfg.allowPlaintext) {
+    console.warn(
+      `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
+    );
+  }
+  const transporter = createTransport({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    // Port 587/143-style configurations must not silently downgrade to
+    // plaintext when the server advertises no usable TLS upgrade.
+    requireTLS,
+    auth: { user: cfg.user, pass: cfg.pass }
+  });
+  const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
+  const mailOptions = {
+    from: requestedFrom || cfg.from,
+    to: opts.to,
+    cc: opts.cc,
+    bcc: opts.bcc,
+    subject: opts.subject,
+    text: opts.body,
+    // When present, nodemailer emits multipart/alternative (text + html).
+    html,
+    attachments,
+    // RFC 5322 threading for SMTP replies/forwards (2.5.0).
+    inReplyTo: opts.inReplyTo?.trim() || void 0,
+    references: opts.references?.length ? opts.references : void 0,
+    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
+    replyTo: opts.replyTo?.trim() || void 0
+  };
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    let copyFields = {};
+    try {
+      const raw = await buildRawMime({
+        ...mailOptions,
+        keepBcc: true,
+        messageId: info.messageId
+      });
+      copyFields = await appendSentCopy(cfg.user, raw);
+    } catch (copyError) {
+      copyFields = { sentCopy: false, sentCopyError: errText(copyError) };
+    }
+    return { success: true, messageId: info.messageId, ...copyFields };
+  } catch (error2) {
+    const detail = error2 instanceof Error ? error2.message : String(error2);
+    const tlsHint = requireTLS ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.` : "";
+    return {
+      success: false,
+      error: `SMTP send failed: ${detail}.${tlsHint}`
+    };
+  } finally {
+    transporter.close();
+  }
+}
+function applyPlaceholders(template, variables) {
+  let out = template;
+  for (const [key, value] of Object.entries(variables)) {
+    const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), value);
+  }
+  return out;
+}
+async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) {
+  const send = opts.send ?? sendViaSmtp;
+  const sleep2 = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const delay = Math.min(Math.max(opts.delayMs ?? 500, 0), 1e4);
+  const results = [];
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    try {
+      const res = await send(
+        {
+          to: [r.email],
+          subject: applyPlaceholders(subject, r.variables),
+          body: applyPlaceholders(body, r.variables),
+          from: config2.from
+        },
+        config2
+      );
+      results.push({ email: r.email, success: res.success, error: res.error });
+    } catch (error2) {
+      results.push({
+        email: r.email,
+        success: false,
+        error: error2 instanceof Error ? error2.message : String(error2)
+      });
+    }
+    if (delay > 0 && i < recipients.length - 1) {
+      await sleep2(delay);
+    }
+  }
+  return results;
+}
+var import_nodemailer, import_mail_composer, SMTP_ENV;
+var init_smtpMailer = __esm({
+  "src/services/smtpMailer.ts"() {
+    "use strict";
+    import_nodemailer = __toESM(require_nodemailer(), 1);
+    import_mail_composer = __toESM(require_mail_composer(), 1);
+    init_attachmentLimits();
+    init_attachmentReadPolicy();
+    init_docsUrls();
+    SMTP_ENV = {
+      host: "APPLE_MAIL_MCP_SMTP_HOST",
+      port: "APPLE_MAIL_MCP_SMTP_PORT",
+      secure: "APPLE_MAIL_MCP_SMTP_SECURE",
+      allowPlaintext: "APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT",
+      user: "APPLE_MAIL_MCP_SMTP_USER",
+      from: "APPLE_MAIL_MCP_SMTP_FROM",
+      allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
+      password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
+      keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
+      keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
+    };
+  }
+});
+
+// src/utils/mimeParse.ts
+function extractBoundary(source) {
+  const match = source.match(/boundary="?([^";\s\r\n]+)"?/i);
+  return match ? match[1] : null;
+}
+function getHeader(headers, name) {
+  const regex = new RegExp(`^${name}:\\s*(.+(?:\\r?\\n[ \\t]+.+)*)`, "im");
+  const match = headers.match(regex);
+  if (!match) return null;
+  return match[1].replace(/\r?\n[ \t]+/g, " ").trim();
+}
+function extractFilename(headers) {
+  const dispHeader = getHeader(headers, "Content-Disposition");
+  if (dispHeader) {
+    const fnMatch = dispHeader.match(/filename="?([^";\r\n]+)"?/i);
+    if (fnMatch) return fnMatch[1].trim();
+  }
+  const ctHeader = getHeader(headers, "Content-Type");
+  if (ctHeader) {
+    const nameMatch = ctHeader.match(/name="?([^";\r\n]+)"?/i);
+    if (nameMatch) return nameMatch[1].trim();
+  }
+  return null;
+}
+function isInlineDisposition(headers) {
+  const dispHeader = getHeader(headers, "Content-Disposition");
+  if (!dispHeader) return false;
+  return dispHeader.toLowerCase().startsWith("inline");
+}
+function extractSize(headers) {
+  const dispHeader = getHeader(headers, "Content-Disposition");
+  if (dispHeader) {
+    const sizeMatch = dispHeader.match(/size=(\d+)/i);
+    if (sizeMatch) return parseInt(sizeMatch[1], 10);
+  }
+  return 0;
+}
+function extractMimeType(headers) {
+  const ctHeader = getHeader(headers, "Content-Type");
+  if (!ctHeader) return "application/octet-stream";
+  const typeMatch = ctHeader.match(/^([^;\s]+)/);
+  return typeMatch ? typeMatch[1].toLowerCase() : "application/octet-stream";
+}
+function extractCharset(headers) {
+  const ct = getHeader(headers, "Content-Type");
+  const m = ct?.match(/charset\s*=\s*"?([^";\s]+)"?/i);
+  return m ? m[1].toLowerCase() : null;
+}
+function decodePartText(bytes, charset) {
+  if (charset && !["utf-8", "utf8", "us-ascii", "ascii"].includes(charset)) {
+    try {
+      return new TextDecoder(charset).decode(bytes);
+    } catch {
+    }
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+function estimateBase64Size(base64Body) {
+  const cleaned = base64Body.replace(/[\s\r\n]/g, "");
+  return Math.floor(cleaned.length * 3 / 4);
+}
+function splitMimeParts(source, boundary) {
+  const parts = [];
+  const boundaryDelim = `--${boundary}`;
+  const sections = source.split(boundaryDelim);
+  for (const section of sections) {
+    const trimmed = section.trim();
+    if (!trimmed || trimmed.startsWith("--")) continue;
+    const blankLineIdx = trimmed.search(/\r?\n\r?\n/);
+    if (blankLineIdx === -1) continue;
+    const headers = trimmed.substring(0, blankLineIdx);
+    const body = trimmed.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
+    parts.push({ headers, body });
+  }
+  return parts;
+}
+function walkLeafParts(source, boundary, depth = 0) {
+  const result = [];
+  const parts = splitMimeParts(source, boundary);
+  for (const part of parts) {
+    const ct = getHeader(part.headers, "Content-Type");
+    if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
+      const nestedBoundary = extractBoundary(ct);
+      if (nestedBoundary) {
+        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1));
+        continue;
+      }
+    }
+    result.push(part);
+  }
+  return result;
+}
+function decodeBody(body, encoding) {
+  const enc = (encoding || "").toLowerCase().trim();
+  if (enc === "base64") {
+    return Buffer.from(body.replace(/[\s\r\n]/g, ""), "base64");
+  }
+  if (enc === "quoted-printable") {
+    return decodeQuotedPrintable(body);
+  }
+  return Buffer.from(body, "binary");
+}
+function decodeQuotedPrintable(body) {
+  const noSoft = body.replace(/=\r?\n/g, "");
+  const bytes = [];
+  for (let i = 0; i < noSoft.length; i++) {
+    const c = noSoft[i];
+    if (c === "=" && i + 2 < noSoft.length) {
+      const hex = noSoft.substring(i + 1, i + 3);
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        bytes.push(parseInt(hex, 16));
+        i += 2;
+        continue;
+      }
+    }
+    bytes.push(c.charCodeAt(0) & 255);
+  }
+  return Buffer.from(bytes);
+}
+function estimateSize(body, encoding) {
+  const enc = (encoding || "").toLowerCase().trim();
+  if (enc === "base64") return estimateBase64Size(body);
+  return body.length;
+}
+function parseMimeAttachments(source) {
+  if (!source || !source.trim()) return [];
+  const boundary = extractBoundary(source);
+  if (!boundary) return [];
+  const parts = walkLeafParts(source, boundary);
+  const attachments = [];
+  for (const part of parts) {
+    const filename = extractFilename(part.headers);
+    if (!filename) continue;
+    if (isInlineDisposition(part.headers)) continue;
+    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+    attachments.push({
+      name: filename,
+      mimeType: extractMimeType(part.headers),
+      size: extractSize(part.headers) || estimateSize(part.body, encoding)
+    });
+  }
+  return attachments;
+}
+function extractHtmlBody(source) {
+  if (!source || !source.trim()) return null;
+  const boundary = extractBoundary(source);
+  if (boundary) {
+    for (const part of walkLeafParts(source, boundary)) {
+      if (extractMimeType(part.headers) === "text/html") {
+        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
+        return decodePartText(decodeBody(part.body, encoding2), extractCharset(part.headers));
+      }
+    }
+    return null;
+  }
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  if (blankLineIdx === -1) return null;
+  const headers = source.substring(0, blankLineIdx);
+  if (extractMimeType(headers) !== "text/html") return null;
+  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
+  const encoding = getHeader(headers, "Content-Transfer-Encoding");
+  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
+}
+function extractTextBody(source) {
+  if (!source || !source.trim()) return null;
+  const boundary = extractBoundary(source);
+  if (boundary) {
+    for (const part of walkLeafParts(source, boundary)) {
+      if (extractMimeType(part.headers) === "text/plain") {
+        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
+        return decodePartText(decodeBody(part.body, encoding2), extractCharset(part.headers));
+      }
+    }
+    return null;
+  }
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  if (blankLineIdx === -1) return null;
+  const headers = source.substring(0, blankLineIdx);
+  const ct = extractMimeType(headers);
+  if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
+  const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
+  const encoding = getHeader(headers, "Content-Transfer-Encoding");
+  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
+}
+function extractRfcMessageIdFromSource(source) {
+  if (!source || !source.trim()) return "";
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  const headers = blankLineIdx === -1 ? source : source.substring(0, blankLineIdx);
+  const raw = getHeader(headers, "Message-ID") ?? getHeader(headers, "Message-Id");
+  if (!raw) return "";
+  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
+function extractMimeAttachment(source, attachmentName) {
+  if (!source || !source.trim()) return null;
+  const boundary = extractBoundary(source);
+  if (!boundary) return null;
+  const parts = walkLeafParts(source, boundary);
+  for (const part of parts) {
+    const filename = extractFilename(part.headers);
+    if (filename !== attachmentName) continue;
+    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+    const data = decodeBody(part.body, encoding);
+    return {
+      name: filename,
+      mimeType: extractMimeType(part.headers),
+      size: extractSize(part.headers) || data.length,
+      data
+    };
+  }
+  return null;
+}
+var MAX_MIME_DEPTH;
+var init_mimeParse = __esm({
+  "src/utils/mimeParse.ts"() {
+    "use strict";
+    MAX_MIME_DEPTH = 20;
+  }
+});
+
+// src/utils/headers.ts
+function decodeEncodedWords(value) {
+  if (!value.includes("=?")) return value;
+  const joined = value.replace(/(\?=)\s+(=\?)/g, "$1$2");
+  return joined.replace(
+    /=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g,
+    (whole, charset, enc, text) => {
+      try {
+        const bytes = enc.toUpperCase() === "B" ? Buffer.from(text, "base64") : Buffer.from(
+          text.replace(/_/g, " ").replace(
+            /=([0-9A-Fa-f]{2})/g,
+            (_m, h) => String.fromCharCode(parseInt(h, 16))
+          ),
+          "latin1"
+        );
+        return new TextDecoder(normalizeCharset(charset)).decode(bytes);
+      } catch {
+        return whole;
+      }
+    }
+  );
+}
+function normalizeCharset(charset) {
+  const bare = charset.split("*")[0].trim().toLowerCase();
+  try {
+    new TextDecoder(bare);
+    return bare;
+  } catch {
+    return "utf-8";
+  }
+}
+function bareId(raw) {
+  return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+}
+function splitIds(raw) {
+  const bracketed = raw.match(/<[^>]+>/g);
+  if (bracketed) return bracketed.map(bareId).filter(Boolean);
+  return raw.split(/[\s,]+/).map(bareId).filter(Boolean);
+}
+function parseDateHeader(value) {
+  const direct = new Date(value);
+  if (!Number.isNaN(direct.getTime())) return direct;
+  let replaced = value;
+  for (const [abbr, en] of Object.entries(LOCALE_MONTHS)) {
+    const re = new RegExp(`\\b${abbr}\\.?\\b`, "i");
+    if (re.test(replaced)) {
+      replaced = replaced.replace(re, en);
+      break;
+    }
+  }
+  if (replaced !== value) {
+    const viaMonth = new Date(replaced);
+    if (!Number.isNaN(viaMonth.getTime())) return viaMonth;
+  }
+  return void 0;
+}
+function splitFusedDate(headers) {
+  const i = headers.findIndex((h) => h.name.toLowerCase() === "date");
+  if (i === -1) return void 0;
+  const m = /^([A-Za-z][A-Za-z0-9-]*):[ \t]?(.*)$/.exec(headers[i].value);
+  if (!m) return void 0;
+  const name = m[1];
+  if (!FUSABLE_HEADER_NAMES.has(name.toLowerCase()) && !/^x-/i.test(name)) return void 0;
+  headers.splice(i, 1, { name: headers[i].name, value: "" }, { name, value: m[2].trim() });
+  return name;
+}
+function parseHeaderBlock(input) {
+  const text = (input ?? "").replace(/\r\n|\r/g, "\n");
+  const blank = text.search(/\n\n/);
+  const raw = (blank === -1 ? text : text.slice(0, blank)).replace(/\n+$/, "");
+  const headers = [];
+  for (const line of raw.split("\n")) {
+    if (/^[ \t]/.test(line) && headers.length) {
+      headers[headers.length - 1].value += " " + line.trim();
+      continue;
+    }
+    const m = /^([!-9;-~]+):[ \t]?(.*)$/.exec(line);
+    if (!m) continue;
+    headers.push({ name: m[1], value: m[2].trim() });
+  }
+  const warnings = [];
+  const fused = splitFusedDate(headers);
+  if (fused) {
+    warnings.push(
+      `The Date: header arrived with no value and the ${fused}: header joined onto it (Mail.app's all-headers property does this for a Date: it cannot parse). Split back into Date: and ${fused}:; the send date is unknown from this source.`
+    );
+  }
+  const first = (name) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
+  const all = (name) => headers.filter((h) => h.name.toLowerCase() === name.toLowerCase()).map((h) => h.value);
+  const decoded = (name) => {
+    const v = first(name);
+    return v === void 0 ? void 0 : decodeEncodedWords(v);
+  };
+  const dateHeader = first("Date") || void 0;
+  let date3;
+  if (dateHeader) {
+    const parsed = parseDateHeader(dateHeader.replace(/\s*\([^)]*\)\s*$/, ""));
+    if (parsed) date3 = parsed.toISOString();
+  }
+  const messageIdRaw = first("Message-ID") ?? first("Message-Id");
+  const inReplyToRaw = first("In-Reply-To");
+  const referencesRaw = first("References");
+  return {
+    raw,
+    headers,
+    date: date3,
+    dateHeader,
+    messageId: messageIdRaw ? bareId(messageIdRaw) || void 0 : void 0,
+    subject: decoded("Subject"),
+    from: decoded("From"),
+    to: decoded("To"),
+    cc: decoded("Cc"),
+    replyTo: decoded("Reply-To"),
+    inReplyTo: inReplyToRaw ? bareId(inReplyToRaw) || void 0 : void 0,
+    references: referencesRaw ? splitIds(referencesRaw) : [],
+    received: all("Received"),
+    ...warnings.length ? { warnings } : {}
+  };
+}
+function headersStructured(id, parsed, dateReceived, backend) {
+  const received = dateReceived instanceof Date ? Number.isNaN(dateReceived.getTime()) ? void 0 : dateReceived.toISOString() : dateReceived || void 0;
+  return {
+    id,
+    ...backend ? { backend } : {},
+    raw: parsed.raw,
+    headers: parsed.headers,
+    headerCount: parsed.headers.length,
+    ...parsed.date !== void 0 ? { date: parsed.date } : {},
+    ...parsed.dateHeader !== void 0 ? { dateHeader: parsed.dateHeader } : {},
+    ...received !== void 0 ? { dateReceived: received } : {},
+    ...parsed.messageId !== void 0 ? { messageId: parsed.messageId } : {},
+    ...parsed.subject !== void 0 ? { subject: parsed.subject } : {},
+    ...parsed.from !== void 0 ? { from: parsed.from } : {},
+    ...parsed.to !== void 0 ? { to: parsed.to } : {},
+    ...parsed.cc !== void 0 ? { cc: parsed.cc } : {},
+    ...parsed.replyTo !== void 0 ? { replyTo: parsed.replyTo } : {},
+    ...parsed.inReplyTo !== void 0 ? { inReplyTo: parsed.inReplyTo } : {},
+    references: parsed.references,
+    received: parsed.received,
+    ...parsed.warnings?.length ? { warnings: parsed.warnings } : {}
+  };
+}
+function plausibleDateSent(sent, received) {
+  if (!sent || Number.isNaN(sent.getTime())) return void 0;
+  if (!received || Number.isNaN(received.getTime())) return sent;
+  return sent.getTime() - received.getTime() > MAX_SENT_AFTER_RECEIVED_MS ? void 0 : sent;
+}
+function headerBlockBytes(source, whole) {
+  const cuts = [source.indexOf("\r\n\r\n"), source.indexOf("\n\n")].filter((i) => i !== -1);
+  if (cuts.length) return source.subarray(0, Math.min(...cuts));
+  return whole ? source : void 0;
+}
+function decodeHeaderBytes(bytes) {
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  const cp1252 = new TextDecoder("windows-1252");
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i <= bytes.length; i++) {
+    if (i < bytes.length && bytes[i] !== 10) continue;
+    const line = bytes.subarray(start, i);
+    try {
+      lines.push(utf8.decode(line));
+    } catch {
+      lines.push(cp1252.decode(line));
+    }
+    start = i + 1;
+  }
+  return lines.join("\n");
+}
+function isoOrUndefined(d) {
+  if (d === void 0 || d === "") return void 0;
+  const date3 = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(date3.getTime()) ? void 0 : date3.toISOString();
+}
+var LOCALE_MONTHS, FUSABLE_HEADER_NAMES, MAX_SENT_AFTER_RECEIVED_MS;
+var init_headers = __esm({
+  "src/utils/headers.ts"() {
+    "use strict";
+    LOCALE_MONTHS = {
+      // Spanish
+      ene: "Jan",
+      feb: "Feb",
+      mar: "Mar",
+      abr: "Apr",
+      may: "May",
+      jun: "Jun",
+      jul: "Jul",
+      ago: "Aug",
+      sep: "Sep",
+      set: "Sep",
+      oct: "Oct",
+      nov: "Nov",
+      dic: "Dec",
+      // French
+      janv: "Jan",
+      f\u00E9vr: "Feb",
+      fevr: "Feb",
+      avr: "Apr",
+      mai: "May",
+      juin: "Jun",
+      juil: "Jul",
+      ao\u00FBt: "Aug",
+      aout: "Aug",
+      d\u00E9c: "Dec",
+      dec: "Dec",
+      // German
+      jan: "Jan",
+      m\u00E4r: "Mar",
+      maer: "Mar",
+      mrz: "Mar",
+      okt: "Oct",
+      dez: "Dec",
+      // Italian / Portuguese
+      gen: "Jan",
+      giu: "Jun",
+      lug: "Jul",
+      ott: "Oct",
+      out: "Oct",
+      fev: "Feb"
+    };
+    FUSABLE_HEADER_NAMES = /* @__PURE__ */ new Set([
+      "subject",
+      "from",
+      "to",
+      "cc",
+      "bcc",
+      "sender",
+      "reply-to",
+      "message-id",
+      "in-reply-to",
+      "references",
+      "mime-version",
+      "content-type",
+      "content-transfer-encoding",
+      "content-disposition",
+      "return-path",
+      "received",
+      "importance",
+      "priority",
+      "thread-topic",
+      "thread-index"
+    ]);
+    MAX_SENT_AFTER_RECEIVED_MS = 7 * 24 * 60 * 60 * 1e3;
+  }
+});
+
+// src/services/auditLog.ts
+import { appendFileSync } from "node:fs";
+function isOn(raw) {
+  return /^(1|true|yes|on)$/i.test((raw ?? "").trim());
+}
+function auditLogPath() {
+  const raw = process.env[AUDIT_LOG_ENV]?.trim();
+  return raw ? raw : null;
+}
+function isAuditEnabled() {
+  return auditLogPath() !== null;
+}
+function auditSubjectsEnabled() {
+  return isAuditEnabled() && isOn(process.env[AUDIT_SUBJECTS_ENV]);
+}
+function auditSnapshotMax() {
+  const raw = process.env[AUDIT_SNAPSHOT_MAX_ENV]?.trim();
+  if (raw === void 0 || raw === "") return DEFAULT_SNAPSHOT_MAX;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_SNAPSHOT_MAX;
+  return Math.floor(n);
+}
+function auditSnapshotChunk() {
+  const raw = process.env[AUDIT_SNAPSHOT_CHUNK_ENV]?.trim();
+  if (raw === void 0 || raw === "") return DEFAULT_SNAPSHOT_CHUNK;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_SNAPSHOT_CHUNK;
+  return Math.floor(n);
+}
+function classifyCountStatus(readable, expected, observed) {
+  if (!readable) return { status: "unknown", unknownReason: "count-unreadable" };
+  if (expected === null) return { status: "unknown", unknownReason: "no-expectation" };
+  if (observed === expected) return { status: "match" };
+  if ((observed ?? 0) > expected) return { status: "over" };
+  if (observed === 0) return { status: "unknown", unknownReason: "count-did-not-move" };
+  return { status: "unknown", unknownReason: "count-partial" };
+}
+function writeAuditRecord(record2) {
+  const path = auditLogPath();
+  if (!path) return;
+  try {
+    appendFileSync(path, `${JSON.stringify(record2)}
+`, "utf8");
+  } catch (err) {
+    console.error(
+      `[apple-mail-mcp] audit log write failed (${path}): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+function writeDestructiveAudit(ctx, report) {
+  if (!isAuditEnabled()) return;
+  writeAuditRecord({
+    ts: (/* @__PURE__ */ new Date()).toISOString(),
+    tool: ctx.tool,
+    serverVersion: ctx.serverVersion,
+    args: ctx.args,
+    preImages: report.preImages,
+    outcomes: report.outcomes,
+    countDeltas: report.countDeltas,
+    collateral: report.collateral,
+    subjectsLogged: auditSubjectsEnabled()
+  });
+}
+function countDeltaWarning(d) {
+  if (d.status !== "over" || d.expected === null) return null;
+  const extra = (d.observed ?? 0) - d.expected;
+  const where = d.account ? `"${d.mailbox}" in account "${d.account}"` : `"${d.mailbox}"`;
+  return `\u26A0\uFE0F Effect mismatch in ${where}: ${d.observed} message(s) left the mailbox but only ${d.expected} were operated on (count ${d.before} \u2192 ${d.after}). ${extra} message(s) are unaccounted for. Anything else removing mail from this mailbox at the same moment \u2014 a Mail rule, a server-side filter, another client, an IMAP expunge \u2014 reads the same way, so rule that out first. If nothing else was touching it, this is the signature of https://github.com/sweetrb/apple-mail-mcp/issues/155 \u2014 please report it there, and set ${AUDIT_LOG_ENV}=/path/to/audit.ndjson to capture which messages disappeared.`;
+}
+function reconciliationWarnings(report) {
+  return report.countDeltas.map((d) => countDeltaWarning(d)).filter((w) => w !== null);
+}
+var AUDIT_LOG_ENV, AUDIT_SUBJECTS_ENV, AUDIT_SNAPSHOT_MAX_ENV, AUDIT_SNAPSHOT_CHUNK_ENV, DEFAULT_SNAPSHOT_MAX, DEFAULT_SNAPSHOT_CHUNK, SNAPSHOT_SLICE_ATTEMPTS;
+var init_auditLog = __esm({
+  "src/services/auditLog.ts"() {
+    "use strict";
+    AUDIT_LOG_ENV = "APPLE_MAIL_MCP_AUDIT_LOG";
+    AUDIT_SUBJECTS_ENV = "APPLE_MAIL_MCP_AUDIT_SUBJECTS";
+    AUDIT_SNAPSHOT_MAX_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_MAX";
+    AUDIT_SNAPSHOT_CHUNK_ENV = "APPLE_MAIL_MCP_AUDIT_SNAPSHOT_CHUNK";
+    DEFAULT_SNAPSHOT_MAX = 2e3;
+    DEFAULT_SNAPSHOT_CHUNK = 250;
+    SNAPSHOT_SLICE_ATTEMPTS = 2;
+  }
+});
+
 // src/services/imapClient.ts
 var imapClient_exports = {};
 __export(imapClient_exports, {
@@ -65940,7 +66174,7 @@ function imapMailStats(deps = {}) {
     true
   );
 }
-function errText(e) {
+function errText2(e) {
   return e instanceof Error ? e.message : String(e);
 }
 function assertMutated(result, what) {
@@ -65965,7 +66199,7 @@ async function verifyMoved(client, moved, uid, srcPath, destPath) {
       why: `the server accepted the MOVE, but UID ${uid} is still present in "${srcPath}" and this server does not advertise UIDPLUS, so arrival in "${destPath}" could not be confirmed. A Gmail label store can legitimately keep a message in an all-mail view after a move, so this is not reported as a failure`
     };
   } catch (e) {
-    return { verdict: "unverified", why: `the post-move check could not run: ${errText(e)}` };
+    return { verdict: "unverified", why: `the post-move check could not run: ${errText2(e)}` };
   }
 }
 function poolKey(cfg) {
@@ -66033,7 +66267,7 @@ async function imapHealthCheck(deps = {}) {
   try {
     cfg = deps.config ?? resolveImapConfig(process.env, deps.account);
   } catch (e) {
-    return { configured: true, ok: false, error: errText(e) };
+    return { configured: true, ok: false, error: errText2(e) };
   }
   try {
     await useClient(deps, async (client) => {
@@ -66046,7 +66280,7 @@ async function imapHealthCheck(deps = {}) {
       ok: false,
       account: cfg.accountLabel,
       host: cfg.host,
-      error: errText(e)
+      error: errText2(e)
     };
   }
 }
@@ -66119,7 +66353,7 @@ function imapCreateMailbox(name, deps = {}) {
       const res = await client.mailboxCreate(name);
       return res.created ? { success: true, info: `Created mailbox "${res.path}".` } : { success: true, info: `Mailbox "${res.path}" already existed.` };
     } catch (e) {
-      return { success: false, error: `IMAP create failed for "${name}": ${errText(e)}` };
+      return { success: false, error: `IMAP create failed for "${name}": ${errText2(e)}` };
     }
   });
 }
@@ -66146,7 +66380,7 @@ function imapDeleteMailbox(name, deps = {}) {
         info: `Deleted mailbox "${path}" via IMAP (account ${cfg.accountLabel}).`
       };
     } catch (e) {
-      return { success: false, error: `IMAP delete failed for "${path}": ${errText(e)}` };
+      return { success: false, error: `IMAP delete failed for "${path}": ${errText2(e)}` };
     }
   });
 }
@@ -66172,7 +66406,7 @@ function imapRenameMailbox(oldName, newName, deps = {}) {
     } catch (e) {
       return {
         success: false,
-        error: `IMAP rename failed for "${path}" -> "${newName}": ${errText(e)}`
+        error: `IMAP rename failed for "${path}" -> "${newName}": ${errText2(e)}`
       };
     }
   });
@@ -66187,7 +66421,7 @@ async function imapAppendSentCopy(smtpUser, raw, deps = {}) {
       return { attempted: true, success: true, mailbox: path };
     });
   } catch (e) {
-    return { attempted: true, success: false, error: errText(e) };
+    return { attempted: true, success: false, error: errText2(e) };
   }
 }
 async function withMailbox(path, deps, fn) {
@@ -66232,7 +66466,14 @@ async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   const requested = Math.floor(opts.maxBytes ?? MAX_RFC822_INLINE_BYTES);
   const limit = Math.min(Math.max(1, requested), MAX_RFC822_FILE_BYTES);
-  return withClient(depsForMessageRef(ref, deps), async (client) => {
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    if (opts.requireDraftMailbox) {
+      const boxes = await client.list();
+      const draftPath = boxes.find((box) => box.specialUse?.toLowerCase() === "\\drafts")?.path;
+      if (!draftPath || draftPath !== ref.path) {
+        return { success: false, error: `"${ref.path}" is not the account's Drafts mailbox.` };
+      }
+    }
     const lock = await client.getMailboxLock(ref.path, { readOnly: true });
     try {
       const mb = client.mailbox;
@@ -66278,6 +66519,12 @@ async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
         success: true,
         acquisition: {
           account: ref.account,
+          accountUser: cfg.user,
+          envelopeRecipients: msg.envelope?.to || msg.envelope?.cc || msg.envelope?.bcc ? {
+            to: msg.envelope.to?.map((address) => address.address ?? "") ?? [],
+            cc: msg.envelope.cc?.map((address) => address.address ?? "") ?? [],
+            bcc: msg.envelope.bcc?.map((address) => address.address ?? "") ?? []
+          } : void 0,
           mailbox: ref.path,
           uid: ref.uid,
           uidValidity,
@@ -66419,7 +66666,7 @@ function flagOp(id, flag, add, deps) {
     } catch (e) {
       return {
         success: false,
-        error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}`
+        error: `IMAP flag update failed for UID ${ref.uid}: ${errText2(e)}`
       };
     }
   });
@@ -66437,7 +66684,7 @@ function imapFlagMessage(id, colorIndex, deps = {}) {
       if (clear.length) await client.messageFlagsRemove([ref.uid], clear, { uid: true });
       return { success: true };
     } catch (e) {
-      return { success: false, error: `IMAP flag update failed for UID ${ref.uid}: ${errText(e)}` };
+      return { success: false, error: `IMAP flag update failed for UID ${ref.uid}: ${errText2(e)}` };
     }
   });
 }
@@ -66452,7 +66699,7 @@ function imapUnflagMessage(id, deps = {}) {
       if (!ok) return { success: false, error: `IMAP unflag returned false for UID ${ref.uid}.` };
       return { success: true };
     } catch (e) {
-      return { success: false, error: `IMAP unflag failed for UID ${ref.uid}: ${errText(e)}` };
+      return { success: false, error: `IMAP unflag failed for UID ${ref.uid}: ${errText2(e)}` };
     }
   });
 }
@@ -66483,7 +66730,7 @@ async function imapMoveMessageById(id, destMailbox, deps = {}) {
     } catch (e) {
       return {
         success: false,
-        error: `IMAP move failed for UID ${ref.uid} -> "${destPath}": ${errText(e)}`
+        error: `IMAP move failed for UID ${ref.uid} -> "${destPath}": ${errText2(e)}`
       };
     } finally {
       lock.release();
@@ -66537,7 +66784,7 @@ async function verifyExpunged(client, uid, path) {
       why: `the server accepted the EXPUNGE but UID ${uid} is still present in "${path}"`
     };
   } catch (e) {
-    return { verdict: "unverified", why: `the post-delete check could not run: ${errText(e)}` };
+    return { verdict: "unverified", why: `the post-delete check could not run: ${errText2(e)}` };
   }
 }
 async function imapDeleteMessageById(id, deps = {}) {
@@ -66554,7 +66801,7 @@ async function imapDeleteMessageById(id, deps = {}) {
         verification
       };
     } catch (e) {
-      return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText(e)}` };
+      return { success: false, error: `IMAP delete failed for UID ${ref.uid}: ${errText2(e)}` };
     }
   });
 }
@@ -66640,7 +66887,7 @@ async function imapFetchAttachment(id, attachmentName, deps = {}) {
         mimeType: match.mimeType
       };
     } catch (e) {
-      return { success: false, error: `IMAP attachment fetch failed: ${errText(e)}` };
+      return { success: false, error: `IMAP attachment fetch failed: ${errText2(e)}` };
     }
   });
 }
@@ -66706,7 +66953,7 @@ async function imapBatch(ids, deps, op, opts = {}) {
       success += g.uids.length;
     } catch (e) {
       failed += g.uids.length;
-      errors.push(`${g.path}: ${errText(e)}`);
+      errors.push(`${g.path}: ${errText2(e)}`);
     }
   }
   return { success, failed, errors, ...countDelta.length ? { countDelta } : {} };
@@ -66917,240 +67164,6 @@ var init_imapClient = __esm({
       },
       { reconcile: true }
     );
-  }
-});
-
-// src/services/smtpMailer.ts
-import { execFileSync } from "child_process";
-function errText2(e) {
-  return e instanceof Error ? e.message : String(e);
-}
-async function defaultAppendSentCopy(smtpUser, raw) {
-  const { imapAppendSentCopy: imapAppendSentCopy2 } = await Promise.resolve().then(() => (init_imapClient(), imapClient_exports));
-  const result = await imapAppendSentCopy2(smtpUser, raw);
-  if (!result.attempted) return {};
-  return result.success ? { sentCopy: true } : { sentCopy: false, sentCopyError: result.error };
-}
-function buildRawMime(mail) {
-  return new import_mail_composer.default(mail).compile().build();
-}
-function isSmtpConfigured(env = process.env) {
-  return Boolean(env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim());
-}
-function shouldUseSmtp(transport2, account, configured = isSmtpConfigured()) {
-  if (transport2 === "smtp") return true;
-  if (transport2 === "applescript") return false;
-  if (!configured) return false;
-  const isAccountLabel = Boolean(account && !account.includes("@"));
-  return !isAccountLabel;
-}
-function readKeychainPassword(service, account) {
-  for (const kind of ["find-internet-password", "find-generic-password"]) {
-    try {
-      const out = execFileSync("security", [kind, "-s", service, "-a", account, "-w"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"]
-      });
-      const pass = out.replace(/\n$/, "");
-      if (pass) return pass;
-    } catch {
-    }
-  }
-  return null;
-}
-function resolveSmtpConfig(env = process.env) {
-  const host = env[SMTP_ENV.host]?.trim();
-  const user = env[SMTP_ENV.user]?.trim();
-  const missing = [];
-  if (!host) missing.push(SMTP_ENV.host);
-  if (!user) missing.push(SMTP_ENV.user);
-  if (missing.length > 0) {
-    throw new Error(
-      `SMTP transport is not configured. Set ${missing.join(" and ")} (plus a password via ${SMTP_ENV.password} or the Keychain). ` + SETUP_HINT
-    );
-  }
-  const secure = /^(1|true|yes)$/i.test(env[SMTP_ENV.secure]?.trim() ?? "");
-  const port = env[SMTP_ENV.port] ? Number.parseInt(env[SMTP_ENV.port], 10) : secure ? 465 : 587;
-  if (!Number.isInteger(port) || port <= 0) {
-    throw new Error(`Invalid ${SMTP_ENV.port}: "${env[SMTP_ENV.port]}" is not a valid port.`);
-  }
-  const from = env[SMTP_ENV.from]?.trim() || user;
-  const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-  let pass = env[SMTP_ENV.password];
-  if (!pass) {
-    const service = env[SMTP_ENV.keychainService]?.trim() || host;
-    const account = env[SMTP_ENV.keychainAccount]?.trim() || user;
-    pass = readKeychainPassword(service, account) ?? void 0;
-  }
-  if (!pass) {
-    throw new Error(
-      `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
-    );
-  }
-  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
-  return {
-    host,
-    port,
-    secure,
-    allowPlaintext,
-    user,
-    pass,
-    from,
-    allowedFrom
-  };
-}
-function buildAttachments(attachments) {
-  if (!attachments || attachments.length === 0) return void 0;
-  return attachments.map((a) => {
-    if (typeof a === "string") {
-      return { path: resolveAttachmentReadPath(a) };
-    }
-    if (!a.filename || !a.contentBase64) {
-      throw new Error("Inline attachment requires both filename and contentBase64.");
-    }
-    return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
-  });
-}
-async function sendViaSmtp(opts, config2, createTransport = import_nodemailer.default.createTransport, appendSentCopy = defaultAppendSentCopy) {
-  let cfg;
-  try {
-    cfg = config2 ?? resolveSmtpConfig();
-  } catch (error2) {
-    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
-  }
-  const requestedFrom = opts.from?.trim();
-  const allowedFrom = new Set(
-    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((value) => value.trim().toLowerCase())
-  );
-  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
-    return {
-      success: false,
-      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`
-    };
-  }
-  let attachments;
-  try {
-    attachments = buildAttachments(opts.attachments);
-  } catch (error2) {
-    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
-  }
-  const requireTLS = !cfg.secure && !cfg.allowPlaintext;
-  if (!cfg.secure && cfg.allowPlaintext) {
-    console.warn(
-      `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
-    );
-  }
-  const transporter = createTransport({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    // Port 587/143-style configurations must not silently downgrade to
-    // plaintext when the server advertises no usable TLS upgrade.
-    requireTLS,
-    auth: { user: cfg.user, pass: cfg.pass }
-  });
-  const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
-  const mailOptions = {
-    from: requestedFrom || cfg.from,
-    to: opts.to,
-    cc: opts.cc,
-    bcc: opts.bcc,
-    subject: opts.subject,
-    text: opts.body,
-    // When present, nodemailer emits multipart/alternative (text + html).
-    html,
-    attachments,
-    // RFC 5322 threading for SMTP replies/forwards (2.5.0).
-    inReplyTo: opts.inReplyTo?.trim() || void 0,
-    references: opts.references?.length ? opts.references : void 0,
-    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
-    replyTo: opts.replyTo?.trim() || void 0
-  };
-  try {
-    const info = await transporter.sendMail(mailOptions);
-    let copyFields = {};
-    try {
-      const raw = await buildRawMime({
-        ...mailOptions,
-        keepBcc: true,
-        messageId: info.messageId
-      });
-      copyFields = await appendSentCopy(cfg.user, raw);
-    } catch (copyError) {
-      copyFields = { sentCopy: false, sentCopyError: errText2(copyError) };
-    }
-    return { success: true, messageId: info.messageId, ...copyFields };
-  } catch (error2) {
-    const detail = error2 instanceof Error ? error2.message : String(error2);
-    const tlsHint = requireTLS ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.` : "";
-    return {
-      success: false,
-      error: `SMTP send failed: ${detail}.${tlsHint}`
-    };
-  } finally {
-    transporter.close();
-  }
-}
-function applyPlaceholders(template, variables) {
-  let out = template;
-  for (const [key, value] of Object.entries(variables)) {
-    const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), value);
-  }
-  return out;
-}
-async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) {
-  const send = opts.send ?? sendViaSmtp;
-  const sleep2 = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const delay = Math.min(Math.max(opts.delayMs ?? 500, 0), 1e4);
-  const results = [];
-  for (let i = 0; i < recipients.length; i++) {
-    const r = recipients[i];
-    try {
-      const res = await send(
-        {
-          to: [r.email],
-          subject: applyPlaceholders(subject, r.variables),
-          body: applyPlaceholders(body, r.variables),
-          from: config2.from
-        },
-        config2
-      );
-      results.push({ email: r.email, success: res.success, error: res.error });
-    } catch (error2) {
-      results.push({
-        email: r.email,
-        success: false,
-        error: error2 instanceof Error ? error2.message : String(error2)
-      });
-    }
-    if (delay > 0 && i < recipients.length - 1) {
-      await sleep2(delay);
-    }
-  }
-  return results;
-}
-var import_nodemailer, import_mail_composer, SMTP_ENV;
-var init_smtpMailer = __esm({
-  "src/services/smtpMailer.ts"() {
-    "use strict";
-    import_nodemailer = __toESM(require_nodemailer(), 1);
-    import_mail_composer = __toESM(require_mail_composer(), 1);
-    init_attachmentLimits();
-    init_attachmentReadPolicy();
-    init_docsUrls();
-    SMTP_ENV = {
-      host: "APPLE_MAIL_MCP_SMTP_HOST",
-      port: "APPLE_MAIL_MCP_SMTP_PORT",
-      secure: "APPLE_MAIL_MCP_SMTP_SECURE",
-      allowPlaintext: "APPLE_MAIL_MCP_SMTP_ALLOW_PLAINTEXT",
-      user: "APPLE_MAIL_MCP_SMTP_USER",
-      from: "APPLE_MAIL_MCP_SMTP_FROM",
-      allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
-      password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
-      keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
-      keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
-    };
   }
 });
 
@@ -81637,26 +81650,22 @@ var StdioServerTransport = class {
   }
 };
 
-// src/services/appleMailManager.ts
-import { spawnSync as spawnSync2 } from "child_process";
-import {
-  constants as fsConstants,
-  chmodSync,
-  existsSync as existsSync3,
-  writeFileSync as writeFileSync3,
-  readFileSync as readFileSync2,
-  readdirSync as readdirSync2,
-  unlinkSync,
-  copyFileSync,
-  renameSync,
-  mkdtempSync as mkdtempSync2,
-  rmSync as rmSync2,
-  realpathSync as realpathSync2,
-  lstatSync
-} from "fs";
-import { resolve as resolve2, sep as sep2, join as join5 } from "path";
-import { homedir as homedir4 } from "os";
-import { randomUUID } from "crypto";
+// src/utils/mailScriptBuilders.ts
+function escapeForAppleScript(text) {
+  if (!text) return "";
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, "");
+}
+function escapeForAppleScriptBody(text) {
+  if (!text) return "";
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r\n|\r|\n/g, "\\n").replace(/\t/g, "\\t").replace(/[\x00-\x1f\x7f]/g, "");
+}
+function buildAppLevelScript(command) {
+  return `
+    tell application "Mail"
+      ${command}
+    end tell
+  `;
+}
 
 // src/utils/applescript.ts
 import { execSync, spawnSync } from "child_process";
@@ -81909,19 +81918,310 @@ function executeAppleScript(script, options = {}) {
   return lastError;
 }
 
+// src/services/draftCompose.ts
+var RECEIPT_SEPARATOR = "";
+function buildDraftScript(input) {
+  const account = escapeForAppleScript(input.account ?? "");
+  const sender = escapeForAppleScript(input.sender ?? "");
+  const signature = escapeForAppleScript(input.signature ?? "");
+  const acquireMessage = `
+    if selectedSender is "" then
+      set newMessage to make new outgoing message with properties {subject:"${input.safeSubject}", visible:false}
+    else
+      set newMessage to make new outgoing message with properties {subject:"${input.safeSubject}", sender:selectedSender, visible:false}
+    end if
+  `;
+  return buildAppLevelScript(`
+    considering case, diacriticals, punctuation
+    set requestedAccount to "${account}"
+    set requestedSender to "${sender}"
+    set requestedSignatureName to "${signature}"
+    set selectedSignature to missing value
+    if requestedSignatureName is not "" then
+      set matchingSignatures to every signature whose name is requestedSignatureName
+      if (count of matchingSignatures) is not 1 then error "Signature missing or ambiguous: " & requestedSignatureName
+      set selectedSignature to item 1 of matchingSignatures
+    end if
+
+    set selectedSender to ""
+    if requestedAccount is not "" or requestedSender is not "" then
+      set matchingAccounts to {}
+      repeat with candidate in accounts
+        if enabled of candidate then
+          set candidateAddresses to email addresses of candidate
+          set accountMatches to (requestedAccount is "" or name of candidate is requestedAccount or candidateAddresses contains requestedAccount)
+          set senderMatches to (requestedSender is "" or candidateAddresses contains requestedSender)
+          if accountMatches and senderMatches then set end of matchingAccounts to contents of candidate
+        end if
+      end repeat
+      if (count of matchingAccounts) is not 1 then error "Account/sender missing, disabled, mismatched or ambiguous"
+      set selectedAccount to item 1 of matchingAccounts
+      set selectedAddresses to email addresses of selectedAccount
+      if (count of selectedAddresses) is 0 then error "Selected account has no sender address"
+      if requestedSender is not "" then
+        set selectedSender to requestedSender
+      else if selectedAddresses contains requestedAccount then
+        set selectedSender to requestedAccount
+      else
+        set selectedSender to item 1 of selectedAddresses
+      end if
+    end if
+
+    set desiredBody to "${input.safeBody}"
+    ${acquireMessage}
+    tell newMessage
+      ${input.recipientCommands}
+      set message signature to missing value
+      set content to desiredBody
+      ${input.attachmentCommands}
+    end tell
+    if selectedSignature is not missing value then set message signature of newMessage to selectedSignature
+    save newMessage
+
+    set actualSender to sender of newMessage
+    if selectedSender is not "" then
+      if actualSender is not selectedSender and actualSender does not end with ("<" & selectedSender & ">") then error "Draft sender verification failed; inspect Drafts before retrying"
+    end if
+    set actualSignature to ""
+    if message signature of newMessage is not missing value then set actualSignature to name of message signature of newMessage
+    if actualSignature is not requestedSignatureName then error "Draft signature verification failed; inspect Drafts before retrying"
+    set savedBody to content of newMessage as text
+    repeat with bodyParagraph in paragraphs of desiredBody
+      if (bodyParagraph as text) is not "" and savedBody does not contain (bodyParagraph as text) then error "Draft body verification failed; inspect Drafts before retrying"
+    end repeat
+    set composeId to id of newMessage as text
+    close newMessage saving yes
+    return "saved" & character id 31 & composeId & character id 31 & actualSender & character id 31 & actualSignature
+    end considering
+  `);
+}
+function createSavedDraft(input) {
+  const result = executeAppleScript(buildDraftScript(input), { timeoutMs: 6e4, maxRetries: 1 });
+  if (!result.success) {
+    return {
+      success: false,
+      error: `${result.error ?? "Draft creation failed"}. A draft may already exist; inspect Drafts before retrying.`
+    };
+  }
+  const [status, composeId, sender, signature = "", ...extra] = result.output.split(RECEIPT_SEPARATOR);
+  if (status !== "saved" || !/^\d+$/.test(composeId ?? "") || !sender || extra.length) {
+    return { success: false, error: "Invalid draft receipt; inspect Drafts before retrying." };
+  }
+  return { success: true, composeId, sender, signature };
+}
+function listMailSignatures() {
+  const result = executeAppleScript(
+    buildAppLevelScript(`
+    set signatureNames to name of every signature
+    set AppleScript's text item delimiters to character id 31
+    return signatureNames as text
+  `)
+  );
+  if (!result.success) throw new Error(result.error ?? "Could not read Mail signatures");
+  return result.output ? result.output.split(RECEIPT_SEPARATOR) : [];
+}
+
+// src/services/draftSend.ts
+var import_nodemailer2 = __toESM(require_nodemailer(), 1);
+var import_addressparser = __toESM(require_addressparser(), 1);
+init_imapClient();
+init_smtpMailer();
+init_headers();
+init_mimeParse();
+var fetchDraft = (id) => imapGetMessageRfc822(id, { maxBytes: MAX_RFC822_FILE_BYTES, requireDraftMailbox: true });
+function addressFields(headers, name) {
+  const values = headers.filter((field) => field.name.toLowerCase() === name).map((field) => field.value);
+  const addresses = values.flatMap(
+    (value) => (0, import_addressparser.default)(value, { flatten: true }).map((item) => item.address)
+  );
+  if (addresses.some((address) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))) {
+    throw new Error(`Draft has an invalid ${name} address; no send performed.`);
+  }
+  return addresses;
+}
+function cleanDraftHeaders(raw, keepBcc) {
+  const source = raw.toString("latin1");
+  const match = /\r?\n\r?\n/.exec(source);
+  if (!match || match.index === void 0)
+    throw new Error("Draft has no MIME header/body boundary.");
+  const separator = match[0];
+  const lines = source.slice(0, match.index).split(/\r?\n/);
+  const kept = [];
+  let omit2 = false;
+  for (const line of lines) {
+    if (!/^[ \t]/.test(line)) {
+      const name = line.slice(0, line.indexOf(":")).toLowerCase();
+      omit2 = !keepBcc && name === "bcc" || name === "x-unsent" || name.startsWith("x-apple-") || name.startsWith("x-uniform-") || name.startsWith("x-universally-");
+    }
+    if (!omit2) kept.push(line);
+  }
+  return Buffer.from(
+    kept.join(separator.startsWith("\r") ? "\r\n" : "\n") + separator + source.slice(match.index + separator.length),
+    "latin1"
+  );
+}
+function prepare(acquisition, draftId) {
+  if (!acquisition.uidValidity) {
+    throw new Error("Draft mailbox did not report UIDVALIDITY; no send performed.");
+  }
+  const rawText = acquisition.bytes.toString("latin1");
+  const parsed = parseHeaderBlock(rawText);
+  if (parsed.headers.some((field) => field.name.toLowerCase().startsWith("resent-"))) {
+    throw new Error("Draft contains Resent headers that are not shown in the preview.");
+  }
+  const from = addressFields(parsed.headers, "from");
+  const to = addressFields(parsed.headers, "to");
+  const cc = addressFields(parsed.headers, "cc");
+  const bcc = addressFields(parsed.headers, "bcc");
+  const replyTo = addressFields(parsed.headers, "reply-to");
+  if (!acquisition.envelopeRecipients) {
+    throw new Error("IMAP did not report draft envelope recipients; no send performed.");
+  }
+  const same = (left, right) => left.map((address) => address.toLowerCase()).sort().join("\0") === right.map((address) => address.toLowerCase()).sort().join("\0");
+  if (!same(to, acquisition.envelopeRecipients.to) || !same(cc, acquisition.envelopeRecipients.cc) || !same(bcc, acquisition.envelopeRecipients.bcc)) {
+    throw new Error("Draft MIME recipients differ from the IMAP envelope; no send performed.");
+  }
+  if (from.length !== 1 || to.length + cc.length + bcc.length === 0) {
+    throw new Error("Draft needs exactly one From address and at least one recipient.");
+  }
+  const body = extractTextBody(rawText);
+  const html = extractHtmlBody(rawText);
+  if (body === null && html === null) {
+    throw new Error("Draft body could not be shown for approval; no send performed.");
+  }
+  if ((body?.length ?? 0) > 1e5 || (html?.length ?? 0) > 1e5) {
+    throw new Error("Draft body exceeds the Codex preview limit; no send performed.");
+  }
+  const preview = {
+    status: "preview",
+    draftId,
+    sha256: acquisition.sha256,
+    uidValidity: acquisition.uidValidity,
+    from: from[0],
+    to,
+    cc,
+    bcc,
+    replyTo,
+    subject: parsed.subject ?? "",
+    body: body ?? html ?? "",
+    isHtml: body === null,
+    htmlBody: body !== null ? html ?? void 0 : void 0,
+    attachments: parseMimeAttachments(rawText)
+  };
+  return {
+    preview,
+    wire: cleanDraftHeaders(acquisition.bytes, false),
+    sentCopy: cleanDraftHeaders(acquisition.bytes, true),
+    accountUser: acquisition.accountUser
+  };
+}
+async function submitRaw(raw, envelope, config2) {
+  const transporter = import_nodemailer2.default.createTransport({
+    host: config2.host,
+    port: config2.port,
+    secure: config2.secure,
+    requireTLS: !config2.secure && !config2.allowPlaintext,
+    auth: { user: config2.user, pass: config2.pass }
+  });
+  try {
+    const result = await transporter.sendMail({ raw, envelope });
+    return { messageId: result.messageId };
+  } finally {
+    transporter.close();
+  }
+}
+async function sendSavedDraft(input, deps = {}) {
+  if (!input.draftId.startsWith("imap:")) {
+    throw new Error('Use an imap: id from list-messages on Drafts (transport: "imap").');
+  }
+  if (!input.dryRun && (!/^[a-f0-9]{64}$/i.test(input.approvedSha256 ?? "") || !input.approvedUidValidity)) {
+    throw new Error("A fresh preview sha256 and uidValidity are required before sending.");
+  }
+  const result = await (deps.fetch ?? fetchDraft)(input.draftId);
+  if (!result.success) throw new Error(result.error);
+  const prepared = prepare(result.acquisition, input.draftId);
+  if (input.dryRun) return prepared.preview;
+  if (prepared.preview.sha256 !== input.approvedSha256 || prepared.preview.uidValidity !== input.approvedUidValidity) {
+    throw new Error("Draft changed since the Codex preview; review the current draft again.");
+  }
+  const cfg = (deps.smtpConfig ?? resolveSmtpConfig)();
+  const allowed = new Set(
+    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((address) => address.toLowerCase())
+  );
+  if (result.acquisition.accountUser.toLowerCase() !== cfg.user.toLowerCase() || !allowed.has(prepared.preview.from.toLowerCase())) {
+    throw new Error("Draft account or From address does not match the configured SMTP identity.");
+  }
+  const envelope = {
+    from: prepared.preview.from,
+    to: [...prepared.preview.to, ...prepared.preview.cc, ...prepared.preview.bcc]
+  };
+  const submitted = await (deps.submit ?? submitRaw)(prepared.wire, envelope, cfg);
+  let sentCopy;
+  let sentCopyError;
+  try {
+    const copy = await (deps.appendSent ?? imapAppendSentCopy)(cfg.user, prepared.sentCopy);
+    if (copy.attempted) {
+      sentCopy = copy.success ?? false;
+      if (!copy.success) sentCopyError = copy.error;
+    }
+  } catch (error2) {
+    sentCopy = false;
+    sentCopyError = error2 instanceof Error ? error2.message : String(error2);
+  }
+  try {
+    const removed = await (deps.removeDraft ?? imapDeleteMessageById)(input.draftId);
+    return {
+      status: "submitted",
+      messageId: submitted.messageId,
+      sentCopy,
+      sentCopyError,
+      draftRemoved: removed.success,
+      draftRemovalError: removed.success ? void 0 : removed.error
+    };
+  } catch (error2) {
+    return {
+      status: "submitted",
+      messageId: submitted.messageId,
+      sentCopy,
+      sentCopyError,
+      draftRemoved: false,
+      draftRemovalError: error2 instanceof Error ? error2.message : String(error2)
+    };
+  }
+}
+
 // src/services/appleMailManager.ts
+import { spawnSync as spawnSync2 } from "child_process";
+import {
+  constants as fsConstants,
+  chmodSync,
+  existsSync as existsSync3,
+  writeFileSync as writeFileSync3,
+  readFileSync as readFileSync2,
+  readdirSync as readdirSync2,
+  unlinkSync,
+  copyFileSync,
+  renameSync,
+  mkdtempSync as mkdtempSync2,
+  rmSync as rmSync2,
+  realpathSync as realpathSync2,
+  lstatSync
+} from "fs";
+import { resolve as resolve2, sep as sep2, join as join5 } from "path";
+import { homedir as homedir4 } from "os";
+import { randomUUID } from "crypto";
 init_docsUrls();
 init_mimeParse();
 init_headers();
 
 // src/services/templateStore.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
-import { homedir } from "os";
+import { dirname, join as join2 } from "path";
+import { homedir as homedir2 } from "os";
 function defaultTemplatesFile() {
   const env = process.env.APPLE_MAIL_MCP_TEMPLATES_FILE;
   if (env && env.trim()) return env.trim();
-  return join(homedir(), "Library", "Application Support", "apple-mail-mcp", "templates.json");
+  return join2(homedir2(), "Library", "Application Support", "apple-mail-mcp", "templates.json");
 }
 var TemplateStore = class {
   file;
@@ -82266,14 +82566,6 @@ function chooseDefaultAccount(accounts, opts = {}) {
   if (firstEnabled) return firstEnabled.name;
   return accounts[0]?.name ?? null;
 }
-function escapeForAppleScript(text) {
-  if (!text) return "";
-  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, "");
-}
-function escapeForAppleScriptBody(text) {
-  if (!text) return "";
-  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r\n|\r|\n/g, "\\n").replace(/\t/g, "\\t").replace(/[\x00-\x1f\x7f]/g, "");
-}
 function buildAttachmentCommands(attachments) {
   if (!attachments || attachments.length === 0) return "";
   const readablePaths = attachments.map((filePath) => resolveAttachmentReadPath(filePath));
@@ -82491,13 +82783,6 @@ function crossCheckRenumbered(disappeared, appeared) {
     out.push({ messageId: mid, before: before.id, after: after.id });
   }
   return out;
-}
-function buildAppLevelScript(command) {
-  return `
-    tell application "Mail"
-      ${command}
-    end tell
-  `;
 }
 function mailboxPathFragment(mailboxVar, outputVar) {
   return `
@@ -84455,9 +84740,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param cc - CC recipients
    * @param bcc - BCC recipients
    * @param account - Account to create draft in
-   * @returns true if draft created successfully
+   * @returns Checked save receipt or an error; a failed attempt may have left a draft
    */
-  createDraft(to, subject, body, cc, bcc, account, attachments) {
+  createDraft(to, subject, body, cc, bcc, account, attachments, options = {}) {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
     let recipientCommands = "";
@@ -84485,42 +84770,28 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         safeSubject,
         safeBody,
         account,
-        attachmentCommands
+        attachmentCommands,
+        options
       );
     } finally {
       mat.cleanup();
     }
   }
-  createDraftWithCommands(recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
-    let draftCommand;
-    if (account) {
-      const safeAccount = escapeForAppleScript(account);
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          set sender to "${safeAccount}"
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    } else {
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    }
-    const script = buildAppLevelScript(draftCommand);
-    const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 1 });
-    if (!result.success) {
-      console.error(`Failed to create draft: ${result.error}`);
-      return false;
-    }
-    return result.output.includes("draft created");
+  createDraftWithCommands(recipientCommands, safeSubject, safeBody, account, attachmentCommands, options) {
+    return createSavedDraft({
+      recipientCommands,
+      safeSubject,
+      safeBody,
+      account,
+      attachmentCommands,
+      ...options
+    });
+  }
+  listSignatures() {
+    return listMailSignatures();
+  }
+  sendSavedDraft(input) {
+    return sendSavedDraft(input);
   }
   /**
    * Reply to a message.
@@ -86503,7 +86774,7 @@ ${actionStmts.join("\n")}
     const subject = overrides?.subject ?? template.subject;
     const body = overrides?.body ?? template.body;
     if (to.length === 0) return false;
-    return this.createDraft(to, subject, body, cc);
+    return this.createDraft(to, subject, body, cc).success;
   }
   // ===========================================================================
   // Diagnostics
@@ -88698,6 +88969,47 @@ var SENT_COPY_SCHEMA = external_exports.boolean().optional().describe(
 );
 var SENT_COPY_ERROR_SCHEMA = external_exports.string().optional().describe("Present only when sentCopy is false: why the Sent-folder copy failed.");
 registerTool(
+  "send-saved-draft",
+  {
+    description: "Use when: showing the current stored Drafts message in Codex for review, or submitting its approved MIME content. Requires an imap: id from list-messages on Drafts for an IMAP-configured account and a matching SMTP identity.\nReturns: dryRun preview with current sender, recipients, Reply-To, subject, body, HTML alternative, attachments, sha256 and UIDVALIDITY; or submitted with Sent-copy and draft-removal status.\nDo not use when: the draft cannot be fully previewed or the SMTP identity differs. Never recreates a Mail composer.\nSafety: dryRun:false sends real email. Show the full preview in Codex and obtain explicit user approval of recipients, subject and body first. Pass its sha256 and UIDVALIDITY; any intervening edit blocks sending. Never retry an uncertain send; inspect Sent first.",
+    outputSchema: {
+      status: external_exports.enum(["preview", "submitted"]).optional(),
+      draftId: external_exports.string().optional(),
+      sha256: external_exports.string().optional(),
+      uidValidity: external_exports.string().optional(),
+      from: external_exports.string().optional(),
+      to: external_exports.array(external_exports.string()).optional(),
+      cc: external_exports.array(external_exports.string()).optional(),
+      bcc: external_exports.array(external_exports.string()).optional(),
+      replyTo: external_exports.array(external_exports.string()).optional(),
+      subject: external_exports.string().optional(),
+      body: external_exports.string().optional(),
+      isHtml: external_exports.boolean().optional(),
+      htmlBody: external_exports.string().optional(),
+      attachments: external_exports.array(external_exports.object({ name: external_exports.string(), mimeType: external_exports.string(), size: external_exports.number() })).optional(),
+      messageId: external_exports.string().optional(),
+      sentCopy: external_exports.boolean().optional(),
+      sentCopyError: external_exports.string().optional(),
+      draftRemoved: external_exports.boolean().optional(),
+      draftRemovalError: external_exports.string().optional()
+    },
+    inputSchema: {
+      draftId: external_exports.string().startsWith("imap:"),
+      approvedSha256: external_exports.string().regex(/^[a-f0-9]{64}$/i).optional(),
+      approvedUidValidity: external_exports.string().min(1).optional(),
+      dryRun: external_exports.boolean().default(true)
+    }
+  },
+  withErrorHandling(async (input) => {
+    const result = await mailManager.sendSavedDraft(input);
+    return successResponse(
+      result.status === "preview" ? `Current saved draft for review in Codex:
+${JSON.stringify(result, null, 2)}` : `Draft submitted; draft removed: ${result.draftRemoved}`,
+      { ...result }
+    );
+  }, "Error sending saved draft")
+);
+registerTool(
   "send-email",
   {
     description: "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent \u2014 require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
@@ -88825,36 +89137,66 @@ ${details}`,
   }, "Error sending serial emails")
 );
 registerTool(
+  "list-signatures",
+  {
+    description: "Use when: choosing a native signature for create-draft.\nReturns: existing signature names.\nDo not use when: modifying signatures or Mail preferences. Read-only.",
+    inputSchema: {},
+    outputSchema: { signatures: external_exports.array(external_exports.string()).optional() }
+  },
+  withErrorHandling(() => {
+    const signatures = mailManager.listSignatures();
+    return successResponse(signatures.join("\n") || "No signatures configured", { signatures });
+  }, "Error listing signatures")
+);
+registerTool(
   "create-draft",
   {
-    description: "Use when: composing an email the user should review in Mail.app before sending \u2014 the safe default for any new message (to/cc/bcc are arrays, optional attachments).\nReturns: a confirmation that the draft was created, with recipients and attachment count.\nDo not use when: the user has already confirmed they want it sent now (use send-email).\nSafety: low risk \u2014 creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
+    description: "Use when: composing and explicitly saving an unsent Apple Mail draft. Supports an account name or address, an exact sender address (including aliases), and a named existing signature from list-signatures. Invalid or ambiguous selections fail instead of silently falling back. \nReturns: the actual compose sender/signature after save; composeId is not a stored message locator. \nDo not use when: immediate sending is requested (use send-email).\nSafety: never sends mail. A failed or timed-out call may leave a draft: inspect Drafts before retrying.",
     inputSchema: {
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       subject: external_exports.string().min(1, "Subject is required"),
       body: external_exports.string().min(1, "Body is required"),
       cc: external_exports.array(external_exports.string()).optional().describe("CC recipients"),
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
-      account: external_exports.string().optional().describe("Account to create draft in"),
+      account: external_exports.string().min(1).optional().describe("Exact enabled Mail account name or one of its email addresses"),
+      sender: external_exports.string().email().optional().describe(
+        "Exact From email address. Must belong to an enabled Mail account and match account if supplied."
+      ),
+      signature: external_exports.string().min(1).optional().describe(
+        "Exact existing signature name from list-signatures. Omit for no signature; body should not repeat the signature."
+      ),
       attachments: ATTACHMENTS_SCHEMA
     },
     outputSchema: {
       ok: external_exports.boolean().optional(),
       recipients: external_exports.array(external_exports.string()).optional(),
-      attachmentCount: external_exports.number().optional()
+      attachmentCount: external_exports.number().optional(),
+      saved: external_exports.boolean().optional(),
+      composeId: external_exports.string().optional(),
+      sender: external_exports.string().optional(),
+      signature: external_exports.string().optional()
     }
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
-    const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
-    if (!success) {
-      return errorResponse("Failed to create draft. Check Mail.app configuration.");
-    }
-    const attachmentCount = attachments?.length ?? 0;
-    const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-    return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
-      ok: true,
-      recipients: to,
-      attachmentCount
+  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments, sender, signature }) => {
+    const result = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments, {
+      sender,
+      signature
     });
+    if (!result.success) {
+      return errorResponse(result.error);
+    }
+    return successResponse(
+      `Draft saved for ${to.join(", ")} from ${result.sender}; signature: ${result.signature || "none"}`,
+      {
+        ok: true,
+        recipients: to,
+        attachmentCount: attachments?.length ?? 0,
+        saved: true,
+        composeId: result.composeId,
+        sender: result.sender,
+        signature: result.signature
+      }
+    );
   }, "Error creating draft")
 );
 function resolveSmtpOrFallback() {

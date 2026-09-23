@@ -1,3 +1,21 @@
+import {
+  buildAppLevelScript,
+  escapeForAppleScript,
+  escapeForAppleScriptBody,
+} from "@/utils/mailScriptBuilders.js";
+export { escapeForAppleScript, escapeForAppleScriptBody } from "@/utils/mailScriptBuilders.js";
+import {
+  createSavedDraft,
+  listMailSignatures,
+  type DraftOptions,
+  type DraftResult,
+} from "./draftCompose.js";
+import {
+  sendSavedDraft,
+  type SavedDraftInput,
+  type SavedDraftPreview,
+  type SavedDraftSubmission,
+} from "./draftSend.js";
 /**
  * Apple Mail Manager
  *
@@ -423,51 +441,6 @@ export function chooseDefaultAccount(
   const firstEnabled = accounts.find((a) => a.enabled);
   if (firstEnabled) return firstEnabled.name;
   return accounts[0]?.name ?? null;
-}
-
-export function escapeForAppleScript(text: string): string {
-  if (!text) return "";
-  // Escape backslash and double-quote for the AppleScript string literal, and
-  // strip ASCII control characters. An AppleScript double-quoted literal cannot
-  // contain a raw newline, so an interpolated value with a `\n` (or other
-  // control char) would terminate the literal early and could inject a
-  // statement; stripping them closes that gap (audit finding #10).
-  return (
-    text
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      // eslint-disable-next-line no-control-regex
-      .replace(/[\x00-\x1f\x7f]/g, "")
-  );
-}
-
-/**
- * Escape a message BODY for interpolation into an AppleScript string literal.
- *
- * Same injection defense as {@link escapeForAppleScript} (backslash then quote,
- * in that order), but instead of stripping line breaks it converts CRLF / CR /
- * LF to the two-character sequence `\n` (and tab to `\t`), which AppleScript
- * 2.0+ interprets as a linefeed/tab inside a double-quoted literal. No raw
- * control character ever reaches the emitted literal, so the audit finding #10
- * fix is preserved — but paragraph breaks survive in bodies instead of
- * collapsing into a wall of text. Any remaining control characters are
- * stripped exactly as in the single-line variant.
- *
- * Use ONLY for body/content values. Subjects, addresses, account/mailbox
- * names, paths, queries, and rule expressions must stay on
- * {@link escapeForAppleScript} so they remain single-line.
- */
-export function escapeForAppleScriptBody(text: string): string {
-  if (!text) return "";
-  return (
-    text
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      .replace(/\r\n|\r|\n/g, "\\n")
-      .replace(/\t/g, "\\t")
-      // eslint-disable-next-line no-control-regex
-      .replace(/[\x00-\x1f\x7f]/g, "")
-  );
 }
 
 /**
@@ -965,17 +938,6 @@ function crossCheckRenumbered(
     out.push({ messageId: mid, before: before.id, after: after.id });
   }
   return out;
-}
-
-/**
- * Builds an AppleScript command at the application level.
- */
-function buildAppLevelScript(command: string): string {
-  return `
-    tell application "Mail"
-      ${command}
-    end tell
-  `;
 }
 
 /**
@@ -3464,10 +3426,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
 
     const script = buildAppLevelScript(sendCommand);
-    // Exactly one attempt. `executeAppleScript` retries on a timeout, and a
-    // `send` that timed out may already have been accepted by Mail — a retry
-    // would compose and submit a second copy. A send is not idempotent, so the
-    // caller gets the failure and inspects Sent/Outbox instead.
+    // Exactly one attempt. A timed-out send may already have been accepted by
+    // Mail; retrying would compose and submit a duplicate.
     const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 1 });
 
     if (!result.success) {
@@ -3554,7 +3514,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param cc - CC recipients
    * @param bcc - BCC recipients
    * @param account - Account to create draft in
-   * @returns true if draft created successfully
+   * @returns Checked save receipt or an error; a failed attempt may have left a draft
    */
   createDraft(
     to: string[],
@@ -3563,8 +3523,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     cc?: string[],
     bcc?: string[],
     account?: string,
-    attachments?: AttachmentInput[]
-  ): boolean {
+    attachments?: AttachmentInput[],
+    options: DraftOptions = {}
+  ): DraftResult {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
 
@@ -3593,7 +3554,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         safeSubject,
         safeBody,
         account,
-        attachmentCommands
+        attachmentCommands,
+        options
       );
     } finally {
       mat.cleanup();
@@ -3605,43 +3567,25 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     safeSubject: string,
     safeBody: string,
     account: string | undefined,
-    attachmentCommands: string
-  ): boolean {
-    let draftCommand: string;
-    if (account) {
-      const safeAccount = escapeForAppleScript(account);
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          set sender to "${safeAccount}"
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    } else {
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    }
+    attachmentCommands: string,
+    options: DraftOptions
+  ): DraftResult {
+    return createSavedDraft({
+      recipientCommands,
+      safeSubject,
+      safeBody,
+      account,
+      attachmentCommands,
+      ...options,
+    });
+  }
 
-    const script = buildAppLevelScript(draftCommand);
-    // Exactly one attempt, for the same reason as sendEmailWithPaths: a
-    // compose that timed out may already have produced the draft, and a retry
-    // would leave a duplicate in Drafts.
-    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 1 });
+  listSignatures(): string[] {
+    return listMailSignatures();
+  }
 
-    if (!result.success) {
-      console.error(`Failed to create draft: ${result.error}`);
-      return false;
-    }
-
-    return result.output.includes("draft created");
+  sendSavedDraft(input: SavedDraftInput): Promise<SavedDraftPreview | SavedDraftSubmission> {
+    return sendSavedDraft(input);
   }
 
   /**
@@ -6248,7 +6192,7 @@ ${actionStmts.join("\n")}
 
     if (to.length === 0) return false;
 
-    return this.createDraft(to, subject, body, cc);
+    return this.createDraft(to, subject, body, cc).success;
   }
 
   // ===========================================================================

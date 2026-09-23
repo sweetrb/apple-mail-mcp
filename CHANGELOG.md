@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [2.19.13] - 2026-09-23
+
+### Added
+
+- `create-draft` resolves an explicit Mail account, sender alias, and native signature before composing and returns the actual saved identity. `list-signatures` lists available native signature names.
+- `send-saved-draft` previews the current stored IMAP Drafts message in Codex and can submit its approved MIME content through a matching SMTP identity after a SHA-256 and UIDVALIDITY check. It strips Bcc and draft-only headers from the transmitted copy, files a best-effort Sent copy, and reports draft cleanup separately. No compose or send mutation is retried.
+
 ## [2.19.12] - 2026-09-22
 
 ### Fixed
