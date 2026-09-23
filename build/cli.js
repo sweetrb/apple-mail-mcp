@@ -61660,7 +61660,14 @@ async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   const requested = Math.floor(opts.maxBytes ?? MAX_RFC822_INLINE_BYTES);
   const limit = Math.min(Math.max(1, requested), MAX_RFC822_FILE_BYTES);
-  return withClient(depsForMessageRef(ref, deps), async (client) => {
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    if (opts.requireDraftMailbox) {
+      const boxes = await client.list();
+      const draftPath = boxes.find((box) => box.specialUse?.toLowerCase() === "\\drafts")?.path;
+      if (!draftPath || draftPath !== ref.path) {
+        return { success: false, error: `"${ref.path}" is not the account's Drafts mailbox.` };
+      }
+    }
     const lock = await client.getMailboxLock(ref.path, { readOnly: true });
     try {
       const mb = client.mailbox;
@@ -61706,6 +61713,7 @@ async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
         success: true,
         acquisition: {
           account: ref.account,
+          accountUser: cfg.user,
           mailbox: ref.path,
           uid: ref.uid,
           uidValidity,

@@ -1,5 +1,5 @@
 import { executeAppleScript } from "@/utils/applescript.js";
-import { buildAppLevelScript, escapeForAppleScript } from "@/utils/appleScriptText.js";
+import { buildAppLevelScript, escapeForAppleScript } from "@/utils/mailScriptBuilders.js";
 
 export interface DraftOptions {
   sender?: string;
@@ -33,6 +33,7 @@ export function buildDraftScript(input: DraftScriptInput): string {
     end if
   `;
   return buildAppLevelScript(`
+    considering case, diacriticals, punctuation
     set requestedAccount to "${account}"
     set requestedSender to "${sender}"
     set requestedSignatureName to "${signature}"
@@ -91,7 +92,8 @@ export function buildDraftScript(input: DraftScriptInput): string {
     end repeat
     set composeId to id of newMessage as text
     close newMessage saving yes
-    return "saved" & ASCII character 31 & composeId & ASCII character 31 & actualSender & ASCII character 31 & actualSignature
+    return "saved" & character id 31 & composeId & character id 31 & actualSender & character id 31 & actualSignature
+    end considering
   `);
 }
 
@@ -115,7 +117,7 @@ export function listMailSignatures(): string[] {
   const result = executeAppleScript(
     buildAppLevelScript(`
     set signatureNames to name of every signature
-    set AppleScript's text item delimiters to ASCII character 31
+    set AppleScript's text item delimiters to character id 31
     return signatureNames as text
   `)
   );

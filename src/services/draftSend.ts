@@ -1,81 +1,257 @@
-import { executeAppleScript } from "@/utils/applescript.js";
+import nodemailer from "nodemailer";
+import addressparser from "nodemailer/lib/addressparser/index.js";
 import {
-  buildAppLevelScript,
-  escapeForAppleScript,
-  escapeForAppleScriptBody,
-} from "@/utils/appleScriptText.js";
+  imapAppendSentCopy,
+  imapDeleteMessageById,
+  imapGetMessageRfc822,
+  MAX_RFC822_FILE_BYTES,
+  type ImapRfc822Acquisition,
+} from "@/services/imapClient.js";
+import { resolveSmtpConfig, type SmtpConfig } from "@/services/smtpMailer.js";
+import { parseHeaderBlock } from "@/utils/headers.js";
+import { extractHtmlBody, extractTextBody, parseMimeAttachments } from "@/utils/mimeParse.js";
 
-export interface SavedDraftSendInput {
-  account: string;
+export interface SavedDraftInput {
   draftId: string;
-  composeId: string;
-  sender: string;
-  recipient: string;
-  subject: string;
-  signature: string;
-  body: string;
   dryRun: boolean;
+  /** Values returned by a fresh preview. Required before any send. */
+  approvedSha256?: string;
+  approvedUidValidity?: string;
 }
 
-// Mail represents signature spacing differently in the composer and saved MIME.
-// Ignore whitespace only; word tokenization would hide punctuation-only edits.
-export const DRAFT_TEXT_NORMALIZER = `
-on compactDraftText(valueText)
-  set priorDelimiters to AppleScript's text item delimiters
-  set AppleScript's text item delimiters to {space, tab, return, linefeed, character id 160, character id 8239}
-  set textParts to text items of valueText
-  set AppleScript's text item delimiters to ""
-  set compactValue to textParts as text
-  set AppleScript's text item delimiters to priorDelimiters
-  return compactValue
-end compactDraftText
-`;
+export interface SavedDraftPreview {
+  status: "preview";
+  draftId: string;
+  sha256: string;
+  uidValidity: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  replyTo: string[];
+  subject: string;
+  body: string;
+  isHtml: boolean;
+  htmlBody?: string;
+  attachments: { name: string; mimeType: string; size: number }[];
+}
 
-/** Only sends an existing, verified composer while its saved draft still exists. */
-export function buildSavedDraftSendScript(input: SavedDraftSendInput): string {
-  if (!/^\d+$/.test(input.draftId) || !/^\d+$/.test(input.composeId))
-    throw new Error("Invalid draft identifiers");
-  const e = escapeForAppleScript;
-  return (
-    DRAFT_TEXT_NORMALIZER +
-    buildAppLevelScript(`
-    set sourceAccount to account "${e(input.account)}"
-    set sourceMessage to first message of mailbox "Drafts" of sourceAccount whose id is ${input.draftId}
-    if subject of sourceMessage is not "${e(input.subject)}" then error "Stored draft subject mismatch"
-    if (address of every to recipient of sourceMessage) is not {"${e(input.recipient)}"} then error "Stored draft recipient mismatch"
-    if sender of sourceMessage is not "${e(input.sender)}" then error "Stored draft sender mismatch"
-    set candidateMessages to every outgoing message whose id is ${input.composeId}
-    if (count of candidateMessages) is not 1 then error "Original composer unavailable; no send performed"
-    set targetMessage to item 1 of candidateMessages
-    if subject of targetMessage is not "${e(input.subject)}" then error "Composer subject mismatch"
-    if sender of targetMessage is not "${e(input.sender)}" then error "Composer sender mismatch"
-    if (address of every to recipient of targetMessage) is not {"${e(input.recipient)}"} then error "Composer recipient mismatch"
-    if (count of cc recipients of targetMessage) is not 0 or (count of bcc recipients of targetMessage) is not 0 then error "Unexpected CC/BCC"
-    if (count of attachments of content of targetMessage) is not 0 then error "Unexpected attachment"
-    if message signature of targetMessage is missing value then error "Missing signature"
-    if name of message signature of targetMessage is not "${e(input.signature)}" then error "Signature mismatch"
-    set expectedBody to "${escapeForAppleScriptBody(input.body)}"
-    set composeBody to content of targetMessage as text
-    set storedBody to content of sourceMessage as text
-    considering case, diacriticals, punctuation
-    if my compactDraftText(composeBody) is not my compactDraftText(expectedBody) then error "Composer body differs from approved content"
-    set expectedFullText to expectedBody & return & (content of message signature of targetMessage as text)
-    if my compactDraftText(storedBody) is not my compactDraftText(expectedFullText) then error "Stored body differs from approved content"
-    end considering
-    ${input.dryRun ? 'return "validated"' : 'if send targetMessage then\n      return "submitted"\n    else\n      error "Mail did not confirm submission; inspect Sent before retrying"\n    end if'}
-  `)
+export interface SavedDraftSubmission {
+  status: "submitted";
+  messageId?: string;
+  sentCopy?: boolean;
+  sentCopyError?: string;
+  draftRemoved: boolean;
+  draftRemovalError?: string;
+}
+
+type DraftAcquisition = Awaited<ReturnType<typeof imapGetMessageRfc822>>;
+type SentCopy = Awaited<ReturnType<typeof imapAppendSentCopy>>;
+type DeleteResult = Awaited<ReturnType<typeof imapDeleteMessageById>>;
+
+export interface SavedDraftDeps {
+  fetch?: (id: string) => Promise<DraftAcquisition>;
+  smtpConfig?: () => SmtpConfig;
+  submit?: (
+    raw: Buffer,
+    envelope: { from: string; to: string[] },
+    config: SmtpConfig
+  ) => Promise<{ messageId?: string }>;
+  appendSent?: (smtpUser: string, raw: Buffer) => Promise<SentCopy>;
+  removeDraft?: (id: string) => Promise<DeleteResult>;
+}
+
+const fetchDraft = (id: string): Promise<DraftAcquisition> =>
+  imapGetMessageRfc822(id, { maxBytes: MAX_RFC822_FILE_BYTES, requireDraftMailbox: true });
+
+function addressFields(
+  headers: ReturnType<typeof parseHeaderBlock>["headers"],
+  name: string
+): string[] {
+  const values = headers
+    .filter((field) => field.name.toLowerCase() === name)
+    .map((field) => field.value);
+  const addresses = values.flatMap((value) =>
+    addressparser(value, { flatten: true }).map((item) => item.address)
+  );
+  if (addresses.some((address) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))) {
+    throw new Error(`Draft has an invalid ${name} address; no send performed.`);
+  }
+  return addresses;
+}
+
+function cleanDraftHeaders(raw: Buffer, keepBcc: boolean): Buffer {
+  const source = raw.toString("latin1");
+  const match = /\r?\n\r?\n/.exec(source);
+  if (!match || match.index === undefined)
+    throw new Error("Draft has no MIME header/body boundary.");
+  const separator = match[0];
+  const lines = source.slice(0, match.index).split(/\r?\n/);
+  const kept: string[] = [];
+  let omit = false;
+  for (const line of lines) {
+    if (!/^[ \t]/.test(line)) {
+      const name = line.slice(0, line.indexOf(":")).toLowerCase();
+      omit =
+        (!keepBcc && name === "bcc") ||
+        name === "x-unsent" ||
+        name.startsWith("x-apple-") ||
+        name.startsWith("x-uniform-") ||
+        name.startsWith("x-universally-");
+    }
+    if (!omit) kept.push(line);
+  }
+  return Buffer.from(
+    kept.join(separator.startsWith("\r") ? "\r\n" : "\n") +
+      separator +
+      source.slice(match.index + separator.length),
+    "latin1"
   );
 }
 
-export function sendSavedDraft(input: SavedDraftSendInput): { status: string } {
-  const result = executeAppleScript(buildSavedDraftSendScript(input), {
-    timeoutMs: 60000,
-    maxRetries: 1,
+function prepare(acquisition: ImapRfc822Acquisition, draftId: string) {
+  if (!acquisition.uidValidity) {
+    throw new Error("Draft mailbox did not report UIDVALIDITY; no send performed.");
+  }
+  const rawText = acquisition.bytes.toString("latin1");
+  const parsed = parseHeaderBlock(rawText);
+  if (parsed.headers.some((field) => field.name.toLowerCase().startsWith("resent-"))) {
+    throw new Error("Draft contains Resent headers that are not shown in the preview.");
+  }
+  const from = addressFields(parsed.headers, "from");
+  const to = addressFields(parsed.headers, "to");
+  const cc = addressFields(parsed.headers, "cc");
+  const bcc = addressFields(parsed.headers, "bcc");
+  const replyTo = addressFields(parsed.headers, "reply-to");
+  if (from.length !== 1 || to.length + cc.length + bcc.length === 0) {
+    throw new Error("Draft needs exactly one From address and at least one recipient.");
+  }
+  const body = extractTextBody(rawText);
+  const html = extractHtmlBody(rawText);
+  if (body === null && html === null) {
+    throw new Error("Draft body could not be shown for approval; no send performed.");
+  }
+  if ((body?.length ?? 0) > 100_000 || (html?.length ?? 0) > 100_000) {
+    throw new Error("Draft body exceeds the Codex preview limit; no send performed.");
+  }
+  const preview: SavedDraftPreview = {
+    status: "preview",
+    draftId,
+    sha256: acquisition.sha256,
+    uidValidity: acquisition.uidValidity,
+    from: from[0],
+    to,
+    cc,
+    bcc,
+    replyTo,
+    subject: parsed.subject ?? "",
+    body: body ?? html ?? "",
+    isHtml: body === null,
+    htmlBody: body !== null ? (html ?? undefined) : undefined,
+    attachments: parseMimeAttachments(rawText),
+  };
+  return {
+    preview,
+    wire: cleanDraftHeaders(acquisition.bytes, false),
+    sentCopy: cleanDraftHeaders(acquisition.bytes, true),
+    accountUser: acquisition.accountUser,
+  };
+}
+
+async function submitRaw(
+  raw: Buffer,
+  envelope: { from: string; to: string[] },
+  config: SmtpConfig
+): Promise<{ messageId?: string }> {
+  const transporter = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    requireTLS: !config.secure && !config.allowPlaintext,
+    auth: { user: config.user, pass: config.pass },
   });
-  if (!result.success)
-    throw new Error(result.error ?? "Unknown send outcome; inspect Sent before retrying");
-  const expected = input.dryRun ? "validated" : "submitted";
-  if (result.output !== expected)
-    throw new Error("Unknown send outcome; inspect Sent before retrying");
-  return { status: expected };
+  try {
+    const result = await transporter.sendMail({ raw, envelope });
+    return { messageId: result.messageId };
+  } finally {
+    transporter.close();
+  }
+}
+
+/**
+ * A preview exposes the current stored MIME in Codex. Sending rereads the
+ * same IMAP UID and requires its byte hash and UIDVALIDITY to match that preview.
+ * No fallback transport and no retry are attempted after an uncertain send.
+ */
+export async function sendSavedDraft(
+  input: SavedDraftInput,
+  deps: SavedDraftDeps = {}
+): Promise<SavedDraftPreview | SavedDraftSubmission> {
+  if (!input.draftId.startsWith("imap:")) {
+    throw new Error('Use an imap: id from list-messages on Drafts (transport: "imap").');
+  }
+  if (
+    !input.dryRun &&
+    (!/^[a-f0-9]{64}$/i.test(input.approvedSha256 ?? "") || !input.approvedUidValidity)
+  ) {
+    throw new Error("A fresh preview sha256 and uidValidity are required before sending.");
+  }
+  const result = await (deps.fetch ?? fetchDraft)(input.draftId);
+  if (!result.success) throw new Error(result.error);
+  const prepared = prepare(result.acquisition, input.draftId);
+  if (input.dryRun) return prepared.preview;
+  if (
+    prepared.preview.sha256 !== input.approvedSha256 ||
+    prepared.preview.uidValidity !== input.approvedUidValidity
+  ) {
+    throw new Error("Draft changed since the Codex preview; review the current draft again.");
+  }
+
+  const cfg = (deps.smtpConfig ?? resolveSmtpConfig)();
+  const allowed = new Set(
+    [cfg.user, cfg.from, ...(cfg.allowedFrom ?? [])].map((address) => address.toLowerCase())
+  );
+  if (
+    result.acquisition.accountUser.toLowerCase() !== cfg.user.toLowerCase() ||
+    !allowed.has(prepared.preview.from.toLowerCase())
+  ) {
+    throw new Error("Draft account or From address does not match the configured SMTP identity.");
+  }
+  const envelope = {
+    from: prepared.preview.from,
+    to: [...prepared.preview.to, ...prepared.preview.cc, ...prepared.preview.bcc],
+  };
+  const submitted = await (deps.submit ?? submitRaw)(prepared.wire, envelope, cfg);
+  let sentCopy: boolean | undefined;
+  let sentCopyError: string | undefined;
+  try {
+    const copy = await (deps.appendSent ?? imapAppendSentCopy)(cfg.user, prepared.sentCopy);
+    if (copy.attempted) {
+      sentCopy = copy.success ?? false;
+      if (!copy.success) sentCopyError = copy.error;
+    }
+  } catch (error) {
+    sentCopy = false;
+    sentCopyError = error instanceof Error ? error.message : String(error);
+  }
+  try {
+    const removed = await (deps.removeDraft ?? imapDeleteMessageById)(input.draftId);
+    return {
+      status: "submitted",
+      messageId: submitted.messageId,
+      sentCopy,
+      sentCopyError,
+      draftRemoved: removed.success,
+      draftRemovalError: removed.success ? undefined : removed.error,
+    };
+  } catch (error) {
+    return {
+      status: "submitted",
+      messageId: submitted.messageId,
+      sentCopy,
+      sentCopyError,
+      draftRemoved: false,
+      draftRemovalError: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

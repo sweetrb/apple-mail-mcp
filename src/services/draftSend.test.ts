@@ -1,86 +1,158 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, it, expect, vi } from "vitest";
-import { executeAppleScript } from "@/utils/applescript.js";
-import { buildSavedDraftSendScript, sendSavedDraft, DRAFT_TEXT_NORMALIZER } from "./draftSend.js";
-vi.mock("@/utils/applescript.js", () => ({ executeAppleScript: vi.fn() }));
-const input = {
-  account: "Work",
-  draftId: "123",
-  composeId: "45",
-  sender: "me@example.com",
-  recipient: "you@example.com",
-  subject: 'A "topic"',
-  signature: "Work",
-  body: "Approved body",
-  dryRun: true,
-};
-describe("existing draft send", () => {
-  it("validates saved and composed identities without recreating or sending during preview", () => {
-    const script = buildSavedDraftSendScript(input);
-    expect(script).toContain("whose id is 123");
-    expect(script).toContain("whose id is 45");
-    expect(script).toContain('A \\"topic\\"');
-    expect(script).toContain("Stored draft recipient mismatch");
-    expect(script).toContain("Composer sender mismatch");
-    expect(script).toContain("Signature mismatch");
-    expect(script).toContain("Unexpected CC/BCC");
-    expect(script).toContain("Unexpected attachment");
-    expect(script).toContain("Stored body differs");
-    expect(script).not.toContain("send targetMessage");
-    expect(script).not.toContain("make new");
-  });
-  it("only sends after validation and never retries an uncertain submission", () => {
-    const script = buildSavedDraftSendScript({ ...input, dryRun: false });
-    expect(script.indexOf("Stored body differs")).toBeLessThan(
-      script.indexOf("send targetMessage")
-    );
-    vi.mocked(executeAppleScript).mockReturnValue({ success: false, output: "", error: "timeout" });
-    expect(() => sendSavedDraft({ ...input, dryRun: false })).toThrow("timeout");
-    expect(executeAppleScript).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
-      timeoutMs: 60000,
-      maxRetries: 1,
-    });
-  });
-  it("rejects invalid IDs and unexpected receipts", () => {
-    expect(() => buildSavedDraftSendScript({ ...input, composeId: "45; send" })).toThrow("Invalid");
-    vi.mocked(executeAppleScript).mockReturnValue({ success: true, output: "true" });
-    expect(() => sendSavedDraft(input)).toThrow("Unknown send outcome");
-    vi.mocked(executeAppleScript).mockReturnValue({ success: true, output: "submitted" });
-    expect(sendSavedDraft({ ...input, dryRun: false })).toEqual({ status: "submitted" });
-  });
-});
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import type { ImapRfc822Acquisition } from "./imapClient.js";
+import type { SmtpConfig } from "./smtpMailer.js";
+import { sendSavedDraft, type SavedDraftDeps } from "./draftSend.js";
 
-describe.skipIf(process.platform !== "darwin")("draft text comparison (no Mail access)", () => {
-  it("compiles both preview and send scripts without executing Mail commands", () => {
-    const directory = mkdtempSync(join(tmpdir(), "mail-draft-compile-"));
-    try {
-      for (const dryRun of [true, false]) {
-        execFileSync("osacompile", [
-          "-o",
-          join(directory, "draft.scpt"),
-          "-e",
-          buildSavedDraftSendScript({ ...input, dryRun }),
-        ]);
-      }
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+const draftId = "imap:example";
+const raw = Buffer.from(
+  [
+    "From: Example Sender <sender@example.com>",
+    "To: Ada <ada@example.com>",
+    "Cc: Review <review@example.com>",
+    "Bcc: Secret <secret@example.com>",
+    "Reply-To: Replies <replies@example.com>",
+    "Subject: Current draft",
+    "Message-ID: <draft@example.com>",
+    "X-Unsent: 1",
+    "X-Uniform-Type-Identifier: com.apple.mail-draft",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Edited in Mail.",
+  ].join("\r\n")
+);
+const sha256 = createHash("sha256").update(raw).digest("hex");
+const acquisition: ImapRfc822Acquisition = {
+  account: "Work",
+  accountUser: "sender@example.com",
+  mailbox: "Drafts",
+  uid: 42,
+  uidValidity: "100",
+  flags: ["\\Draft"],
+  bytes: raw,
+  sha256,
+  readMethod: "EXAMINE; UID FETCH BODY.PEEK[]",
+  warnings: [],
+};
+const config: SmtpConfig = {
+  host: "smtp.example.com",
+  port: 587,
+  secure: false,
+  user: "sender@example.com",
+  pass: "not-used",
+  from: "sender@example.com",
+};
+
+function deps(value: ImapRfc822Acquisition = acquisition) {
+  const submit = vi.fn().mockResolvedValue({ messageId: "<draft@example.com>" });
+  const appendSent = vi.fn().mockResolvedValue({ attempted: true, success: true });
+  const removeDraft = vi.fn().mockResolvedValue({ success: true, info: "moved to Trash" });
+  const injected: SavedDraftDeps = {
+    fetch: vi.fn().mockResolvedValue({ success: true, acquisition: value }),
+    smtpConfig: () => config,
+    submit,
+    appendSent,
+    removeDraft,
+  };
+  return { injected, submit, appendSent, removeDraft };
+}
+
+describe("send-saved-draft", () => {
+  it("shows the current stored content in Codex without submitting or removing it", async () => {
+    const d = deps();
+    const preview = await sendSavedDraft({ draftId, dryRun: true }, d.injected);
+    expect(preview).toMatchObject({
+      status: "preview",
+      sha256,
+      uidValidity: "100",
+      from: "sender@example.com",
+      to: ["ada@example.com"],
+      cc: ["review@example.com"],
+      bcc: ["secret@example.com"],
+      replyTo: ["replies@example.com"],
+      subject: "Current draft",
+      body: "Edited in Mail.",
+    });
+    expect(d.submit).not.toHaveBeenCalled();
+    expect(d.removeDraft).not.toHaveBeenCalled();
   });
-  it("ignores line spacing while retaining punctuation, decimals, and case", () => {
-    const script =
-      DRAFT_TEXT_NORMALIZER +
-      `
-      set spaced to my compactDraftText("A 1.5" & return & "mg")
-      considering case, diacriticals, punctuation
-        if spaced is not "A1.5mg" then error "Whitespace normalization failed"
-        if spaced is my compactDraftText("A 15 mg") then error "Decimal punctuation lost"
-        if spaced is my compactDraftText("a 1.5 mg") then error "Case ignored"
-      end considering
-      return "ok"
-    `;
-    expect(execFileSync("osascript", ["-e", script], { encoding: "utf8" }).trim()).toBe("ok");
+
+  it("sends only the approved bytes, strips Bcc from wire MIME, and removes the draft after submission", async () => {
+    const d = deps();
+    const result = await sendSavedDraft(
+      { draftId, dryRun: false, approvedSha256: sha256, approvedUidValidity: "100" },
+      d.injected
+    );
+    expect(result).toMatchObject({
+      status: "submitted",
+      messageId: "<draft@example.com>",
+      sentCopy: true,
+      draftRemoved: true,
+    });
+    const [wire, envelope] = d.submit.mock.calls[0];
+    expect(wire.toString()).toContain("Edited in Mail.");
+    expect(wire.toString()).not.toMatch(/^(Bcc|X-Unsent|X-Uniform-Type-Identifier):/m);
+    expect(envelope).toEqual({
+      from: "sender@example.com",
+      to: ["ada@example.com", "review@example.com", "secret@example.com"],
+    });
+    expect(d.appendSent.mock.calls[0][1].toString()).toContain("Bcc: Secret");
+    expect(d.removeDraft).toHaveBeenCalledWith(draftId);
+  });
+
+  it("refuses changes, missing approval, and a mismatched SMTP identity before submission", async () => {
+    const d = deps();
+    await expect(sendSavedDraft({ draftId, dryRun: false }, d.injected)).rejects.toThrow(
+      "fresh preview"
+    );
+    await expect(
+      sendSavedDraft(
+        { draftId, dryRun: false, approvedSha256: "a".repeat(64), approvedUidValidity: "100" },
+        d.injected
+      )
+    ).rejects.toThrow("Draft changed");
+    await expect(
+      sendSavedDraft(
+        { draftId, dryRun: false, approvedSha256: sha256, approvedUidValidity: "101" },
+        d.injected
+      )
+    ).rejects.toThrow("Draft changed");
+    d.injected.smtpConfig = () => ({ ...config, user: "different@example.com" });
+    await expect(
+      sendSavedDraft(
+        { draftId, dryRun: false, approvedSha256: sha256, approvedUidValidity: "100" },
+        d.injected
+      )
+    ).rejects.toThrow("does not match");
+    expect(d.submit).not.toHaveBeenCalled();
+  });
+
+  it("reports post-send cleanup failure without retrying the submission", async () => {
+    const d = deps();
+    d.removeDraft.mockResolvedValue({ success: false, error: "IMAP unavailable" });
+    const result = await sendSavedDraft(
+      { draftId, dryRun: false, approvedSha256: sha256, approvedUidValidity: "100" },
+      d.injected
+    );
+    expect(result).toMatchObject({
+      status: "submitted",
+      draftRemoved: false,
+      draftRemovalError: "IMAP unavailable",
+    });
+    expect(d.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the draft untouched when SMTP submission is uncertain", async () => {
+    const d = deps();
+    d.submit.mockRejectedValue(new Error("SMTP timeout"));
+    await expect(
+      sendSavedDraft(
+        { draftId, dryRun: false, approvedSha256: sha256, approvedUidValidity: "100" },
+        d.injected
+      )
+    ).rejects.toThrow("SMTP timeout");
+    expect(d.submit).toHaveBeenCalledTimes(1);
+    expect(d.appendSent).not.toHaveBeenCalled();
+    expect(d.removeDraft).not.toHaveBeenCalled();
   });
 });

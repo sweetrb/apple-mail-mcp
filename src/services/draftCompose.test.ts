@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { executeAppleScript } from "@/utils/applescript.js";
 import { buildDraftScript, createSavedDraft, listMailSignatures } from "./draftCompose.js";
@@ -80,5 +84,21 @@ describe("saved drafts", () => {
     expect(listMailSignatures()).toEqual([]);
     vi.mocked(executeAppleScript).mockReturnValue({ success: true, output: "First\x1fSecond" });
     expect(listMailSignatures()).toEqual(["First", "Second"]);
+  });
+});
+
+describe.skipIf(process.platform !== "darwin")("draft AppleScript compilation", () => {
+  it("resolves Mail terminology without executing draft creation", () => {
+    const directory = mkdtempSync(join(tmpdir(), "mail-draft-compile-"));
+    try {
+      execFileSync("osacompile", [
+        "-o",
+        join(directory, "draft.scpt"),
+        "-e",
+        buildDraftScript(input),
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

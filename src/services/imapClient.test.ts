@@ -3441,6 +3441,27 @@ describe("imapGetMessageRfc822 (#244 — raw bytes with IMAP identity)", () => {
     expect(d.connect).not.toHaveBeenCalled();
   });
 
+  it("requires the server's special-use Drafts mailbox before a saved-draft send", async () => {
+    const d = rfcClient();
+    const draftId = encodeImapId(cfg.accountLabel, "Drafts", 42);
+    vi.spyOn(d.client, "list").mockResolvedValue([
+      { path: "Drafts", name: "Drafts", specialUse: "\\Drafts" },
+    ]);
+    const allowed = await imapGetMessageRfc822(draftId, { requireDraftMailbox: true }, d.deps);
+    expect(allowed.success).toBe(true);
+    expect(d.client.getMailboxLock).toHaveBeenCalledWith("Drafts", { readOnly: true });
+
+    vi.mocked(d.client.list).mockResolvedValue([
+      { path: "Archive/Drafts", name: "Drafts", specialUse: "\\Drafts" },
+    ]);
+    const refused = await imapGetMessageRfc822(draftId, { requireDraftMailbox: true }, d.deps);
+    expect(refused).toEqual({
+      success: false,
+      error: expect.stringContaining("not the account's Drafts mailbox"),
+    });
+    expect(d.client.fetchOne).toHaveBeenCalledTimes(1);
+  });
+
   it("reports a missing message and releases the lock", async () => {
     const d = rfcClient();
     d.client.fetchOne.mockResolvedValue(false);
