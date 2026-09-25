@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+## [2.19.16] - 2026-09-25
+
+### Fixed
+
+- **A filter-less `list-messages` no longer fails on iCloud mailboxes holding
+  deleted-but-never-expunged mail**
+  ([#246](https://github.com/sweetrb/apple-mail-mcp/issues/246), diagnosed by
+  @j5pu): iCloud leaves messages flagged `\Deleted` but never expunged out of
+  `EXISTS`, `STATUS` and `FETCH`, yet returns them from `UID SEARCH` for
+  flag-only criteria (`ALL`, `SEEN`, `UNSEEN`) — @j5pu captured a plain
+  `* SEARCH` of 100,011 UIDs for a 48-message INBOX, 99,963 of them
+  `\Deleted`. The 2.19.11 STATUS cross-check correctly refused that total, so
+  `list-messages` with no filters, and any search filtered only by
+  `isRead`/`unreadOnly`, failed on every call. Every enumerating IMAP search
+  (list, search, get-thread, mail-stats' recent counts) now carries
+  `UNDELETED`; the STATUS guard stays as a safety net. This also corrects the
+  2.19.11 note's attribution: on this account the inflated count came from the
+  server's own SEARCH reply, not imapflow's ESEARCH range expansion.
+
 ## [2.19.15] - 2026-09-25
 
 ### Fixed
