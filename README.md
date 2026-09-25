@@ -1077,6 +1077,15 @@ refused rather than guessed; pass the full path to disambiguate. This also
 means Gmail's nested special mailboxes now report their real path, e.g.
 `[Gmail]/All Mail` rather than `All Mail` — a visible change from before 2.17.0.
 
+Matching ignores letter case **and Unicode normalization form**: a typed
+precomposed `México` (NFC) finds a mailbox the server stores decomposed (NFD —
+common for folders created on a Mac, and what iCloud keeps), and the server's
+own stored spelling is what gets selected. Two mailboxes whose names differ
+*only* in case or normalization look identical in any listing, so a name that
+matches both is refused with an error saying so — rename one of them. For the
+same reason `create-mailbox` treats a normalization-equivalent existing name as
+already existing, and `rename-mailbox` refuses to create such a twin.
+
 **Mail's local "On My Mac" mailboxes** are not children of any account — they
 hang off the application — so they are reported under the synthetic account label
 **`On My Mac`**. An unscoped call includes them (listed last); `account="On My

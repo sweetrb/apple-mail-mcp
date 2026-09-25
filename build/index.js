@@ -7681,6 +7681,19 @@ var init_headers = __esm({
   }
 });
 
+// src/utils/mailboxName.ts
+function mailboxNameKey(name) {
+  return name.trim().normalize("NFC").toLowerCase();
+}
+function nfc(name) {
+  return name.trim().normalize("NFC");
+}
+var init_mailboxName = __esm({
+  "src/utils/mailboxName.ts"() {
+    "use strict";
+  }
+});
+
 // src/utils/attachmentLimits.ts
 function isInlineAttachmentBase64WithinLimit(contentBase64) {
   if (contentBase64.length > MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS) return false;
@@ -65405,6 +65418,7 @@ __export(imapClient_exports, {
   listImapAccountLabels: () => listImapAccountLabels,
   mailFlagBitsFor: () => mailFlagBitsFor,
   mailFlagColorIndex: () => mailFlagColorIndex,
+  matchMailbox: () => matchMailbox,
   normalizeMessageId: () => normalizeMessageId,
   resolveImapConfig: () => resolveImapConfig,
   resolveImapConfigs: () => resolveImapConfigs,
@@ -65619,16 +65633,21 @@ function staticMailboxAlias(mailbox) {
 }
 async function resolveMailboxPath(client, mailbox, _mode) {
   if (!mailbox) return "INBOX";
+  let boxes;
   try {
-    const resolved = await resolveMailbox(client, mailbox);
-    if (resolved.kind === "found") return resolved.path;
-    const flag = SPECIAL_USE_ALIASES[mailbox.trim().toLowerCase()];
-    if (flag) {
-      const boxes = await client.list();
-      const special = boxes.find((b) => b.specialUse?.toLowerCase() === flag);
-      if (special) return special.path;
-    }
+    boxes = await client.list();
   } catch {
+    return staticMailboxAlias(mailbox);
+  }
+  const resolved = matchMailbox(boxes, mailbox);
+  if (resolved.kind === "found") return resolved.path;
+  const flag = SPECIAL_USE_ALIASES[mailbox.trim().toLowerCase()];
+  if (flag) {
+    const special = boxes.find((b) => b.specialUse?.toLowerCase() === flag);
+    if (special) return special.path;
+  }
+  if (resolved.kind === "ambiguous") {
+    throw new Error(ambiguousMailboxError(mailbox, resolved.candidates));
   }
   return staticMailboxAlias(mailbox);
 }
@@ -65721,7 +65740,7 @@ function structuredRow(m, account, path) {
   };
 }
 function describeMailboxFailure(error2) {
-  const raw = error2 instanceof Error ? error2.message : String(error2);
+  const raw = errText(error2);
   const oneLine = raw.split("\n")[0].trim();
   const looksSensitive = /pass(word)?\s*[:=]|authorization:\s*\S|bearer\s+\S{10,}/i.test(oneLine);
   const safe = looksSensitive ? "IMAP error (detail redacted \u2014 response text looked like it might contain a credential)" : oneLine || "unknown error";
@@ -65959,7 +65978,13 @@ function imapMailStats(deps = {}) {
   );
 }
 function errText(e) {
-  return e instanceof Error ? e.message : String(e);
+  if (!(e instanceof Error)) return String(e);
+  const x = e;
+  if (typeof x.responseStatus !== "string" || !x.responseStatus) return e.message;
+  const code = typeof x.serverResponseCode === "string" && x.serverResponseCode;
+  const text = typeof x.responseText === "string" ? x.responseText.trim() : "";
+  const server2 = [x.responseStatus, code ? `[${code}]` : "", text].filter(Boolean).join(" ");
+  return e.message && e.message !== "Command failed" ? `${e.message}: ${server2}` : server2;
 }
 function assertMutated(result, what) {
   if (!result) throw new Error(`${what}: server rejected the command (IMAP NO/BAD)`);
@@ -66111,20 +66136,30 @@ function withClient(deps, fn) {
   return useClient(deps, fn);
 }
 async function resolveMailbox(client, name) {
-  const wanted = name.trim().toLowerCase();
   const boxes = await client.list();
-  const byPath = boxes.find((b) => b.path.toLowerCase() === wanted);
-  if (byPath) return { kind: "found", path: byPath.path };
-  const byName = boxes.filter((b) => b.name.toLowerCase() === wanted);
-  if (byName.length === 1) return { kind: "found", path: byName[0].path };
-  if (byName.length > 1) {
-    return { kind: "ambiguous", candidates: byName.map((b) => b.path).sort() };
+  return matchMailbox(boxes, name);
+}
+function matchMailbox(boxes, name) {
+  const exact = boxes.find((b) => b.path === name || b.path === name.trim());
+  if (exact) return { kind: "found", path: exact.path };
+  const wanted = mailboxNameKey(name);
+  const tiers = [
+    boxes.filter((b) => mailboxNameKey(b.path) === wanted),
+    boxes.filter((b) => mailboxNameKey(b.name) === wanted)
+  ];
+  for (const hits of tiers) {
+    const paths = [...new Set(hits.map((b) => b.path))];
+    if (paths.length === 1) return { kind: "found", path: paths[0] };
+    if (paths.length > 1) return { kind: "ambiguous", candidates: paths.sort() };
   }
   return { kind: "none" };
 }
 function ambiguousMailboxError(name, candidates, accountLabel) {
   const where = accountLabel ? ` on IMAP account ${accountLabel}` : "";
-  return `Mailbox "${name}" is ambiguous${where} \u2014 it matches ${candidates.map((c) => `"${c}"`).join(" and ")}. Pass the full path.`;
+  const listed = candidates.map((c) => `"${c}"`).join(" and ");
+  const indistinguishable = new Set(candidates.map(mailboxNameKey)).size === 1;
+  const hint = indistinguishable ? " They differ only in letter case or Unicode normalization (precomposed vs decomposed accents), so no typed name can tell them apart. Rename one of them." : " Pass the full path.";
+  return `Mailbox "${name}" is ambiguous${where} \u2014 it matches ${listed}.${hint}`;
 }
 async function findMailboxPathOrThrow(client, name) {
   const res = await resolveMailbox(client, name);
@@ -66133,6 +66168,15 @@ async function findMailboxPathOrThrow(client, name) {
 }
 function imapCreateMailbox(name, deps = {}) {
   return withClient(deps, async (client) => {
+    let twin;
+    try {
+      const wanted = nfc(name);
+      twin = (await client.list()).find((b) => nfc(b.path) === wanted)?.path;
+    } catch {
+    }
+    if (twin !== void 0) {
+      return { success: true, info: `Mailbox "${twin}" already existed.` };
+    }
     try {
       const res = await client.mailboxCreate(name);
       return res.created ? { success: true, info: `Created mailbox "${res.path}".` } : { success: true, info: `Mailbox "${res.path}" already existed.` };
@@ -66184,6 +66228,14 @@ function imapRenameMailbox(oldName, newName, deps = {}) {
       };
     }
     const path = found.path;
+    const wantedNew = nfc(newName);
+    const clash = (await client.list()).find((b) => b.path !== path && nfc(b.path) === wantedNew);
+    if (clash) {
+      return {
+        success: false,
+        error: `Cannot rename "${path}" to "${newName}": mailbox "${clash.path}" already exists on IMAP account ${cfg.accountLabel} (the same name, differing only in how its accents are encoded).`
+      };
+    }
     try {
       const res = await client.mailboxRename(path, newName);
       return { success: true, info: `Renamed "${res.path}" to "${res.newPath}" via IMAP.` };
@@ -66838,6 +66890,7 @@ var init_imapClient = __esm({
     import_imapflow = __toESM(require_imap_flow(), 1);
     init_smtpMailer();
     init_docsUrls();
+    init_mailboxName();
     init_mimeParse();
     init_headers();
     init_auditLog();
@@ -81931,6 +81984,7 @@ function executeAppleScript(script, options = {}) {
 init_docsUrls();
 init_mimeParse();
 init_headers();
+init_mailboxName();
 
 // src/services/templateStore.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -82566,23 +82620,28 @@ function mailboxLeaf(path) {
 function resolveAppleMailboxPath(mailbox, actualPaths) {
   if (actualPaths.length === 0) return mailbox;
   const candidates = [mailbox, ...MAILBOX_ALIASES[mailbox.toLowerCase()] ?? []];
+  const ambiguous = (matches) => {
+    const sorted = [...new Set(matches)].sort();
+    const paths = sorted.map((path) => `"${path}"`).join(" and ");
+    const twins = new Set(sorted.map(mailboxNameKey)).size === 1;
+    const hint = twins ? " They differ only in letter case or Unicode normalization (precomposed vs decomposed accents), so no typed name can tell them apart. Rename one of them." : " Pass the full path.";
+    return new Error(`Mailbox "${mailbox}" is ambiguous \u2014 it matches ${paths}.${hint}`);
+  };
   for (const candidate of candidates) {
     const exact = actualPaths.find((path) => path === candidate);
     if (exact) return exact;
-    const folded = actualPaths.find((path) => path.toLowerCase() === candidate.toLowerCase());
-    if (folded) return folded;
+    const key = mailboxNameKey(candidate);
+    const folded = [...new Set(actualPaths.filter((path) => mailboxNameKey(path) === key))];
+    if (folded.length === 1) return folded[0];
+    if (folded.length > 1) throw ambiguous(folded);
   }
   for (const candidate of candidates) {
-    const leafMatches = actualPaths.filter(
-      (path) => mailboxLeaf(path).toLowerCase() === candidate.toLowerCase()
-    );
+    const key = mailboxNameKey(candidate);
+    const leafMatches = [
+      ...new Set(actualPaths.filter((path) => mailboxNameKey(mailboxLeaf(path)) === key))
+    ];
     if (leafMatches.length === 1) return leafMatches[0];
-    if (leafMatches.length > 1) {
-      const paths = [...leafMatches].sort().map((path) => `"${path}"`).join(" and ");
-      throw new Error(
-        `Mailbox "${mailbox}" is ambiguous \u2014 it matches ${paths}. Pass the full path.`
-      );
-    }
+    if (leafMatches.length > 1) throw ambiguous(leafMatches);
   }
   return mailbox;
 }
