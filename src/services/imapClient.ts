@@ -663,8 +663,20 @@ export async function resolveMailboxPath(
   return staticMailboxAlias(mailbox);
 }
 
+/**
+ * Every enumerating SEARCH carries UNDELETED (#246). iCloud keeps messages
+ * flagged `\\Deleted` but never expunged out of EXISTS, STATUS and FETCH, yet
+ * returns them from `UID SEARCH` for flag-only criteria (`ALL`, `SEEN`,
+ * `UNSEEN`, `DELETED`) — @j5pu measured 100,011 UIDs for a 48-message INBOX,
+ * 99,963 of them `\\Deleted`. Those "matches" can never be fetched, so a
+ * filter-less list tripped the STATUS guard below on every call. UNDELETED is
+ * also simply the right semantics: a message awaiting expunge is gone as far as
+ * a reader is concerned.
+ */
+const NOT_DELETED = { deleted: false } as const;
+
 function buildCriteria(a: ImapSearchArgs, listMode: boolean): Record<string, unknown> {
-  const c: Record<string, unknown> = {};
+  const c: Record<string, unknown> = { ...NOT_DELETED };
   if (a.query) c.or = [{ subject: a.query }, { from: a.query }];
   if (a.body) c.body = a.body;
   if (a.from) c.from = a.from;
@@ -676,7 +688,7 @@ function buildCriteria(a: ImapSearchArgs, listMode: boolean): Record<string, unk
   if (a.isFlagged === false) c.unflagged = true;
   if (a.dateFrom) c.since = new Date(a.dateFrom);
   if (a.dateTo) c.before = new Date(a.dateTo);
-  if (Object.keys(c).length === 0) c.all = true;
+  // No `all: true` fallback: UNDELETED alone already means "every live message".
   return c;
 }
 
@@ -903,6 +915,12 @@ async function fetchMailboxMatches(
     // bogus results (#246). Reported upstream candidate for a fix, but we
     // guard here regardless since we cannot control the installed version
     // or the server's exact wire behavior.
+    //
+    // The trigger @j5pu actually captured on iCloud was different and more
+    // mundane: a plain untagged `* SEARCH` listing ~100k `\Deleted`,
+    // never-expunged UIDs that EXISTS/STATUS/FETCH all exclude. `NOT_DELETED`
+    // in every enumerating criteria set fixes that at the source; this guard
+    // stays as the safety net for whatever else can inflate a match count.
     const status = await client.status(path, { messages: true });
     if (typeof status.messages === "number" && uids.length > status.messages) {
       throw new Error(
@@ -1174,7 +1192,10 @@ export function imapMailStats(deps: ImapDeps = {}): Promise<ImapStats> {
         try {
           const lock = await client.getMailboxLock("INBOX");
           try {
-            const found = await client.search({ since: since(days) }, { uid: true });
+            const found = await client.search(
+              { since: since(days), ...NOT_DELETED },
+              { uid: true }
+            );
             return Array.isArray(found) ? found.length : 0;
           } finally {
             lock.release();
@@ -2829,12 +2850,24 @@ export async function imapThread(
         };
         // Descendants: anything referencing the seed.
         if (seedMsgId) {
-          addFound(await client.search({ header: { references: seedMsgId } }, { uid: true }));
-          addFound(await client.search({ header: { "in-reply-to": seedMsgId } }, { uid: true }));
+          addFound(
+            await client.search(
+              { header: { references: seedMsgId }, ...NOT_DELETED },
+              { uid: true }
+            )
+          );
+          addFound(
+            await client.search(
+              { header: { "in-reply-to": seedMsgId }, ...NOT_DELETED },
+              { uid: true }
+            )
+          );
         }
         // Ancestors: messages whose Message-ID is in the seed's References (bounded).
         for (const mid of [...refIds].slice(0, 20)) {
-          addFound(await client.search({ header: { "message-id": mid } }, { uid: true }));
+          addFound(
+            await client.search({ header: { "message-id": mid }, ...NOT_DELETED }, { uid: true })
+          );
         }
         if (uidSet.size <= 1) return null; // only the seed → caller falls back to subject
 
