@@ -1,5 +1,35 @@
 ## [Unreleased]
 
+## [2.19.15] - 2026-09-25
+
+### Fixed
+
+- **Mailbox names now match regardless of Unicode normalization form**
+  ([#253](https://github.com/sweetrb/apple-mail-mcp/issues/253), reported by
+  @j5pu): iCloud stored a Mac-created `Xxxxx México` **decomposed** (NFD —
+  `e` + U+0301, modified UTF-7 `Me&AwE-xico`), while the name a user or model
+  types is **precomposed** (NFC — U+00E9, `M&AOk-xico`). The resolver compared
+  with `toLowerCase()` alone, found nothing, fell back to the caller's literal
+  spelling, and the server answered `NO [NONEXISTENT]` — so the mailbox showed
+  up in `list-mailboxes`/`get-mail-stats` but `list-messages`/`search-messages`
+  on it always failed. Both resolvers (IMAP and AppleScript) now compare names
+  NFC-folded and case-insensitively, then address the server with its **own**
+  stored path, which round-trips to exactly the modified-UTF-7 name it LISTed.
+  This covers every mailbox-taking operation: list, search, unread count,
+  move, batch-move, delete-mailbox, rename-mailbox and rule `moveTo`.
+- **Mailboxes that differ only in case or normalization are refused, not
+  guessed**: when a name matches two such visually identical mailboxes, the
+  error says so and asks for one to be renamed (a "full path" hint cannot help
+  there). A read scoped to an ambiguous leaf name is now refused too, instead
+  of falling back to SELECTing the caller's literal spelling. `create-mailbox`
+  reports a normalization-equivalent existing mailbox as already existing
+  rather than creating an unaddressable twin, and `rename-mailbox` refuses to
+  create one.
+- **A server's NO/BAD text now reaches the caller**: imapflow reports every
+  tagged NO/BAD as a generic `Command failed`, keeping the server's reply on
+  side fields. Error text now reads e.g. `NO [NONEXISTENT] Mailbox does not
+  exist` — completing what 2.19.14 set out to surface.
+
 ## [2.19.14] - 2026-09-23
 
 ### Fixed

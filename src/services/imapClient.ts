@@ -30,6 +30,7 @@ import { createHash } from "node:crypto";
 import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
+import { mailboxNameKey, nfc } from "@/utils/mailboxName.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
 import {
   decodeHeaderBytes,
@@ -623,10 +624,12 @@ function staticMailboxAlias(mailbox: string): string {
  *   3. The legacy Gmail-only static map (`staticMailboxAlias`), as a last
  *      resort when LIST failed or nothing above matched.
  *
- * A tier-1 match that is itself ambiguous (two mailboxes sharing a leaf name)
- * falls through to tiers 2/3 rather than erroring: unlike a *move* destination
- * (#137), guessing wrong here only scopes a read to a plausible mailbox, not
- * a wrong destination for a mutation.
+ * Tier 1 matching is case- and Unicode-normalization-insensitive (#253) and
+ * always yields the server's own stored path. A tier-1 match that is itself
+ * ambiguous (two mailboxes sharing a leaf name, or two paths that differ only
+ * in NFC/NFD form or case) is refused with an error naming the candidates
+ * unless a SPECIAL-USE alias settles it — the static fallback would only
+ * SELECT the caller's literal spelling, which is not one of them.
  */
 export async function resolveMailboxPath(
   client: ImapClientLike,
@@ -634,19 +637,28 @@ export async function resolveMailboxPath(
   _mode: "search" | "list"
 ): Promise<string> {
   if (!mailbox) return "INBOX";
+  let boxes: ImapMailboxListing[];
   try {
-    const resolved = await resolveMailbox(client, mailbox);
-    if (resolved.kind === "found") return resolved.path;
-
-    const flag = SPECIAL_USE_ALIASES[mailbox.trim().toLowerCase()];
-    if (flag) {
-      const boxes = await client.list();
-      const special = boxes.find((b) => b.specialUse?.toLowerCase() === flag);
-      if (special) return special.path;
-    }
+    boxes = await client.list();
   } catch {
-    // LIST failed — fall through to the static guess below, same as
-    // resolveTrashPath's own `!listed` fallback.
+    // LIST failed — fall back to the static guess, same as resolveTrashPath's
+    // own `!listed` fallback.
+    return staticMailboxAlias(mailbox);
+  }
+  const resolved = matchMailbox(boxes, mailbox);
+  if (resolved.kind === "found") return resolved.path;
+
+  const flag = SPECIAL_USE_ALIASES[mailbox.trim().toLowerCase()];
+  if (flag) {
+    const special = boxes.find((b) => b.specialUse?.toLowerCase() === flag);
+    if (special) return special.path;
+  }
+  // #253: an ambiguous name is refused, not guessed. Falling through to the
+  // static map would SELECT the caller's literal spelling, which (for an
+  // ambiguous leaf or two normalization-twins) is at best NONEXISTENT and at
+  // worst a third mailbox the caller never meant.
+  if (resolved.kind === "ambiguous") {
+    throw new Error(ambiguousMailboxError(mailbox, resolved.candidates));
   }
   return staticMailboxAlias(mailbox);
 }
@@ -822,7 +834,7 @@ interface FetchedMailboxMessage {
  * through raw.
  */
 function describeMailboxFailure(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = errText(error);
   const oneLine = raw.split("\n")[0].trim();
   const looksSensitive = /pass(word)?\s*[:=]|authorization:\s*\S|bearer\s+\S{10,}/i.test(oneLine);
   const safe = looksSensitive
@@ -1224,7 +1236,20 @@ export interface ImapOpResult {
 }
 
 function errText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  if (!(e instanceof Error)) return String(e);
+  // imapflow reports every tagged NO/BAD as the generic "Command failed" and
+  // puts what the server actually said on side fields (#253: the caller saw
+  // "Command failed" for `NO [NONEXISTENT] Mailbox does not exist`).
+  const x = e as Error & {
+    responseStatus?: unknown;
+    responseText?: unknown;
+    serverResponseCode?: unknown;
+  };
+  if (typeof x.responseStatus !== "string" || !x.responseStatus) return e.message;
+  const code = typeof x.serverResponseCode === "string" && x.serverResponseCode;
+  const text = typeof x.responseText === "string" ? x.responseText.trim() : "";
+  const server = [x.responseStatus, code ? `[${code}]` : "", text].filter(Boolean).join(" ");
+  return e.message && e.message !== "Command failed" ? `${e.message}: ${server}` : server;
 }
 
 /**
@@ -1535,14 +1560,38 @@ type MailboxResolution =
  * unaffected, and a single leaf match still resolves.
  */
 async function resolveMailbox(client: ImapClientLike, name: string): Promise<MailboxResolution> {
-  const wanted = name.trim().toLowerCase();
   const boxes = await client.list();
-  const byPath = boxes.find((b) => b.path.toLowerCase() === wanted);
-  if (byPath) return { kind: "found", path: byPath.path };
-  const byName = boxes.filter((b) => b.name.toLowerCase() === wanted);
-  if (byName.length === 1) return { kind: "found", path: byName[0].path };
-  if (byName.length > 1) {
-    return { kind: "ambiguous", candidates: byName.map((b) => b.path).sort() };
+  return matchMailbox(boxes, name);
+}
+
+/**
+ * The pure matching half of `resolveMailbox`, in three tiers:
+ *   1. the caller's spelling is byte-for-byte a listed path — wins outright;
+ *   2. full-path match modulo case and Unicode normalization (#253: iCloud
+ *      stores a Mac-created `México` decomposed, NFD, while a typed name is
+ *      precomposed, NFC — they look identical and never compared equal);
+ *   3. leaf-name match, same folding.
+ * Tiers 2 and 3 collect every match: two distinct server paths that fold to
+ * the same key (e.g. an NFC and an NFD `México` side by side, or `Foo`/`foo`)
+ * are reported as ambiguous rather than guessed. Whatever is returned is the
+ * server's own stored path, so SELECT/EXAMINE/MOVE encode it back to exactly
+ * the modified-UTF-7 name the server LISTed.
+ */
+export function matchMailbox(
+  boxes: readonly Pick<ImapMailboxListing, "path" | "name">[],
+  name: string
+): MailboxResolution {
+  const exact = boxes.find((b) => b.path === name || b.path === name.trim());
+  if (exact) return { kind: "found", path: exact.path };
+  const wanted = mailboxNameKey(name);
+  const tiers = [
+    boxes.filter((b) => mailboxNameKey(b.path) === wanted),
+    boxes.filter((b) => mailboxNameKey(b.name) === wanted),
+  ];
+  for (const hits of tiers) {
+    const paths = [...new Set(hits.map((b) => b.path))];
+    if (paths.length === 1) return { kind: "found", path: paths[0] };
+    if (paths.length > 1) return { kind: "ambiguous", candidates: paths.sort() };
   }
   return { kind: "none" };
 }
@@ -1550,9 +1599,14 @@ async function resolveMailbox(client: ImapClientLike, name: string): Promise<Mai
 /** The error text for an ambiguous destination — names every candidate. */
 function ambiguousMailboxError(name: string, candidates: string[], accountLabel?: string): string {
   const where = accountLabel ? ` on IMAP account ${accountLabel}` : "";
-  return `Mailbox "${name}" is ambiguous${where} — it matches ${candidates
-    .map((c) => `"${c}"`)
-    .join(" and ")}. Pass the full path.`;
+  const listed = candidates.map((c) => `"${c}"`).join(" and ");
+  // #253: two paths that fold to one key look identical in any listing, so
+  // "pass the full path" is no help — say what actually differs.
+  const indistinguishable = new Set(candidates.map(mailboxNameKey)).size === 1;
+  const hint = indistinguishable
+    ? " They differ only in letter case or Unicode normalization (precomposed vs decomposed accents), so no typed name can tell them apart. Rename one of them."
+    : " Pass the full path.";
+  return `Mailbox "${name}" is ambiguous${where} — it matches ${listed}.${hint}`;
 }
 
 /**
@@ -1571,6 +1625,20 @@ async function findMailboxPathOrThrow(
 
 export function imapCreateMailbox(name: string, deps: ImapDeps = {}): Promise<ImapOpResult> {
   return withClient(deps, async (client) => {
+    // #253: creating "México" (NFC) next to an existing NFD "México" makes a
+    // visually identical twin that no typed name can ever address uniquely
+    // again. Treat a normalization-equivalent path as already existing. (Case
+    // is left alone: a server that allows Foo beside foo keeps allowing it.)
+    let twin: string | undefined;
+    try {
+      const wanted = nfc(name);
+      twin = (await client.list()).find((b) => nfc(b.path) === wanted)?.path;
+    } catch {
+      // LIST failed — let CREATE itself be the judge.
+    }
+    if (twin !== undefined) {
+      return { success: true, info: `Mailbox "${twin}" already existed.` };
+    }
     try {
       const res = await client.mailboxCreate(name);
       return res.created
@@ -1630,6 +1698,17 @@ export function imapRenameMailbox(
       };
     }
     const path = found.path;
+    // #253: refuse a rename onto a name another mailbox already holds in the
+    // other Unicode normalization form — it would create an unaddressable
+    // visual twin. (Re-normalizing a mailbox's own name is still allowed.)
+    const wantedNew = nfc(newName);
+    const clash = (await client.list()).find((b) => b.path !== path && nfc(b.path) === wantedNew);
+    if (clash) {
+      return {
+        success: false,
+        error: `Cannot rename "${path}" to "${newName}": mailbox "${clash.path}" already exists on IMAP account ${cfg.accountLabel} (the same name, differing only in how its accents are encoded).`,
+      };
+    }
     try {
       const res = await client.mailboxRename(path, newName);
       return { success: true, info: `Renamed "${res.path}" to "${res.newPath}" via IMAP.` };

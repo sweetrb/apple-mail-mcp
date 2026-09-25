@@ -36,6 +36,7 @@ import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { plausibleDateSent } from "@/utils/headers.js";
+import { mailboxNameKey } from "@/utils/mailboxName.js";
 import { TemplateStore } from "@/services/templateStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
 import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
@@ -1068,27 +1069,35 @@ export function resolveAppleMailboxPath(mailbox: string, actualPaths: readonly s
   if (actualPaths.length === 0) return mailbox;
 
   const candidates = [mailbox, ...(MAILBOX_ALIASES[mailbox.toLowerCase()] ?? [])];
+  const ambiguous = (matches: string[]): Error => {
+    const sorted = [...new Set(matches)].sort();
+    const paths = sorted.map((path) => `"${path}"`).join(" and ");
+    // #253: NFC/NFD (or case) twins look identical; "full path" can't help.
+    const twins = new Set(sorted.map(mailboxNameKey)).size === 1;
+    const hint = twins
+      ? " They differ only in letter case or Unicode normalization (precomposed vs decomposed accents), so no typed name can tell them apart. Rename one of them."
+      : " Pass the full path.";
+    return new Error(`Mailbox "${mailbox}" is ambiguous — it matches ${paths}.${hint}`);
+  };
   for (const candidate of candidates) {
     const exact = actualPaths.find((path) => path === candidate);
     if (exact) return exact;
-    const folded = actualPaths.find((path) => path.toLowerCase() === candidate.toLowerCase());
-    if (folded) return folded;
+    // Case- and normalization-insensitive (#253): a typed precomposed "é"
+    // (NFC) must find a mailbox Mail/iCloud stored decomposed (NFD), and the
+    // stored spelling is what gets returned and addressed.
+    const key = mailboxNameKey(candidate);
+    const folded = [...new Set(actualPaths.filter((path) => mailboxNameKey(path) === key))];
+    if (folded.length === 1) return folded[0];
+    if (folded.length > 1) throw ambiguous(folded);
   }
 
   for (const candidate of candidates) {
-    const leafMatches = actualPaths.filter(
-      (path) => mailboxLeaf(path).toLowerCase() === candidate.toLowerCase()
-    );
+    const key = mailboxNameKey(candidate);
+    const leafMatches = [
+      ...new Set(actualPaths.filter((path) => mailboxNameKey(mailboxLeaf(path)) === key)),
+    ];
     if (leafMatches.length === 1) return leafMatches[0];
-    if (leafMatches.length > 1) {
-      const paths = [...leafMatches]
-        .sort()
-        .map((path) => `"${path}"`)
-        .join(" and ");
-      throw new Error(
-        `Mailbox "${mailbox}" is ambiguous — it matches ${paths}. Pass the full path.`
-      );
-    }
+    if (leafMatches.length > 1) throw ambiguous(leafMatches);
   }
 
   return mailbox;

@@ -369,7 +369,9 @@ deadline already gone returns an error naming the queue. If you need several fig
 destination as a **full path** first, then as a leaf name. A leaf name matching more than
 one mailbox (`Archive` under both `Work` and `Thornlands`) is **refused** with an error
 naming every candidate — retry with the full path from `list-mailboxes` rather than
-guessing, and don't fall back to a different name.
+guessing, and don't fall back to a different name. Matching ignores case and Unicode
+normalization (NFC `é` finds an NFD-stored `é`, #253); an "ambiguous … Unicode normalization"
+refusal means two visually identical mailboxes exist — tell the user, don't retry variants.
 
 ## Known Issue (Resolved): Reply / Forward Empty Body from Background Processes
 
