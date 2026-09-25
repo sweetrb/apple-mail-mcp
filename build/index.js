@@ -65652,7 +65652,7 @@ async function resolveMailboxPath(client, mailbox, _mode) {
   return staticMailboxAlias(mailbox);
 }
 function buildCriteria(a, listMode) {
-  const c = {};
+  const c = { ...NOT_DELETED };
   if (a.query) c.or = [{ subject: a.query }, { from: a.query }];
   if (a.body) c.body = a.body;
   if (a.from) c.from = a.from;
@@ -65664,7 +65664,6 @@ function buildCriteria(a, listMode) {
   if (a.isFlagged === false) c.unflagged = true;
   if (a.dateFrom) c.since = new Date(a.dateFrom);
   if (a.dateTo) c.before = new Date(a.dateTo);
-  if (Object.keys(c).length === 0) c.all = true;
   return c;
 }
 function validDate(d) {
@@ -65958,7 +65957,10 @@ function imapMailStats(deps = {}) {
         try {
           const lock = await client.getMailboxLock("INBOX");
           try {
-            const found = await client.search({ since: since(days) }, { uid: true });
+            const found = await client.search(
+              { since: since(days), ...NOT_DELETED },
+              { uid: true }
+            );
             return Array.isArray(found) ? found.length : 0;
           } finally {
             lock.release();
@@ -66827,11 +66829,23 @@ async function imapThread(id, deps = {}, limit = 50) {
           if (Array.isArray(found)) found.forEach((u) => uidSet.add(u));
         };
         if (seedMsgId) {
-          addFound(await client.search({ header: { references: seedMsgId } }, { uid: true }));
-          addFound(await client.search({ header: { "in-reply-to": seedMsgId } }, { uid: true }));
+          addFound(
+            await client.search(
+              { header: { references: seedMsgId }, ...NOT_DELETED },
+              { uid: true }
+            )
+          );
+          addFound(
+            await client.search(
+              { header: { "in-reply-to": seedMsgId }, ...NOT_DELETED },
+              { uid: true }
+            )
+          );
         }
         for (const mid of [...refIds].slice(0, 20)) {
-          addFound(await client.search({ header: { "message-id": mid } }, { uid: true }));
+          addFound(
+            await client.search({ header: { "message-id": mid }, ...NOT_DELETED }, { uid: true })
+          );
         }
         if (uidSet.size <= 1) return null;
         const uids = [...uidSet].slice(0, limit);
@@ -66883,7 +66897,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -66936,6 +66950,7 @@ var init_imapClient = __esm({
       junk: "\\junk",
       starred: "\\flagged"
     };
+    NOT_DELETED = { deleted: false };
     poolConnect = defaultConnect;
     pools = /* @__PURE__ */ new Map();
     connecting = /* @__PURE__ */ new Map();

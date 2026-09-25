@@ -467,7 +467,7 @@ describe("imapSearchMessages", () => {
       { body: "Alfred", limit: 5 },
       { config: cfg, connect: async () => makeClient([1, 2, 3], rec) }
     );
-    expect(rec.criteria).toEqual({ body: "Alfred" });
+    expect(rec.criteria).toEqual({ deleted: false, body: "Alfred" });
   });
 
   it("body combines with query and the other filters (all ANDed)", async () => {
@@ -477,6 +477,7 @@ describe("imapSearchMessages", () => {
       { config: cfg, connect: async () => makeClient([1, 2, 3], rec) }
     );
     expect(rec.criteria).toEqual({
+      deleted: false,
       or: [{ subject: "accounts" }, { from: "accounts" }],
       body: "dividend",
       from: "jla",
@@ -492,7 +493,10 @@ describe("imapSearchMessages", () => {
     );
     const out = res.text;
     expect(rec.path).toBe("[Gmail]/All Mail");
-    expect(rec.criteria).toEqual({ or: [{ subject: "the" }, { from: "the" }] });
+    expect(rec.criteria).toEqual({
+      deleted: false,
+      or: [{ subject: "the" }, { from: "the" }],
+    });
     expect(rec.range).toBe("5,4"); // newest two, newest first
     expect(out).toContain("via IMAP");
     // Rows now carry composite imap: ids; decode them back to UIDs.
@@ -723,7 +727,7 @@ describe("imapListMessages", () => {
     );
     const out = res.text;
     expect(rec.path).toBe("INBOX");
-    expect(rec.criteria).toEqual({ unseen: true });
+    expect(rec.criteria).toEqual({ deleted: false, unseen: true });
     const uids = [...out.matchAll(/imap:[A-Za-z0-9_-]+/g)].map((m) => decodeImapId(m[0])?.uid);
     expect(uids).toEqual([8, 7]); // newest-first
     expect(out).toContain("2 total listed");
