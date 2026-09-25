@@ -1086,6 +1086,12 @@ matches both is refused with an error saying so — rename one of them. For the
 same reason `create-mailbox` treats a normalization-equivalent existing name as
 already existing, and `rename-mailbox` refuses to create such a twin.
 
+**Messages awaiting expunge are not listed.** On IMAP accounts, search,
+list, thread and mail-stats queries only match messages *not* flagged
+`\Deleted` (IMAP `UNDELETED`). iCloud keeps flagged-but-never-expunged
+messages out of its message counts yet still returns them from `UID SEARCH`,
+which made a filter-less `list-messages` fail on such a mailbox before 2.19.16.
+
 **Mail's local "On My Mac" mailboxes** are not children of any account — they
 hang off the application — so they are reported under the synthetic account label
 **`On My Mac`**. An unscoped call includes them (listed last); `account="On My
