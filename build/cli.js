@@ -58045,6 +58045,7 @@ var imapClient_exports = {};
 __export(imapClient_exports, {
   HEADER_WINDOW_BYTES: () => HEADER_WINDOW_BYTES,
   IMAP_ENV: () => IMAP_ENV,
+  LARGE_MAILBOX_MESSAGES: () => LARGE_MAILBOX_MESSAGES,
   MAX_COMPOSE_SOURCE_BYTES: () => MAX_COMPOSE_SOURCE_BYTES,
   MAX_RFC822_FILE_BYTES: () => MAX_RFC822_FILE_BYTES,
   MAX_RFC822_INLINE_BYTES: () => MAX_RFC822_INLINE_BYTES,
@@ -58428,44 +58429,139 @@ function messageIdentity(entry) {
   const messageId = raw.replace(/^<+|>+$/g, "").trim().toLowerCase();
   return messageId ? `mid:${messageId}` : `${entry.path}\0${entry.message.uid}`;
 }
-async function fetchMailboxMatches(client, path, criteria, newestCount) {
-  const lock = await client.getMailboxLock(path);
+function isUnfiltered(criteria) {
+  const keys = Object.keys(criteria);
+  return keys.length === 1 && criteria.deleted === false;
+}
+async function statusMessageCount(client, path) {
   try {
-    const found = await client.search(criteria, { uid: true });
-    const uids = Array.isArray(found) ? found : [];
-    if (uids.length === 0 || newestCount === 0) return { messages: [], total: uids.length };
-    const status = await client.status(path, { messages: true });
-    if (typeof status.messages === "number" && uids.length > status.messages) {
+    const st = await client.status(path, { messages: true });
+    return typeof st.messages === "number" && st.messages >= 0 ? st.messages : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function searchUids(client, path, criteria, size) {
+  client.takeLastCommandError?.();
+  const found = await client.search(criteria, { uid: true });
+  if (Array.isArray(found)) return found;
+  const cause = client.takeLastCommandError?.();
+  const sized = size === void 0 ? "" : ` (${size.toLocaleString("en-US")} messages)`;
+  throw new Error(
+    `IMAP SEARCH on "${path}"${sized} failed: ` + (cause ? errText(cause) : "the server rejected it or the connection dropped before it answered (on a mailbox this size, usually a server-side timeout)")
+  );
+}
+async function fetchRows(client, uids) {
+  if (uids.length === 0) return [];
+  const byUid = /* @__PURE__ */ new Map();
+  for await (const msg of client.fetch(
+    uids.join(","),
+    // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
+    // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
+    // the fetch (~17%), same single round trip, no extra request.
+    //
+    // INTERNALDATE rides along for the same reason, and is why `dateReceived`
+    // can finally mean what it says: imapflow's `envelope.date` is built from
+    // the header block, so it IS the `Date:` header, not arrival time.
+    //
+    // The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the
+    // SAME FETCH command, so a date the server's ENVELOPE parser rejected can
+    // still be recovered (#234). Measured on 50 real messages, 6 alternating
+    // runs: median ~334ms without vs ~315ms with — inside the noise — for ~44
+    // bytes per message. Too cheap to hide behind an opt-in.
+    { envelope: true, flags: true, bodyStructure: true, internalDate: true, headers: ["date"] },
+    { uid: true }
+  )) {
+    byUid.set(msg.uid, msg);
+  }
+  return uids.map((uid) => byUid.get(uid)).filter((message) => message !== void 0);
+}
+async function walkWindows(exists, page, firstWindow, readWindow) {
+  const wanted = page.skip + page.take;
+  const uids = [];
+  let seen = 0;
+  let matched = 0;
+  let hi = exists;
+  let width = Math.max(1, Math.min(firstWindow, MAX_WINDOW));
+  while (hi >= 1 && seen < wanted) {
+    const lo = Math.max(1, hi - width + 1);
+    const live = (await readWindow(lo, hi === exists ? "*" : hi, hi - lo + 1)).slice().sort((a, b) => b - a);
+    matched += live.length;
+    for (const uid of live) {
+      if (seen >= wanted) break;
+      if (seen >= page.skip) uids.push(uid);
+      seen++;
+    }
+    hi = lo - 1;
+    width = Math.min(width * 4, MAX_WINDOW);
+  }
+  return { uids, matched, exhausted: hi < 1 };
+}
+async function listLargeMailbox(client, exists, page) {
+  let deletedSeen = 0;
+  const walk = await walkWindows(
+    exists,
+    page,
+    // Room for a few ghosts on the first read without a second round trip.
+    page.skip + page.take + 64,
+    async (lo, hi) => {
+      const live = [];
+      for await (const msg of client.fetch(`${lo}:${hi}`, { uid: true, flags: true })) {
+        if (msg.flags?.has("\\Deleted")) deletedSeen++;
+        else live.push(msg.uid);
+      }
+      return live;
+    }
+  );
+  return {
+    messages: await fetchRows(client, walk.uids),
+    total: Math.max(0, exists - deletedSeen),
+    totalExact: true
+  };
+}
+async function searchLargeMailbox(client, path, criteria, exists, page) {
+  const walk = await walkWindows(exists, page, FIRST_SEARCH_WINDOW, async (lo, hi, width) => {
+    const found = await searchUids(client, path, { ...criteria, seq: `${lo}:${hi}` }, exists);
+    if (found.length > width) {
       throw new Error(
-        `IMAP SEARCH on "${path}" reported ${uids.length} matches, more than the mailbox's own ${status.messages} messages \u2014 discarding as corrupted rather than trusting it (see #246).`
+        `IMAP SEARCH on "${path}" reported ${found.length} matches in a ${width}-message window \u2014 discarding as corrupted rather than trusting it (see #246).`
       );
     }
-    const newest = uids.slice().reverse().slice(0, newestCount);
-    const byUid = /* @__PURE__ */ new Map();
-    for await (const msg of client.fetch(
-      newest.join(","),
-      // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
-      // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
-      // the fetch (~17%), same single round trip, no extra request.
-      //
-      // INTERNALDATE rides along for the same reason, and is why `dateReceived`
-      // can finally mean what it says: imapflow's `envelope.date` is built from
-      // the header block, so it IS the `Date:` header, not arrival time.
-      //
-      // The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the
-      // SAME FETCH command, so a date the server's ENVELOPE parser rejected can
-      // still be recovered (#234). Measured on 50 real messages, 6 alternating
-      // runs: median ~334ms without vs ~315ms with — inside the noise — for ~44
-      // bytes per message. Too cheap to hide behind an opt-in.
-      { envelope: true, flags: true, bodyStructure: true, internalDate: true, headers: ["date"] },
-      { uid: true }
-    )) {
-      byUid.set(msg.uid, msg);
+    return found;
+  });
+  return {
+    messages: await fetchRows(client, walk.uids),
+    total: walk.matched,
+    totalExact: walk.exhausted
+  };
+}
+async function fetchMailboxMatches(client, path, criteria, page) {
+  const lock = await client.getMailboxLock(path);
+  try {
+    const exists = await statusMessageCount(client, path);
+    if (exists === 0) return { messages: [], total: 0, totalExact: true };
+    if (exists !== void 0 && exists > LARGE_MAILBOX_MESSAGES) {
+      try {
+        return isUnfiltered(criteria) ? await listLargeMailbox(client, exists, page) : await searchLargeMailbox(client, path, criteria, exists, page);
+      } catch (error) {
+        const detail = errText(error);
+        throw new Error(
+          detail.includes(`"${path}" (`) ? detail : `reading the newest messages of "${path}" (${exists.toLocaleString("en-US")} messages) failed: ${detail}`
+        );
+      }
     }
-    return {
-      messages: newest.map((uid) => byUid.get(uid)).filter((message) => message !== void 0),
-      total: uids.length
-    };
+    const uids = await searchUids(client, path, criteria, exists);
+    if (uids.length === 0 || page.take === 0) {
+      return { messages: [], total: uids.length, totalExact: true };
+    }
+    const messages = exists ?? (await client.status(path, { messages: true })).messages ?? void 0;
+    if (typeof messages === "number" && uids.length > messages) {
+      throw new Error(
+        `IMAP SEARCH on "${path}" reported ${uids.length} matches, more than the mailbox's own ${messages} messages \u2014 discarding as corrupted rather than trusting it (see #246).`
+      );
+    }
+    const newest = uids.slice().reverse().slice(page.skip, page.skip + page.take);
+    return { messages: await fetchRows(client, newest), total: uids.length, totalExact: true };
   } finally {
     lock.release();
   }
@@ -58494,15 +58590,17 @@ async function run(args, listMode, deps) {
       const limit = args.limit ?? 50;
       const offset = args.offset ?? 0;
       const criteria = buildCriteria(args, listMode);
-      const newestPerMailbox = offset + limit;
+      const page = unscopedSearch ? { skip: 0, take: offset + limit } : { skip: offset, take: limit };
       const fetched = [];
       const failedMailboxes = [];
       const failedMailboxReasons = {};
       let totalMatched = 0;
+      let totalExact = true;
       for (const path of paths) {
         try {
-          const result = await fetchMailboxMatches(client, path, criteria, newestPerMailbox);
+          const result = await fetchMailboxMatches(client, path, criteria, page);
           totalMatched += result.total;
+          totalExact &&= result.totalExact;
           fetched.push(...result.messages.map((message) => ({ message, path })));
         } catch (error) {
           failedMailboxes.push(path);
@@ -58527,8 +58625,6 @@ async function run(args, listMode, deps) {
           if (!unique.has(key)) unique.set(key, entry);
         }
         ordered = [...unique.values()].slice(offset, offset + limit);
-      } else {
-        ordered = fetched.slice(offset, offset + limit);
       }
       const rows = ordered.map(({ message, path }) => formatRow(message, cfg.accountLabel, path));
       const messages = ordered.map(
@@ -58539,6 +58635,7 @@ async function run(args, listMode, deps) {
 
 Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}" (${failedMailboxReasons[path]})`).join(", ")}.` : "";
       const verb = listMode ? "listed" : "matched";
+      const totalText = totalExact ? `${totalMatched} total` : `at least ${totalMatched} total`;
       const scope = unscopedSearch ? allMailboxCount === 1 ? `mailbox "${paths[0]}"` : `${allMailboxCount} selectable mailboxes` : `mailbox "${paths[0]}"`;
       if (messages.length === 0) {
         return {
@@ -58550,7 +58647,7 @@ Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"
           failedMailboxReasons
         };
       }
-      const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalMatched} total ${verb}):
+      const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalText} ${verb}):
 ` + rows.join("\n") + `
 
 Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.` + failureNote;
@@ -59568,7 +59665,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -59594,7 +59691,24 @@ var init_imapClient = __esm({
       accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS"
     };
     defaultConnect = async (cfg) => {
-      const client = new import_imapflow.ImapFlow(buildImapConnectionOptions(cfg));
+      let lastCommandError;
+      const keepErr = (entry) => {
+        if (entry && typeof entry === "object" && "err" in entry) {
+          lastCommandError = entry.err;
+        }
+      };
+      const noop = () => void 0;
+      const client = new import_imapflow.ImapFlow({
+        ...buildImapConnectionOptions(cfg),
+        logger: { trace: noop, debug: noop, info: noop, warn: keepErr, error: keepErr, fatal: keepErr }
+      });
+      Object.assign(client, {
+        takeLastCommandError: () => {
+          const err = lastCommandError;
+          lastCommandError = void 0;
+          return err;
+        }
+      });
       client.on("error", () => {
       });
       try {
@@ -59622,6 +59736,9 @@ var init_imapClient = __esm({
       starred: "\\flagged"
     };
     NOT_DELETED = { deleted: false };
+    LARGE_MAILBOX_MESSAGES = 1e4;
+    FIRST_SEARCH_WINDOW = 5e3;
+    MAX_WINDOW = 5e4;
     poolConnect = defaultConnect;
     pools = /* @__PURE__ */ new Map();
     connecting = /* @__PURE__ */ new Map();

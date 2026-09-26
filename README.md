@@ -826,7 +826,7 @@ Reply to an existing message.
 | Parameter   | Type    | Required | Description                                                                                    |
 | ----------- | ------- | -------- | ---------------------------------------------------------------------------------------------- |
 | `id`        | string  | Yes      | Message ID to reply to                                                                         |
-| `body`      | string  | Yes      | Reply body (plain text; HTML tags such as `<br>` are not rendered)                              |
+| `body`      | string  | Yes      | Reply body (plain text; HTML tags such as `<br>` are not rendered)                             |
 | `replyAll`  | boolean | No       | Reply to all recipients (default: false)                                                       |
 | `send`      | boolean | No       | Send immediately (default: true, false = save as draft)                                        |
 | `transport` | string  | No       | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript. |
@@ -1081,16 +1081,30 @@ Matching ignores letter case **and Unicode normalization form**: a typed
 precomposed `México` (NFC) finds a mailbox the server stores decomposed (NFD —
 common for folders created on a Mac, and what iCloud keeps), and the server's
 own stored spelling is what gets selected. Two mailboxes whose names differ
-*only* in case or normalization look identical in any listing, so a name that
+_only_ in case or normalization look identical in any listing, so a name that
 matches both is refused with an error saying so — rename one of them. For the
 same reason `create-mailbox` treats a normalization-equivalent existing name as
 already existing, and `rename-mailbox` refuses to create such a twin.
 
 **Messages awaiting expunge are not listed.** On IMAP accounts, search,
-list, thread and mail-stats queries only match messages *not* flagged
+list, thread and mail-stats queries only match messages _not_ flagged
 `\Deleted` (IMAP `UNDELETED`). iCloud keeps flagged-but-never-expunged
 messages out of its message counts yet still returns them from `UID SEARCH`,
 which made a filter-less `list-messages` fail on such a mailbox before 2.19.16.
+
+**Very large IMAP mailboxes are read newest-first in bounded windows**
+([#256](https://github.com/sweetrb/apple-mail-mcp/issues/256)). Above 10,000
+messages, a filter-less `list-messages`/`search-messages` pages by message
+sequence number from the top of the mailbox — it fetches UIDs and flags for
+just enough of the newest messages to fill `limit` + `offset` (skipping
+`\Deleted` ones) and full rows for the page alone, so `limit: 1` on a
+793,614-message mailbox costs one small `FETCH`, not a whole-mailbox `SEARCH`.
+A filtered search there runs the same criteria over newest-first sequence
+windows (5,000 messages, growing to 50,000) and stops once the page is full;
+the reported total then reads `at least N` unless the walk reached the bottom
+of the mailbox. A `SEARCH` or `FETCH` that fails names the mailbox, its size and
+the server's own reason (or a likely timeout) instead of reporting "no
+messages".
 
 **Mail's local "On My Mac" mailboxes** are not children of any account — they
 hang off the application — so they are reported under the synthetic account label
