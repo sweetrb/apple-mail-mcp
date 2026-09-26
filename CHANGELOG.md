@@ -1,5 +1,34 @@
 ## [Unreleased]
 
+## [2.19.17] - 2026-09-26
+
+### Fixed
+
+- **`list-messages` works on IMAP mailboxes with hundreds of thousands of
+  messages** ([#256](https://github.com/sweetrb/apple-mail-mcp/issues/256),
+  diagnosed by @j5pu): every IMAP list ran a whole-mailbox `UID SEARCH` before
+  applying `limit`/`offset`, so `list-messages({ limit: 1 })` failed with
+  `IMAP list failed in every requested mailbox` on @j5pu's 793,614- and
+  255,104-message iCloud mailboxes while a 25k one worked. Above 10,000
+  messages (per `STATUS`), an unfiltered list now pages by **sequence number
+  from the top of the mailbox**: a flags-only `FETCH` of just enough of the
+  newest messages to cover `limit` + `offset`, skipping any still flagged
+  `\Deleted`, then full rows for the requested page alone. Order is unchanged
+  (newest first). A filtered search on such a mailbox runs the same criteria
+  over newest-first sequence windows (5,000, growing to at most 50,000
+  messages each) and stops once the page is full, so no single response holds
+  more than one window's UIDs; its total reads `at least N` when the walk
+  stopped early. The #246 STATUS guard stays on the whole-mailbox path and
+  applies per window on the new one.
+- **A failed IMAP `SEARCH` is an error, not "no messages"**: imapflow resolves
+  `false` instead of throwing when the server rejects a `SEARCH` or the
+  connection drops mid-command, and that was read as zero matches. It now fails
+  the mailbox with the server's own reason (captured from imapflow's logger) or,
+  when there is none, says the connection dropped — usually a server-side
+  timeout — and every large-mailbox failure names the mailbox and its size.
+- A single-mailbox list or search now fetches full rows only for the requested
+  page, not for every message the `offset` skips.
+
 ## [2.19.16] - 2026-09-25
 
 ### Fixed
@@ -47,7 +76,7 @@
 - **A server's NO/BAD text now reaches the caller**: imapflow reports every
   tagged NO/BAD as a generic `Command failed`, keeping the server's reply on
   side fields. Error text now reads e.g. `NO [NONEXISTENT] Mailbox does not
-  exist` — completing what 2.19.14 set out to surface.
+exist` — completing what 2.19.14 set out to surface.
 
 ## [2.19.14] - 2026-09-23
 
@@ -59,7 +88,7 @@
   @j5pu confirmed `list-mailboxes` now correctly reports their real INBOX
   count (the original fabricated-count bug is fixed) — but `list-messages`
   started failing outright with `IMAP list failed in every requested mailbox
-  for account j5pu@icloud.com: INBOX.` and no further detail. The per-mailbox
+for account j5pu@icloud.com: INBOX.` and no further detail. The per-mailbox
   error was logged server-side and then discarded before reaching the tool
   response, so neither the reporter nor a maintainer could tell a SELECT
   failure from anything else. A new `failedMailboxReasons` map (keyed the
@@ -80,7 +109,7 @@
   created "without opening window" — so `save theReply`/`save theForward`
   alone left Mail holding that window open even though the draft was safely
   saved. The fix appends `close theReply saving yes`/`close theForward saving
-  yes` after the existing save, closing the window without discarding the
+yes` after the existing save, closing the window without discarding the
   save. New regression tests pin the save-before-close ordering and confirm
   the send path (`send: true`) is untouched.
 
@@ -96,7 +125,7 @@
   just the new text, discarding the "On \<date\>, \<sender\> wrote:" quote Mail
   normally adds. The reporter traced this precisely: `content of theReply`
   reads back as empty immediately after `reply`, and still after `save`, so
-  the quote Mail builds internally is real (a draft saved *without* touching
+  the quote Mail builds internally is real (a draft saved _without_ touching
   `content` shows it) but unreadable through AppleScript — there is nothing to
   read back and prepend to. `replyToMessage`/`forwardMessage` now build the
   quoted body in TypeScript, reusing the same `quoteBody`/attribution/
