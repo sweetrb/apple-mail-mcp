@@ -280,19 +280,27 @@ human reader; the same information is also returned as structured fields on
 `search-messages` and `list-messages`, so a caller can tell _"nothing matched"_
 apart from _"I did not look everywhere"_ without parsing the text:
 
-| Field                   | Type     | Meaning                                                                                                                                                                            |
-| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `partial`               | boolean  | Coverage was incomplete — **the result is not a confirmed "no such mail"**. True whenever any field below is non-empty.                                                            |
-| `skippedLargeMailboxes` | string[] | Mailboxes never scanned because their message count exceeded `APPLE_MAIL_MAX_SEARCH_MAILBOX`, formatted `"Account / Mailbox (count)"` — e.g. `"iCloud / Archive (90694)"`.         |
-| `notSearchedMailboxes`  | string[] | Mailboxes that _were_ reached but timed out or errored mid-scan, formatted `"Account / Mailbox"`. Also carries the IMAP path's `failedMailboxes`.                                  |
-| `timedOutAccounts`      | string[] | Accounts whose whole-account AppleScript was killed by the per-account time budget — nothing from that account was searched.                                                       |
-| `failedMailboxes`       | string[] | IMAP-backend mailboxes that errored. These are merged into `notSearchedMailboxes` as well; read that field unless you need to attribute the failure to the IMAP path specifically. |
+| Field                   | Type     | Meaning                                                                                                                                                                                                                                                                                                               |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `partial`               | boolean  | Coverage was incomplete — **the result is not a confirmed "no such mail"**. True whenever any field below is non-empty.                                                                                                                                                                                               |
+| `skippedLargeMailboxes` | string[] | Mailboxes never scanned because their message count exceeded `APPLE_MAIL_MAX_SEARCH_MAILBOX`, formatted `"Account / Mailbox (count)"` — e.g. `"iCloud / Archive (90694)"`.                                                                                                                                            |
+| `notSearchedMailboxes`  | string[] | Mailboxes that _were_ reached but timed out or errored mid-scan, formatted `"Account / Mailbox"`. Also carries the IMAP path's `failedMailboxes`.                                                                                                                                                                     |
+| `timedOutAccounts`      | string[] | Accounts whose whole-account AppleScript was killed by the per-account time budget — nothing from that account was searched.                                                                                                                                                                                          |
+| `failedMailboxes`       | string[] | IMAP-backend mailboxes that errored. These are merged into `notSearchedMailboxes` as well; read that field unless you need to attribute the failure to the IMAP path specifically.                                                                                                                                    |
+| `failedMailboxReasons`  | object   | The IMAP server's own error text for each entry in `failedMailboxes`, keyed the same way.                                                                                                                                                                                                                             |
+| `omittedMessages`       | object[] | IMAP messages that belong on the page but whose `FETCH` response could not be read even with a reduced item set — `{ id, mailbox, uid, reason }`. The page is short by exactly these; the `id` still works with `get-message` / `get-message-headers`. ([#256](https://github.com/sweetrb/apple-mail-mcp/issues/256)) |
 
 Treat a non-empty `skippedLargeMailboxes` as actionable rather than
 informational: re-run scoped to the named mailbox with a `dateFrom`/`dateTo`
 window, or configure the [IMAP backend](#imap-backend--opt-in), which searches
-those mailboxes server-side. All five fields are optional and are omitted when
-coverage was complete.
+those mailboxes server-side. The list fields are optional and are omitted (or
+empty) when coverage was complete.
+
+A row the IMAP backend could only read with a reduced item set (its full
+`BODYSTRUCTURE`, or its whole `FETCH` response, was unparseable — e.g. a message
+forwarded as an attachment many levels deep) is still returned, with a
+`metadataIncomplete` note saying what was missing; its `hasAttachments` is then
+inferred from the top-level `Content-Type`.
 
 ---
 

@@ -27,6 +27,7 @@ import {
   type ImapSearchArgs,
   type ImapConfig,
   type ImapDeps,
+  type OmittedMessage,
 } from "@/services/imapClient.js";
 import type { Account } from "@/types.js";
 
@@ -143,12 +144,14 @@ export async function fanOutImapMessages(
   accountsFailed: string[];
   failedMailboxes: string[];
   failedMailboxReasons: Record<string, string>;
+  omittedMessages: OmittedMessage[];
 }> {
   const rows: MessageRow[] = [];
   const accountsQueried: string[] = [];
   const accountsFailed: string[] = [];
   const failedMailboxes: string[] = [];
   const failedMailboxReasons: Record<string, string> = {};
+  const omittedMessages: OmittedMessage[] = [];
   for (const config of configs) {
     // Keep an omitted mailbox omitted. The per-account search discovers an RFC
     // 6154 `\\All` mailbox when available (Gmail), otherwise it searches every
@@ -168,12 +171,27 @@ export async function fanOutImapMessages(
       for (const [mailbox, reason] of Object.entries(res.failedMailboxReasons)) {
         failedMailboxReasons[`${config.accountLabel} / ${mailbox}`] = reason;
       }
+      // The id already carries the account; the mailbox is prefixed like
+      // failedMailboxes so rows from two accounts stay distinguishable.
+      omittedMessages.push(
+        ...(res.omittedMessages ?? []).map((o) => ({
+          ...o,
+          mailbox: `${config.accountLabel} / ${o.mailbox}`,
+        }))
+      );
     } catch (e) {
       accountsFailed.push(config.accountLabel);
       console.error(`IMAP fan-out failed for account "${config.accountLabel}": ${String(e)}`);
     }
   }
-  return { rows, accountsQueried, accountsFailed, failedMailboxes, failedMailboxReasons };
+  return {
+    rows,
+    accountsQueried,
+    accountsFailed,
+    failedMailboxes,
+    failedMailboxReasons,
+    omittedMessages,
+  };
 }
 
 // ---------------------------------------------------------------------------

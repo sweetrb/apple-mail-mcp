@@ -1,5 +1,32 @@
 ## [Unreleased]
 
+## [2.19.18] - 2026-09-26
+
+### Fixed
+
+- **An IMAP page is never silently short**
+  ([#256](https://github.com/sweetrb/apple-mail-mcp/issues/256) follow-up,
+  reported by @j5pu with the exact missing UIDs and a positive control):
+  `list-messages({ limit: 500 })` on a 255,104-message iCloud mailbox returned
+  497 rows with `partial: false`. imapflow drops an untagged `FETCH` response
+  it cannot parse — its token parser stops at 25 levels of nesting, and
+  `BODYSTRUCTURE` nests one list per MIME level, so a message forwarded as an
+  attachment roughly eleven levels deep exceeds it — while the command still
+  completes `OK`, and the row fetch then filtered out every requested UID it
+  had not received. The fetched set is now checked against the requested one.
+  Anything missing is retried once with the same items, then without
+  `BODYSTRUCTURE` (`hasAttachments` inferred from `Content-Type`), then per UID
+  from raw headers alone; a row read that way carries a `metadataIncomplete`
+  note. Whatever still cannot be read is listed in a new `omittedMessages`
+  field (`{ id, mailbox, uid, reason }`, with imapflow's recorded parse error
+  as the reason) and sets `partial: true`. Applies to `list-messages`,
+  `search-messages` and `get-thread`, on both the large-mailbox and the
+  ordinary path, and through the multi-account merge.
+- A UID answered in more than one untagged `FETCH` response (a server may send
+  `FLAGS` on their own at any time) is merged instead of the last response
+  replacing the earlier ones, so a late flags-only update can no longer strip a
+  row's envelope.
+
 ## [2.19.17] - 2026-09-26
 
 ### Fixed
