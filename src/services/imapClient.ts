@@ -161,11 +161,20 @@ export interface ImapClientLike {
   /** The currently open mailbox, as imapflow exposes it after a lock is taken.
    *  Only `uidValidity` is read here; optional so mocks needn't provide it. */
   mailbox?: { path?: string; uidValidity?: bigint; readOnly?: boolean } | false;
-  search(query: Record<string, unknown>, opts: { uid: true }): Promise<number[] | false>;
+  /** imapflow resolves `false` (never throws) when the server rejects the
+   *  SEARCH or the connection drops mid-command, and `undefined` when no
+   *  mailbox is selected — both are failures, never "no matches" (#256). */
+  search(
+    query: Record<string, unknown>,
+    opts: { uid: true }
+  ): Promise<number[] | false | undefined>;
+  /** `{ uid: true }` addresses `range` by UID; omitted/false addresses it by
+   *  message SEQUENCE number (the #256 large-mailbox listing pages by
+   *  sequence number from the top of the mailbox). */
   fetch(
     range: string,
     query: Record<string, unknown>,
-    opts: { uid: true }
+    opts?: { uid?: boolean }
   ): AsyncIterable<ImapMessage>;
   fetchOne(
     range: string,
@@ -205,6 +214,11 @@ export interface ImapClientLike {
    *  graceful logout() can't complete on a half-closed socket. Optional so test
    *  mocks needn't implement it. */
   close?(): void;
+  /** The error imapflow last swallowed (it logs a failed command and resolves
+   *  `false` instead of throwing), cleared on read. Captured through the
+   *  connection's logger by `defaultConnect`; optional so mocks needn't
+   *  provide it (#256). */
+  takeLastCommandError?(): unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -549,7 +563,29 @@ export function buildImapConnectionOptions(cfg: ImapConfig) {
 }
 
 const defaultConnect: ImapConnect = async (cfg) => {
-  const client = new ImapFlow(buildImapConnectionOptions(cfg));
+  // imapflow swallows a failed SEARCH (and every mutation — see #181): it logs
+  // the error through its logger and resolves `false`. With `logger: false` the
+  // reason was simply gone, so a SEARCH that timed out or hit a server limit on
+  // a huge mailbox was indistinguishable from "no matches" (#256). This logger
+  // prints nothing; it only keeps the most recent error for the caller.
+  let lastCommandError: unknown;
+  const keepErr = (entry: unknown) => {
+    if (entry && typeof entry === "object" && "err" in entry) {
+      lastCommandError = (entry as { err: unknown }).err;
+    }
+  };
+  const noop = () => undefined;
+  const client = new ImapFlow({
+    ...buildImapConnectionOptions(cfg),
+    logger: { trace: noop, debug: noop, info: noop, warn: keepErr, error: keepErr, fatal: keepErr },
+  } as ConstructorParameters<typeof ImapFlow>[0]);
+  Object.assign(client, {
+    takeLastCommandError: () => {
+      const err = lastCommandError;
+      lastCommandError = undefined;
+      return err;
+    },
+  });
   // ImapFlow is an EventEmitter: once connect() resolves, a later socket error
   // on this pooled, long-lived client (idle Gmail/iCloud timeout, server BYE,
   // network drop) emits 'error'. With no listener that is an *uncaught*
@@ -879,17 +915,247 @@ function messageIdentity(entry: FetchedMailboxMessage): string {
   return messageId ? `mid:${messageId}` : `${entry.path}\u0000${entry.message.uid}`;
 }
 
+/**
+ * Above this many messages (per STATUS) a mailbox is read top-down in bounded
+ * windows instead of by one whole-mailbox `UID SEARCH` (#256). Below it the
+ * single SEARCH is cheap, exact, and one round trip.
+ */
+export const LARGE_MAILBOX_MESSAGES = 10_000;
+/** First window of a filtered search on a large mailbox, in sequence numbers. */
+const FIRST_SEARCH_WINDOW = 5_000;
+/** Largest single window (flags-only FETCH or windowed SEARCH), in sequence numbers. */
+const MAX_WINDOW = 50_000;
+
+/** Which live messages a mailbox read should return, newest first. */
+interface MailboxPage {
+  /** Newest live matches to skip. */
+  skip: number;
+  /** Matches to return after the skip. */
+  take: number;
+}
+
+interface MailboxMatches {
+  messages: ImapMessage[];
+  /** Live matches counted. A lower bound when `totalExact` is false. */
+  total: number;
+  /** False when a large mailbox was only read far enough to fill the page. */
+  totalExact: boolean;
+}
+
+/** Only the always-present UNDELETED: a plain "list everything" read. */
+function isUnfiltered(criteria: Record<string, unknown>): boolean {
+  const keys = Object.keys(criteria);
+  return keys.length === 1 && criteria.deleted === false;
+}
+
+/** Messages in `path` per a fresh STATUS round trip, or undefined when the server won't say. */
+async function statusMessageCount(
+  client: ImapClientLike,
+  path: string
+): Promise<number | undefined> {
+  try {
+    const st = await client.status(path, { messages: true });
+    return typeof st.messages === "number" && st.messages >= 0 ? st.messages : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `client.search`, but a failure is an error rather than "no matches".
+ * imapflow resolves `false` when the server answers NO/BAD or the connection
+ * drops mid-command (a server-side timeout on a huge mailbox looks exactly like
+ * this), and `undefined` when nothing is selected. Both used to be read as an
+ * empty result (#256).
+ */
+async function searchUids(
+  client: ImapClientLike,
+  path: string,
+  criteria: Record<string, unknown>,
+  size: number | undefined
+): Promise<number[]> {
+  client.takeLastCommandError?.();
+  const found = await client.search(criteria, { uid: true });
+  if (Array.isArray(found)) return found;
+  const cause = client.takeLastCommandError?.();
+  const sized = size === undefined ? "" : ` (${size.toLocaleString("en-US")} messages)`;
+  throw new Error(
+    `IMAP SEARCH on "${path}"${sized} failed: ` +
+      (cause
+        ? errText(cause)
+        : "the server rejected it or the connection dropped before it answered (on a mailbox this size, usually a server-side timeout)")
+  );
+}
+
+/** Full row attributes for `uids`, returned in the order given. */
+async function fetchRows(client: ImapClientLike, uids: number[]): Promise<ImapMessage[]> {
+  if (uids.length === 0) return [];
+  const byUid = new Map<number, ImapMessage>();
+  for await (const msg of client.fetch(
+    uids.join(","),
+    // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
+    // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
+    // the fetch (~17%), same single round trip, no extra request.
+    //
+    // INTERNALDATE rides along for the same reason, and is why `dateReceived`
+    // can finally mean what it says: imapflow's `envelope.date` is built from
+    // the header block, so it IS the `Date:` header, not arrival time.
+    //
+    // The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the
+    // SAME FETCH command, so a date the server's ENVELOPE parser rejected can
+    // still be recovered (#234). Measured on 50 real messages, 6 alternating
+    // runs: median ~334ms without vs ~315ms with — inside the noise — for ~44
+    // bytes per message. Too cheap to hide behind an opt-in.
+    { envelope: true, flags: true, bodyStructure: true, internalDate: true, headers: ["date"] },
+    { uid: true }
+  )) {
+    byUid.set(msg.uid, msg);
+  }
+  return uids
+    .map((uid) => byUid.get(uid))
+    .filter((message): message is ImapMessage => message !== undefined);
+}
+
+/**
+ * Walk a large mailbox top-down in sequence-number windows, newest first (#256).
+ * `readWindow(lo, hi)` returns the live UIDs in that window; the first window is
+ * addressed `lo:*` so a count that moved since STATUS can't name a sequence
+ * number past the end. Stops once the page is full, so `limit: 1` on a
+ * 793,614-message mailbox reads one small window instead of every UID.
+ */
+async function walkWindows(
+  exists: number,
+  page: MailboxPage,
+  firstWindow: number,
+  readWindow: (lo: number, hi: number | "*", width: number) => Promise<number[]>
+): Promise<{ uids: number[]; matched: number; exhausted: boolean }> {
+  const wanted = page.skip + page.take;
+  const uids: number[] = [];
+  let seen = 0;
+  let matched = 0;
+  let hi = exists;
+  let width = Math.max(1, Math.min(firstWindow, MAX_WINDOW));
+  while (hi >= 1 && seen < wanted) {
+    const lo = Math.max(1, hi - width + 1);
+    const live = (await readWindow(lo, hi === exists ? "*" : hi, hi - lo + 1))
+      .slice()
+      .sort((a, b) => b - a);
+    matched += live.length;
+    for (const uid of live) {
+      if (seen >= wanted) break;
+      if (seen >= page.skip) uids.push(uid);
+      seen++;
+    }
+    hi = lo - 1;
+    width = Math.min(width * 4, MAX_WINDOW);
+  }
+  return { uids, matched, exhausted: hi < 1 };
+}
+
+/**
+ * Unfiltered read of a large mailbox: FETCH only UID + FLAGS by sequence range
+ * from the top, drop anything flagged `\Deleted` (pending expunge — the same
+ * UNDELETED semantics #246 gave the SEARCH path), then fetch full rows for the
+ * page alone. No SEARCH at all, so nothing proportional to the mailbox size
+ * ever crosses the wire.
+ */
+async function listLargeMailbox(
+  client: ImapClientLike,
+  exists: number,
+  page: MailboxPage
+): Promise<MailboxMatches> {
+  let deletedSeen = 0;
+  const walk = await walkWindows(
+    exists,
+    page,
+    // Room for a few ghosts on the first read without a second round trip.
+    page.skip + page.take + 64,
+    async (lo, hi) => {
+      const live: number[] = [];
+      for await (const msg of client.fetch(`${lo}:${hi}`, { uid: true, flags: true })) {
+        if (msg.flags?.has("\\Deleted")) deletedSeen++;
+        else live.push(msg.uid);
+      }
+      return live;
+    }
+  );
+  // The total is STATUS less the ghosts actually seen. iCloud keeps messages
+  // awaiting expunge out of STATUS and the sequence space altogether, so there
+  // it is exact; a server that counts them can overstate by however many sit
+  // below the part walked — the same count list-mailboxes reports.
+  return {
+    messages: await fetchRows(client, walk.uids),
+    total: Math.max(0, exists - deletedSeen),
+    totalExact: true,
+  };
+}
+
+/**
+ * Filtered read of a large mailbox: the same criteria, confined to one
+ * sequence window at a time (`SEARCH <lo:hi> …`), newest window first, growing
+ * ×4 up to {@link MAX_WINDOW}. A filter matching most of a 793k-message mailbox
+ * fills a page from the first window; a narrow one (a recent `dateFrom`) walks
+ * further but never asks for more than one window's UIDs at once.
+ */
+async function searchLargeMailbox(
+  client: ImapClientLike,
+  path: string,
+  criteria: Record<string, unknown>,
+  exists: number,
+  page: MailboxPage
+): Promise<MailboxMatches> {
+  const walk = await walkWindows(exists, page, FIRST_SEARCH_WINDOW, async (lo, hi, width) => {
+    const found = await searchUids(client, path, { ...criteria, seq: `${lo}:${hi}` }, exists);
+    // The #246 guard, per window: no criteria can match more messages than
+    // the window holds.
+    if (found.length > width) {
+      throw new Error(
+        `IMAP SEARCH on "${path}" reported ${found.length} matches in a ${width}-message window — ` +
+          `discarding as corrupted rather than trusting it (see #246).`
+      );
+    }
+    return found;
+  });
+  return {
+    messages: await fetchRows(client, walk.uids),
+    total: walk.matched,
+    totalExact: walk.exhausted,
+  };
+}
+
 async function fetchMailboxMatches(
   client: ImapClientLike,
   path: string,
   criteria: Record<string, unknown>,
-  newestCount: number
-): Promise<{ messages: ImapMessage[]; total: number }> {
+  page: MailboxPage
+): Promise<MailboxMatches> {
   const lock = await client.getMailboxLock(path);
   try {
-    const found = await client.search(criteria, { uid: true });
-    const uids = Array.isArray(found) ? found : [];
-    if (uids.length === 0 || newestCount === 0) return { messages: [], total: uids.length };
+    // #256: a whole-mailbox `UID SEARCH` before applying limit/offset failed
+    // outright on @j5pu's 793,614- and 255,104-message iCloud mailboxes. Read
+    // the size first, and past LARGE_MAILBOX_MESSAGES page by sequence number
+    // from the top instead of materializing every UID.
+    const exists = await statusMessageCount(client, path);
+    if (exists === 0) return { messages: [], total: 0, totalExact: true };
+    if (exists !== undefined && exists > LARGE_MAILBOX_MESSAGES) {
+      try {
+        return isUnfiltered(criteria)
+          ? await listLargeMailbox(client, exists, page)
+          : await searchLargeMailbox(client, path, criteria, exists, page);
+      } catch (error) {
+        const detail = errText(error);
+        throw new Error(
+          detail.includes(`"${path}" (`)
+            ? detail
+            : `reading the newest messages of "${path}" (${exists.toLocaleString("en-US")} messages) failed: ${detail}`
+        );
+      }
+    }
+
+    const uids = await searchUids(client, path, criteria, exists);
+    if (uids.length === 0 || page.take === 0) {
+      return { messages: [], total: uids.length, totalExact: true };
+    }
 
     // A SEARCH match count can never exceed the mailbox's own total message
     // count — no criteria can match more messages than exist. Cross-check
@@ -921,42 +1187,22 @@ async function fetchMailboxMatches(
     // never-expunged UIDs that EXISTS/STATUS/FETCH all exclude. `NOT_DELETED`
     // in every enumerating criteria set fixes that at the source; this guard
     // stays as the safety net for whatever else can inflate a match count.
-    const status = await client.status(path, { messages: true });
-    if (typeof status.messages === "number" && uids.length > status.messages) {
+    // The count read above is reused; a server that would not answer it then
+    // is asked again here, and a failure now fails the mailbox as it always has.
+    const messages =
+      exists ?? (await client.status(path, { messages: true })).messages ?? undefined;
+    if (typeof messages === "number" && uids.length > messages) {
       throw new Error(
         `IMAP SEARCH on "${path}" reported ${uids.length} matches, more than the mailbox's own ` +
-          `${status.messages} messages — discarding as corrupted rather than trusting it (see #246).`
+          `${messages} messages — discarding as corrupted rather than trusting it (see #246).`
       );
     }
 
-    const newest = uids.slice().reverse().slice(0, newestCount);
-    const byUid = new Map<number, ImapMessage>();
-    for await (const msg of client.fetch(
-      newest.join(","),
-      // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
-      // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
-      // the fetch (~17%), same single round trip, no extra request.
-      //
-      // INTERNALDATE rides along for the same reason, and is why `dateReceived`
-      // can finally mean what it says: imapflow's `envelope.date` is built from
-      // the header block, so it IS the `Date:` header, not arrival time.
-      //
-      // The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the
-      // SAME FETCH command, so a date the server's ENVELOPE parser rejected can
-      // still be recovered (#234). Measured on 50 real messages, 6 alternating
-      // runs: median ~334ms without vs ~315ms with — inside the noise — for ~44
-      // bytes per message. Too cheap to hide behind an opt-in.
-      { envelope: true, flags: true, bodyStructure: true, internalDate: true, headers: ["date"] },
-      { uid: true }
-    )) {
-      byUid.set(msg.uid, msg);
-    }
-    return {
-      messages: newest
-        .map((uid) => byUid.get(uid))
-        .filter((message): message is ImapMessage => message !== undefined),
-      total: uids.length,
-    };
+    const newest = uids
+      .slice()
+      .reverse()
+      .slice(page.skip, page.skip + page.take);
+    return { messages: await fetchRows(client, newest), total: uids.length, totalExact: true };
   } finally {
     lock.release();
   }
@@ -993,16 +1239,23 @@ async function run(
       const limit = args.limit ?? 50;
       const offset = args.offset ?? 0;
       const criteria = buildCriteria(args, listMode);
-      const newestPerMailbox = offset + limit;
+      // A single mailbox applies the offset itself, so only the requested page
+      // is ever fetched in full (#256); a multi-mailbox search needs each
+      // mailbox's newest offset+limit to merge and page across them.
+      const page: MailboxPage = unscopedSearch
+        ? { skip: 0, take: offset + limit }
+        : { skip: offset, take: limit };
       const fetched: FetchedMailboxMessage[] = [];
       const failedMailboxes: string[] = [];
       const failedMailboxReasons: Record<string, string> = {};
       let totalMatched = 0;
+      let totalExact = true;
 
       for (const path of paths) {
         try {
-          const result = await fetchMailboxMatches(client, path, criteria, newestPerMailbox);
+          const result = await fetchMailboxMatches(client, path, criteria, page);
           totalMatched += result.total;
+          totalExact &&= result.totalExact;
           fetched.push(...result.messages.map((message) => ({ message, path })));
         } catch (error) {
           failedMailboxes.push(path);
@@ -1033,8 +1286,6 @@ async function run(
           if (!unique.has(key)) unique.set(key, entry);
         }
         ordered = [...unique.values()].slice(offset, offset + limit);
-      } else {
-        ordered = fetched.slice(offset, offset + limit);
       }
 
       const rows = ordered.map(({ message, path }) => formatRow(message, cfg.accountLabel, path));
@@ -1048,6 +1299,7 @@ async function run(
             .join(", ")}.`
         : "";
       const verb = listMode ? "listed" : "matched";
+      const totalText = totalExact ? `${totalMatched} total` : `at least ${totalMatched} total`;
       const scope = unscopedSearch
         ? allMailboxCount === 1
           ? `mailbox "${paths[0]}"`
@@ -1066,7 +1318,7 @@ async function run(
       }
 
       const text =
-        `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalMatched} total ${verb}):\n` +
+        `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalText} ${verb}):\n` +
         rows.join("\n") +
         `\n\nNote: these IMAP IDs (imap:…) work with get-message and the message mutations (mark/flag/move/delete-message), which route back to IMAP.` +
         failureNote;
@@ -2845,7 +3097,7 @@ export async function imapThread(
         if (seed.envelope?.inReplyTo) refIds.add(seed.envelope.inReplyTo);
 
         const uidSet = new Set<number>([ref.uid]);
-        const addFound = (found: number[] | false): void => {
+        const addFound = (found: number[] | false | undefined): void => {
           if (Array.isArray(found)) found.forEach((u) => uidSet.add(u));
         };
         // Descendants: anything referencing the seed.
