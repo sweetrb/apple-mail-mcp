@@ -64,6 +64,8 @@ import {
   imapBatchDelete,
   imapBatchMove,
   imapThread,
+  omittedNote,
+  type OmittedMessage,
   imapCreateMailbox,
   imapDeleteMailbox,
   imapRenameMailbox,
@@ -202,6 +204,11 @@ const LIST_OUTPUT_SCHEMA = {
   // Underlying error text per entry in `failedMailboxes`, same keys (#246
   // follow-up) — declared so a client can rely on it rather than parse text.
   failedMailboxReasons: z.record(z.string(), z.string()).optional(),
+  // Messages that belong on the page but could not be read, each with its
+  // imap: id and why (#256 follow-up). Non-empty implies `partial: true`.
+  omittedMessages: z
+    .array(z.object({ id: z.string(), mailbox: z.string(), uid: z.number(), reason: z.string() }))
+    .optional(),
 };
 
 /** Shape returned by the batch count tools. */
@@ -349,6 +356,7 @@ function mergedMessageResponse(
     accountsFailed: string[];
     failedMailboxes: string[];
     failedMailboxReasons: Record<string, string>;
+    omittedMessages: OmittedMessage[];
   },
   apple: AppleScan,
   limit: number,
@@ -360,7 +368,10 @@ function mergedMessageResponse(
   const diagnostics: SearchDiagnostics = {
     ...apple.diagnostics,
     partial:
-      apple.diagnostics.partial || fan.accountsFailed.length > 0 || fan.failedMailboxes.length > 0,
+      apple.diagnostics.partial ||
+      fan.accountsFailed.length > 0 ||
+      fan.failedMailboxes.length > 0 ||
+      fan.omittedMessages.length > 0,
     timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
     notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes],
   };
@@ -373,8 +384,9 @@ function mergedMessageResponse(
     timedOutAccounts: diagnostics.timedOutAccounts,
     failedMailboxes: fan.failedMailboxes,
     failedMailboxReasons: fan.failedMailboxReasons,
+    omittedMessages: fan.omittedMessages,
   };
-  const coverageBlock = partialCoverageBlock(diagnostics);
+  const coverageBlock = partialCoverageBlock(diagnostics) + omittedNote(fan.omittedMessages, true);
   if (merged.length === 0) {
     const base = diagnostics.partial
       ? `No messages found in the portions that were ${verb === "matched" ? "searched" : "listed"}.`
@@ -581,6 +593,7 @@ registerTool(
             partial: r.partial,
             failedMailboxes: r.failedMailboxes,
             failedMailboxReasons: r.failedMailboxReasons,
+            omittedMessages: r.omittedMessages,
           });
         }
         const fan = await fanOutImapMessages(imapArgs, "search");
@@ -1052,6 +1065,8 @@ registerTool(
       count: z.number().optional(),
       partial: z.boolean().optional(),
       failedMailboxes: z.array(z.string()).optional(),
+      failedMailboxReasons: LIST_OUTPUT_SCHEMA.failedMailboxReasons,
+      omittedMessages: LIST_OUTPUT_SCHEMA.omittedMessages,
     },
   },
   withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
@@ -1094,6 +1109,7 @@ registerTool(
           partial: r.partial,
           failedMailboxes: r.failedMailboxes,
           failedMailboxReasons: r.failedMailboxReasons,
+          omittedMessages: r.omittedMessages,
         });
       }
       const fan = await fanOutImapMessages({ subject: base, mailbox, limit }, "search");
@@ -1126,13 +1142,15 @@ registerTool(
       const partial =
         apple.diagnostics.partial ||
         fan.accountsFailed.length > 0 ||
-        fan.failedMailboxes.length > 0;
-      const coverage = partialCoverageBlock({
-        ...apple.diagnostics,
-        partial,
-        timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
-        notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes],
-      });
+        fan.failedMailboxes.length > 0 ||
+        fan.omittedMessages.length > 0;
+      const coverage =
+        partialCoverageBlock({
+          ...apple.diagnostics,
+          partial,
+          timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
+          notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes],
+        }) + omittedNote(fan.omittedMessages, true);
       const structured = {
         subject: base,
         messages: orderedRows,
@@ -1140,6 +1158,7 @@ registerTool(
         partial,
         failedMailboxes: fan.failedMailboxes,
         failedMailboxReasons: fan.failedMailboxReasons,
+        omittedMessages: fan.omittedMessages,
       };
       if (orderedRows.length === 0) {
         return successResponse(`No messages found in thread "${base}".${coverage}`, structured);
@@ -1236,6 +1255,7 @@ registerTool(
           partial: r.partial,
           failedMailboxes: r.failedMailboxes,
           failedMailboxReasons: r.failedMailboxReasons,
+          omittedMessages: r.omittedMessages,
         });
       }
       const fan = await fanOutImapMessages({ mailbox, limit, offset, from, unreadOnly }, "list");

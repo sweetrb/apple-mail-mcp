@@ -39,6 +39,7 @@ import {
   parseDateHeader,
   parseHeaderBlock,
   plausibleDateSent,
+  type ParsedHeaders,
 } from "@/utils/headers.js";
 import { classifyCountStatus, type CountDelta } from "@/services/auditLog.js";
 import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
@@ -125,6 +126,10 @@ interface ImapMessage {
   /** `RFC822.SIZE` — the server's own byte count for the stored message,
    *  present when the fetch asked for `size: true`. */
   size?: number;
+  /** Set by {@link fetchRows} on a row read with a reduced item set because
+   *  the full FETCH response for it could not be parsed (#256 follow-up):
+   *  `bodystructure` = no BODYSTRUCTURE; `envelope` = rebuilt from raw headers. */
+  degraded?: "bodystructure" | "envelope";
 }
 interface ImapDownload {
   meta?: { filename?: string; contentType?: string };
@@ -836,7 +841,21 @@ function structuredRow(m: ImapMessage, account: string, path: string): Record<st
     // a caller from "no attachments", so every IMAP-sourced message claimed to
     // have none. Falls back to false only when the fetch carried no
     // BODYSTRUCTURE at all.
-    hasAttachments: bodyStructureHasAttachments(m.bodyStructure),
+    // A row read without BODYSTRUCTURE (#256 follow-up) judges by its top-level
+    // Content-Type instead, and says so in `metadataIncomplete`.
+    hasAttachments: m.bodyStructure
+      ? bodyStructureHasAttachments(m.bodyStructure)
+      : m.degraded
+        ? contentTypeSuggestsAttachments(m)
+        : false,
+    ...(m.degraded
+      ? {
+          metadataIncomplete:
+            m.degraded === "bodystructure"
+              ? "BODYSTRUCTURE unreadable; hasAttachments inferred from Content-Type"
+              : "FETCH response unreadable; row rebuilt from raw headers, hasAttachments inferred from Content-Type",
+        }
+      : {}),
     // Message-ID (when the envelope carries it) is the strongest cross-/intra-
     // backend dedup key for the multi-account merge (imapMultiAccount.ts). The
     // AppleScript path does not expose it, so cross-backend dedup falls back to
@@ -863,6 +882,21 @@ export interface ImapListResult {
    *  no way to tell a real "IMAP list failed in every requested mailbox" from
    *  anything else — WHY it failed matters as much as THAT it failed. */
   failedMailboxReasons: Record<string, string>;
+  /** Messages that belong on this page but could not be read, each with why
+   *  (#256 follow-up). Non-empty implies `partial: true`: a short page is
+   *  never returned silently. */
+  omittedMessages: OmittedMessage[];
+}
+
+/** The text a caller sees for {@link ImapListResult.omittedMessages}. */
+export function omittedNote(omitted: OmittedMessage[], merged: boolean): string {
+  if (omitted.length === 0) return "";
+  const list = omitted.map((o) => `UID ${o.uid} in "${o.mailbox}" (${o.id})`).join(", ");
+  return (
+    `\n\nPartial result. ${omitted.length} message(s) ${merged ? "that may belong" : "that belong"} on this page could not be read ` +
+    `and are not listed: ${list}. Reason: ${[...new Set(omitted.map((o) => o.reason))].join("; ")}. ` +
+    `get-message or get-message-headers with those ids may still read them.`
+  );
 }
 
 interface FetchedMailboxMessage {
@@ -936,6 +970,10 @@ interface MailboxPage {
 
 interface MailboxMatches {
   messages: ImapMessage[];
+  /** Page UIDs no FETCH could read (#256 follow-up); never silently dropped. */
+  omitted: number[];
+  /** Why, when known. */
+  omittedReason?: string;
   /** Live matches counted. A lower bound when `totalExact` is false. */
   total: number;
   /** False when a large mailbox was only read far enough to fill the page. */
@@ -987,33 +1025,216 @@ async function searchUids(
   );
 }
 
-/** Full row attributes for `uids`, returned in the order given. */
-async function fetchRows(client: ImapClientLike, uids: number[]): Promise<ImapMessage[]> {
-  if (uids.length === 0) return [];
-  const byUid = new Map<number, ImapMessage>();
-  for await (const msg of client.fetch(
-    uids.join(","),
-    // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
-    // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
-    // the fetch (~17%), same single round trip, no extra request.
-    //
-    // INTERNALDATE rides along for the same reason, and is why `dateReceived`
-    // can finally mean what it says: imapflow's `envelope.date` is built from
-    // the header block, so it IS the `Date:` header, not arrival time.
-    //
-    // The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the
-    // SAME FETCH command, so a date the server's ENVELOPE parser rejected can
-    // still be recovered (#234). Measured on 50 real messages, 6 alternating
-    // runs: median ~334ms without vs ~315ms with — inside the noise — for ~44
-    // bytes per message. Too cheap to hide behind an opt-in.
-    { envelope: true, flags: true, bodyStructure: true, internalDate: true, headers: ["date"] },
-    { uid: true }
-  )) {
-    byUid.set(msg.uid, msg);
+/**
+ * The full row FETCH for list/search/thread.
+ *
+ * BODYSTRUCTURE rides along so `hasAttachments` is computed rather than
+ * assumed. Measured on 50 real messages: ~390ms -> ~465ms for the fetch
+ * (~17%), same single round trip, no extra request.
+ *
+ * INTERNALDATE rides along for the same reason, and is why `dateReceived` can
+ * finally mean what it says: imapflow's `envelope.date` is built from the
+ * header block, so it IS the `Date:` header, not arrival time.
+ *
+ * The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the SAME
+ * FETCH command, so a date the server's ENVELOPE parser rejected can still be
+ * recovered (#234). Measured on 50 real messages, 6 alternating runs: median
+ * ~334ms without vs ~315ms with — inside the noise — for ~44 bytes per message.
+ */
+const ROW_QUERY = {
+  envelope: true,
+  flags: true,
+  bodyStructure: true,
+  internalDate: true,
+  headers: ["date"],
+};
+/** First fallback: everything but BODYSTRUCTURE, the one item whose depth is
+ *  unbounded (see {@link fetchRows}). `Content-Type` stands in for it. */
+const ROW_QUERY_NO_STRUCTURE = {
+  envelope: true,
+  flags: true,
+  internalDate: true,
+  headers: ["date", "content-type"],
+};
+/** Last fallback: no ENVELOPE either — the row is rebuilt from raw headers. */
+const ROW_QUERY_HEADERS_ONLY = {
+  flags: true,
+  internalDate: true,
+  headers: ["date", "from", "subject", "message-id", "in-reply-to", "content-type"],
+};
+
+/** A requested message that no FETCH, full or reduced, ever returned. */
+export interface OmittedMessage {
+  id: string;
+  mailbox: string;
+  uid: number;
+  reason: string;
+}
+
+interface RowFetch {
+  messages: ImapMessage[];
+  /** Requested UIDs no FETCH returned, in request order. */
+  omitted: number[];
+  /** Why, when imapflow recorded a cause (a parser or untagged-handler error). */
+  cause?: string;
+}
+
+/** Fold one untagged FETCH into what was already seen for its UID. A server
+ *  may answer one UID in several untagged responses (RFC 3501 §7.4.2 lets it
+ *  send FLAGS on their own at any time); imapflow yields each separately, and
+ *  keeping only the last one could replace a full row with a flags-only one. */
+function mergeFetched(into: Map<number, ImapMessage>, msg: ImapMessage): void {
+  const prev = into.get(msg.uid);
+  if (!prev) {
+    into.set(msg.uid, msg);
+    return;
   }
-  return uids
-    .map((uid) => byUid.get(uid))
-    .filter((message): message is ImapMessage => message !== undefined);
+  const merged: ImapMessage = { ...prev };
+  for (const [key, value] of Object.entries(msg)) {
+    if (value !== undefined && value !== null)
+      (merged as unknown as Record<string, unknown>)[key] = value;
+  }
+  into.set(msg.uid, merged);
+}
+
+async function fetchInto(
+  client: ImapClientLike,
+  uids: number[],
+  query: Record<string, unknown>,
+  into: Map<number, ImapMessage>
+): Promise<void> {
+  const wanted = new Set(uids);
+  for await (const msg of client.fetch(uids.join(","), query, { uid: true })) {
+    // An unsolicited FETCH (no UID, or one we did not ask for) is not a row.
+    if (typeof msg?.uid === "number" && wanted.has(msg.uid)) mergeFetched(into, msg);
+  }
+}
+
+/** The fetched HEADER.FIELDS block, parsed (RFC 2047 words decoded). */
+function fetchedHeaders(m: ImapMessage): ParsedHeaders | undefined {
+  return m.headers ? parseHeaderBlock(decodeHeaderBytes(asBuffer(m.headers))) : undefined;
+}
+
+/** An envelope rebuilt from raw headers, for a row fetched without ENVELOPE. */
+function envelopeFromHeaders(m: ImapMessage): ImapEnvelope | undefined {
+  const h = fetchedHeaders(m);
+  if (!h || h.headers.length === 0) return undefined;
+  const env: ImapEnvelope = {};
+  if (h.subject) env.subject = h.subject;
+  if (h.from) {
+    const angle = h.from.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>/);
+    env.from = angle
+      ? [{ ...(angle[1].trim() ? { name: angle[1].trim() } : {}), address: angle[2].trim() }]
+      : [{ address: h.from.trim() }];
+  }
+  if (h.messageId) env.messageId = `<${h.messageId}>`;
+  if (h.inReplyTo) env.inReplyTo = `<${h.inReplyTo}>`;
+  if (h.dateHeader) env.date = h.dateHeader;
+  return env;
+}
+
+/** Stand-in for BODYSTRUCTURE when it could not be fetched: a top-level
+ *  `multipart/mixed` is what a message carrying files looks like. */
+function contentTypeSuggestsAttachments(m: ImapMessage): boolean {
+  const type = fetchedHeaders(m)?.headers.find((h) => h.name.toLowerCase() === "content-type");
+  return /^\s*multipart\/mixed\b/i.test(type?.value ?? "");
+}
+
+/**
+ * Full row attributes for `uids`, returned in the order given, plus every UID
+ * that could not be read (#256 follow-up, @j5pu).
+ *
+ * imapflow drops an untagged FETCH it cannot parse: `handleResponse` logs the
+ * parser error and moves on, and the command still completes `OK`. So a FETCH
+ * of 500 UIDs can yield 497 messages with nothing thrown. The limit that bites
+ * is `MAX_NODE_DEPTH` (25) in its token parser — BODYSTRUCTURE nests one list
+ * per MIME level, so a message forwarded as an attachment of an attachment
+ * about eleven times deep (or ~22 nested multiparts) is over it, while its
+ * ENVELOPE, flags and dates are perfectly ordinary. The page used to come back
+ * short and `partial: false`.
+ *
+ * Now the fetched set is checked against the requested one. Anything missing
+ * is retried once with the same items (a transient loss), then without
+ * BODYSTRUCTURE, then from raw headers alone (no ENVELOPE). Only what survives
+ * all three is omitted, and the caller reports it.
+ */
+async function fetchRows(client: ImapClientLike, uids: number[]): Promise<RowFetch> {
+  if (uids.length === 0) return { messages: [], omitted: [] };
+  const byUid = new Map<number, ImapMessage>();
+  const causes: string[] = [];
+  const noteCause = () => {
+    const err = client.takeLastCommandError?.();
+    if (err !== undefined) {
+      const text = describeMailboxFailure(err);
+      if (!causes.includes(text)) causes.push(text);
+    }
+  };
+  // A row is only as good as its identity: one without an ENVELOPE (a
+  // flags-only untagged response that was never followed by the rest) counts
+  // as missing and is retried.
+  const missing = () => uids.filter((uid) => !byUid.get(uid)?.envelope);
+
+  client.takeLastCommandError?.();
+  await fetchInto(client, uids, ROW_QUERY, byUid);
+  noteCause();
+
+  let gap = missing();
+  if (gap.length > 0) {
+    await fetchInto(client, gap, ROW_QUERY, byUid);
+    noteCause();
+    gap = missing();
+  }
+  if (gap.length > 0) {
+    const reduced = new Map<number, ImapMessage>();
+    await fetchInto(client, gap, ROW_QUERY_NO_STRUCTURE, reduced);
+    noteCause();
+    for (const msg of reduced.values()) {
+      if (!msg.envelope) continue;
+      mergeFetched(byUid, { ...msg, degraded: "bodystructure" } as ImapMessage);
+    }
+    gap = missing();
+  }
+  if (gap.length > 0) {
+    // One UID per command: whatever still fails, fails alone.
+    for (const uid of gap) {
+      const bare = new Map<number, ImapMessage>();
+      await fetchInto(client, [uid], ROW_QUERY_HEADERS_ONLY, bare);
+      noteCause();
+      const msg = bare.get(uid);
+      const envelope = msg ? envelopeFromHeaders(msg) : undefined;
+      if (msg && envelope) {
+        mergeFetched(byUid, { ...msg, envelope, degraded: "envelope" } as ImapMessage);
+      }
+    }
+    gap = missing();
+  }
+
+  const omitted = new Set(gap);
+  return {
+    messages: uids
+      .filter((uid) => !omitted.has(uid))
+      .map((uid) => byUid.get(uid))
+      .filter((message): message is ImapMessage => message !== undefined),
+    omitted: gap,
+    ...(causes.length > 0 ? { cause: causes.join("; ") } : {}),
+  };
+}
+
+/** A {@link RowFetch} as the page part of {@link MailboxMatches}. */
+function pageRows(fetch: RowFetch): Pick<MailboxMatches, "messages" | "omitted" | "omittedReason"> {
+  return {
+    messages: fetch.messages,
+    omitted: fetch.omitted,
+    ...(fetch.omitted.length > 0 ? { omittedReason: omissionReason(fetch) } : {}),
+  };
+}
+
+/** Why a UID in {@link RowFetch.omitted} is missing, in words a caller can act on. */
+function omissionReason(fetch: RowFetch): string {
+  return (
+    "the server's FETCH response for this message could not be read, even without BODYSTRUCTURE or ENVELOPE" +
+    (fetch.cause ? ` (${fetch.cause})` : "")
+  );
 }
 
 /**
@@ -1084,7 +1305,7 @@ async function listLargeMailbox(
   // it is exact; a server that counts them can overstate by however many sit
   // below the part walked — the same count list-mailboxes reports.
   return {
-    messages: await fetchRows(client, walk.uids),
+    ...pageRows(await fetchRows(client, walk.uids)),
     total: Math.max(0, exists - deletedSeen),
     totalExact: true,
   };
@@ -1117,7 +1338,7 @@ async function searchLargeMailbox(
     return found;
   });
   return {
-    messages: await fetchRows(client, walk.uids),
+    ...pageRows(await fetchRows(client, walk.uids)),
     total: walk.matched,
     totalExact: walk.exhausted,
   };
@@ -1136,7 +1357,7 @@ async function fetchMailboxMatches(
     // the size first, and past LARGE_MAILBOX_MESSAGES page by sequence number
     // from the top instead of materializing every UID.
     const exists = await statusMessageCount(client, path);
-    if (exists === 0) return { messages: [], total: 0, totalExact: true };
+    if (exists === 0) return { messages: [], omitted: [], total: 0, totalExact: true };
     if (exists !== undefined && exists > LARGE_MAILBOX_MESSAGES) {
       try {
         return isUnfiltered(criteria)
@@ -1154,7 +1375,7 @@ async function fetchMailboxMatches(
 
     const uids = await searchUids(client, path, criteria, exists);
     if (uids.length === 0 || page.take === 0) {
-      return { messages: [], total: uids.length, totalExact: true };
+      return { messages: [], omitted: [], total: uids.length, totalExact: true };
     }
 
     // A SEARCH match count can never exceed the mailbox's own total message
@@ -1202,7 +1423,7 @@ async function fetchMailboxMatches(
       .slice()
       .reverse()
       .slice(page.skip, page.skip + page.take);
-    return { messages: await fetchRows(client, newest), total: uids.length, totalExact: true };
+    return { ...pageRows(await fetchRows(client, newest)), total: uids.length, totalExact: true };
   } finally {
     lock.release();
   }
@@ -1248,6 +1469,7 @@ async function run(
       const fetched: FetchedMailboxMessage[] = [];
       const failedMailboxes: string[] = [];
       const failedMailboxReasons: Record<string, string> = {};
+      const omittedMessages: OmittedMessage[] = [];
       let totalMatched = 0;
       let totalExact = true;
 
@@ -1257,6 +1479,14 @@ async function run(
           totalMatched += result.total;
           totalExact &&= result.totalExact;
           fetched.push(...result.messages.map((message) => ({ message, path })));
+          for (const uid of result.omitted) {
+            omittedMessages.push({
+              id: encodeImapId(cfg.accountLabel, path, uid),
+              mailbox: path,
+              uid,
+              reason: result.omittedReason ?? "the server's FETCH response could not be read",
+            });
+          }
         } catch (error) {
           failedMailboxes.push(path);
           failedMailboxReasons[path] = describeMailboxFailure(error);
@@ -1292,12 +1522,13 @@ async function run(
       const messages = ordered.map(({ message, path }) =>
         structuredRow(message, cfg.accountLabel, path)
       );
-      const partial = failedMailboxes.length > 0;
-      const failureNote = partial
-        ? `\n\nPartial result. Could not search mailbox(es): ${failedMailboxes
-            .map((path) => `"${path}" (${failedMailboxReasons[path]})`)
-            .join(", ")}.`
-        : "";
+      const partial = failedMailboxes.length > 0 || omittedMessages.length > 0;
+      const failureNote =
+        (failedMailboxes.length > 0
+          ? `\n\nPartial result. Could not search mailbox(es): ${failedMailboxes
+              .map((path) => `"${path}" (${failedMailboxReasons[path]})`)
+              .join(", ")}.`
+          : "") + omittedNote(omittedMessages, unscopedSearch);
       const verb = listMode ? "listed" : "matched";
       const totalText = totalExact ? `${totalMatched} total` : `at least ${totalMatched} total`;
       const scope = unscopedSearch
@@ -1314,6 +1545,7 @@ async function run(
           partial,
           failedMailboxes,
           failedMailboxReasons,
+          omittedMessages,
         };
       }
 
@@ -1329,6 +1561,7 @@ async function run(
         partial,
         failedMailboxes,
         failedMailboxReasons,
+        omittedMessages,
       };
     },
     true
@@ -3060,7 +3293,13 @@ export interface ImapThreadMessage {
 export interface ImapThreadResult {
   count: number;
   text: string;
-  structured: { subject: string; messages: ImapThreadMessage[]; count: number };
+  structured: {
+    subject: string;
+    messages: ImapThreadMessage[];
+    count: number;
+    partial: boolean;
+    omittedMessages: OmittedMessage[];
+  };
 }
 
 function senderName(from?: ImapAddress[]): string {
@@ -3124,31 +3363,25 @@ export async function imapThread(
         if (uidSet.size <= 1) return null; // only the seed → caller falls back to subject
 
         const uids = [...uidSet].slice(0, limit);
-        const msgs: ImapMessage[] = [];
-        for await (const msg of client.fetch(
-          uids.join(","),
-          // Same reason as the list/search fetch: get-thread emits structured
-          // rows too, so it needs BODYSTRUCTURE or its hasAttachments would
-          // silently disagree with the same message seen via search.
-          // INTERNALDATE and the Date: header ride along for the same reason as
-          // the list/search fetch: the per-message date is recovered and
-          // sanity-checked exactly as a row's dateSent is (#234).
-          {
-            envelope: true,
-            flags: true,
-            bodyStructure: true,
-            internalDate: true,
-            headers: ["date"],
-          },
-          { uid: true }
-        )) {
-          msgs.push(msg);
-        }
+        // Same row FETCH as list/search — get-thread emits structured rows too,
+        // so it needs BODYSTRUCTURE (hasAttachments) and the Date: header
+        // (#234) — and the same guarantee that a message the server's response
+        // hid from imapflow is reported, not silently dropped (#256 follow-up).
+        const rows = await fetchRows(client, uids);
+        const msgs = rows.messages.slice();
+        const omittedMessages: OmittedMessage[] = rows.omitted.map((uid) => ({
+          id: encodeImapId(ref.account, ref.path, uid),
+          mailbox: ref.path,
+          uid,
+          reason: omissionReason(rows),
+        }));
         msgs.sort((a, b) => dateMs(a) - dateMs(b)); // oldest first
         const subject = seed.envelope?.subject || "(no subject)";
         const structured = {
           subject,
           count: msgs.length,
+          partial: omittedMessages.length > 0,
+          omittedMessages,
           messages: msgs.map((m) => ({
             id: encodeImapId(ref.account, ref.path, m.uid),
             subject: m.envelope?.subject || "(no subject)",
@@ -3164,7 +3397,8 @@ export async function imapThread(
         };
         const text =
           `Thread "${subject}" — ${msgs.length} message(s) via IMAP (References-linked, oldest first):\n` +
-          msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n");
+          msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n") +
+          omittedNote(omittedMessages, false);
         return { count: msgs.length, text, structured };
       } finally {
         lock.release();

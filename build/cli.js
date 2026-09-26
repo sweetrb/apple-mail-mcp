@@ -58092,6 +58092,7 @@ __export(imapClient_exports, {
   mailFlagColorIndex: () => mailFlagColorIndex,
   matchMailbox: () => matchMailbox,
   normalizeMessageId: () => normalizeMessageId,
+  omittedNote: () => omittedNote,
   resolveImapConfig: () => resolveImapConfig,
   resolveImapConfigs: () => resolveImapConfigs,
   resolveMailboxPath: () => resolveMailboxPath,
@@ -58402,13 +58403,25 @@ function structuredRow(m, account, path) {
     // a caller from "no attachments", so every IMAP-sourced message claimed to
     // have none. Falls back to false only when the fetch carried no
     // BODYSTRUCTURE at all.
-    hasAttachments: bodyStructureHasAttachments(m.bodyStructure),
+    // A row read without BODYSTRUCTURE (#256 follow-up) judges by its top-level
+    // Content-Type instead, and says so in `metadataIncomplete`.
+    hasAttachments: m.bodyStructure ? bodyStructureHasAttachments(m.bodyStructure) : m.degraded ? contentTypeSuggestsAttachments(m) : false,
+    ...m.degraded ? {
+      metadataIncomplete: m.degraded === "bodystructure" ? "BODYSTRUCTURE unreadable; hasAttachments inferred from Content-Type" : "FETCH response unreadable; row rebuilt from raw headers, hasAttachments inferred from Content-Type"
+    } : {},
     // Message-ID (when the envelope carries it) is the strongest cross-/intra-
     // backend dedup key for the multi-account merge (imapMultiAccount.ts). The
     // AppleScript path does not expose it, so cross-backend dedup falls back to
     // the subject|sender|date composite key.
     ...env.messageId ? { messageId: env.messageId } : {}
   };
+}
+function omittedNote(omitted, merged) {
+  if (omitted.length === 0) return "";
+  const list = omitted.map((o) => `UID ${o.uid} in "${o.mailbox}" (${o.id})`).join(", ");
+  return `
+
+Partial result. ${omitted.length} message(s) ${merged ? "that may belong" : "that belong"} on this page could not be read and are not listed: ${list}. Reason: ${[...new Set(omitted.map((o) => o.reason))].join("; ")}. get-message or get-message-headers with those ids may still read them.`;
 }
 function describeMailboxFailure(error) {
   const raw = errText(error);
@@ -58451,30 +58464,106 @@ async function searchUids(client, path, criteria, size) {
     `IMAP SEARCH on "${path}"${sized} failed: ` + (cause ? errText(cause) : "the server rejected it or the connection dropped before it answered (on a mailbox this size, usually a server-side timeout)")
   );
 }
-async function fetchRows(client, uids) {
-  if (uids.length === 0) return [];
-  const byUid = /* @__PURE__ */ new Map();
-  for await (const msg of client.fetch(
-    uids.join(","),
-    // BODYSTRUCTURE rides along so `hasAttachments` is computed rather
-    // than assumed. Measured on 50 real messages: ~390ms -> ~465ms for
-    // the fetch (~17%), same single round trip, no extra request.
-    //
-    // INTERNALDATE rides along for the same reason, and is why `dateReceived`
-    // can finally mean what it says: imapflow's `envelope.date` is built from
-    // the header block, so it IS the `Date:` header, not arrival time.
-    //
-    // The `Date:` header itself (BODY.PEEK[HEADER.FIELDS (DATE)]) rides in the
-    // SAME FETCH command, so a date the server's ENVELOPE parser rejected can
-    // still be recovered (#234). Measured on 50 real messages, 6 alternating
-    // runs: median ~334ms without vs ~315ms with — inside the noise — for ~44
-    // bytes per message. Too cheap to hide behind an opt-in.
-    { envelope: true, flags: true, bodyStructure: true, internalDate: true, headers: ["date"] },
-    { uid: true }
-  )) {
-    byUid.set(msg.uid, msg);
+function mergeFetched(into, msg) {
+  const prev = into.get(msg.uid);
+  if (!prev) {
+    into.set(msg.uid, msg);
+    return;
   }
-  return uids.map((uid) => byUid.get(uid)).filter((message) => message !== void 0);
+  const merged = { ...prev };
+  for (const [key, value] of Object.entries(msg)) {
+    if (value !== void 0 && value !== null)
+      merged[key] = value;
+  }
+  into.set(msg.uid, merged);
+}
+async function fetchInto(client, uids, query, into) {
+  const wanted = new Set(uids);
+  for await (const msg of client.fetch(uids.join(","), query, { uid: true })) {
+    if (typeof msg?.uid === "number" && wanted.has(msg.uid)) mergeFetched(into, msg);
+  }
+}
+function fetchedHeaders(m) {
+  return m.headers ? parseHeaderBlock(decodeHeaderBytes(asBuffer(m.headers))) : void 0;
+}
+function envelopeFromHeaders(m) {
+  const h = fetchedHeaders(m);
+  if (!h || h.headers.length === 0) return void 0;
+  const env = {};
+  if (h.subject) env.subject = h.subject;
+  if (h.from) {
+    const angle = h.from.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>/);
+    env.from = angle ? [{ ...angle[1].trim() ? { name: angle[1].trim() } : {}, address: angle[2].trim() }] : [{ address: h.from.trim() }];
+  }
+  if (h.messageId) env.messageId = `<${h.messageId}>`;
+  if (h.inReplyTo) env.inReplyTo = `<${h.inReplyTo}>`;
+  if (h.dateHeader) env.date = h.dateHeader;
+  return env;
+}
+function contentTypeSuggestsAttachments(m) {
+  const type = fetchedHeaders(m)?.headers.find((h) => h.name.toLowerCase() === "content-type");
+  return /^\s*multipart\/mixed\b/i.test(type?.value ?? "");
+}
+async function fetchRows(client, uids) {
+  if (uids.length === 0) return { messages: [], omitted: [] };
+  const byUid = /* @__PURE__ */ new Map();
+  const causes = [];
+  const noteCause = () => {
+    const err = client.takeLastCommandError?.();
+    if (err !== void 0) {
+      const text = describeMailboxFailure(err);
+      if (!causes.includes(text)) causes.push(text);
+    }
+  };
+  const missing = () => uids.filter((uid) => !byUid.get(uid)?.envelope);
+  client.takeLastCommandError?.();
+  await fetchInto(client, uids, ROW_QUERY, byUid);
+  noteCause();
+  let gap = missing();
+  if (gap.length > 0) {
+    await fetchInto(client, gap, ROW_QUERY, byUid);
+    noteCause();
+    gap = missing();
+  }
+  if (gap.length > 0) {
+    const reduced = /* @__PURE__ */ new Map();
+    await fetchInto(client, gap, ROW_QUERY_NO_STRUCTURE, reduced);
+    noteCause();
+    for (const msg of reduced.values()) {
+      if (!msg.envelope) continue;
+      mergeFetched(byUid, { ...msg, degraded: "bodystructure" });
+    }
+    gap = missing();
+  }
+  if (gap.length > 0) {
+    for (const uid of gap) {
+      const bare = /* @__PURE__ */ new Map();
+      await fetchInto(client, [uid], ROW_QUERY_HEADERS_ONLY, bare);
+      noteCause();
+      const msg = bare.get(uid);
+      const envelope = msg ? envelopeFromHeaders(msg) : void 0;
+      if (msg && envelope) {
+        mergeFetched(byUid, { ...msg, envelope, degraded: "envelope" });
+      }
+    }
+    gap = missing();
+  }
+  const omitted = new Set(gap);
+  return {
+    messages: uids.filter((uid) => !omitted.has(uid)).map((uid) => byUid.get(uid)).filter((message) => message !== void 0),
+    omitted: gap,
+    ...causes.length > 0 ? { cause: causes.join("; ") } : {}
+  };
+}
+function pageRows(fetch) {
+  return {
+    messages: fetch.messages,
+    omitted: fetch.omitted,
+    ...fetch.omitted.length > 0 ? { omittedReason: omissionReason(fetch) } : {}
+  };
+}
+function omissionReason(fetch) {
+  return "the server's FETCH response for this message could not be read, even without BODYSTRUCTURE or ENVELOPE" + (fetch.cause ? ` (${fetch.cause})` : "");
 }
 async function walkWindows(exists, page, firstWindow, readWindow) {
   const wanted = page.skip + page.take;
@@ -58514,7 +58603,7 @@ async function listLargeMailbox(client, exists, page) {
     }
   );
   return {
-    messages: await fetchRows(client, walk.uids),
+    ...pageRows(await fetchRows(client, walk.uids)),
     total: Math.max(0, exists - deletedSeen),
     totalExact: true
   };
@@ -58530,7 +58619,7 @@ async function searchLargeMailbox(client, path, criteria, exists, page) {
     return found;
   });
   return {
-    messages: await fetchRows(client, walk.uids),
+    ...pageRows(await fetchRows(client, walk.uids)),
     total: walk.matched,
     totalExact: walk.exhausted
   };
@@ -58539,7 +58628,7 @@ async function fetchMailboxMatches(client, path, criteria, page) {
   const lock = await client.getMailboxLock(path);
   try {
     const exists = await statusMessageCount(client, path);
-    if (exists === 0) return { messages: [], total: 0, totalExact: true };
+    if (exists === 0) return { messages: [], omitted: [], total: 0, totalExact: true };
     if (exists !== void 0 && exists > LARGE_MAILBOX_MESSAGES) {
       try {
         return isUnfiltered(criteria) ? await listLargeMailbox(client, exists, page) : await searchLargeMailbox(client, path, criteria, exists, page);
@@ -58552,7 +58641,7 @@ async function fetchMailboxMatches(client, path, criteria, page) {
     }
     const uids = await searchUids(client, path, criteria, exists);
     if (uids.length === 0 || page.take === 0) {
-      return { messages: [], total: uids.length, totalExact: true };
+      return { messages: [], omitted: [], total: uids.length, totalExact: true };
     }
     const messages = exists ?? (await client.status(path, { messages: true })).messages ?? void 0;
     if (typeof messages === "number" && uids.length > messages) {
@@ -58561,7 +58650,7 @@ async function fetchMailboxMatches(client, path, criteria, page) {
       );
     }
     const newest = uids.slice().reverse().slice(page.skip, page.skip + page.take);
-    return { messages: await fetchRows(client, newest), total: uids.length, totalExact: true };
+    return { ...pageRows(await fetchRows(client, newest)), total: uids.length, totalExact: true };
   } finally {
     lock.release();
   }
@@ -58594,6 +58683,7 @@ async function run(args, listMode, deps) {
       const fetched = [];
       const failedMailboxes = [];
       const failedMailboxReasons = {};
+      const omittedMessages = [];
       let totalMatched = 0;
       let totalExact = true;
       for (const path of paths) {
@@ -58602,6 +58692,14 @@ async function run(args, listMode, deps) {
           totalMatched += result.total;
           totalExact &&= result.totalExact;
           fetched.push(...result.messages.map((message) => ({ message, path })));
+          for (const uid of result.omitted) {
+            omittedMessages.push({
+              id: encodeImapId(cfg.accountLabel, path, uid),
+              mailbox: path,
+              uid,
+              reason: result.omittedReason ?? "the server's FETCH response could not be read"
+            });
+          }
         } catch (error) {
           failedMailboxes.push(path);
           failedMailboxReasons[path] = describeMailboxFailure(error);
@@ -58630,10 +58728,10 @@ async function run(args, listMode, deps) {
       const messages = ordered.map(
         ({ message, path }) => structuredRow(message, cfg.accountLabel, path)
       );
-      const partial = failedMailboxes.length > 0;
-      const failureNote = partial ? `
+      const partial = failedMailboxes.length > 0 || omittedMessages.length > 0;
+      const failureNote = (failedMailboxes.length > 0 ? `
 
-Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}" (${failedMailboxReasons[path]})`).join(", ")}.` : "";
+Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"${path}" (${failedMailboxReasons[path]})`).join(", ")}.` : "") + omittedNote(omittedMessages, unscopedSearch);
       const verb = listMode ? "listed" : "matched";
       const totalText = totalExact ? `${totalMatched} total` : `at least ${totalMatched} total`;
       const scope = unscopedSearch ? allMailboxCount === 1 ? `mailbox "${paths[0]}"` : `${allMailboxCount} selectable mailboxes` : `mailbox "${paths[0]}"`;
@@ -58644,7 +58742,8 @@ Partial result. Could not search mailbox(es): ${failedMailboxes.map((path) => `"
           count: 0,
           partial,
           failedMailboxes,
-          failedMailboxReasons
+          failedMailboxReasons,
+          omittedMessages
         };
       }
       const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalText} ${verb}):
@@ -58657,7 +58756,8 @@ Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutatio
         count: messages.length,
         partial,
         failedMailboxes,
-        failedMailboxReasons
+        failedMailboxReasons,
+        omittedMessages
       };
     },
     true
@@ -59617,31 +59717,21 @@ async function imapThread(id, deps = {}, limit = 50) {
         }
         if (uidSet.size <= 1) return null;
         const uids = [...uidSet].slice(0, limit);
-        const msgs = [];
-        for await (const msg of client.fetch(
-          uids.join(","),
-          // Same reason as the list/search fetch: get-thread emits structured
-          // rows too, so it needs BODYSTRUCTURE or its hasAttachments would
-          // silently disagree with the same message seen via search.
-          // INTERNALDATE and the Date: header ride along for the same reason as
-          // the list/search fetch: the per-message date is recovered and
-          // sanity-checked exactly as a row's dateSent is (#234).
-          {
-            envelope: true,
-            flags: true,
-            bodyStructure: true,
-            internalDate: true,
-            headers: ["date"]
-          },
-          { uid: true }
-        )) {
-          msgs.push(msg);
-        }
+        const rows = await fetchRows(client, uids);
+        const msgs = rows.messages.slice();
+        const omittedMessages = rows.omitted.map((uid) => ({
+          id: encodeImapId(ref.account, ref.path, uid),
+          mailbox: ref.path,
+          uid,
+          reason: omissionReason(rows)
+        }));
         msgs.sort((a, b) => dateMs(a) - dateMs(b));
         const subject = seed.envelope?.subject || "(no subject)";
         const structured = {
           subject,
           count: msgs.length,
+          partial: omittedMessages.length > 0,
+          omittedMessages,
           messages: msgs.map((m) => ({
             id: encodeImapId(ref.account, ref.path, m.uid),
             subject: m.envelope?.subject || "(no subject)",
@@ -59656,7 +59746,7 @@ async function imapThread(id, deps = {}, limit = 50) {
           }))
         };
         const text = `Thread "${subject}" \u2014 ${msgs.length} message(s) via IMAP (References-linked, oldest first):
-` + msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n");
+` + msgs.map((m) => formatRow(m, ref.account, ref.path)).join("\n") + omittedNote(omittedMessages, false);
         return { count: msgs.length, text, structured };
       } finally {
         lock.release();
@@ -59665,7 +59755,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -59739,6 +59829,24 @@ var init_imapClient = __esm({
     LARGE_MAILBOX_MESSAGES = 1e4;
     FIRST_SEARCH_WINDOW = 5e3;
     MAX_WINDOW = 5e4;
+    ROW_QUERY = {
+      envelope: true,
+      flags: true,
+      bodyStructure: true,
+      internalDate: true,
+      headers: ["date"]
+    };
+    ROW_QUERY_NO_STRUCTURE = {
+      envelope: true,
+      flags: true,
+      internalDate: true,
+      headers: ["date", "content-type"]
+    };
+    ROW_QUERY_HEADERS_ONLY = {
+      flags: true,
+      internalDate: true,
+      headers: ["date", "from", "subject", "message-id", "in-reply-to", "content-type"]
+    };
     poolConnect = defaultConnect;
     pools = /* @__PURE__ */ new Map();
     connecting = /* @__PURE__ */ new Map();
