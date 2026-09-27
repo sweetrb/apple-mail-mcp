@@ -1,5 +1,39 @@
 ## [Unreleased]
 
+## [2.19.19] - 2026-09-27
+
+### Fixed
+
+- **A deep `offset` no longer times out on a very large mailbox**
+  ([#256](https://github.com/sweetrb/apple-mail-mcp/issues/256) follow-up,
+  isolated by @j5pu with sequential single calls, a health-check control and a
+  two-mailbox comparison): `list-messages({ limit: 1, offset: 350000 })` on a
+  ~793k-message iCloud mailbox hit the ~60 s timeout while offset 280,000 and
+  below worked. The unfiltered large-mailbox path read UID + FLAGS for every
+  skipped message, 50,000 at a time, so its cost grew with the offset. It now
+  computes the page's sequence range directly — `N-offset-limit+1 ..
+N-offset`, against the selected mailbox's EXISTS — and fetches only that
+  range plus a 32-message margin: offset 790,000 costs the same one small
+  `FETCH` as offset 0. `\Deleted` messages inside the window are still dropped
+  (never returned, #246) and the page is topped up from just below it.
+  **Offsets now count sequence positions.** On iCloud, where messages awaiting
+  expunge are outside the sequence space, that is exact; on a server that keeps
+  them in it, a page shifts by the number of such messages above it (2.19.18
+  skipped them, at a cost proportional to the offset). Correcting that would
+  need a `SEARCH DELETED` over the whole skipped range — the same
+  offset-proportional server work this removes — so it is documented instead.
+  Retries, `omittedMessages`/`partial`, `metadataIncomplete`, newest-first
+  order and the STATUS guard are unchanged.
+- **`search-messages` honours `offset`** instead of silently dropping it (the
+  parameter was never in its schema). It pages a single mailbox by skipping
+  matches, and a merged all-mailbox search the same way `list-messages` does.
+  Where it can't be served it is refused with the reason: without a `mailbox`,
+  `offset` + `limit` above 5,000 (each mailbox would contribute that many full
+  rows to the merge — name a mailbox to page deeper), and on an
+  AppleScript-only account, whose search has no offset. A filtered deep offset
+  still costs one windowed `SEARCH` per 50,000 skipped messages, since which
+  messages match is only known by searching them; the README says so.
+
 ## [2.19.18] - 2026-09-26
 
 ### Fixed
