@@ -165,7 +165,7 @@ export interface ImapClientLike {
   getMailboxLock(path: string, options?: { readOnly?: boolean }): Promise<MailboxLock>;
   /** The currently open mailbox, as imapflow exposes it after a lock is taken.
    *  Only `uidValidity` is read here; optional so mocks needn't provide it. */
-  mailbox?: { path?: string; uidValidity?: bigint; readOnly?: boolean } | false;
+  mailbox?: { path?: string; uidValidity?: bigint; readOnly?: boolean; exists?: number } | false;
   /** imapflow resolves `false` (never throws) when the server rejects the
    *  SEARCH or the connection drops mid-command, and `undefined` when no
    *  mailbox is selected — both are failures, never "no matches" (#256). */
@@ -960,6 +960,25 @@ const FIRST_SEARCH_WINDOW = 5_000;
 /** Largest single window (flags-only FETCH or windowed SEARCH), in sequence numbers. */
 const MAX_WINDOW = 50_000;
 
+/**
+ * Deepest `offset + limit` an all-mailbox `search-messages` accepts. With no
+ * `mailbox`, each mailbox contributes its newest `offset + limit` matches, in
+ * full, to a merge sorted by date; past this a deep page costs a full-row fetch
+ * of every skipped match. A single named mailbox has no such cap: it skips by
+ * position (see {@link walkWindows}).
+ */
+export const MAX_UNSCOPED_SEARCH_DEPTH = 5_000;
+
+/** Why an all-mailbox search can't serve this offset, or undefined when it can. */
+export function unscopedSearchOffsetError(offset: number, limit: number): string | undefined {
+  if (offset <= 0 || offset + limit <= MAX_UNSCOPED_SEARCH_DEPTH) return undefined;
+  return (
+    `search-messages without a mailbox merges every mailbox's newest offset+limit matches, so it ` +
+    `pages at most ${MAX_UNSCOPED_SEARCH_DEPTH.toLocaleString("en-US")} deep (offset ${offset} + limit ${limit} asked). ` +
+    `Name a mailbox (e.g. the account's All Mail or Archive) to page deeper, or narrow the search with dateTo.`
+  );
+}
+
 /** Which live messages a mailbox read should return, newest first. */
 interface MailboxPage {
   /** Newest live matches to skip. */
@@ -1239,26 +1258,29 @@ function omissionReason(fetch: RowFetch): string {
 
 /**
  * Walk a large mailbox top-down in sequence-number windows, newest first (#256).
- * `readWindow(lo, hi)` returns the live UIDs in that window; the first window is
- * addressed `lo:*` so a count that moved since STATUS can't name a sequence
- * number past the end. Stops once the page is full, so `limit: 1` on a
- * 793,614-message mailbox reads one small window instead of every UID.
+ * `readWindow(lo, hi)` returns the live UIDs in that window. The walk starts at
+ * sequence number `top`; when `openTop` is set (a walk from the very top of the
+ * mailbox) the first window is addressed `lo:*`, so a count that moved since
+ * it was read can't name a sequence number past the end. Stops once the page
+ * is full, so `limit: 1` on a 793,614-message mailbox reads one small window
+ * instead of every UID.
  */
 async function walkWindows(
-  exists: number,
+  top: number,
   page: MailboxPage,
   firstWindow: number,
-  readWindow: (lo: number, hi: number | "*", width: number) => Promise<number[]>
+  readWindow: (lo: number, hi: number | "*", width: number) => Promise<number[]>,
+  openTop = true
 ): Promise<{ uids: number[]; matched: number; exhausted: boolean }> {
   const wanted = page.skip + page.take;
   const uids: number[] = [];
   let seen = 0;
   let matched = 0;
-  let hi = exists;
+  let hi = top;
   let width = Math.max(1, Math.min(firstWindow, MAX_WINDOW));
   while (hi >= 1 && seen < wanted) {
     const lo = Math.max(1, hi - width + 1);
-    const live = (await readWindow(lo, hi === exists ? "*" : hi, hi - lo + 1))
+    const live = (await readWindow(lo, hi === top && openTop ? "*" : hi, hi - lo + 1))
       .slice()
       .sort((a, b) => b - a);
     matched += live.length;
@@ -1274,23 +1296,53 @@ async function walkWindows(
 }
 
 /**
- * Unfiltered read of a large mailbox: FETCH only UID + FLAGS by sequence range
- * from the top, drop anything flagged `\Deleted` (pending expunge — the same
- * UNDELETED semantics #246 gave the SEARCH path), then fetch full rows for the
- * page alone. No SEARCH at all, so nothing proportional to the mailbox size
- * ever crosses the wire.
+ * Extra sequence numbers read below an unfiltered page, so a few `\Deleted`
+ * ghosts inside it are replaced without a second round trip.
+ */
+const DELETED_MARGIN = 32;
+
+/**
+ * The selected mailbox's EXISTS — the count that defines its message sequence
+ * numbers for this session — falling back to the STATUS count.
+ */
+function sequenceTop(client: ImapClientLike, statusCount: number): number {
+  const mb = client.mailbox;
+  const exists = mb && typeof mb.exists === "number" && mb.exists >= 0 ? mb.exists : undefined;
+  return exists ?? statusCount;
+}
+
+/**
+ * Unfiltered read of a large mailbox, by position: newest-first page `offset`
+ * of size `limit` is sequence numbers `N-offset-limit+1 .. N-offset`. Only that
+ * range (plus {@link DELETED_MARGIN}) is fetched, UID + FLAGS only; anything
+ * flagged `\Deleted` is dropped (pending expunge — the same UNDELETED
+ * semantics #246 gave the SEARCH path) and, when that leaves the page short,
+ * topped up from further down. Full rows are then fetched for the page alone.
+ * The cost is the page, not the offset: offset 790,000 on a 793k-message
+ * mailbox reads one ~33-message window (#256 follow-up; 2.19.17/18 walked every
+ * skipped message's FLAGS in 50k chunks and timed out past ~300k).
+ *
+ * Offsets count sequence positions. On iCloud, EXISTS and the sequence space
+ * already exclude `\Deleted` ghosts (#246), so that is exact. A server that
+ * keeps ghosts in its sequence space shifts the page by however many sit above
+ * it; correcting that would need a `SEARCH DELETED` over the whole skipped
+ * range — server work proportional to the offset, which is the cost this
+ * removes — so it is documented rather than corrected.
  */
 async function listLargeMailbox(
   client: ImapClientLike,
   exists: number,
   page: MailboxPage
 ): Promise<MailboxMatches> {
+  const top = sequenceTop(client, exists) - page.skip;
+  if (top < 1 || page.take === 0) {
+    return { messages: [], omitted: [], total: exists, totalExact: true };
+  }
   let deletedSeen = 0;
   const walk = await walkWindows(
-    exists,
-    page,
-    // Room for a few ghosts on the first read without a second round trip.
-    page.skip + page.take + 64,
+    top,
+    { skip: 0, take: page.take },
+    page.take + DELETED_MARGIN,
     async (lo, hi) => {
       const live: number[] = [];
       for await (const msg of client.fetch(`${lo}:${hi}`, { uid: true, flags: true })) {
@@ -1298,12 +1350,15 @@ async function listLargeMailbox(
         else live.push(msg.uid);
       }
       return live;
-    }
+    },
+    // From the very top the first window is `lo:*`, as before; below it the
+    // range is exact.
+    page.skip === 0
   );
   // The total is STATUS less the ghosts actually seen. iCloud keeps messages
   // awaiting expunge out of STATUS and the sequence space altogether, so there
   // it is exact; a server that counts them can overstate by however many sit
-  // below the part walked — the same count list-mailboxes reports.
+  // outside the part read — the same count list-mailboxes reports.
   return {
     ...pageRows(await fetchRows(client, walk.uids)),
     total: Math.max(0, exists - deletedSeen),
@@ -1459,6 +1514,10 @@ async function run(
 
       const limit = args.limit ?? 50;
       const offset = args.offset ?? 0;
+      if (unscopedSearch) {
+        const tooDeep = unscopedSearchOffsetError(offset, limit);
+        if (tooDeep) throw new Error(tooDeep);
+      }
       const criteria = buildCriteria(args, listMode);
       // A single mailbox applies the offset itself, so only the requested page
       // is ever fetched in full (#256); a multi-mailbox search needs each

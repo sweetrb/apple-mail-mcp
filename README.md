@@ -240,6 +240,7 @@ Search for messages matching criteria. Searches all accounts by default.
 | `dateFrom`  | string  | No       | Start date filter (e.g., "January 1, 2026")                                                                                               |
 | `dateTo`    | string  | No       | End date filter (e.g., "March 1, 2026")                                                                                                   |
 | `limit`     | number  | No       | Max results, 1–500 (default: 50)                                                                                                          |
+| `offset`    | number  | No       | Newest matches to skip, ≥ 0 (for pagination). IMAP accounts only; without a `mailbox`, `offset` + `limit` may not exceed 5,000            |
 
 **Returns:** List of matching messages with ID, date, subject, sender, and read state.
 
@@ -1103,14 +1104,23 @@ which made a filter-less `list-messages` fail on such a mailbox before 2.19.16.
 **Very large IMAP mailboxes are read newest-first in bounded windows**
 ([#256](https://github.com/sweetrb/apple-mail-mcp/issues/256)). Above 10,000
 messages, a filter-less `list-messages`/`search-messages` pages by message
-sequence number from the top of the mailbox — it fetches UIDs and flags for
-just enough of the newest messages to fill `limit` + `offset` (skipping
-`\Deleted` ones) and full rows for the page alone, so `limit: 1` on a
-793,614-message mailbox costs one small `FETCH`, not a whole-mailbox `SEARCH`.
+sequence number: page `offset` of `limit` is sequence numbers
+`N-offset-limit+1 .. N-offset`, so it fetches UIDs and flags for that range
+alone (plus a small margin; `\Deleted` ones are skipped and the page topped up
+from below) and full rows for the page. The cost is the page, not the offset:
+`limit: 1` at offset 790,000 of a 793,614-message mailbox is one ~33-message
+`FETCH`, not a whole-mailbox `SEARCH` or a walk over every skipped message.
+Offsets count sequence positions. iCloud keeps messages awaiting expunge out of
+the sequence space, so there they are exact; on a server that keeps them in it,
+a page shifts by the number of such messages above it (they are never
+returned).
 A filtered search there runs the same criteria over newest-first sequence
 windows (5,000 messages, growing to 50,000) and stops once the page is full;
 the reported total then reads `at least N` unless the walk reached the bottom
-of the mailbox. A `SEARCH` or `FETCH` that fails names the mailbox, its size and
+of the mailbox. A filtered search's deep `offset` has no such shortcut — which
+messages match is only known by searching the skipped windows — so its cost
+still grows with the offset (in 50,000-message `SEARCH` windows); narrow it
+with `dateTo` instead. A `SEARCH` or `FETCH` that fails names the mailbox, its size and
 the server's own reason (or a likely timeout) instead of reporting "no
 messages".
 

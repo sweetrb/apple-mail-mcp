@@ -58049,6 +58049,7 @@ __export(imapClient_exports, {
   MAX_COMPOSE_SOURCE_BYTES: () => MAX_COMPOSE_SOURCE_BYTES,
   MAX_RFC822_FILE_BYTES: () => MAX_RFC822_FILE_BYTES,
   MAX_RFC822_INLINE_BYTES: () => MAX_RFC822_INLINE_BYTES,
+  MAX_UNSCOPED_SEARCH_DEPTH: () => MAX_UNSCOPED_SEARCH_DEPTH,
   __resetPool: () => __resetPool,
   __setPoolConnect: () => __setPoolConnect,
   bodyStructureHasAttachments: () => bodyStructureHasAttachments,
@@ -58096,7 +58097,8 @@ __export(imapClient_exports, {
   resolveImapConfig: () => resolveImapConfig,
   resolveImapConfigs: () => resolveImapConfigs,
   resolveMailboxPath: () => resolveMailboxPath,
-  shouldUseImap: () => shouldUseImap
+  shouldUseImap: () => shouldUseImap,
+  unscopedSearchOffsetError: () => unscopedSearchOffsetError
 });
 import { createHash } from "node:crypto";
 function encodeImapId(account, path, uid) {
@@ -58442,6 +58444,10 @@ function messageIdentity(entry) {
   const messageId = raw.replace(/^<+|>+$/g, "").trim().toLowerCase();
   return messageId ? `mid:${messageId}` : `${entry.path}\0${entry.message.uid}`;
 }
+function unscopedSearchOffsetError(offset, limit) {
+  if (offset <= 0 || offset + limit <= MAX_UNSCOPED_SEARCH_DEPTH) return void 0;
+  return `search-messages without a mailbox merges every mailbox's newest offset+limit matches, so it pages at most ${MAX_UNSCOPED_SEARCH_DEPTH.toLocaleString("en-US")} deep (offset ${offset} + limit ${limit} asked). Name a mailbox (e.g. the account's All Mail or Archive) to page deeper, or narrow the search with dateTo.`;
+}
 function isUnfiltered(criteria) {
   const keys = Object.keys(criteria);
   return keys.length === 1 && criteria.deleted === false;
@@ -58565,16 +58571,16 @@ function pageRows(fetch) {
 function omissionReason(fetch) {
   return "the server's FETCH response for this message could not be read, even without BODYSTRUCTURE or ENVELOPE" + (fetch.cause ? ` (${fetch.cause})` : "");
 }
-async function walkWindows(exists, page, firstWindow, readWindow) {
+async function walkWindows(top, page, firstWindow, readWindow, openTop = true) {
   const wanted = page.skip + page.take;
   const uids = [];
   let seen = 0;
   let matched = 0;
-  let hi = exists;
+  let hi = top;
   let width = Math.max(1, Math.min(firstWindow, MAX_WINDOW));
   while (hi >= 1 && seen < wanted) {
     const lo = Math.max(1, hi - width + 1);
-    const live = (await readWindow(lo, hi === exists ? "*" : hi, hi - lo + 1)).slice().sort((a, b) => b - a);
+    const live = (await readWindow(lo, hi === top && openTop ? "*" : hi, hi - lo + 1)).slice().sort((a, b) => b - a);
     matched += live.length;
     for (const uid of live) {
       if (seen >= wanted) break;
@@ -58586,13 +58592,21 @@ async function walkWindows(exists, page, firstWindow, readWindow) {
   }
   return { uids, matched, exhausted: hi < 1 };
 }
+function sequenceTop(client, statusCount) {
+  const mb = client.mailbox;
+  const exists = mb && typeof mb.exists === "number" && mb.exists >= 0 ? mb.exists : void 0;
+  return exists ?? statusCount;
+}
 async function listLargeMailbox(client, exists, page) {
+  const top = sequenceTop(client, exists) - page.skip;
+  if (top < 1 || page.take === 0) {
+    return { messages: [], omitted: [], total: exists, totalExact: true };
+  }
   let deletedSeen = 0;
   const walk = await walkWindows(
-    exists,
-    page,
-    // Room for a few ghosts on the first read without a second round trip.
-    page.skip + page.take + 64,
+    top,
+    { skip: 0, take: page.take },
+    page.take + DELETED_MARGIN,
     async (lo, hi) => {
       const live = [];
       for await (const msg of client.fetch(`${lo}:${hi}`, { uid: true, flags: true })) {
@@ -58600,7 +58614,10 @@ async function listLargeMailbox(client, exists, page) {
         else live.push(msg.uid);
       }
       return live;
-    }
+    },
+    // From the very top the first window is `lo:*`, as before; below it the
+    // range is exact.
+    page.skip === 0
   );
   return {
     ...pageRows(await fetchRows(client, walk.uids)),
@@ -58678,6 +58695,10 @@ async function run(args, listMode, deps) {
       }
       const limit = args.limit ?? 50;
       const offset = args.offset ?? 0;
+      if (unscopedSearch) {
+        const tooDeep = unscopedSearchOffsetError(offset, limit);
+        if (tooDeep) throw new Error(tooDeep);
+      }
       const criteria = buildCriteria(args, listMode);
       const page = unscopedSearch ? { skip: 0, take: offset + limit } : { skip: offset, take: limit };
       const fetched = [];
@@ -59755,7 +59776,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -59829,6 +59850,7 @@ var init_imapClient = __esm({
     LARGE_MAILBOX_MESSAGES = 1e4;
     FIRST_SEARCH_WINDOW = 5e3;
     MAX_WINDOW = 5e4;
+    MAX_UNSCOPED_SEARCH_DEPTH = 5e3;
     ROW_QUERY = {
       envelope: true,
       flags: true,
@@ -59847,6 +59869,7 @@ var init_imapClient = __esm({
       internalDate: true,
       headers: ["date", "from", "subject", "message-id", "in-reply-to", "content-type"]
     };
+    DELETED_MARGIN = 32;
     poolConnect = defaultConnect;
     pools = /* @__PURE__ */ new Map();
     connecting = /* @__PURE__ */ new Map();
