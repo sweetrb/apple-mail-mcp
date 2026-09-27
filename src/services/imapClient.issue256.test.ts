@@ -158,34 +158,167 @@ describe("#256 list-messages on an 800k-message mailbox", () => {
     expect(log.searches).toEqual([]);
   });
 
-  it("a deep offset walks bounded windows and stays exact", async () => {
-    const log = newLog();
-    const res = await imapListMessages(
-      { mailbox: "Archive", limit: 2, offset: 100_000 },
-      { config: cfg, connect: async () => bigMailbox(log) }
-    );
-    expect(uids(res)).toEqual([uidOf(EXISTS - 100_000), uidOf(EXISTS - 100_001)]);
-    for (const r of log.seqFetches) {
-      const [a, b] = r.split(":");
-      const hi = b === "*" ? EXISTS : Number(b);
-      expect(hi - Number(a) + 1).toBeLessThanOrEqual(50_000);
-    }
-    expect(log.seqRowsReturned).toBeLessThan(200_000);
-  });
-
-  it("skips interleaved \\Deleted ghosts, including a run of them at the top", async () => {
+  it("skips \\Deleted ghosts inside the page and tops it up from below", async () => {
     const deleted = new Set<number>();
     for (let s = EXISTS; s > EXISTS - 300; s--) deleted.add(s); // 300 ghosts on top
     for (let s = EXISTS - 300; s > EXISTS - 400; s -= 2) deleted.add(s); // then every other one
     const log = newLog();
     const res = await imapListMessages(
-      { mailbox: "Archive", limit: 3, offset: 2 },
+      { mailbox: "Archive", limit: 3 },
       { config: cfg, connect: async () => bigMailbox(log, { deleted }) }
     );
-    // Live messages from the top: 799699, 799697, 799695, 799693, 799691, …
-    expect(uids(res)).toEqual([799_695, 799_693, 799_691].map(uidOf));
+    // Live messages from the top: 799699, 799697, 799695, …
+    expect(uids(res)).toEqual([799_699, 799_697, 799_695].map(uidOf));
     expect(log.seqFetches.length).toBeGreaterThan(1); // the first window was all ghosts
     for (const uid of uids(res)) expect(deleted.has(((uid as number) - 1_000_000) / 3)).toBe(false);
+  });
+});
+
+/** Sequence range `lo:hi` of a logged FETCH, with `*` read as the top. */
+const span = (r: string): [number, number] => {
+  const [a, b] = r.split(":");
+  return [Number(a), b === "*" ? EXISTS : Number(b)];
+};
+
+describe("#256 follow-up: a deep offset costs the page, not the offset", () => {
+  // @j5pu, 2.19.18: offset 350,000 with limit 1 timed out (~60 s) on a
+  // 793k-message iCloud mailbox; 280,000 and below were fine. Every skipped
+  // message's FLAGS used to be read, 50k at a time.
+  const MARGIN = 32;
+
+  it.each([
+    [350_000, 1],
+    [790_000, 1],
+    [350_000, 500],
+    [799_000, 50],
+  ])(
+    "offset %i, limit %i fetches exactly seq N-offset-limit-margin+1 .. N-offset",
+    async (offset, limit) => {
+      const log = newLog();
+      const res = await imapListMessages(
+        { mailbox: "Archive", limit, offset },
+        { config: cfg, connect: async () => bigMailbox(log) }
+      );
+      const top = EXISTS - offset;
+      expect(log.seqFetches).toEqual([`${top - limit - MARGIN + 1}:${top}`]);
+      expect(log.seqRowsReturned).toBe(limit + MARGIN);
+      expect(log.searches).toEqual([]);
+      const want = Array.from({ length: limit }, (_, k) => uidOf(top - k));
+      expect(uids(res)).toEqual(want);
+      expect(log.uidFetches).toEqual([want.join(",")]);
+      expect(res.partial).toBe(false);
+    }
+  );
+
+  it("the cost is flat in the offset (ops-count and time regression guard)", async () => {
+    const counts: number[] = [];
+    const started = Date.now();
+    for (const offset of [0, 1_000, 100_000, 350_000, 600_000, 790_000]) {
+      const log = newLog();
+      await imapListMessages(
+        { mailbox: "Archive", limit: 1, offset },
+        { config: cfg, connect: async () => bigMailbox(log) }
+      );
+      expect(log.seqFetches).toHaveLength(1);
+      counts.push(log.seqRowsReturned);
+    }
+    expect(new Set(counts)).toEqual(new Set([1 + MARGIN]));
+    // Six pages of an 800k-message mock: 2.19.18 read ~2.4M FLAGS records here.
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("reaches the oldest messages, and a page past the end is empty without a FETCH", async () => {
+    const tail = newLog();
+    const res = await imapListMessages(
+      { mailbox: "Archive", limit: 50, offset: EXISTS - 10 },
+      { config: cfg, connect: async () => bigMailbox(tail) }
+    );
+    expect(tail.seqFetches).toEqual(["1:10"]);
+    expect(uids(res)).toEqual(Array.from({ length: 10 }, (_, k) => uidOf(10 - k)));
+
+    const past = newLog();
+    const none = await imapListMessages(
+      { mailbox: "Archive", limit: 5, offset: EXISTS },
+      { config: cfg, connect: async () => bigMailbox(past) }
+    );
+    expect(none.messages).toEqual([]);
+    expect(none.partial).toBe(false);
+    expect(past.seqFetches).toEqual([]);
+    expect(past.uidFetches).toEqual([]);
+  });
+
+  it("tops up from below when ghosts sit inside the fetched window, never returning one", async () => {
+    // 41 ghosts from the top of the page down: more than the margin, so the
+    // first 37-message window is all ghosts and the next one fills the page.
+    const top = EXISTS - 1_000;
+    const deleted = new Set<number>();
+    for (let s = top; s > top - 41; s--) deleted.add(s);
+    const log = newLog();
+    const res = await imapListMessages(
+      { mailbox: "Archive", limit: 5, offset: 1_000 },
+      { config: cfg, connect: async () => bigMailbox(log, { deleted }) }
+    );
+    expect(uids(res)).toEqual([0, 1, 2, 3, 4].map((k) => uidOf(top - 41 - k)));
+    expect(log.seqFetches[0]).toBe(`${top - 36}:${top}`);
+    expect(log.seqFetches).toHaveLength(2);
+    const [lo, hi] = span(log.seqFetches[1]);
+    expect(hi).toBe(top - 37); // contiguous, no overlap
+    expect(hi - lo + 1).toBeLessThanOrEqual(4 * 37);
+    for (const uid of uids(res)) expect(deleted.has(((uid as number) - 1_000_000) / 3)).toBe(false);
+  });
+
+  it("ghosts in the SKIPPED region count as positions (documented policy)", async () => {
+    // A server that keeps \Deleted messages in its sequence space (iCloud does
+    // not, #246): the offset counts sequence positions, so two ghosts above
+    // the page shift it by two rather than costing a SEARCH over the whole
+    // skipped range.
+    const deleted = new Set([EXISTS, EXISTS - 1]);
+    const log = newLog();
+    const res = await imapListMessages(
+      { mailbox: "Archive", limit: 3, offset: 5 },
+      { config: cfg, connect: async () => bigMailbox(log, { deleted }) }
+    );
+    expect(uids(res)).toEqual([5, 6, 7].map((k) => uidOf(EXISTS - k)));
+    expect(log.searches).toEqual([]);
+    expect(log.seqFetches).toHaveLength(1);
+  });
+
+  it("addresses by the selected mailbox's EXISTS, which defines its sequence numbers", async () => {
+    const log = newLog();
+    const client = bigMailbox(log);
+    // STATUS says 800,000; the session's SELECT saw 20 fewer (expunged since).
+    (client as { mailbox?: unknown }).mailbox = { path: "Archive", exists: EXISTS - 20 };
+    await imapListMessages(
+      { mailbox: "Archive", limit: 1, offset: 10 },
+      { config: cfg, connect: async () => client }
+    );
+    const top = EXISTS - 20 - 10;
+    expect(log.seqFetches).toEqual([`${top - MARGIN}:${top}`]);
+  });
+});
+
+describe("#256 follow-up: search-messages honours offset", () => {
+  it("pages a filtered search of one large mailbox by skipping matches", async () => {
+    const unseen = (s: number) => s % 10 === 0;
+    const first = await imapSearchMessages(
+      { mailbox: "Archive", isRead: false, limit: 3 },
+      { config: cfg, connect: async () => bigMailbox(newLog(), { unseen }) }
+    );
+    const second = await imapSearchMessages(
+      { mailbox: "Archive", isRead: false, limit: 3, offset: 3 },
+      { config: cfg, connect: async () => bigMailbox(newLog(), { unseen }) }
+    );
+    expect(uids(first)).toEqual([0, 10, 20].map((k) => uidOf(EXISTS - k)));
+    expect(uids(second)).toEqual([30, 40, 50].map((k) => uidOf(EXISTS - k)));
+  });
+
+  it("refuses an all-mailbox search deeper than the merge can serve, saying why", async () => {
+    await expect(
+      imapSearchMessages(
+        { from: "x@example.com", limit: 50, offset: 350_000 },
+        { config: cfg, connect: async () => bigMailbox(newLog()) }
+      )
+    ).rejects.toThrow(/pages at most 5,000 deep.*Name a mailbox/);
   });
 });
 

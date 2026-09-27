@@ -65,6 +65,7 @@ import {
   imapBatchMove,
   imapThread,
   omittedNote,
+  unscopedSearchOffsetError,
   type OmittedMessage,
   imapCreateMailbox,
   imapDeleteMailbox,
@@ -548,6 +549,14 @@ registerTool(
         .max(500)
         .optional()
         .describe("Maximum number of results (default: 50, max: 500)"),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "Number of newest matches to skip (for pagination; IMAP accounts only). Without a mailbox, offset + limit may not exceed 5,000 — name a mailbox to page deeper."
+        ),
     },
     outputSchema: LIST_OUTPUT_SCHEMA,
   },
@@ -558,6 +567,7 @@ registerTool(
       mailbox,
       account,
       limit = 50,
+      offset = 0,
       dateFrom,
       dateTo,
       from,
@@ -572,12 +582,21 @@ registerTool(
       //     config covers (partitioned — so an all-IMAP user runs ZERO
       //     AppleScript and never relies on the composite dedup);
       //   - explicit non-IMAP account (or IMAP unconfigured) → AppleScript below.
+      // `offset` used to be silently dropped here (the schema had no such
+      // field). It is honoured on IMAP and refused, with the reason, wherever
+      // it can't be: an all-mailbox merge past MAX_UNSCOPED_SEARCH_DEPTH, and
+      // the AppleScript backend, whose search has no offset.
+      if (offset > 0 && !mailbox) {
+        const tooDeep = unscopedSearchOffsetError(offset, limit);
+        if (tooDeep) return errorResponse(tooDeep);
+      }
       if (shouldUseImap(account)) {
         const imapArgs = {
           query,
           body,
           mailbox,
           limit,
+          offset,
           dateFrom,
           dateTo,
           from,
@@ -596,11 +615,19 @@ registerTool(
             omittedMessages: r.omittedMessages,
           });
         }
-        const fan = await fanOutImapMessages(imapArgs, "search");
         const { appleScriptOnly } = partitionAccountsForCounts(
           mailManager.listAccounts(),
           resolveImapConfigs()
         );
+        if (offset > 0 && appleScriptOnly.length > 0 && !body) {
+          return errorResponse(
+            `offset is supported only on IMAP accounts, and ${appleScriptOnly
+              .map((a) => `"${a.name}"`)
+              .join(", ")} ${appleScriptOnly.length === 1 ? "is" : "are"} AppleScript-only. ` +
+              `Pass an IMAP account to page, or omit offset.`
+          );
+        }
+        const fan = await fanOutImapMessages(imapArgs, "search");
         // Body search is IMAP-only: AppleScript's `content contains` has to pull
         // every message body through the Apple Event bridge and times out on
         // real mailboxes. Rather than silently drop the body filter (and return
@@ -634,6 +661,14 @@ registerTool(
           )
         );
         return mergedMessageResponse(fan, apple, limit, "matched");
+      }
+
+      if (offset > 0) {
+        return errorResponse(
+          `offset is supported only on IMAP accounts; IMAP is not configured for ${
+            account ? `account "${account}"` : "any account"
+          }. Omit offset, or narrow the search with dateFrom/dateTo instead.`
+        );
       }
 
       if (body) {
