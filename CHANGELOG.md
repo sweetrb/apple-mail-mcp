@@ -1,5 +1,28 @@
 ## [Unreleased]
 
+## [2.19.21] - 2026-09-29
+
+### Security
+
+- Bumped `nodemailer` from `9.1.1` to `10.0.10` (range `^10.0.2`), fixing
+  [GHSA-6vj9-mwq6-2f5v](https://github.com/advisories/GHSA-6vj9-mwq6-2f5v)
+  (medium, CVSS 5.9) — a process-global DNS cache that reused a TLS
+  `servername` across transports, allowing cross-tenant SMTP credential
+  disclosure. `nodemailer` is a direct runtime dependency reachable in the
+  shipped bundle via `smtpMailer.ts`'s direct-SMTP send path. Dependabot's
+  own PR (#262) bumped `package.json`/`pnpm-lock.yaml` only and failed CI —
+  not from a nodemailer 9→10 API break (none found: `tsc --noEmit`, the full
+  926-test suite, lint, and format:check are all clean against 10.0.10, and
+  the `nodemailer/lib/mail-composer/index.js` deep import used to build raw
+  RFC822 bytes still resolves), but because the Dependabot-generated
+  lockfile also dragged an unrelated transitive (`rolldown`, via `vitest`)
+  forward to a build published within the repo's 7-day `minimumReleaseAge`
+  supply-chain soak. Fixed by a fresh `pnpm install` resolution (`rm
+  pnpm-lock.yaml && pnpm install`) rather than accepting Dependabot's
+  lockfile — pnpm re-resolves every entry honoring the age policy, landing
+  nodemailer 10.0.10 (10.0.12 exists but is itself too fresh) and reverting
+  `rolldown` to an already-aged version.
+
 ## [2.19.20] - 2026-09-29
 
 ### Security
