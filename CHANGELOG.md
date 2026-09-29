@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [2.19.20] - 2026-09-29
+
+### Security
+
+- Raised the `fast-uri` override floor from `>=3.1.6 <4` to `>=3.1.7 <4`,
+  fixing [GHSA-58mr-gqgx-xq4g](https://github.com/advisories/GHSA-58mr-gqgx-xq4g)
+  (high). `fast-uri` is reachable in the shipped bundle (via ajv), so this
+  changes shipped bytes.
+- Raised the `ip-address` override floor from the caret range `^10.3.1` (which
+  had stopped enforcing anything once the fix landed mid-major) to the
+  two-sided range `>=10.5.1 <11`, fixing
+  [GHSA-2vr4-cq9g-pvrc](https://github.com/advisories/GHSA-2vr4-cq9g-pvrc)
+  (medium) and deduping the tree's lingering 10.4.0/10.7.0 copies onto a
+  single resolved 10.7.0.
+
 ## [2.19.19] - 2026-09-27
 
 ### Fixed

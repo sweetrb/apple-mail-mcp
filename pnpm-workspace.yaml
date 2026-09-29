@@ -48,13 +48,20 @@ overrides:
   # + GHSA-fph4-wmhf-6fwf (high, SSRF via repeated hostname percent-decoding):
   # both fixed in 3.1.6. Raised the floor from ^3.1.5 (which still permitted the
   # vulnerable 3.1.5 itself) to >=3.1.6 <4.
-  fast-uri: ">=3.1.6 <4"
+  # 2026-09-29: GHSA-58mr-gqgx-xq4g (high), fixed in 3.1.7. Raised >=3.1.6 <4 ->
+  # >=3.1.7 <4.
+  fast-uri: ">=3.1.7 <4"
   # GHSA-mwp4-54f8-5fhr (high) + GHSA-4xrf-jv44-h6hh + GHSA-22jq-vg5j-6vgg.
   # express-rate-limit -> @modelcontextprotocol/sdk pulled ip-address 10.2.0 while
   # imapflow -> socks already resolved a clean 10.3.1, so the tree carried two
   # copies and shipped the vulnerable one in the bundle. This floors both onto
   # 10.3.1 and dedupes them.
-  ip-address: ^10.3.1
+  # 2026-09-29: GHSA-2vr4-cq9g-pvrc (medium), fixed in 10.5.1 — the tree had
+  # drifted to 10.4.0/10.7.0 duplicates, both still inside the vulnerable range.
+  # Switched from a caret floor (^10.3.1, which stopped enforcing anything once
+  # the fix landed mid-major) to an explicit two-sided range, same as fast-uri:
+  # never an unbounded ">=" and never an exact pin.
+  ip-address: ">=10.5.1 <11"
   # GHSA-8j4g-w8fx-2239 (moderate): ReDoS in Hono's CORS middleware, fixed in
   # 4.12.34. Deferred earlier the same day because that release was still inside
   # the 24h minimumReleaseAge soak — it missed by 41 minutes. No
