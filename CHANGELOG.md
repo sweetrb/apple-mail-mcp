@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [2.19.22] - 2026-09-30
+
+### Security
+
+- Raised the `ip-address` override floor from `>=10.5.1 <11` to `>=10.7.1
+  <11`, fixing
+  [GHSA-j6r3-76f7-8jcv](https://github.com/advisories/GHSA-j6r3-76f7-8jcv)
+  and [GHSA-h3mg-xc3c-68pw](https://github.com/advisories/GHSA-h3mg-xc3c-68pw)
+  (both medium) — 10.5.1 was not actually the patched release. `ip-address`
+  is reachable in the shipped bundle, so this changes shipped bytes;
+  resolution lands on 10.7.2.
+- Raised the `brace-expansion` override pinned values from `1.1.18` to
+  `1.1.21` (1.x line) and from `5.0.9` to `5.0.12` (5.x line), fixing
+  [GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr)
+  (medium). `brace-expansion` is dev-scope only (reached via eslint's glob
+  tooling) and does not reach the shipped bundle.
+
 ## [2.19.21] - 2026-09-29
 
 ### Security
