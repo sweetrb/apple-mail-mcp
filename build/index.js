@@ -52883,9 +52883,9 @@ var require_util3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/address-error.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/address-error.js
 var require_address_error = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/address-error.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/address-error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.AddressError = void 0;
@@ -52900,9 +52900,9 @@ var require_address_error = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/common.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/common.js
 var require_common = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/common.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/common.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.isInSubnet = isInSubnet;
@@ -52923,6 +52923,9 @@ var require_common = __commonJS({
       return isHostInSubnet.call(this, address);
     }
     function isHostInSubnet(address) {
+      if (this.binaryZeroPad().length !== address.binaryZeroPad().length) {
+        return false;
+      }
       return this.mask(address.subnetMask) === address.mask();
     }
     function isGloballyReachable(entries) {
@@ -53000,9 +53003,9 @@ var require_common = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v4/constants.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/v4/constants.js
 var require_constants3 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v4/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/v4/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.SPECIAL_PURPOSE = exports.RE_SUBNET_STRING = exports.RE_ADDRESS = exports.GROUPS = exports.BITS = void 0;
@@ -53041,9 +53044,9 @@ var require_constants3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ipv4.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/ipv4.js
 var require_ipv4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ipv4.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/ipv4.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -53100,6 +53103,10 @@ var require_ipv4 = __commonJS({
             throw new address_error_1.AddressError("Invalid subnet mask.");
           }
           address = address.replace(constants.RE_SUBNET_STRING, "");
+        }
+        const longest = constants.GROUPS * 4 - 1;
+        if (address.length > longest) {
+          throw new address_error_1.AddressError(`IPv4 addresses are at most ${longest} characters.`);
         }
         this.addressMinusSuffix = address;
         this.parsedAddress = this.parse(address);
@@ -53237,15 +53244,18 @@ var require_ipv4 = __commonJS({
         return _Address4.fromHex(integer2.toString(16).padStart(8, "0"));
       }
       /**
-       * Return an address from in-addr.arpa form
+       * Return an address from in-addr.arpa form: the four octets reversed, with
+       * or without the `.in-addr.arpa` suffix and root dot, in any case. Throws
+       * `AddressError` unless the reversed labels form a valid IPv4 address, so
+       * `fromArpa(x.reverseForm())` round-trips {@link reverseForm}.
        * @param {string} arpaFormAddress - an 'in-addr.arpa' form ipv4 address
        * @returns {Adress4}
        * @example
-       * var address = Address4.fromArpa(42.2.0.192.in-addr.arpa.)
+       * var address = Address4.fromArpa('42.2.0.192.in-addr.arpa.')
        * address.correctForm(); // '192.0.2.42'
        */
       static fromArpa(arpaFormAddress) {
-        const leader = arpaFormAddress.replace(/(\.in-addr\.arpa)?\.$/, "");
+        const leader = arpaFormAddress.replace(/(\.in-addr\.arpa)?\.?$/i, "");
         const address = leader.split(".").reverse().join(".");
         return new _Address4(address);
       }
@@ -53599,9 +53609,9 @@ var require_ipv4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/constants.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/v6/constants.js
 var require_constants4 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/constants.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/v6/constants.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.SPECIAL_PURPOSE = exports.RE_URL_WITH_PORT = exports.RE_URL = exports.RE_ZONE_STRING = exports.RE_SUBNET_STRING = exports.RE_BAD_ADDRESS = exports.RE_BAD_CHARACTERS = exports.TYPES = exports.SCOPES = exports.GROUPS = exports.BITS = void 0;
@@ -53689,9 +53699,9 @@ var require_constants4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/helpers.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/v6/helpers.js
 var require_helpers = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/helpers.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/v6/helpers.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.escapeHtml = escapeHtml;
@@ -53728,9 +53738,9 @@ var require_helpers = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/regular-expressions.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/v6/regular-expressions.js
 var require_regular_expressions = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/v6/regular-expressions.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -53820,9 +53830,9 @@ var require_regular_expressions = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ipv6.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/ipv6.js
 var require_ipv6 = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ipv6.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/ipv6.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -53932,6 +53942,10 @@ var require_ipv6 = __commonJS({
         if (zone) {
           this.zone = zone[0];
           address = address.replace(constants6.RE_ZONE_STRING, "");
+        }
+        const longest = this.groups * 5 + 5;
+        if (address.length > longest) {
+          throw new address_error_1.AddressError(`IPv6 addresses are at most ${longest} characters.`);
         }
         this.addressMinusSuffix = address;
         this.parsedAddress = this.parse(this.addressMinusSuffix);
@@ -54129,7 +54143,7 @@ var require_ipv6 = __commonJS({
        * Address6.fromArpa('8.b.d.0.1.0.0.2.ip6.arpa.').networkForm(); // '2001:db8::/32'
        */
       static fromArpa(arpaFormAddress) {
-        const nibbles = arpaFormAddress.replace(/(\.ip6\.arpa)?\.?$/, "");
+        const nibbles = arpaFormAddress.replace(/(\.ip6\.arpa)?\.?$/i, "");
         if (!/^[0-9a-f](\.[0-9a-f]){0,31}$/i.test(nibbles)) {
           throw new address_error_1.AddressError("Invalid 'ip6.arpa' form.");
         }
@@ -55149,9 +55163,9 @@ var require_ipv6 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ip-address.js
+// node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/ip-address.js
 var require_ip_address = __commonJS({
-  "node_modules/.pnpm/ip-address@10.7.0/node_modules/ip-address/dist/ip-address.js"(exports) {
+  "node_modules/.pnpm/ip-address@10.7.2/node_modules/ip-address/dist/ip-address.js"(exports) {
     "use strict";
     var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;

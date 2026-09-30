@@ -35,8 +35,12 @@ overrides:
   # own complete (sequence-bounded) release. The bounds must be two-sided —
   # a bare "<5.0.9" also matches 1.1.18 and 2.1.4 under semver and would drag
   # minimatch 3's CommonJS path onto the v5 ESM API ("expand is not a function").
-  "brace-expansion@>=1.0.0 <1.1.18": 1.1.18
-  "brace-expansion@>=5.0.0 <5.0.9": 5.0.9
+  # 2026-09-30: GHSA-q2hr-2g5m-vwhr (medium), fixed in 1.1.21 (1.x line) and
+  # 5.0.12 (5.x line). Moved the pinned values forward from 1.1.18/5.0.9 to the
+  # new patches; range keys kept as-is since both still exclude the new floors.
+  # Dev-scope only (reached via eslint's glob tooling), not in the shipped bundle.
+  "brace-expansion@>=1.0.0 <1.1.18": 1.1.21
+  "brace-expansion@>=5.0.0 <5.0.9": 5.0.12
   # ⚠️ These are FLOORS, not pins. `fast-uri: 3.1.4` (exact) was written here as a
   # security floor and then became a CEILING: when GHSA-7p8r-x3mc-p8w7 landed with
   # a 3.1.5 fix, the exact pin held the tree on the vulnerable 3.1.4 and the
@@ -61,7 +65,10 @@ overrides:
   # Switched from a caret floor (^10.3.1, which stopped enforcing anything once
   # the fix landed mid-major) to an explicit two-sided range, same as fast-uri:
   # never an unbounded ">=" and never an exact pin.
-  ip-address: ">=10.5.1 <11"
+  # 2026-09-30: GHSA-j6r3-76f7-8jcv + GHSA-h3mg-xc3c-68pw (both medium), fixed
+  # in 10.7.1 — 10.5.1 was not actually the patched release. Raised the floor
+  # >=10.5.1 <11 -> >=10.7.1 <11. Reachable in the shipped bundle (as before).
+  ip-address: ">=10.7.1 <11"
   # GHSA-8j4g-w8fx-2239 (moderate): ReDoS in Hono's CORS middleware, fixed in
   # 4.12.34. Deferred earlier the same day because that release was still inside
   # the 24h minimumReleaseAge soak — it missed by 41 minutes. No
