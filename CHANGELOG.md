@@ -1,5 +1,50 @@
 ## [Unreleased]
 
+## [2.20.0] - 2026-10-05
+
+### Added
+
+- **`attachments` on `reply-to-message` and `forward-message`** (#267, requested
+  by @j5pu). Same schema, limits (20 items, 25 MiB each) and read roots as
+  `send-email` / `create-draft` — absolute paths and/or inline
+  `{filename, contentBase64}` items, mixed freely. Validated before the original
+  is fetched, so an out-of-roots path fails with `send-email`'s exact error.
+  Works on both transports: over SMTP the files ride the same `sendViaSmtp`
+  builder `send-email` uses, so the Sent-folder copy carries them too; over
+  AppleScript they are added with `make new attachment` after the reply/forward
+  content is set and before `save`/`send` (inline items become `0600` temp files,
+  removed afterwards), so `send: false` drafts contain them. Recipients,
+  `In-Reply-To`/`References` and the quote are identical to the same call
+  without attachments. Results report `attachmentCount`.
+- **`inReplyTo` / `references` on `send-email` and `create-draft`** (#267), for
+  callers that build recipients and quoted text themselves. Values must be
+  `<id@host>` msg-id tokens; `references` defaults to `[inReplyTo]`. They are
+  never silently dropped: `send-email` refuses them unless SMTP is the
+  transport (Mail.app's AppleScript cannot set these headers), and
+  `create-draft` composes a threaded draft with the SMTP builder and files it
+  over IMAP into the account's `\Drafts` mailbox, flagged `\Draft` — refusing,
+  with nothing filed, when no IMAP account can carry it.
+- `send-email` over SMTP now returns the delivered `messageId`.
+
+### Fixed
+
+- `In-Reply-To` / `References` are pinned by tests to stay plain `<id>` tokens —
+  never RFC 2047-encoded — for Message-IDs longer than 76 characters
+  (Outlook/Exchange), on the wire and in the Sent copy.
+- AppleScript `reply-to-message` / `forward-message` with an `imap:` id on a
+  label store (Gmail) were always refused as "present in more than one
+  mailbox": the imap→numeric bridge returned a bare id that INBOX, All Mail and
+  Sent Mail all answer to. The resolved id is now bound to the mailbox it was
+  found in.
+- AppleScript reply/forward compose scripts are now single-attempt
+  (`maxRetries: 1`), like `send-email` / `create-draft`: a retried `send` that
+  had timed out could deliver a second copy.
+
+### Changed
+
+- README: the reply/forward Delivery note no longer claims SMTP replies get no
+  Sent copy (best-effort `sentCopy` has applied to them since 2.18.0).
+
 ## [2.19.22] - 2026-09-30
 
 ### Security
