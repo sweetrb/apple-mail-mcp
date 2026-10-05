@@ -69,3 +69,39 @@ export const ATTACHMENTS_SCHEMA = z
       "'/Users/me/Documents/report.pdf') and/or inline {filename, contentBase64} objects " +
       "up to 25 MiB decoded each."
   );
+
+/**
+ * One RFC 5322 `msg-id` token as it appears on the wire: `<left@right>`, no
+ * whitespace, no nested angle brackets (#267). Deliberately strict — these
+ * values are emitted verbatim into `In-Reply-To` / `References`, and a value a
+ * MIME library has to "fix up" (wrap, encode) is exactly how threading silently
+ * breaks on the recipient side.
+ */
+export const RFC_MESSAGE_ID_TOKEN = /^<[^<>\s@]+@[^<>\s@]+>$/;
+
+const MESSAGE_ID_TOKEN_SCHEMA = z
+  .string()
+  .max(998, "Message-ID is longer than an RFC 5322 header line (998 chars)")
+  .regex(
+    RFC_MESSAGE_ID_TOKEN,
+    "Must be an RFC 5322 Message-ID token including angle brackets, e.g. <abc123@mail.example.com>"
+  );
+
+/** Optional `In-Reply-To` for send-email / create-draft (#267). */
+export const IN_REPLY_TO_SCHEMA = MESSAGE_ID_TOKEN_SCHEMA.optional().describe(
+  "Thread this message as a reply: the parent's Message-ID token, angle brackets included " +
+    "(e.g. '<abc123@mail.example.com>'). Emitted verbatim as In-Reply-To, never RFC 2047-encoded. " +
+    "When `references` is omitted, References defaults to [inReplyTo]. Prefer reply-to-message, " +
+    "which derives recipients, threading and the quote from the original for you."
+);
+
+/** Optional `References` chain for send-email / create-draft (#267). */
+export const REFERENCES_SCHEMA = z
+  .array(MESSAGE_ID_TOKEN_SCHEMA)
+  .min(1, "references must contain at least one Message-ID")
+  .max(100, "Cannot list more than 100 Message-IDs in references")
+  .optional()
+  .describe(
+    "Thread chain, oldest first: the parent's own References followed by the parent's " +
+      "Message-ID (each an angle-bracketed token). Emitted verbatim, never RFC 2047-encoded."
+  );

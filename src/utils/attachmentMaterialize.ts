@@ -37,7 +37,9 @@ export function materializeAttachments(attachments?: AttachmentInput[]): Materia
       if (!dir) dir = mkdtempSync(join(tmpdir(), "amcp-att-"));
       const safeName = a.filename.replace(/[/\\]/g, "_");
       const p = join(dir, safeName);
-      writeFileSync(p, decodeInlineAttachment(a.contentBase64));
+      // 0600: the dir is already 0700 (mkdtemp), but don't rely on umask for
+      // content the caller may consider sensitive.
+      writeFileSync(p, decodeInlineAttachment(a.contentBase64), { mode: 0o600 });
       return p;
     });
   } catch (error) {
@@ -50,4 +52,25 @@ export function materializeAttachments(attachments?: AttachmentInput[]): Materia
       if (dir) rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Validate every attachment WITHOUT writing anything (#267): each path must pass
+ * the outbound read policy, each inline item must carry a filename and decode
+ * within the size limit. Throws the exact same errors {@link materializeAttachments}
+ * and the SMTP builder throw, so a bad attachment is rejected identically by
+ * send-email, create-draft, reply-to-message and forward-message — and before
+ * any original message is fetched or anything is composed.
+ */
+export function preflightAttachments(attachments?: AttachmentInput[]): void {
+  for (const a of attachments ?? []) {
+    if (typeof a === "string") {
+      resolveAttachmentReadPath(a);
+      continue;
+    }
+    if (!a.filename || !a.contentBase64) {
+      throw new Error("Inline attachment requires both filename and contentBase64.");
+    }
+    decodeInlineAttachment(a.contentBase64);
+  }
 }

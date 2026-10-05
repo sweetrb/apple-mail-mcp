@@ -42,9 +42,17 @@ import {
   shouldUseSmtp,
   isSmtpConfigured,
   resolveSmtpConfig,
+  composeRawMime,
+  SMTP_ENV,
   type SmtpConfig,
 } from "@/services/smtpMailer.js";
 import { runReply, runForward, type ComposeDeps } from "@/tools/compose.js";
+import {
+  runThreadedDraft,
+  threadingHeaders,
+  sendEmailThreading,
+  type ThreadedDraftDeps,
+} from "@/tools/threading.js";
 import {
   isImapAccount,
   shouldUseImap,
@@ -84,6 +92,8 @@ import {
   imapDeleteMessageById,
   imapFetchMessageId,
   decodeImapId,
+  imapAppendDraft,
+  resolveDraftImapAccount,
 } from "@/services/imapClient.js";
 import {
   successResponse,
@@ -112,7 +122,9 @@ import {
   ATTACHMENTS_SCHEMA,
   BATCH_IDS_SCHEMA,
   DATE_FILTER_SCHEMA,
+  IN_REPLY_TO_SCHEMA,
   MESSAGE_ID_SCHEMA,
+  REFERENCES_SCHEMA,
 } from "@/schemas.js";
 import { normalizeSubject, subjectFromGetMessage } from "@/tools/thread.js";
 import { extractRfcMessageIdFromSource } from "@/utils/mimeParse.js";
@@ -1365,7 +1377,7 @@ registerTool(
   "send-email",
   {
     description:
-      "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent — require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
+      "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments, a chosen transport, and caller-built threading headers (inReplyTo/references, SMTP only).\nReturns: a confirmation naming the recipients and attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message — they derive recipients, threading and the quote, and also take attachments), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent — require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
     inputSchema: {
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       subject: z.string().min(1, "Subject is required"),
@@ -1374,6 +1386,8 @@ registerTool(
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
       account: z.string().optional().describe("Account to send from"),
       attachments: ATTACHMENTS_SCHEMA,
+      inReplyTo: IN_REPLY_TO_SCHEMA,
+      references: REFERENCES_SCHEMA,
       replyTo: z
         .string()
         .optional()
@@ -1399,12 +1413,25 @@ registerTool(
       recipients: z.array(z.string()).optional(),
       attachmentCount: z.number().optional(),
       transport: z.string().optional(),
+      messageId: z.string().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
     },
   },
   withErrorHandling(
-    async ({ to, subject, body, cc, bcc, account, attachments, transport, replyTo }) => {
+    async ({
+      to,
+      subject,
+      body,
+      cc,
+      bcc,
+      account,
+      attachments,
+      transport,
+      replyTo,
+      inReplyTo,
+      references,
+    }) => {
       const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
 
       const attachmentCount = attachments?.length ?? 0;
@@ -1413,7 +1440,12 @@ registerTool(
       // configured and no transport was specified — except when a non-email
       // `account` label requests Mail.app account selection (see shouldUseSmtp).
       // Explicit transport:"applescript" always forces the Mail.app path.
-      if (shouldUseSmtp(transport, account)) {
+      const useSmtp = shouldUseSmtp(transport, account);
+      // #267: never silently drop caller threading headers on a transport that
+      // cannot emit them.
+      const threading = sendEmailThreading({ inReplyTo, references }, useSmtp);
+      if (!threading.ok) return errorResponse(threading.error);
+      if (useSmtp) {
         // `account` is a Mail.app account label for the AppleScript path; for SMTP
         // it only makes sense as a From override when it is an actual address.
         // A bare label (only possible here via explicit transport:"smtp") must not
@@ -1428,6 +1460,7 @@ registerTool(
           from: smtpFrom,
           attachments,
           replyTo,
+          ...threading.headers,
         });
         if (!result.success) {
           return errorResponse(result.error ?? "Failed to send email via SMTP.");
@@ -1443,6 +1476,7 @@ registerTool(
           recipients: to,
           attachmentCount,
           transport: "smtp",
+          ...(result.messageId ? { messageId: result.messageId } : {}),
           ...(result.sentCopy !== undefined ? { sentCopy: result.sentCopy } : {}),
           ...(result.sentCopyError !== undefined ? { sentCopyError: result.sentCopyError } : {}),
         });
@@ -1558,38 +1592,81 @@ registerTool(
   "create-draft",
   {
     description:
-      "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message (to/cc/bcc are arrays, optional attachments).\nReturns: a confirmation that the draft was created, with recipients and attachment count.\nDo not use when: the user has already confirmed they want it sent now (use send-email).\nSafety: low risk — creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
+      "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message (to/cc/bcc are arrays, optional attachments). With inReplyTo/references the draft is threaded: it is composed by this server and filed over IMAP into the account's Drafts mailbox (Mail.app's AppleScript cannot set those headers), so an IMAP account is required.\nReturns: a confirmation that the draft was created, with recipients and attachment count; for a threaded draft also its Drafts mailbox, account and Message-ID (transport: imap).\nDo not use when: the user has already confirmed they want it sent now (use send-email), or is replying to an existing message (use reply-to-message with send=false — it derives recipients, threading and the quote and takes attachments).\nSafety: low risk — creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
     inputSchema: {
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       subject: z.string().min(1, "Subject is required"),
       body: z.string().min(1, "Body is required"),
       cc: z.array(z.string()).optional().describe("CC recipients"),
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
-      account: z.string().optional().describe("Account to create draft in"),
+      account: z
+        .string()
+        .optional()
+        .describe(
+          "Account to create draft in. With inReplyTo/references this must name a configured " +
+            "IMAP account (label or login); when omitted, the IMAP account matching the SMTP " +
+            "identity, else the only IMAP account, is used."
+        ),
       attachments: ATTACHMENTS_SCHEMA,
+      inReplyTo: IN_REPLY_TO_SCHEMA,
+      references: REFERENCES_SCHEMA,
     },
     outputSchema: {
       ok: z.boolean().optional(),
       recipients: z.array(z.string()).optional(),
       attachmentCount: z.number().optional(),
+      transport: z.enum(["applescript", "imap"]).optional(),
+      account: z.string().optional().describe("Threaded draft only: IMAP account it was filed in"),
+      mailbox: z.string().optional().describe("Threaded draft only: Drafts mailbox path"),
+      messageId: z.string().optional().describe("Threaded draft only: the draft's Message-ID"),
+      inReplyTo: z.string().optional(),
+      references: z.array(z.string()).optional(),
     },
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
-    const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
+  withErrorHandling(
+    async ({ to, subject, body, cc, bcc, account, attachments, inReplyTo, references }) => {
+      if (threadingHeaders({ inReplyTo, references })) {
+        return runThreadedDraft(threadedDraftDeps, {
+          to,
+          subject,
+          body,
+          cc,
+          bcc,
+          account,
+          attachments,
+          inReplyTo,
+          references,
+        });
+      }
+      const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
 
-    if (!success) {
-      return errorResponse("Failed to create draft. Check Mail.app configuration.");
-    }
+      if (!success) {
+        return errorResponse("Failed to create draft. Check Mail.app configuration.");
+      }
 
-    const attachmentCount = attachments?.length ?? 0;
-    const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-    return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
-      ok: true,
-      recipients: to,
-      attachmentCount,
-    });
-  }, "Error creating draft")
+      const attachmentCount = attachments?.length ?? 0;
+      const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
+      return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
+        ok: true,
+        recipients: to,
+        attachmentCount,
+        transport: "applescript",
+      });
+    },
+    "Error creating draft"
+  )
 );
+
+const threadedDraftDeps: ThreadedDraftDeps = {
+  resolveAccount: (account, smtpUser) => resolveDraftImapAccount(account, smtpUser),
+  smtpIdentity: () => {
+    if (!isSmtpConfigured()) return {};
+    const user = process.env[SMTP_ENV.user]?.trim();
+    return { user, from: process.env[SMTP_ENV.from]?.trim() || user };
+  },
+  compose: composeRawMime,
+  append: (account, raw) => imapAppendDraft(account, raw),
+};
 
 /** Resolve SMTP config, falling back (host/user set but no password) to Mail.app. */
 function resolveSmtpOrFallback(): SmtpConfig | null {
@@ -1659,7 +1736,7 @@ registerTool(
   "reply-to-message",
   {
     description:
-      "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
+      "Use when: replying to an existing message by id, preserving its threading headers and quoting the original, optionally with attachments (same rules as send-email). Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft, with the attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
@@ -1673,6 +1750,7 @@ registerTool(
         .optional()
         .default(true)
         .describe("Send immediately (false = save as draft)"),
+      attachments: ATTACHMENTS_SCHEMA,
     },
     outputSchema: {
       transport: z.enum(["smtp", "applescript"]).optional(),
@@ -1680,6 +1758,7 @@ registerTool(
       ok: z.boolean().optional(),
       sent: z.boolean().optional(),
       id: z.string().optional(),
+      attachmentCount: z.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
     },
@@ -1693,7 +1772,7 @@ registerTool(
   "forward-message",
   {
     description:
-      "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
+      "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend and optional extra attachments (same rules as send-email). Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft, with the attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
@@ -1704,6 +1783,7 @@ registerTool(
         .optional()
         .default(true)
         .describe("Send immediately (false = save as draft)"),
+      attachments: ATTACHMENTS_SCHEMA,
     },
     outputSchema: {
       transport: z.enum(["smtp", "applescript"]).optional(),
@@ -1712,6 +1792,7 @@ registerTool(
       sent: z.boolean().optional(),
       recipients: z.array(z.string()).optional(),
       id: z.string().optional(),
+      attachmentCount: z.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
     },

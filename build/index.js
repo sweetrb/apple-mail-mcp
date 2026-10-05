@@ -65187,6 +65187,7 @@ __export(imapClient_exports, {
   decodeImapId: () => decodeImapId,
   dropAllPools: () => dropAllPools,
   encodeImapId: () => encodeImapId,
+  imapAppendDraft: () => imapAppendDraft,
   imapAppendSentCopy: () => imapAppendSentCopy,
   imapBatchDelete: () => imapBatchDelete,
   imapBatchFlag: () => imapBatchFlag,
@@ -65224,6 +65225,7 @@ __export(imapClient_exports, {
   matchMailbox: () => matchMailbox,
   normalizeMessageId: () => normalizeMessageId,
   omittedNote: () => omittedNote,
+  resolveDraftImapAccount: () => resolveDraftImapAccount,
   resolveImapConfig: () => resolveImapConfig,
   resolveImapConfigs: () => resolveImapConfigs,
   resolveMailboxPath: () => resolveMailboxPath,
@@ -66281,6 +66283,40 @@ async function imapAppendSentCopy(smtpUser, raw, deps = {}) {
     return { attempted: true, success: false, error: errText(e) };
   }
 }
+function resolveDraftImapAccount(account, smtpUser, env = process.env) {
+  const specs = listImapAccountSpecs(env);
+  const why = "Mail.app's AppleScript cannot set In-Reply-To/References on a draft, so a threaded draft is filed over IMAP into the account's Drafts mailbox";
+  if (specs.length === 0) {
+    throw new Error(
+      `${why}, and IMAP is not configured. Configure IMAP, omit inReplyTo/references, or use reply-to-message with send=false. ${SETUP_HINT}`
+    );
+  }
+  let spec;
+  if (account) {
+    spec = specs.find((s) => specMatchesSelector(s, account));
+    if (!spec) {
+      throw new Error(
+        `${why}, and "${account}" is not a configured IMAP account. Configured: ${specs.map((s) => s.accountLabel).join(", ")}.`
+      );
+    }
+  } else {
+    spec = (smtpUser ? specs.find((s) => specMatchesSelector(s, smtpUser)) : void 0) ?? (specs.length === 1 ? specs[0] : void 0);
+    if (!spec) {
+      throw new Error(
+        `${why}; several IMAP accounts are configured, so pass \`account\` to choose one: ${specs.map((s) => s.accountLabel).join(", ")}.`
+      );
+    }
+  }
+  return { label: spec.accountLabel, user: spec.user };
+}
+async function imapAppendDraft(account, raw, deps = {}) {
+  return withClient({ ...deps, account: deps.account ?? account }, async (client, cfg) => {
+    const path3 = await resolveMailboxPath(client, "drafts", "list");
+    const res = await client.append(path3, raw, ["\\Draft", "\\Seen"]);
+    if (!res) throw new Error(`server rejected the APPEND to "${path3}" (IMAP NO/BAD)`);
+    return { mailbox: path3, account: cfg.accountLabel };
+  });
+}
 async function withMailbox(path3, deps, fn) {
   return withClient(deps, async (client) => {
     const lock = await client.getMailboxLock(path3);
@@ -67146,6 +67182,34 @@ function buildAttachments(attachments) {
     return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
   });
 }
+function buildMailOptions(opts, from, attachments) {
+  const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
+  return {
+    from,
+    to: opts.to,
+    cc: opts.cc,
+    bcc: opts.bcc,
+    subject: opts.subject,
+    text: opts.body,
+    // When present, nodemailer emits multipart/alternative (text + html).
+    html,
+    attachments,
+    // RFC 5322 threading for SMTP replies/forwards (2.5.0). nodemailer treats
+    // In-Reply-To / References as structured msg-id headers and never
+    // RFC 2047-encodes them, however long the id (pinned by a test, #267).
+    inReplyTo: opts.inReplyTo?.trim() || void 0,
+    references: opts.references?.length ? opts.references : void 0,
+    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
+    replyTo: opts.replyTo?.trim() || void 0
+  };
+}
+function composeRawMime(opts, from) {
+  return buildRawMime({
+    ...buildMailOptions(opts, from, buildAttachments(opts.attachments)),
+    keepBcc: true,
+    date: /* @__PURE__ */ new Date()
+  });
+}
 async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.createTransport, appendSentCopy = defaultAppendSentCopy) {
   let cfg;
   try {
@@ -67184,23 +67248,7 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
     requireTLS,
     auth: { user: cfg.user, pass: cfg.pass }
   });
-  const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
-  const mailOptions = {
-    from: requestedFrom || cfg.from,
-    to: opts.to,
-    cc: opts.cc,
-    bcc: opts.bcc,
-    subject: opts.subject,
-    text: opts.body,
-    // When present, nodemailer emits multipart/alternative (text + html).
-    html,
-    attachments,
-    // RFC 5322 threading for SMTP replies/forwards (2.5.0).
-    inReplyTo: opts.inReplyTo?.trim() || void 0,
-    references: opts.references?.length ? opts.references : void 0,
-    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
-    replyTo: opts.replyTo?.trim() || void 0
-  };
+  const mailOptions = buildMailOptions(opts, requestedFrom || cfg.from, attachments);
   try {
     const info = await transporter.sendMail(mailOptions);
     let copyFields = {};
@@ -82144,7 +82192,7 @@ function materializeAttachments(attachments) {
       if (!dir) dir = mkdtempSync(join3(tmpdir2(), "amcp-att-"));
       const safeName = a.filename.replace(/[/\\]/g, "_");
       const p = join3(dir, safeName);
-      writeFileSync2(p, decodeInlineAttachment(a.contentBase64));
+      writeFileSync2(p, decodeInlineAttachment(a.contentBase64), { mode: 384 });
       return p;
     });
   } catch (error3) {
@@ -82157,6 +82205,18 @@ function materializeAttachments(attachments) {
       if (dir) rmSync(dir, { recursive: true, force: true });
     }
   };
+}
+function preflightAttachments(attachments) {
+  for (const a of attachments ?? []) {
+    if (typeof a === "string") {
+      resolveAttachmentReadPath(a);
+      continue;
+    }
+    if (!a.filename || !a.contentBase64) {
+      throw new Error("Inline attachment requires both filename and contentBase64.");
+    }
+    decodeInlineAttachment(a.contentBase64);
+  }
 }
 
 // src/services/appleMailManager.ts
@@ -82420,6 +82480,11 @@ function buildAttachmentCommands(attachments) {
 `;
   }
   return commands;
+}
+function composeAttachmentBlock(msgVar, paths) {
+  const commands = buildAttachmentCommands(paths);
+  return commands ? `tell ${msgVar}
+${commands}end tell` : "";
 }
 function asDateToString(varName) {
   return `((year of ${varName}) as string) & "-" & ((month of ${varName} as integer) as string) & "-" & ((day of ${varName}) as string) & "-" & ((hours of ${varName}) as string) & "-" & ((minutes of ${varName}) as string) & "-" & ((seconds of ${varName}) as string)`;
@@ -84670,20 +84735,28 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param body - Reply body
    * @param replyAll - If true, reply to all recipients
    * @param send - If true, send immediately; if false, save as draft
+   * @param attachments - Files to attach (#267): allowlisted paths and/or inline
+   *   base64 items (materialized to 0600 temp files, removed afterwards)
    * @returns true if reply created/sent successfully
    */
-  replyToMessage(id, body, replyAll = false, send = true) {
+  replyToMessage(id, body, replyAll = false, send = true, attachments) {
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
     const finalAction = send ? "send theReply" : "save theReply\n          close theReply saving yes";
-    const script = this.findMessageScript(
-      id,
-      `
+    const mat = materializeAttachments(attachments);
+    try {
+      const script = this.findMessageScript(
+        id,
+        `
           set theReply to reply msg without opening window${replyAllClause}
           set content of theReply to "${safeBody}"
+          ${composeAttachmentBlock("theReply", mat.paths)}
           ${finalAction}`
-    );
-    return this.runComposeScript(script, "reply to");
+      );
+      return this.runComposeScript(script, "reply to");
+    } finally {
+      mat.cleanup();
+    }
   }
   /**
    * Forward a message.
@@ -84692,9 +84765,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param to - Recipients to forward to
    * @param body - Optional body to prepend
    * @param send - If true, send immediately; if false, save as draft
+   * @param attachments - Additional files to attach (#267), as for replyToMessage
    * @returns true if forward created/sent successfully
    */
-  forwardMessage(id, to, body, send = true) {
+  forwardMessage(id, to, body, send = true, attachments) {
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
     const finalAction = send ? "send theForward" : "save theForward\n          close theForward saving yes";
     let recipientCommands = "";
@@ -84702,15 +84776,21 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       recipientCommands += `make new to recipient at end of to recipients of theForward with properties {address:"${escapeForAppleScript(addr)}"}
 `;
     }
-    const script = this.findMessageScript(
-      id,
-      `
+    const mat = materializeAttachments(attachments);
+    try {
+      const script = this.findMessageScript(
+        id,
+        `
           set theForward to forward msg without opening window
           ${recipientCommands}
           ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
+          ${composeAttachmentBlock("theForward", mat.paths)}
           ${finalAction}`
-    );
-    return this.runComposeScript(script, "forward");
+      );
+      return this.runComposeScript(script, "forward");
+    } finally {
+      mat.cleanup();
+    }
   }
   /**
    * Helper to find and operate on a message by ID, scoped to the mailbox the id
@@ -84745,7 +84825,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * behind one indistinguishable message.
    */
   runComposeScript(script, verb) {
-    const result = executeAppleScript(script, { timeoutMs: 6e4 });
+    const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 1 });
     if (!result.success || result.output.startsWith("error:")) {
       const raw = result.error || result.output;
       const error3 = raw.startsWith("error:") ? raw.slice("error:".length) : raw;
@@ -87195,19 +87275,27 @@ async function replyComposeBody(deps, id, body) {
   const source = await readOriginalForQuote(deps, id);
   return source ? buildReplyBody(body, source.original, source.plainText) : body;
 }
-async function forwardComposeBody(deps, id, body) {
-  if (!body) return body;
+async function forwardComposeBody(deps, id, body, hasAttachments = false) {
+  if (!body && !hasAttachments) return body;
   const source = await readOriginalForQuote(deps, id);
   return source ? buildForwardBody(source.original, source.plainText, body) : body;
 }
 async function runCompose(deps, args) {
-  const { id, send, transport: transport2 } = args;
+  const { id, send, transport: transport2, attachments } = args;
   const verb = args.kind === "reply" ? "reply to" : "forward";
   if (!send && transport2 === "smtp") {
     return errorResponse(
       "SMTP cannot save a Mail.app draft. Omit transport or use transport=applescript with send=false."
     );
   }
+  try {
+    preflightAttachments(attachments);
+  } catch (error3) {
+    return errorResponse(
+      `Failed to ${verb} message "${id}": ${error3 instanceof Error ? error3.message : String(error3)}`
+    );
+  }
+  const attachmentCount = attachments?.length ?? 0;
   const smtp = send && transport2 !== "applescript" && (transport2 === "smtp" || deps.smtpConfigured());
   if (smtp) {
     try {
@@ -87239,6 +87327,7 @@ async function runCompose(deps, args) {
         body: args.body,
         from: cfg.from
       });
+      if (attachmentCount) opts.attachments = attachments;
       const result = await deps.smtpSend(opts, cfg);
       if (!result.success)
         return errorResponse(
@@ -87252,6 +87341,7 @@ async function runCompose(deps, args) {
           id,
           transport: "smtp",
           messageId: result.messageId,
+          attachmentCount,
           ...args.kind === "forward" ? { recipients: args.to } : {},
           // Best-effort Sent-folder copy (issue #220) — same field shape as
           // send-email, since it's the same sendViaSmtp underneath.
@@ -87274,12 +87364,14 @@ async function runCompose(deps, args) {
     resolved.numericId,
     await replyComposeBody(deps, id, args.body),
     args.replyAll,
-    send
+    send,
+    attachmentCount ? attachments : void 0
   ) : deps.mail.forwardMessage(
     resolved.numericId,
     args.to,
-    await forwardComposeBody(deps, id, args.body),
-    send
+    await forwardComposeBody(deps, id, args.body, attachmentCount > 0),
+    send,
+    attachmentCount ? attachments : void 0
   );
   if (!outcome.success)
     return errorResponse(
@@ -87291,6 +87383,7 @@ async function runCompose(deps, args) {
     sent: send,
     id,
     transport: "applescript",
+    attachmentCount,
     ...args.kind === "forward" ? { recipients: args.to } : {}
   });
 }
@@ -87299,6 +87392,70 @@ function runReply(deps, args) {
 }
 function runForward(deps, args) {
   return runCompose(deps, { ...args, kind: "forward" });
+}
+
+// src/tools/threading.ts
+function threadingHeaders(args) {
+  const inReplyTo = args.inReplyTo?.trim() || void 0;
+  const references = args.references?.length ? args.references : void 0;
+  if (!inReplyTo && !references) return void 0;
+  return { inReplyTo, references: references ?? (inReplyTo ? [inReplyTo] : void 0) };
+}
+var SEND_THREADING_NEEDS_SMTP = "inReplyTo/references require the SMTP transport: Mail.app's AppleScript cannot set In-Reply-To or References, so the message would go out unthreaded. Configure SMTP (and do not pass transport=applescript or a Mail.app account label), or use reply-to-message, which threads on both transports.";
+function sendEmailThreading(args, useSmtp) {
+  const headers = threadingHeaders(args);
+  if (headers && !useSmtp) return { ok: false, error: SEND_THREADING_NEEDS_SMTP };
+  return { ok: true, headers };
+}
+function messageIdOf(raw) {
+  const head = raw.toString("utf8").split(/\r?\n\r?\n/)[0] ?? "";
+  return head.replace(/\r?\n[ \t]+/g, " ").match(/^Message-ID:\s*(<[^>\s]+>)/im)?.[1];
+}
+async function runThreadedDraft(deps, args) {
+  const threading = threadingHeaders(args);
+  if (!threading) throw new Error("runThreadedDraft called without threading headers");
+  const fail = (e) => errorResponse(
+    `Failed to create threaded draft: ${e instanceof Error ? e.message : String(e)} Nothing was filed; no Mail.app fallback was attempted (it would drop the threading headers).`
+  );
+  try {
+    preflightAttachments(args.attachments);
+    const smtp = deps.smtpIdentity();
+    const acct = deps.resolveAccount(args.account, smtp.user);
+    const from = smtp.user && smtp.user.toLowerCase() === acct.user.toLowerCase() && smtp.from ? smtp.from : acct.user;
+    const raw = await deps.compose(
+      {
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        subject: args.subject,
+        body: args.body,
+        attachments: args.attachments,
+        inReplyTo: threading.inReplyTo,
+        references: threading.references
+      },
+      from
+    );
+    const filed = await deps.append(acct.label, raw);
+    const attachmentCount = args.attachments?.length ?? 0;
+    const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
+    const messageId = messageIdOf(raw);
+    return successResponse(
+      `Threaded draft for ${args.to.join(", ")}${attachInfo} filed over IMAP in "${filed.mailbox}" (account ${filed.account}). Review and send it from Mail.app.`,
+      {
+        ok: true,
+        recipients: args.to,
+        attachmentCount,
+        transport: "imap",
+        account: filed.account,
+        mailbox: filed.mailbox,
+        ...messageId ? { messageId } : {},
+        ...threading.inReplyTo ? { inReplyTo: threading.inReplyTo } : {},
+        references: threading.references
+      }
+    );
+  } catch (e) {
+    return fail(e);
+  }
 }
 
 // src/index.ts
@@ -87811,6 +87968,17 @@ var ATTACHMENTS_SCHEMA = external_exports.array(
   ])
 ).max(20, "Cannot attach more than 20 files").optional().describe(
   "Files to attach: absolute paths in the configured attachment read roots (e.g. '/Users/me/Documents/report.pdf') and/or inline {filename, contentBase64} objects up to 25 MiB decoded each."
+);
+var RFC_MESSAGE_ID_TOKEN = /^<[^<>\s@]+@[^<>\s@]+>$/;
+var MESSAGE_ID_TOKEN_SCHEMA = external_exports.string().max(998, "Message-ID is longer than an RFC 5322 header line (998 chars)").regex(
+  RFC_MESSAGE_ID_TOKEN,
+  "Must be an RFC 5322 Message-ID token including angle brackets, e.g. <abc123@mail.example.com>"
+);
+var IN_REPLY_TO_SCHEMA = MESSAGE_ID_TOKEN_SCHEMA.optional().describe(
+  "Thread this message as a reply: the parent's Message-ID token, angle brackets included (e.g. '<abc123@mail.example.com>'). Emitted verbatim as In-Reply-To, never RFC 2047-encoded. When `references` is omitted, References defaults to [inReplyTo]. Prefer reply-to-message, which derives recipients, threading and the quote from the original for you."
+);
+var REFERENCES_SCHEMA = external_exports.array(MESSAGE_ID_TOKEN_SCHEMA).min(1, "references must contain at least one Message-ID").max(100, "Cannot list more than 100 Message-IDs in references").optional().describe(
+  "Thread chain, oldest first: the parent's own References followed by the parent's Message-ID (each an angle-bracketed token). Emitted verbatim, never RFC 2047-encoded."
 );
 
 // src/tools/thread.ts
@@ -88896,7 +89064,7 @@ var SENT_COPY_ERROR_SCHEMA = external_exports.string().optional().describe("Pres
 registerTool(
   "send-email",
   {
-    description: "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent \u2014 require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
+    description: "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments, a chosen transport, and caller-built threading headers (inReplyTo/references, SMTP only).\nReturns: a confirmation naming the recipients and attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message \u2014 they derive recipients, threading and the quote, and also take attachments), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent \u2014 require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
     inputSchema: {
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       subject: external_exports.string().min(1, "Subject is required"),
@@ -88905,6 +89073,8 @@ registerTool(
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
       account: external_exports.string().optional().describe("Account to send from"),
       attachments: ATTACHMENTS_SCHEMA,
+      inReplyTo: IN_REPLY_TO_SCHEMA,
+      references: REFERENCES_SCHEMA,
       replyTo: external_exports.string().optional().describe(
         "SMTP only (issue #220): sets the Reply-To header when replies should go somewhere other than the From/login address, e.g. a domain-alias setup where APPLE_MAIL_MCP_SMTP_FROM differs from APPLE_MAIL_MCP_SMTP_USER. Ignored on the AppleScript transport."
       ),
@@ -88917,15 +89087,31 @@ registerTool(
       recipients: external_exports.array(external_exports.string()).optional(),
       attachmentCount: external_exports.number().optional(),
       transport: external_exports.string().optional(),
+      messageId: external_exports.string().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA
     }
   },
   withErrorHandling(
-    async ({ to, subject, body, cc, bcc, account, attachments, transport: transport2, replyTo }) => {
+    async ({
+      to,
+      subject,
+      body,
+      cc,
+      bcc,
+      account,
+      attachments,
+      transport: transport2,
+      replyTo,
+      inReplyTo,
+      references
+    }) => {
       const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
       const attachmentCount = attachments?.length ?? 0;
-      if (shouldUseSmtp(transport2, account)) {
+      const useSmtp = shouldUseSmtp(transport2, account);
+      const threading = sendEmailThreading({ inReplyTo, references }, useSmtp);
+      if (!threading.ok) return errorResponse(threading.error);
+      if (useSmtp) {
         const smtpFrom = account?.includes("@") ? account : void 0;
         const result = await sendViaSmtp({
           to,
@@ -88935,7 +89121,8 @@ registerTool(
           bcc,
           from: smtpFrom,
           attachments,
-          replyTo
+          replyTo,
+          ...threading.headers
         });
         if (!result.success) {
           return errorResponse(result.error ?? "Failed to send email via SMTP.");
@@ -88946,6 +89133,7 @@ registerTool(
           recipients: to,
           attachmentCount,
           transport: "smtp",
+          ...result.messageId ? { messageId: result.messageId } : {},
           ...result.sentCopy !== void 0 ? { sentCopy: result.sentCopy } : {},
           ...result.sentCopyError !== void 0 ? { sentCopyError: result.sentCopyError } : {}
         });
@@ -89023,36 +89211,73 @@ ${details}`,
 registerTool(
   "create-draft",
   {
-    description: "Use when: composing an email the user should review in Mail.app before sending \u2014 the safe default for any new message (to/cc/bcc are arrays, optional attachments).\nReturns: a confirmation that the draft was created, with recipients and attachment count.\nDo not use when: the user has already confirmed they want it sent now (use send-email).\nSafety: low risk \u2014 creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
+    description: "Use when: composing an email the user should review in Mail.app before sending \u2014 the safe default for any new message (to/cc/bcc are arrays, optional attachments). With inReplyTo/references the draft is threaded: it is composed by this server and filed over IMAP into the account's Drafts mailbox (Mail.app's AppleScript cannot set those headers), so an IMAP account is required.\nReturns: a confirmation that the draft was created, with recipients and attachment count; for a threaded draft also its Drafts mailbox, account and Message-ID (transport: imap).\nDo not use when: the user has already confirmed they want it sent now (use send-email), or is replying to an existing message (use reply-to-message with send=false \u2014 it derives recipients, threading and the quote and takes attachments).\nSafety: low risk \u2014 creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
     inputSchema: {
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       subject: external_exports.string().min(1, "Subject is required"),
       body: external_exports.string().min(1, "Body is required"),
       cc: external_exports.array(external_exports.string()).optional().describe("CC recipients"),
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
-      account: external_exports.string().optional().describe("Account to create draft in"),
-      attachments: ATTACHMENTS_SCHEMA
+      account: external_exports.string().optional().describe(
+        "Account to create draft in. With inReplyTo/references this must name a configured IMAP account (label or login); when omitted, the IMAP account matching the SMTP identity, else the only IMAP account, is used."
+      ),
+      attachments: ATTACHMENTS_SCHEMA,
+      inReplyTo: IN_REPLY_TO_SCHEMA,
+      references: REFERENCES_SCHEMA
     },
     outputSchema: {
       ok: external_exports.boolean().optional(),
       recipients: external_exports.array(external_exports.string()).optional(),
-      attachmentCount: external_exports.number().optional()
+      attachmentCount: external_exports.number().optional(),
+      transport: external_exports.enum(["applescript", "imap"]).optional(),
+      account: external_exports.string().optional().describe("Threaded draft only: IMAP account it was filed in"),
+      mailbox: external_exports.string().optional().describe("Threaded draft only: Drafts mailbox path"),
+      messageId: external_exports.string().optional().describe("Threaded draft only: the draft's Message-ID"),
+      inReplyTo: external_exports.string().optional(),
+      references: external_exports.array(external_exports.string()).optional()
     }
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, account, attachments }) => {
-    const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
-    if (!success) {
-      return errorResponse("Failed to create draft. Check Mail.app configuration.");
-    }
-    const attachmentCount = attachments?.length ?? 0;
-    const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-    return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
-      ok: true,
-      recipients: to,
-      attachmentCount
-    });
-  }, "Error creating draft")
+  withErrorHandling(
+    async ({ to, subject, body, cc, bcc, account, attachments, inReplyTo, references }) => {
+      if (threadingHeaders({ inReplyTo, references })) {
+        return runThreadedDraft(threadedDraftDeps, {
+          to,
+          subject,
+          body,
+          cc,
+          bcc,
+          account,
+          attachments,
+          inReplyTo,
+          references
+        });
+      }
+      const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
+      if (!success) {
+        return errorResponse("Failed to create draft. Check Mail.app configuration.");
+      }
+      const attachmentCount = attachments?.length ?? 0;
+      const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
+      return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
+        ok: true,
+        recipients: to,
+        attachmentCount,
+        transport: "applescript"
+      });
+    },
+    "Error creating draft"
+  )
 );
+var threadedDraftDeps = {
+  resolveAccount: (account, smtpUser) => resolveDraftImapAccount(account, smtpUser),
+  smtpIdentity: () => {
+    if (!isSmtpConfigured()) return {};
+    const user = process.env[SMTP_ENV.user]?.trim();
+    return { user, from: process.env[SMTP_ENV.from]?.trim() || user };
+  },
+  compose: composeRawMime,
+  append: (account, raw) => imapAppendDraft(account, raw)
+};
 function resolveSmtpOrFallback() {
   try {
     return resolveSmtpConfig();
@@ -89091,13 +89316,14 @@ var COMPOSE_TRANSPORT_SCHEMA = external_exports.enum(["applescript", "smtp"]).op
 registerTool(
   "reply-to-message",
   {
-    description: "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
+    description: "Use when: replying to an existing message by id, preserving its threading headers and quoting the original, optionally with attachments (same rules as send-email). Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft, with the attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
       body: external_exports.string().min(1, "Reply body is required").describe("Reply body (plain text; HTML tags such as <br> are not rendered)"),
       replyAll: external_exports.boolean().optional().default(false).describe("Reply to all recipients"),
-      send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)")
+      send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
+      attachments: ATTACHMENTS_SCHEMA
     },
     outputSchema: {
       transport: external_exports.enum(["smtp", "applescript"]).optional(),
@@ -89105,6 +89331,7 @@ registerTool(
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
       id: external_exports.string().optional(),
+      attachmentCount: external_exports.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA
     }
@@ -89114,13 +89341,14 @@ registerTool(
 registerTool(
   "forward-message",
   {
-    description: "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
+    description: "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend and optional extra attachments (same rules as send-email). Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft, with the attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       body: external_exports.string().optional().describe("Optional message to prepend (plain text)"),
-      send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)")
+      send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
+      attachments: ATTACHMENTS_SCHEMA
     },
     outputSchema: {
       transport: external_exports.enum(["smtp", "applescript"]).optional(),
@@ -89129,6 +89357,7 @@ registerTool(
       sent: external_exports.boolean().optional(),
       recipients: external_exports.array(external_exports.string()).optional(),
       id: external_exports.string().optional(),
+      attachmentCount: external_exports.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA
     }

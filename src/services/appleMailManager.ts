@@ -490,6 +490,16 @@ function buildAttachmentCommands(attachments?: string[]): string {
 }
 
 /**
+ * `tell <msgVar> … end tell` block attaching each file to a reply/forward
+ * compose object (#267). Must run after `set content of <msgVar>`, which would
+ * otherwise discard the attachment paragraphs. Empty string when no files.
+ */
+function composeAttachmentBlock(msgVar: string, paths: string[]): string {
+  const commands = buildAttachmentCommands(paths);
+  return commands ? `tell ${msgVar}\n${commands}end tell` : "";
+}
+
+/**
  * AppleScript snippet that converts a date variable named `varName` into a
  * locale-independent numeric string: "YYYY-M-D-H-m-s".
  * Use: set <varName> to date received of msg, then inline this snippet.
@@ -3660,13 +3670,16 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param body - Reply body
    * @param replyAll - If true, reply to all recipients
    * @param send - If true, send immediately; if false, save as draft
+   * @param attachments - Files to attach (#267): allowlisted paths and/or inline
+   *   base64 items (materialized to 0600 temp files, removed afterwards)
    * @returns true if reply created/sent successfully
    */
   replyToMessage(
     id: string,
     body: string,
     replyAll = false,
-    send = true
+    send = true,
+    attachments?: AttachmentInput[]
   ): { success: boolean; error?: string } {
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
@@ -3676,15 +3689,22 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       ? "send theReply"
       : "save theReply\n          close theReply saving yes";
 
-    const script = this.findMessageScript(
-      id,
-      `
+    const mat = materializeAttachments(attachments);
+    try {
+      // Attachments go in AFTER the content is set: `set content` replaces the
+      // whole body, attachment paragraphs included (#267).
+      const script = this.findMessageScript(
+        id,
+        `
           set theReply to reply msg without opening window${replyAllClause}
           set content of theReply to "${safeBody}"
+          ${composeAttachmentBlock("theReply", mat.paths)}
           ${finalAction}`
-    );
-
-    return this.runComposeScript(script, "reply to");
+      );
+      return this.runComposeScript(script, "reply to");
+    } finally {
+      mat.cleanup();
+    }
   }
 
   /**
@@ -3694,13 +3714,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param to - Recipients to forward to
    * @param body - Optional body to prepend
    * @param send - If true, send immediately; if false, save as draft
+   * @param attachments - Additional files to attach (#267), as for replyToMessage
    * @returns true if forward created/sent successfully
    */
   forwardMessage(
     id: string,
     to: string[],
     body?: string,
-    send = true
+    send = true,
+    attachments?: AttachmentInput[]
   ): { success: boolean; error?: string } {
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
     // See replyToMessage: save the draft and close any compose window Mail opens.
@@ -3714,16 +3736,21 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       recipientCommands += `make new to recipient at end of to recipients of theForward with properties {address:"${escapeForAppleScript(addr)}"}\n`;
     }
 
-    const script = this.findMessageScript(
-      id,
-      `
+    const mat = materializeAttachments(attachments);
+    try {
+      const script = this.findMessageScript(
+        id,
+        `
           set theForward to forward msg without opening window
           ${recipientCommands}
           ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
+          ${composeAttachmentBlock("theForward", mat.paths)}
           ${finalAction}`
-    );
-
-    return this.runComposeScript(script, "forward");
+      );
+      return this.runComposeScript(script, "forward");
+    } finally {
+      mat.cleanup();
+    }
   }
 
   /**
@@ -3759,7 +3786,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * behind one indistinguishable message.
    */
   private runComposeScript(script: string, verb: string): { success: boolean; error?: string } {
-    const result = executeAppleScript(script, { timeoutMs: 60000 });
+    // Exactly one attempt, as for sendEmail/createDraft: a reply or forward
+    // whose `send`/`save` timed out may already have been accepted by Mail, and
+    // a retry would submit (or file) a second copy.
+    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 1 });
     if (!result.success || result.output.startsWith("error:")) {
       const raw = result.error || result.output;
       const error = raw.startsWith("error:") ? raw.slice("error:".length) : raw;

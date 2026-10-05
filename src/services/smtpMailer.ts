@@ -300,6 +300,51 @@ function buildAttachments(attachments?: AttachmentInput[]) {
 }
 
 /**
+ * The nodemailer message options for `opts` — shared by the SMTP send, its
+ * Sent-folder copy, and the IMAP-filed threaded draft (#267), so all three
+ * carry byte-for-byte the same headers, body and attachments.
+ */
+function buildMailOptions(
+  opts: SmtpSendOptions,
+  from: string,
+  attachments: ReturnType<typeof buildAttachments>
+) {
+  const html = opts.htmlBody?.trim() ? opts.htmlBody : undefined;
+  return {
+    from,
+    to: opts.to,
+    cc: opts.cc,
+    bcc: opts.bcc,
+    subject: opts.subject,
+    text: opts.body,
+    // When present, nodemailer emits multipart/alternative (text + html).
+    html,
+    attachments,
+    // RFC 5322 threading for SMTP replies/forwards (2.5.0). nodemailer treats
+    // In-Reply-To / References as structured msg-id headers and never
+    // RFC 2047-encodes them, however long the id (pinned by a test, #267).
+    inReplyTo: opts.inReplyTo?.trim() || undefined,
+    references: opts.references?.length ? opts.references : undefined,
+    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
+    replyTo: opts.replyTo?.trim() || undefined,
+  };
+}
+
+/**
+ * Compose the raw RFC 822 bytes for `opts` without sending anything — used to
+ * file a threaded draft over IMAP (#267). Attachments go through the same
+ * read-policy validation as {@link sendViaSmtp}; Bcc is kept (it is the
+ * author's own copy). Throws on an invalid attachment.
+ */
+export function composeRawMime(opts: SmtpSendOptions, from: string): Promise<Buffer> {
+  return buildRawMime({
+    ...buildMailOptions(opts, from, buildAttachments(opts.attachments)),
+    keepBcc: true,
+    date: new Date(),
+  });
+}
+
+/**
  * Sends an email over SMTP, producing clean MIME with no blockquote wrapping.
  *
  * Config is resolved via {@link resolveSmtpConfig} unless one is injected (the
@@ -353,24 +398,7 @@ export async function sendViaSmtp(
     auth: { user: cfg.user, pass: cfg.pass },
   });
 
-  const html = opts.htmlBody?.trim() ? opts.htmlBody : undefined;
-
-  const mailOptions = {
-    from: requestedFrom || cfg.from,
-    to: opts.to,
-    cc: opts.cc,
-    bcc: opts.bcc,
-    subject: opts.subject,
-    text: opts.body,
-    // When present, nodemailer emits multipart/alternative (text + html).
-    html,
-    attachments,
-    // RFC 5322 threading for SMTP replies/forwards (2.5.0).
-    inReplyTo: opts.inReplyTo?.trim() || undefined,
-    references: opts.references?.length ? opts.references : undefined,
-    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
-    replyTo: opts.replyTo?.trim() || undefined,
-  };
+  const mailOptions = buildMailOptions(opts, requestedFrom || cfg.from, attachments);
 
   try {
     const info = await transporter.sendMail(mailOptions);
