@@ -80,4 +80,23 @@ describe("findNumericIdByMessageId (imap→numeric bridge)", () => {
     expect(s).toContain("abc@ex.com");
     expect(s).toContain("workaccount");
   });
+
+  it("binds the resolved id to the mailbox it was found in, so a label-store reply is not ambiguous", () => {
+    h.output = "81374\tINBOX\trob@superiortech.io";
+    expect(mgr.findNumericIdByMessageId("<abc@ex.com>", "rob@superiortech.io")).toBe("81374");
+    expect(lastScript()).toContain("& tab & (name of inMb) & tab & (name of acct)");
+    // The follow-up compose now targets that one mailbox instead of scanning
+    // every mailbox and refusing the INBOX/All Mail/Sent Mail aliases.
+    h.output = "ok";
+    mgr.replyToMessage("81374", "body", false, false);
+    const s = lastScript();
+    expect(s).toContain('"INBOX"');
+    expect(s).toContain("whose id is 81374");
+    expect(s).not.toContain("present in more than one mailbox");
+  });
+
+  it("still accepts a bare numeric result without binding a location", () => {
+    h.output = "42";
+    expect(mgr.findNumericIdByMessageId("abc@ex.com")).toBe("42");
+  });
 });

@@ -125,7 +125,8 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 
 - Use `send-email` for immediate sending
 - Use `create-draft` when the user should review first
-- Both support optional `attachments` parameter (array of absolute file paths)
+- Both support optional `attachments` parameter (absolute paths in the read roots and/or inline `{filename, contentBase64}`)
+- Both accept optional `inReplyTo` / `references` (2.20.0, #267) — `<id@host>` tokens, emitted verbatim (never RFC 2047-encoded). Mail.app's AppleScript cannot set these headers, so they are **refused, never dropped**: `send-email` requires the SMTP transport for them, and `create-draft` composes the draft itself and files it over IMAP into the account's Drafts mailbox (needs a configured IMAP account; `account` must name one when several are configured and none matches the SMTP identity). Prefer `reply-to-message` when an original message exists
 - **Recommendation**: For important emails, use `create-draft` and tell the user to review in Mail.app
 
 ### send-serial-email (mail merge)
@@ -140,6 +141,7 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 
 - Set `replyAll: true` to reply to all recipients
 - Set `send: false` to save as draft instead of sending immediately
+- `attachments` (2.20.0, #267): same schema/limits/read roots as `send-email`, validated before anything is fetched. SMTP passes them through `sendViaSmtp` (the Sent copy carries them); AppleScript adds them with `make new attachment` after `set content` and before `save`/`send` (inline items → `0600` temp files, removed afterwards)
 - Default behavior: reply to sender only, send immediately
 - **Transport (v2.5.0):** when SMTP is configured, sends via **clean direct SMTP**, threading the reply with proper RFC 5322 `In-Reply-To`/`References` headers (built from the original) so it stays in the same conversation. Reads `imap:` sources directly over IMAP. `transport: "smtp"` requires clean delivery; a selected SMTP path returns configuration, source, and threading failures rather than silently falling back. With transport omitted, Mail.app's AppleScript `reply … without opening window` is used only when SMTP is unconfigured or `send: false`. Explicit `transport: "applescript"` remains available. The `without opening window` path opens no compose window, which ensures reliable body delivery from background processes (see [Known Issues](#known-issue-resolved-reply--forward-empty-body-from-background-processes) below)
 
@@ -147,6 +149,7 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 
 - Requires message `id` and `to` array
 - Optional `body` to prepend a message
+- Optional `attachments` (2.20.0), same rules as `reply-to-message`; on AppleScript with no `body`, the forwarded-message block is built so the files have a paragraph to anchor to
 - Set `send: false` to save as draft
 - **Transport (v2.5.0):** when SMTP is configured, sends via **clean direct SMTP** (a forward starts a new conversation — no threading headers). Reads `imap:` sources directly over IMAP. A selected SMTP path never silently falls back. With transport omitted, uses AppleScript `forward … without opening window` when SMTP is unconfigured or a draft is requested — same background-process fix as reply-to-message
 
@@ -323,6 +326,8 @@ Changes appear the next time Mail is launched — these tools do **not** quit or
 1. send-email to=["colleague@company.com"] subject="Report" body="See attached." attachments=["/Users/me/report.pdf"]
    OR to let the user review first:
 2. create-draft to=["colleague@company.com"] subject="Report" body="See attached." attachments=["/Users/me/report.pdf"]
+   OR replying in-thread with the file (reply-all, quoted original):
+3. reply-to-message id="..." body="Here it is." replyAll=true attachments=["/Users/me/report.pdf"]
    Note: attachment paths must be absolute and the files must exist; max 20 files per message
 ```
 

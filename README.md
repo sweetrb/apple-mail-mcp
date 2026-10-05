@@ -164,11 +164,11 @@ tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 | **Search Messages**   | Search by sender, subject, content, date range, read/flagged status — across all accounts                                                |
 | **Read Messages**     | Get full email content (plain text or HTML)                                                                                              |
 | **Read Headers**      | Get a message's raw RFC 5322 headers — the author's `Date:`, Message-ID, threading ids, `Received:` trace — without downloading the body |
-| **Send Email**        | Compose and send new emails (attach by file path or inline base64 content)                                                               |
+| **Send Email**        | Compose and send new emails (attach by file path or inline base64 content; optional `inReplyTo`/`references` threading over SMTP)        |
 | **Send Serial Email** | Mail merge — send personalized emails to a list of recipients with {{placeholder}} support                                               |
-| **Create Draft**      | Save emails to Drafts folder (attach by file path or inline base64 content)                                                              |
-| **Reply**             | Reply to messages (with reply-all support)                                                                                               |
-| **Forward**           | Forward messages to new recipients                                                                                                       |
+| **Create Draft**      | Save emails to Drafts folder (attach by file path or inline base64 content; threaded drafts filed over IMAP)                             |
+| **Reply**             | Reply to messages (with reply-all support and attachments)                                                                               |
+| **Forward**           | Forward messages to new recipients (with extra attachments)                                                                              |
 | **Get Thread**        | Group a conversation by normalized subject (across AppleScript or IMAP)                                                                  |
 | **Mark Read/Unread**  | Change read status (single or batch)                                                                                                     |
 | **Flag/Unflag**       | Flag or unflag messages (single or batch)                                                                                                |
@@ -402,16 +402,19 @@ Send a new email immediately.
 
 **⚠️ Safety:** Sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling.
 
-| Parameter     | Type                                    | Required | Description                                                                                                                                                                                                                    |
-| ------------- | --------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `to`          | string[]                                | Yes      | Recipient addresses                                                                                                                                                                                                            |
-| `subject`     | string                                  | Yes      | Email subject                                                                                                                                                                                                                  |
-| `body`        | string                                  | Yes      | Email body (plain text)                                                                                                                                                                                                        |
-| `cc`          | string[]                                | No       | CC recipients                                                                                                                                                                                                                  |
-| `bcc`         | string[]                                | No       | BCC recipients                                                                                                                                                                                                                 |
-| `account`     | string                                  | No       | Mail.app account label, or an email-form SMTP From override. An SMTP override must match `APPLE_MAIL_MCP_SMTP_USER`, `APPLE_MAIL_MCP_SMTP_FROM`, or an address in `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM`                           |
-| `attachments` | (string \| {filename, contentBase64})[] | No       | Up to 20 attachments: absolute file paths inside the configured read roots (e.g., `"/Users/me/Documents/report.pdf"`) and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each                              |
-| `transport`   | `"applescript"` \| `"smtp"`             | No       | Send transport. If omitted, **SMTP is used automatically when configured** (otherwise AppleScript). Pass `"smtp"` to require clean MIME, or `"applescript"` to force the Mail.app path — see [SMTP transport](#smtp-transport) |
+| Parameter     | Type                                    | Required | Description                                                                                                                                                                                                                                           |
+| ------------- | --------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `to`          | string[]                                | Yes      | Recipient addresses                                                                                                                                                                                                                                   |
+| `subject`     | string                                  | Yes      | Email subject                                                                                                                                                                                                                                         |
+| `body`        | string                                  | Yes      | Email body (plain text)                                                                                                                                                                                                                               |
+| `cc`          | string[]                                | No       | CC recipients                                                                                                                                                                                                                                         |
+| `bcc`         | string[]                                | No       | BCC recipients                                                                                                                                                                                                                                        |
+| `account`     | string                                  | No       | Mail.app account label, or an email-form SMTP From override. An SMTP override must match `APPLE_MAIL_MCP_SMTP_USER`, `APPLE_MAIL_MCP_SMTP_FROM`, or an address in `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM`                                                  |
+| `attachments` | (string \| {filename, contentBase64})[] | No       | Up to 20 attachments: absolute file paths inside the configured read roots (e.g., `"/Users/me/Documents/report.pdf"`) and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each                                                     |
+| `transport`   | `"applescript"` \| `"smtp"`             | No       | Send transport. If omitted, **SMTP is used automatically when configured** (otherwise AppleScript). Pass `"smtp"` to require clean MIME, or `"applescript"` to force the Mail.app path — see [SMTP transport](#smtp-transport)                        |
+| `replyTo`     | string                                  | No       | SMTP only: `Reply-To` header, when replies should go somewhere other than the From address. Ignored on the AppleScript transport                                                                                                                      |
+| `inReplyTo`   | string                                  | No       | SMTP only (2.20.0): thread the message as a reply — the parent's `Message-ID` token with angle brackets, e.g. `"<abc@mail.example.com>"`. Emitted verbatim, never RFC 2047-encoded. See [Threading headers](#threading-headers-inreplyto--references) |
+| `references`  | string[]                                | No       | SMTP only (2.20.0): the `References` chain, oldest first (the parent's own `References` + its `Message-ID`). Defaults to `[inReplyTo]` when omitted                                                                                                   |
 
 **Example:**
 
@@ -424,6 +427,22 @@ Send a new email immediately.
   "attachments": ["/Users/me/Documents/agenda.pdf"]
 }
 ```
+
+##### Threading headers (`inReplyTo` / `references`)
+
+`send-email` and `create-draft` accept caller-built threading headers (2.20.0, #267) for
+callers that compose the recipients and quoted text themselves. **Prefer
+`reply-to-message`** — it derives recipients, `In-Reply-To`/`References` and the quote
+from the original, and (since 2.20.0) takes attachments too.
+
+- Each value must be a single RFC 5322 msg-id token **with** angle brackets
+  (`<left@right>`, no whitespace); anything else is rejected by validation.
+- The headers are always emitted as plain `<id>` tokens — never RFC 2047-encoded, even
+  for Outlook/Exchange IDs longer than 76 characters (a long header is folded at
+  whitespace between tokens, which is legal and does not alter the id).
+- Mail.app's AppleScript cannot set these headers, so they are **never silently
+  dropped**: `send-email` refuses them unless the SMTP transport is in use, and
+  `create-draft` files a threaded draft over IMAP instead of through Mail.app (below).
 
 ##### SMTP transport
 
@@ -783,10 +802,24 @@ Save an email to Drafts without sending.
 | `body`        | string                                  | Yes      | Email body (plain text)                                                                                                                                |
 | `cc`          | string[]                                | No       | CC recipients                                                                                                                                          |
 | `bcc`         | string[]                                | No       | BCC recipients                                                                                                                                         |
-| `account`     | string                                  | No       | Account for draft                                                                                                                                      |
+| `account`     | string                                  | No       | Account for draft. With `inReplyTo`/`references` it must name a configured IMAP account (label or login)                                               |
 | `attachments` | (string \| {filename, contentBase64})[] | No       | Up to 20 attachments: absolute file paths inside the configured read roots and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
+| `inReplyTo`   | string                                  | No       | (2.20.0) Parent `Message-ID` token, e.g. `"<abc@mail.example.com>"` — makes this a **threaded draft** (see below)                                      |
+| `references`  | string[]                                | No       | (2.20.0) `References` chain, oldest first; defaults to `[inReplyTo]`                                                                                   |
 
-**Returns:** Confirmation that draft was created.
+**Returns:** Confirmation that draft was created, with `transport` (`applescript`, or `imap` for a threaded draft).
+
+**Threaded drafts (2.20.0, #267):** Mail.app's `outgoing message` has no header property,
+so a draft with `inReplyTo`/`references` cannot go through AppleScript. Instead the
+server composes it with the same MIME builder as the SMTP send (attachments included) and
+files it over IMAP into the account's Drafts mailbox (SPECIAL-USE `\Drafts`), flagged
+`\Draft`. The account is `account` when given (it must be a configured IMAP account);
+otherwise the IMAP account whose login is the SMTP identity, else the only configured
+IMAP account. When none qualifies — IMAP unconfigured, an unknown `account`, or several
+accounts and no way to choose — the call **fails and files nothing**; it never falls back
+to an unthreaded Mail.app draft. The result names the Drafts `mailbox`, the `account` and
+the draft's `messageId`. Without threading headers, `create-draft` is unchanged
+(AppleScript).
 
 #### `get-thread`
 
@@ -832,13 +865,14 @@ Map `imap:` message IDs to their numeric Mail.app IDs, via each message's RFC 53
 
 Reply to an existing message.
 
-| Parameter   | Type    | Required | Description                                                                                    |
-| ----------- | ------- | -------- | ---------------------------------------------------------------------------------------------- |
-| `id`        | string  | Yes      | Message ID to reply to                                                                         |
-| `body`      | string  | Yes      | Reply body (plain text; HTML tags such as `<br>` are not rendered)                             |
-| `replyAll`  | boolean | No       | Reply to all recipients (default: false)                                                       |
-| `send`      | boolean | No       | Send immediately (default: true, false = save as draft)                                        |
-| `transport` | string  | No       | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript. |
+| Parameter     | Type                                    | Required | Description                                                                                                                                                                        |
+| ------------- | --------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | string                                  | Yes      | Message ID to reply to                                                                                                                                                             |
+| `body`        | string                                  | Yes      | Reply body (plain text; HTML tags such as `<br>` are not rendered)                                                                                                                 |
+| `replyAll`    | boolean                                 | No       | Reply to all recipients (default: false)                                                                                                                                           |
+| `send`        | boolean                                 | No       | Send immediately (default: true, false = save as draft)                                                                                                                            |
+| `transport`   | string                                  | No       | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript.                                                                                     |
+| `attachments` | (string \| {filename, contentBase64})[] | No       | Up to 20 attachments, same rules as `send-email`: absolute file paths inside the configured read roots and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 
 **Example - Reply to sender only:**
 
@@ -860,6 +894,30 @@ Reply to an existing message.
 }
 ```
 
+**Example - Reply all with an attachment (2.20.0):**
+
+```json
+{
+  "id": "imap:eyJhIjoiV29yayIsInAiOiJJTkJPWCIsInUiOjQyfQ",
+  "body": "Here is the PDF you asked for.",
+  "replyAll": true,
+  "attachments": [
+    "/Users/me/Documents/quote.pdf",
+    { "filename": "notes.txt", "contentBase64": "SGVsbG8K" }
+  ]
+}
+```
+
+**Attachments (2.20.0, #267):** same schema, limits (20 items, 25 MiB each) and read
+roots as `send-email`, validated before the original is fetched — an out-of-roots path
+fails with exactly `send-email`'s error. Recipients, threading headers and the quote are
+identical to the same call without attachments. Over SMTP the files ride the same
+nodemailer path `send-email` uses, so the Sent-folder copy (`sentCopy`) carries them too.
+On the AppleScript transport they are added with `make new attachment` **after** the
+reply content is set and before `save`/`send` (inline items are written to `0600` temp
+files and removed afterwards), so a `send: false` draft contains both the attachments and
+the quoted original. Results report `attachmentCount`.
+
 **Delivery:** `imap:` IDs are read directly from their encoded account, mailbox, and UID. Numeric IDs are read through Mail.app. With SMTP configured, replies use clean MIME with the original `Message-ID` in `In-Reply-To` and the full `References` chain. Only the original plain-text body is quoted; the new text is not. Pass `transport: "smtp"` to require this path, or `transport: "applescript"` to use Mail.app explicitly.
 
 **AppleScript transport quoting (v2.19.12):** every draft (`send: false`) and any send that falls back to AppleScript (SMTP not configured) also gets the original quoted — an "On \<date\>, \<sender\> wrote:" attribution line followed by the `> `-prefixed original body, built the same way as the SMTP path. Mail's own `reply`/`forward` AppleScript commands generate this quote internally but expose no way to read it back, so it's built here instead of relying on Mail's (unreadable) copy. Unlike SMTP, this path has no sending-identity restriction — it's read-only source lookup, not sending.
@@ -868,7 +926,7 @@ Reply to an existing message.
 
 The direct IMAP source read is bounded to 25 MiB, including MIME attachments. Its account login must match the SMTP login, configured From, or an explicitly configured `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` identity; otherwise the call fails rather than sending from an unrelated account. The SMTP configuration still represents a single sending identity, not a per-account SMTP registry.
 
-Success includes `transport` and, for SMTP when returned by the server, the new `messageId`. SMTP submission does not add a local Sent copy; server-side Sent-folder behavior is unchanged. `send-email` is for **new conversations**: adding `Re:` to its subject does not add threading headers. Use this reply tool with the original id instead.
+Success includes `transport`, `attachmentCount` and, for SMTP when returned by the server, the new `messageId`. Over SMTP a best-effort Sent-folder copy is filed over IMAP exactly as for `send-email` (`sentCopy` / `sentCopyError`, see [SMTP transport](#smtp-transport)). `send-email` is for **new conversations**: adding `Re:` to its subject does not add threading headers. Use this reply tool with the original id instead.
 
 **⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
 
@@ -878,15 +936,18 @@ Success includes `transport` and, for SMTP when returned by the server, the new 
 
 Forward a message to new recipients.
 
-| Parameter   | Type     | Required | Description                                                                                    |
-| ----------- | -------- | -------- | ---------------------------------------------------------------------------------------------- |
-| `id`        | string   | Yes      | Message ID to forward                                                                          |
-| `to`        | string[] | Yes      | Recipients to forward to                                                                       |
-| `body`      | string   | No       | Message to prepend (plain text)                                                                |
-| `send`      | boolean  | No       | Send immediately (default: true, false = save as draft)                                        |
-| `transport` | string   | No       | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript. |
+| Parameter     | Type                                    | Required | Description                                                                                                                                                                                   |
+| ------------- | --------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | string                                  | Yes      | Message ID to forward                                                                                                                                                                         |
+| `to`          | string[]                                | Yes      | Recipients to forward to                                                                                                                                                                      |
+| `body`        | string                                  | No       | Message to prepend (plain text)                                                                                                                                                               |
+| `send`        | boolean                                 | No       | Send immediately (default: true, false = save as draft)                                                                                                                                       |
+| `transport`   | string                                  | No       | `smtp` or `applescript`; omitted prefers configured SMTP when sending. Drafts use AppleScript.                                                                                                |
+| `attachments` | (string \| {filename, contentBase64})[] | No       | Up to 20 additional attachments, same rules as `send-email`: absolute file paths inside the configured read roots and/or inline `{filename, contentBase64}` objects up to 25 MiB decoded each |
 
-**Delivery:** uses the same source lookup, transport selection, 25 MiB source limit, account-identity check, and failure behavior as `reply-to-message`. A forward deliberately starts a new conversation, so it has no `In-Reply-To` or `References` headers. The existing plain-text forwarding behavior is unchanged: original attachments are not reattached. See [SMTP transport](#smtp-transport). On the AppleScript transport, a `body` is merged with the forwarded-message header block and original text the same way the SMTP path builds it (see `reply-to-message`'s AppleScript transport quoting note); with no `body`, Mail's own forward content is left untouched.
+**Delivery:** uses the same source lookup, transport selection, 25 MiB source limit, account-identity check, and failure behavior as `reply-to-message`. A forward deliberately starts a new conversation, so it has no `In-Reply-To` or `References` headers. The existing plain-text forwarding behavior is unchanged: original attachments are not reattached. See [SMTP transport](#smtp-transport). On the AppleScript transport, a `body` is merged with the forwarded-message header block and original text the same way the SMTP path builds it (see `reply-to-message`'s AppleScript transport quoting note); with no `body`, Mail's own forward content is left untouched — unless `attachments` are given, in which case the forwarded-message block is built the same way so Mail has a paragraph to anchor the new files after.
+
+**Attachments (2.20.0, #267):** `attachments` adds new files to the forward, with or without a prepended `body`, under the same rules, validation and per-transport mechanics as `reply-to-message`'s attachments. They are independent of the original's attachments (which the SMTP path still does not reattach).
 
 SMTP forwarding requires a readable plain-text original. HTML-only IMAP messages and failed Mail.app body reads return an error before sending instead of silently omitting the original content. Explicitly select `transport: "applescript"` to forward these with Mail.app; no automatic fallback occurs. An intentionally empty plain-text message is still valid.
 

@@ -4027,13 +4027,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           try
             set inMb to mailbox "INBOX" of acct
             set inHits to ${matchClause("inMb")}
-            if (count of inHits) > 0 then return (id of (item 1 of inHits)) as string
+            if (count of inHits) > 0 then return ((id of (item 1 of inHits)) as string) & tab & (name of inMb) & tab & (name of acct)
           end try
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to ${matchClause("mb")}
               if (count of matchingMsgs) > 0 then
-                return (id of (item 1 of matchingMsgs)) as string
+                return ((id of (item 1 of matchingMsgs)) as string) & tab & (name of mb) & tab & (name of acct)
               end if
             end try
           end repeat
@@ -4046,8 +4046,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     const result = executeAppleScript(script, { timeoutMs: 60000 });
     if (!result.success || result.output.startsWith("error:")) return null;
-    const out = result.output.trim();
-    return /^\d+$/.test(out) ? out : null;
+    const [numericId, mailbox, account] = result.output.trim().split("\t");
+    if (!/^\d+$/.test(numericId ?? "")) return null;
+    // Bind the id to the mailbox it was found in (#267 follow-up). On a label
+    // store (Gmail) the same numeric id answers in INBOX, All Mail and Sent
+    // Mail at once, so an UNBOUND id handed to reply/forward was always refused
+    // as ambiguous — the imap:→numeric bridge never worked there.
+    if (mailbox && account) this.rememberLocation(numericId, account, mailbox);
+    return numericId;
   }
 
   /**

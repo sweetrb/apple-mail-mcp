@@ -149,6 +149,7 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
     );
   }
   const attachmentCount = attachments?.length ?? 0;
+  const withFiles = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
   const smtp =
     send && transport !== "applescript" && (transport === "smtp" || deps.smtpConfigured());
   if (smtp) {
@@ -194,8 +195,8 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
         );
       return successResponse(
         args.kind === "reply"
-          ? "Reply sent via SMTP"
-          : `Message forwarded via SMTP to ${args.to.join(", ")}`,
+          ? `Reply sent via SMTP${withFiles}`
+          : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
         {
           ok: true,
           sent: true,
@@ -245,13 +246,13 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
       `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
     );
   const text =
-    args.kind === "reply"
+    (args.kind === "reply"
       ? send
         ? "Reply sent via AppleScript"
         : "Reply saved as draft"
       : send
         ? `Message forwarded to ${args.to.join(", ")}`
-        : "Forward saved as draft";
+        : "Forward saved as draft") + withFiles;
   return successResponse(text, {
     ok: true,
     sent: send,

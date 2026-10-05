@@ -85015,13 +85015,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           try
             set inMb to mailbox "INBOX" of acct
             set inHits to ${matchClause("inMb")}
-            if (count of inHits) > 0 then return (id of (item 1 of inHits)) as string
+            if (count of inHits) > 0 then return ((id of (item 1 of inHits)) as string) & tab & (name of inMb) & tab & (name of acct)
           end try
           repeat with mb in mailboxes of acct
             try
               set matchingMsgs to ${matchClause("mb")}
               if (count of matchingMsgs) > 0 then
-                return (id of (item 1 of matchingMsgs)) as string
+                return ((id of (item 1 of matchingMsgs)) as string) & tab & (name of mb) & tab & (name of acct)
               end if
             end try
           end repeat
@@ -85033,8 +85033,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     `);
     const result = executeAppleScript(script, { timeoutMs: 6e4 });
     if (!result.success || result.output.startsWith("error:")) return null;
-    const out = result.output.trim();
-    return /^\d+$/.test(out) ? out : null;
+    const [numericId, mailbox, account] = result.output.trim().split("	");
+    if (!/^\d+$/.test(numericId ?? "")) return null;
+    if (mailbox && account) this.rememberLocation(numericId, account, mailbox);
+    return numericId;
   }
   /**
    * Unflag a message.
@@ -87296,6 +87298,7 @@ async function runCompose(deps, args) {
     );
   }
   const attachmentCount = attachments?.length ?? 0;
+  const withFiles = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
   const smtp = send && transport2 !== "applescript" && (transport2 === "smtp" || deps.smtpConfigured());
   if (smtp) {
     try {
@@ -87334,7 +87337,7 @@ async function runCompose(deps, args) {
           `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`
         );
       return successResponse(
-        args.kind === "reply" ? "Reply sent via SMTP" : `Message forwarded via SMTP to ${args.to.join(", ")}`,
+        args.kind === "reply" ? `Reply sent via SMTP${withFiles}` : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
         {
           ok: true,
           sent: true,
@@ -87377,7 +87380,7 @@ async function runCompose(deps, args) {
     return errorResponse(
       `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
     );
-  const text = args.kind === "reply" ? send ? "Reply sent via AppleScript" : "Reply saved as draft" : send ? `Message forwarded to ${args.to.join(", ")}` : "Forward saved as draft";
+  const text = (args.kind === "reply" ? send ? "Reply sent via AppleScript" : "Reply saved as draft" : send ? `Message forwarded to ${args.to.join(", ")}` : "Forward saved as draft") + withFiles;
   return successResponse(text, {
     ok: true,
     sent: send,
