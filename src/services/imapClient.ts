@@ -2337,6 +2337,77 @@ export async function imapAppendSentCopy(
   }
 }
 
+/**
+ * Pick the IMAP account a threaded draft is filed under (#267), never guessing:
+ *   - `account` given → it must be a configured IMAP account (label, login or alias);
+ *   - omitted → the IMAP account whose login is the SMTP identity (`smtpUser`),
+ *     else the ONLY configured IMAP account;
+ *   - otherwise throws, naming the configured accounts.
+ * Returns the account's label and login (no password is resolved here).
+ */
+export function resolveDraftImapAccount(
+  account: string | undefined,
+  smtpUser: string | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): { label: string; user: string } {
+  const specs = listImapAccountSpecs(env);
+  const why =
+    "Mail.app's AppleScript cannot set In-Reply-To/References on a draft, so a threaded " +
+    "draft is filed over IMAP into the account's Drafts mailbox";
+  if (specs.length === 0) {
+    throw new Error(
+      `${why}, and IMAP is not configured. Configure IMAP, omit inReplyTo/references, or use reply-to-message with send=false. ${SETUP_HINT}`
+    );
+  }
+  let spec: ImapAccountSpec | undefined;
+  if (account) {
+    spec = specs.find((s) => specMatchesSelector(s, account));
+    if (!spec) {
+      throw new Error(
+        `${why}, and "${account}" is not a configured IMAP account. Configured: ${specs.map((s) => s.accountLabel).join(", ")}.`
+      );
+    }
+  } else {
+    spec =
+      (smtpUser ? specs.find((s) => specMatchesSelector(s, smtpUser)) : undefined) ??
+      (specs.length === 1 ? specs[0] : undefined);
+    if (!spec) {
+      throw new Error(
+        `${why}; several IMAP accounts are configured, so pass \`account\` to choose one: ${specs.map((s) => s.accountLabel).join(", ")}.`
+      );
+    }
+  }
+  return { label: spec.accountLabel, user: spec.user };
+}
+
+/** Where {@link imapAppendDraft} filed the draft. */
+export interface DraftAppendResult {
+  /** Server path of the Drafts mailbox the draft landed in. */
+  mailbox: string;
+  /** Label of the IMAP account it was filed under. */
+  account: string;
+}
+
+/**
+ * APPEND `raw` (RFC822 source) to the Drafts mailbox of `account`, flagged
+ * `\Draft` + `\Seen` (#267). Used by create-draft when the caller asks for
+ * `In-Reply-To` / `References`, which Mail.app's AppleScript `outgoing message`
+ * cannot carry. Unlike the best-effort Sent copy this is the operation itself,
+ * so every failure throws.
+ */
+export async function imapAppendDraft(
+  account: string,
+  raw: string | Buffer,
+  deps: ImapDeps = {}
+): Promise<DraftAppendResult> {
+  return withClient({ ...deps, account: deps.account ?? account }, async (client, cfg) => {
+    const path = await resolveMailboxPath(client, "drafts", "list");
+    const res = await client.append(path, raw, ["\\Draft", "\\Seen"]);
+    if (!res) throw new Error(`server rejected the APPEND to "${path}" (IMAP NO/BAD)`);
+    return { mailbox: path, account: cfg.accountLabel };
+  });
+}
+
 // ===========================================================================
 // Phase 3 — message-level operations by composite IMAP id (issue #43)
 //

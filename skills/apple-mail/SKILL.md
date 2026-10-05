@@ -33,11 +33,11 @@ Use this skill when the user:
 | `get-message-headers` | Read a message's raw RFC 5322 headers (author's `Date:`, Message-ID, threading ids, `Received:` trace) without the body                                                                                                                                                                 |
 | `get-message-rfc822`  | Acquire the complete original RFC 822 bytes over IMAP — untouched, with `uid`/`uidValidity`/`internalDate`/`flags`/`RFC822.SIZE` and a SHA-256 — for an archival or forensic `.eml` (imap: ids only; read-only: `EXAMINE` + `BODY.PEEK[]`; inline up to 6 MiB, `savePath` up to 25 MiB) |
 | `get-thread`          | Get the full conversation thread for a message                                                                                                                                                                                                                                          |
-| `send-email`          | Send a new email immediately                                                                                                                                                                                                                                                            |
+| `send-email`          | Send a new email immediately (`attachments`; `inReplyTo`/`references` threading, SMTP only)                                                                                                                                                                                             |
 | `send-serial-email`   | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders)                                                                                                                                                                                                    |
-| `create-draft`        | Save an email to Drafts for review                                                                                                                                                                                                                                                      |
-| `reply-to-message`    | Reply to a message (supports reply-all)                                                                                                                                                                                                                                                 |
-| `forward-message`     | Forward a message to new recipients                                                                                                                                                                                                                                                     |
+| `create-draft`        | Save an email to Drafts for review (`attachments`; with `inReplyTo`/`references` a threaded draft is filed over IMAP)                                                                                                                                                                   |
+| `reply-to-message`    | Reply to a message (`replyAll`, `send`, `transport`, `attachments`)                                                                                                                                                                                                                     |
+| `forward-message`     | Forward a message to new recipients (`body`, `send`, `transport`, `attachments`)                                                                                                                                                                                                        |
 | `mark-as-read`        | Mark a message as read                                                                                                                                                                                                                                                                  |
 | `mark-as-unread`      | Mark a message as unread                                                                                                                                                                                                                                                                |
 | `flag-message`        | Flag a message for follow-up (optional color)                                                                                                                                                                                                                                           |
@@ -190,6 +190,9 @@ Action: Use reply-to-message with replyAll=true
 
 User: "Forward this to my colleague"
 Action: Use forward-message with the message ID and recipient
+
+User: "Reply all and attach the PDF they asked for"
+Action: Use reply-to-message with replyAll=true and attachments=["/abs/path/file.pdf"]
 ```
 
 ### Organizing Email
@@ -275,3 +278,11 @@ failed Mail.app body reads are rejected before sending, so the original content
 cannot silently disappear. Explicit AppleScript forwarding remains available;
 do not retry through it automatically. Original attachments are not reattached
 by the plain-text SMTP forward path.
+
+Reply and forward take `attachments` with the same rules as `send-email` (absolute
+paths in the read roots and/or inline `{filename, contentBase64}`, max 20, 25 MiB
+each) on both transports, including `send: false` drafts — attach in the same call
+rather than switching to `send-email`. `inReplyTo`/`references` on `send-email` /
+`create-draft` are for callers that build recipients and quote themselves; they
+must be `<id@host>` tokens, need SMTP (send) or an IMAP account (draft), and are
+refused rather than dropped otherwise.

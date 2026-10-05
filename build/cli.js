@@ -57846,6 +57846,7 @@ __export(imapClient_exports, {
   decodeImapId: () => decodeImapId,
   dropAllPools: () => dropAllPools,
   encodeImapId: () => encodeImapId,
+  imapAppendDraft: () => imapAppendDraft,
   imapAppendSentCopy: () => imapAppendSentCopy,
   imapBatchDelete: () => imapBatchDelete,
   imapBatchFlag: () => imapBatchFlag,
@@ -57883,6 +57884,7 @@ __export(imapClient_exports, {
   matchMailbox: () => matchMailbox,
   normalizeMessageId: () => normalizeMessageId,
   omittedNote: () => omittedNote,
+  resolveDraftImapAccount: () => resolveDraftImapAccount,
   resolveImapConfig: () => resolveImapConfig,
   resolveImapConfigs: () => resolveImapConfigs,
   resolveMailboxPath: () => resolveMailboxPath,
@@ -58940,6 +58942,40 @@ async function imapAppendSentCopy(smtpUser, raw, deps = {}) {
     return { attempted: true, success: false, error: errText(e) };
   }
 }
+function resolveDraftImapAccount(account, smtpUser, env = process.env) {
+  const specs = listImapAccountSpecs(env);
+  const why = "Mail.app's AppleScript cannot set In-Reply-To/References on a draft, so a threaded draft is filed over IMAP into the account's Drafts mailbox";
+  if (specs.length === 0) {
+    throw new Error(
+      `${why}, and IMAP is not configured. Configure IMAP, omit inReplyTo/references, or use reply-to-message with send=false. ${SETUP_HINT}`
+    );
+  }
+  let spec;
+  if (account) {
+    spec = specs.find((s) => specMatchesSelector(s, account));
+    if (!spec) {
+      throw new Error(
+        `${why}, and "${account}" is not a configured IMAP account. Configured: ${specs.map((s) => s.accountLabel).join(", ")}.`
+      );
+    }
+  } else {
+    spec = (smtpUser ? specs.find((s) => specMatchesSelector(s, smtpUser)) : void 0) ?? (specs.length === 1 ? specs[0] : void 0);
+    if (!spec) {
+      throw new Error(
+        `${why}; several IMAP accounts are configured, so pass \`account\` to choose one: ${specs.map((s) => s.accountLabel).join(", ")}.`
+      );
+    }
+  }
+  return { label: spec.accountLabel, user: spec.user };
+}
+async function imapAppendDraft(account, raw, deps = {}) {
+  return withClient({ ...deps, account: deps.account ?? account }, async (client, cfg) => {
+    const path3 = await resolveMailboxPath(client, "drafts", "list");
+    const res = await client.append(path3, raw, ["\\Draft", "\\Seen"]);
+    if (!res) throw new Error(`server rejected the APPEND to "${path3}" (IMAP NO/BAD)`);
+    return { mailbox: path3, account: cfg.accountLabel };
+  });
+}
 async function withMailbox(path3, deps, fn) {
   return withClient(deps, async (client) => {
     const lock = await client.getMailboxLock(path3);
@@ -59795,6 +59831,27 @@ function buildAttachments(attachments) {
     return { filename: a.filename, content: decodeInlineAttachment(a.contentBase64) };
   });
 }
+function buildMailOptions(opts, from, attachments) {
+  const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
+  return {
+    from,
+    to: opts.to,
+    cc: opts.cc,
+    bcc: opts.bcc,
+    subject: opts.subject,
+    text: opts.body,
+    // When present, nodemailer emits multipart/alternative (text + html).
+    html,
+    attachments,
+    // RFC 5322 threading for SMTP replies/forwards (2.5.0). nodemailer treats
+    // In-Reply-To / References as structured msg-id headers and never
+    // RFC 2047-encodes them, however long the id (pinned by a test, #267).
+    inReplyTo: opts.inReplyTo?.trim() || void 0,
+    references: opts.references?.length ? opts.references : void 0,
+    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
+    replyTo: opts.replyTo?.trim() || void 0
+  };
+}
 async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.createTransport, appendSentCopy = defaultAppendSentCopy) {
   let cfg;
   try {
@@ -59833,23 +59890,7 @@ async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.c
     requireTLS,
     auth: { user: cfg.user, pass: cfg.pass }
   });
-  const html = opts.htmlBody?.trim() ? opts.htmlBody : void 0;
-  const mailOptions = {
-    from: requestedFrom || cfg.from,
-    to: opts.to,
-    cc: opts.cc,
-    bcc: opts.bcc,
-    subject: opts.subject,
-    text: opts.body,
-    // When present, nodemailer emits multipart/alternative (text + html).
-    html,
-    attachments,
-    // RFC 5322 threading for SMTP replies/forwards (2.5.0).
-    inReplyTo: opts.inReplyTo?.trim() || void 0,
-    references: opts.references?.length ? opts.references : void 0,
-    // Reply-To header (2.18.0, issue #220): nodemailer already supports this.
-    replyTo: opts.replyTo?.trim() || void 0
-  };
+  const mailOptions = buildMailOptions(opts, requestedFrom || cfg.from, attachments);
   try {
     const info = await transporter.sendMail(mailOptions);
     let copyFields = {};

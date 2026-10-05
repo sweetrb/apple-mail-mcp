@@ -325,7 +325,8 @@ describe("reply and forward transport routing", () => {
       "84",
       ["colleague@example.com"],
       undefined,
-      false
+      false,
+      undefined
     );
   });
 
@@ -349,7 +350,7 @@ describe("reply and forward transport routing", () => {
     d.imapSource.mockRejectedValue(new Error("IMAP connection reset"));
     const result = await runReply(d, { ...args, send: false });
     expect(result.structuredContent).toMatchObject({ sent: false, transport: "applescript" });
-    expect(d.mail.replyToMessage).toHaveBeenCalledWith("84", args.body, false, false);
+    expect(d.mail.replyToMessage).toHaveBeenCalledWith("84", args.body, false, false, undefined);
   });
 
   it("honors explicit AppleScript without resolving SMTP credentials, quoting via IMAP", async () => {

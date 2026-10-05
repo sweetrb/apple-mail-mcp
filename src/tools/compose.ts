@@ -11,6 +11,8 @@ import {
   type OriginalHeaders,
 } from "@/services/replyForward.js";
 import { extractTextBody } from "@/utils/mimeParse.js";
+import { preflightAttachments } from "@/utils/attachmentMaterialize.js";
+import type { AttachmentInput } from "@/types.js";
 import { successResponse, errorResponse, type ToolResponse } from "@/tools/respond.js";
 
 export interface ComposeDeps {
@@ -31,6 +33,8 @@ export interface ReplyArgs {
   replyAll: boolean;
   send: boolean;
   transport?: "smtp" | "applescript";
+  /** Files to attach (#267) — same schema, limits and read roots as send-email. */
+  attachments?: AttachmentInput[];
 }
 
 export interface ForwardArgs {
@@ -39,6 +43,8 @@ export interface ForwardArgs {
   body?: string;
   send: boolean;
   transport?: "smtp" | "applescript";
+  /** Files to attach (#267) — same schema, limits and read roots as send-email. */
+  attachments?: AttachmentInput[];
 }
 
 type ComposeArgs = (ReplyArgs & { kind: "reply" }) | (ForwardArgs & { kind: "forward" });
@@ -108,26 +114,42 @@ async function replyComposeBody(deps: ComposeDeps, id: string, body: string): Pr
 /**
  * Forward body for the AppleScript path: only rebuilds content when a body
  * was passed to prepend — matching the pre-fix behavior of leaving Mail's own
- * forward content untouched when there's nothing of ours to merge into it.
+ * forward content untouched when there's nothing of ours to merge into it —
+ * or when attachments are added (#267): Mail anchors an attachment after the
+ * last paragraph of the plain-text `content`, which AppleScript cannot read
+ * back from Mail's own forward rendering, so the forward block is built here
+ * exactly as it is when a body is given.
  */
 async function forwardComposeBody(
   deps: ComposeDeps,
   id: string,
-  body: string | undefined
+  body: string | undefined,
+  hasAttachments = false
 ): Promise<string | undefined> {
-  if (!body) return body;
+  if (!body && !hasAttachments) return body;
   const source = await readOriginalForQuote(deps, id);
   return source ? buildForwardBody(source.original, source.plainText, body) : body;
 }
 
 async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolResponse> {
-  const { id, send, transport } = args;
+  const { id, send, transport, attachments } = args;
   const verb = args.kind === "reply" ? "reply to" : "forward";
   if (!send && transport === "smtp") {
     return errorResponse(
       "SMTP cannot save a Mail.app draft. Omit transport or use transport=applescript with send=false."
     );
   }
+  // #267: reject a bad attachment with send-email's own error text, before the
+  // original is fetched or anything is composed — on either transport.
+  try {
+    preflightAttachments(attachments);
+  } catch (error) {
+    return errorResponse(
+      `Failed to ${verb} message "${id}": ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  const attachmentCount = attachments?.length ?? 0;
+  const withFiles = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
   const smtp =
     send && transport !== "applescript" && (transport === "smtp" || deps.smtpConfigured());
   if (smtp) {
@@ -163,6 +185,9 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
               body: args.body,
               from: cfg.from,
             });
+      // Same attachment path as send-email: sendViaSmtp's builder, so the wire
+      // message and the Sent-folder copy both carry the files (#267).
+      if (attachmentCount) opts.attachments = attachments;
       const result = await deps.smtpSend(opts, cfg);
       if (!result.success)
         return errorResponse(
@@ -170,14 +195,15 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
         );
       return successResponse(
         args.kind === "reply"
-          ? "Reply sent via SMTP"
-          : `Message forwarded via SMTP to ${args.to.join(", ")}`,
+          ? `Reply sent via SMTP${withFiles}`
+          : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
         {
           ok: true,
           sent: true,
           id,
           transport: "smtp",
           messageId: result.messageId,
+          attachmentCount,
           ...(args.kind === "forward" ? { recipients: args.to } : {}),
           // Best-effort Sent-folder copy (issue #220) — same field shape as
           // send-email, since it's the same sendViaSmtp underneath.
@@ -205,31 +231,34 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
           resolved.numericId,
           await replyComposeBody(deps, id, args.body),
           args.replyAll,
-          send
+          send,
+          attachmentCount ? attachments : undefined
         )
       : deps.mail.forwardMessage(
           resolved.numericId,
           args.to,
-          await forwardComposeBody(deps, id, args.body),
-          send
+          await forwardComposeBody(deps, id, args.body, attachmentCount > 0),
+          send,
+          attachmentCount ? attachments : undefined
         );
   if (!outcome.success)
     return errorResponse(
       `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
     );
   const text =
-    args.kind === "reply"
+    (args.kind === "reply"
       ? send
         ? "Reply sent via AppleScript"
         : "Reply saved as draft"
       : send
         ? `Message forwarded to ${args.to.join(", ")}`
-        : "Forward saved as draft";
+        : "Forward saved as draft") + withFiles;
   return successResponse(text, {
     ok: true,
     sent: send,
     id,
     transport: "applescript",
+    attachmentCount,
     ...(args.kind === "forward" ? { recipients: args.to } : {}),
   });
 }
