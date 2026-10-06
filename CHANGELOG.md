@@ -1,5 +1,28 @@
 ## [Unreleased]
 
+## [2.20.1] - 2026-10-06
+
+### Fixed
+
+- **`list-attachments` reported base64-encoded sizes instead of file sizes**
+  (#270, reported by @j5pu). Over IMAP the size came straight from
+  `BODYSTRUCTURE`, which counts a part in its transfer encoding — a 29-byte
+  attachment listed as 40, 25 as 36, 14 as 20. Sizes are now the decoded byte
+  count `fetch-attachment` returns: a `Content-Disposition` `size=` parameter
+  wins when present; base64 parts are measured exactly from a short tail of
+  each part (padding + line wrap), all in one batched `FETCH`; quoted-printable
+  parts up to 64 KiB are counted exactly. A part that can't be measured gets an
+  estimate (base64 within a few bytes) flagged `sizeApproximate: true`. The
+  text summary now shows sub-KiB files in bytes rather than "0 KB".
+- The AppleScript/MIME fallback path ignored `=` padding when sizing a base64
+  attachment (29 bytes → 30) and used the encoded length for quoted-printable;
+  both are now exact. Its `size=` parameter match is anchored so a
+  `x-file-size=` parameter can't be mistaken for it.
+- `fetch-attachment` / `save-attachment` over IMAP checked the 25 MiB limit
+  against the encoded size, refusing base64 files of ~19–25 MiB before
+  download; the pre-check now uses the decoded estimate (the streaming cut-off
+  is unchanged).
+
 ## [2.20.0] - 2026-10-05
 
 ### Added
@@ -50,7 +73,7 @@
 ### Security
 
 - Raised the `ip-address` override floor from `>=10.5.1 <11` to `>=10.7.1
-  <11`, fixing
+<11`, fixing
   [GHSA-j6r3-76f7-8jcv](https://github.com/advisories/GHSA-j6r3-76f7-8jcv)
   and [GHSA-h3mg-xc3c-68pw](https://github.com/advisories/GHSA-h3mg-xc3c-68pw)
   (both medium) — 10.5.1 was not actually the patched release. `ip-address`
@@ -80,7 +103,7 @@
   lockfile also dragged an unrelated transitive (`rolldown`, via `vitest`)
   forward to a build published within the repo's 7-day `minimumReleaseAge`
   supply-chain soak. Fixed by a fresh `pnpm install` resolution (`rm
-  pnpm-lock.yaml && pnpm install`) rather than accepting Dependabot's
+pnpm-lock.yaml && pnpm install`) rather than accepting Dependabot's
   lockfile — pnpm re-resolves every entry honoring the age policy, landing
   nodemailer 10.0.10 (10.0.12 exists but is itself too fresh) and reverting
   `rolldown` to an already-aged version.

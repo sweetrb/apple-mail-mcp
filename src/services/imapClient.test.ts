@@ -35,6 +35,9 @@ import {
   imapListAttachments,
   imapFetchAttachment,
   bodyStructureHasAttachments,
+  base64DecodedSizeFromTail,
+  decodedSizeWithoutBody,
+  quotedPrintableDecodedLength,
   imapBatchMarkRead,
   imapBatchMove,
   imapBatchDelete,
@@ -1801,6 +1804,235 @@ describe("attachments via BODYSTRUCTURE (I1)", () => {
 
   it("rejects a non-IMAP id", async () => {
     expect((await imapListAttachments("12345")).success).toBe(false);
+  });
+});
+
+describe("list-attachments reports DECODED sizes (#270)", () => {
+  const MID = encodeImapId("acct", "Sent Messages", 9);
+  const b64 = (n: number) => Buffer.alloc(n, 0x41).toString("base64");
+  const wrap = (s: string, crlfEnd = true) =>
+    (s.match(/.{1,76}/g) as string[]).join("\r\n") + (crlfEnd ? "\r\n" : "");
+
+  type Probe = { key: string; start: number; maxLength: number };
+  /** A client whose BODYSTRUCTURE sizes are the encoded lengths of `bodies`,
+   *  and whose bodyParts FETCH returns the requested slice of each. */
+  function sizedClient(
+    bodies: { part: string; body: string; encoding: string; declared?: number }[],
+    rec: { probes: Probe[][] } = { probes: [] },
+    opts: { probeThrows?: boolean } = {}
+  ): ImapClientLike {
+    return {
+      ...makeClient([], {}),
+      fetchOne: async (_range: string, query: Record<string, unknown>) => {
+        if (query.bodyParts) {
+          const ps = query.bodyParts as Probe[];
+          rec.probes.push(ps);
+          if (opts.probeThrows) throw new Error("socket hang up");
+          const map = new Map<string, Buffer>();
+          for (const p of ps) {
+            const b = bodies.find((x) => x.part === p.key) as { body: string };
+            map.set(
+              p.key.toLowerCase(),
+              Buffer.from(b.body, "latin1").subarray(p.start, p.start + p.maxLength)
+            );
+          }
+          return { uid: 9, bodyParts: map };
+        }
+        return {
+          uid: 9,
+          bodyStructure: {
+            type: "multipart/mixed",
+            childNodes: [
+              { part: "1", type: "text/plain", size: 10 },
+              ...bodies.map((b) => ({
+                part: b.part,
+                type: "application/octet-stream",
+                disposition: "attachment",
+                dispositionParameters: {
+                  filename: `f${b.part}.bin`,
+                  ...(b.declared !== undefined ? { size: String(b.declared) } : {}),
+                },
+                encoding: b.encoding,
+                size: Buffer.byteLength(b.body, "latin1"),
+              })),
+            ],
+          },
+        };
+      },
+    };
+  }
+
+  it("reports 29/25/14 bytes, not the 40/36/20 base64 lengths, in ONE probe fetch", async () => {
+    const rec = { probes: [] as Probe[][] };
+    const client = sizedClient(
+      [
+        { part: "2", body: b64(29), encoding: "base64" },
+        { part: "3", body: b64(25), encoding: "base64" },
+        { part: "4", body: b64(14), encoding: "base64" },
+      ],
+      rec
+    );
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(true);
+    expect(r.attachments?.map((a) => a.size)).toEqual([29, 25, 14]);
+    expect(r.attachments?.some((a) => a.sizeApproximate)).toBe(false);
+    expect(rec.probes).toHaveLength(1);
+    expect(rec.probes[0].map((p) => p.key)).toEqual(["2", "3", "4"]);
+  });
+
+  it.each([
+    [3000, true],
+    [3001, true],
+    [3002, true],
+    [3000, false],
+    [3001, false],
+    [3002, false],
+    [100_000, true],
+  ])(
+    "measures a wrapped %i-byte base64 part exactly from its tail (trailing CRLF: %s)",
+    async (n, crlfEnd) => {
+      const rec = { probes: [] as Probe[][] };
+      const body = wrap(b64(n), crlfEnd);
+      const client = sizedClient([{ part: "2", body, encoding: "base64" }], rec);
+      const r = await imapListAttachments(MID, { config: cfg, connect: async () => client });
+      expect(r.attachments?.[0].size).toBe(n);
+      expect(r.attachments?.[0].sizeApproximate).toBeUndefined();
+      // Only the tail travels, never the whole part.
+      expect(rec.probes[0][0].maxLength).toBeLessThanOrEqual(1024);
+    }
+  );
+
+  it("lets a Content-Disposition size= parameter win, without probing", async () => {
+    const rec = { probes: [] as Probe[][] };
+    const client = sizedClient(
+      [{ part: "2", body: b64(29), encoding: "base64", declared: 29 }],
+      rec
+    );
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => client });
+    expect(r.attachments?.[0]).toMatchObject({ size: 29 });
+    expect(r.attachments?.[0].sizeApproximate).toBeUndefined();
+    expect(rec.probes).toHaveLength(0);
+  });
+
+  it("falls back to a marked estimate when the probe fetch fails", async () => {
+    const client = sizedClient([{ part: "2", body: b64(29), encoding: "base64" }], undefined, {
+      probeThrows: true,
+    });
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => client });
+    expect(r.success).toBe(true);
+    // 40 * 3/4 = 30: within a byte or two of 29, and no longer the 33% inflation.
+    expect(r.attachments?.[0]).toMatchObject({ size: 30, sizeApproximate: true });
+  });
+
+  it("refuses to call ragged wrapping exact", async () => {
+    // 10 lines wrapped at 76, the rest at 60: the tail sees a uniform 60-col
+    // wrap that does not divide the total, so the answer must be an estimate.
+    const s = b64(3000);
+    const body = wrap(s.slice(0, 760)) + (s.slice(760).match(/.{1,60}/g) as string[]).join("\r\n");
+    const client = sizedClient([{ part: "2", body: body + "\r\n", encoding: "base64" }]);
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => client });
+    expect(r.attachments?.[0].sizeApproximate).toBe(true);
+    expect(Math.abs((r.attachments?.[0].size ?? 0) - 3000)).toBeLessThan(80);
+  });
+
+  it("counts a small quoted-printable part exactly and passes 7bit through", async () => {
+    const qp = "caf=C3=A9 =\r\nlatte\r\n";
+    const client = sizedClient([
+      { part: "2", body: qp, encoding: "quoted-printable" },
+      { part: "3", body: "plain text\r\n", encoding: "7bit" },
+    ]);
+    const r = await imapListAttachments(MID, { config: cfg, connect: async () => client });
+    expect(r.attachments?.map((a) => a.size)).toEqual([Buffer.from("café latte\r\n").length, 12]);
+    expect(r.attachments?.some((a) => a.sizeApproximate)).toBe(false);
+  });
+
+  it("pure helpers: tail measurement, padding 0/1/2, and the no-body estimate", () => {
+    for (const n of [3000, 3001, 3002]) {
+      const body = Buffer.from(wrap(b64(n)), "latin1");
+      expect(base64DecodedSizeFromTail(body.length, body.subarray(body.length - 1024))).toBe(n);
+    }
+    // a single unwrapped line longer than the window cannot be measured
+    const long = Buffer.from(b64(3000), "latin1");
+    expect(base64DecodedSizeFromTail(long.length, long.subarray(long.length - 1024))).toBe(
+      undefined
+    );
+    expect(quotedPrintableDecodedLength("a=3Db=\r\nc")).toBe(4);
+    expect(decodedSizeWithoutBody({ encodedSize: 40, encoding: "base64" })).toEqual({
+      size: 30,
+      exact: false,
+    });
+    expect(
+      decodedSizeWithoutBody({ encodedSize: 40, encoding: "base64", declaredSize: 29 })
+    ).toEqual({ size: 29, exact: true });
+    expect(decodedSizeWithoutBody({ encodedSize: 40, encoding: "7bit" })).toEqual({
+      size: 40,
+      exact: true,
+    });
+  });
+
+  it("fetch-attachment's 25 MiB pre-check uses the decoded size, not the encoded one", async () => {
+    // A ~20 MiB file is ~27 MiB as base64: under the limit decoded, over it encoded.
+    let downloaded = false;
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 9,
+        bodyStructure: {
+          type: "multipart/mixed",
+          childNodes: [
+            {
+              part: "2",
+              type: "application/pdf",
+              disposition: "attachment",
+              dispositionParameters: { filename: "big.pdf" },
+              encoding: "base64",
+              size: Math.ceil((MAX_IMAP_ATTACHMENT_BYTES * 1.1 * 4) / 3),
+            },
+          ],
+        },
+      }),
+      download: async () => {
+        downloaded = true;
+        return {
+          content: (async function* () {
+            yield Buffer.from("ok");
+          })(),
+        };
+      },
+    };
+    const r = await imapFetchAttachment(MID, "big.pdf", {
+      config: cfg,
+      connect: async () => client,
+    });
+    // 1.1 × the limit decoded is still over: refused before download
+    expect(r.success).toBe(false);
+    expect(downloaded).toBe(false);
+
+    const under: ImapClientLike = {
+      ...client,
+      fetchOne: async () => ({
+        uid: 9,
+        bodyStructure: {
+          type: "multipart/mixed",
+          childNodes: [
+            {
+              part: "2",
+              type: "application/pdf",
+              disposition: "attachment",
+              dispositionParameters: { filename: "big.pdf" },
+              encoding: "base64",
+              size: MAX_IMAP_ATTACHMENT_BYTES + 1, // over encoded, ~19 MiB decoded
+            },
+          ],
+        },
+      }),
+    };
+    const r2 = await imapFetchAttachment(MID, "big.pdf", {
+      config: cfg,
+      connect: async () => under,
+    });
+    expect(r2.success).toBe(true);
+    expect(downloaded).toBe(true);
   });
 });
 

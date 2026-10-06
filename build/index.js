@@ -7256,7 +7256,7 @@ function isInlineDisposition(headers) {
 function extractSize(headers) {
   const dispHeader = getHeader(headers, "Content-Disposition");
   if (dispHeader) {
-    const sizeMatch = dispHeader.match(/size=(\d+)/i);
+    const sizeMatch = dispHeader.match(/(?:^|;)\s*size\s*=\s*"?(\d+)/i);
     if (sizeMatch) return parseInt(sizeMatch[1], 10);
   }
   return 0;
@@ -7285,8 +7285,8 @@ function decodePartText(bytes, charset) {
     return new TextDecoder("windows-1252").decode(bytes);
   }
 }
-function estimateBase64Size(base64Body) {
-  const cleaned = base64Body.replace(/[\s\r\n]/g, "");
+function base64DecodedSize(base64Body) {
+  const cleaned = base64Body.replace(/[^A-Za-z0-9+/]/g, "");
   return Math.floor(cleaned.length * 3 / 4);
 }
 function splitMimeParts(source, boundary) {
@@ -7349,7 +7349,8 @@ function decodeQuotedPrintable(body) {
 }
 function estimateSize(body, encoding) {
   const enc = (encoding || "").toLowerCase().trim();
-  if (enc === "base64") return estimateBase64Size(body);
+  if (enc === "base64") return base64DecodedSize(body);
+  if (enc === "quoted-printable") return decodeQuotedPrintable(body).length;
   return body.length;
 }
 function parseMimeAttachments(source) {
@@ -65182,9 +65183,12 @@ __export(imapClient_exports, {
   MAX_UNSCOPED_SEARCH_DEPTH: () => MAX_UNSCOPED_SEARCH_DEPTH,
   __resetPool: () => __resetPool,
   __setPoolConnect: () => __setPoolConnect,
+  base64DecodedLength: () => base64DecodedLength,
+  base64DecodedSizeFromTail: () => base64DecodedSizeFromTail,
   bodyStructureHasAttachments: () => bodyStructureHasAttachments,
   buildImapConnectionOptions: () => buildImapConnectionOptions,
   decodeImapId: () => decodeImapId,
+  decodedSizeWithoutBody: () => decodedSizeWithoutBody,
   dropAllPools: () => dropAllPools,
   encodeImapId: () => encodeImapId,
   imapAppendDraft: () => imapAppendDraft,
@@ -65225,6 +65229,7 @@ __export(imapClient_exports, {
   matchMailbox: () => matchMailbox,
   normalizeMessageId: () => normalizeMessageId,
   omittedNote: () => omittedNote,
+  quotedPrintableDecodedLength: () => quotedPrintableDecodedLength,
   resolveDraftImapAccount: () => resolveDraftImapAccount,
   resolveImapConfig: () => resolveImapConfig,
   resolveImapConfigs: () => resolveImapConfigs,
@@ -66685,6 +66690,56 @@ async function imapDeleteMessageById(id, deps = {}) {
     }
   });
 }
+function dispositionSize(params) {
+  const raw = params?.size?.trim();
+  return raw && /^\d+$/.test(raw) ? Number(raw) : void 0;
+}
+function base64DecodedLength(body) {
+  const s = typeof body === "string" ? body : body.toString("latin1");
+  const n = s.replace(/[^A-Za-z0-9+/]/g, "").length;
+  return Math.floor(n * 3 / 4);
+}
+function base64DecodedSizeFromTail(total, tail) {
+  if (tail.length >= total) return base64DecodedLength(tail);
+  const s = tail.toString("latin1");
+  const term = s.includes("\r\n") ? "\r\n" : "\n";
+  const segs = s.split(term);
+  if (segs.length < 3) return void 0;
+  let trailing = 0;
+  while (segs.length > 1 && segs[segs.length - 1] === "") {
+    segs.pop();
+    trailing++;
+  }
+  const last = segs[segs.length - 1];
+  const full = segs.slice(1, -1);
+  if (full.length === 0 || !last) return void 0;
+  const L = full[0].length;
+  const alphabet = /^[A-Za-z0-9+/]+$/;
+  if (L === 0 || L % 4 !== 0 || !full.every((l) => l.length === L && alphabet.test(l))) {
+    return void 0;
+  }
+  const m = /^([A-Za-z0-9+/]*)(=*)$/.exec(last);
+  if (!m || m[2].length > 2 || last.length > L) return void 0;
+  const before = total - trailing * term.length - last.length;
+  if (before < 0 || before % (L + term.length) !== 0) return void 0;
+  const chars = before / (L + term.length) * L + last.length;
+  if (chars % 4 !== 0) return void 0;
+  return chars / 4 * 3 - m[2].length;
+}
+function quotedPrintableDecodedLength(body) {
+  const s = (typeof body === "string" ? body : body.toString("latin1")).replace(/=\r?\n/g, "");
+  const escapes = s.match(/=[0-9A-Fa-f]{2}/g)?.length ?? 0;
+  return s.length - escapes * 2;
+}
+function decodedSizeWithoutBody(a) {
+  if (a.declaredSize !== void 0) return { size: a.declaredSize, exact: true };
+  if (a.encoding === "base64") {
+    const chars = a.encodedSize - 2 * Math.floor(a.encodedSize / 78);
+    return { size: Math.floor(chars * 3 / 4), exact: false };
+  }
+  if (a.encoding === "quoted-printable") return { size: a.encodedSize, exact: false };
+  return { size: a.encodedSize, exact: true };
+}
 function collectAttachments(node, out = []) {
   if (!node) return out;
   const filename = node.dispositionParameters?.filename || node.parameters?.name;
@@ -66696,7 +66751,9 @@ function collectAttachments(node, out = []) {
       part: node.part,
       filename: filename || `part-${node.part}`,
       mimeType: node.type || "application/octet-stream",
-      size: node.size ?? 0
+      encodedSize: node.size ?? 0,
+      encoding: (node.encoding || "").toLowerCase().trim(),
+      declaredSize: dispositionSize(node.dispositionParameters)
     });
   }
   for (const child of node.childNodes ?? []) collectAttachments(child, out);
@@ -66717,6 +66774,52 @@ async function streamToBuffer(content, maxBytes) {
   }
   return Buffer.concat(chunks);
 }
+async function resolveDecodedSizes(client, uid, atts) {
+  const out = atts.map(decodedSizeWithoutBody);
+  const probes = [];
+  atts.forEach((a, i) => {
+    if (a.declaredSize !== void 0 || a.encodedSize <= 0) return;
+    if (a.encoding === "base64") {
+      probes.push({ i, start: Math.max(0, a.encodedSize - BASE64_TAIL_WINDOW), kind: "b64" });
+    } else if (a.encoding === "quoted-printable" && a.encodedSize <= QP_EXACT_MAX_BYTES) {
+      probes.push({ i, start: 0, kind: "qp" });
+    }
+  });
+  if (probes.length === 0) return out;
+  let parts;
+  try {
+    const msg = await client.fetchOne(
+      String(uid),
+      {
+        uid: true,
+        bodyParts: probes.map((p) => ({
+          key: atts[p.i].part,
+          start: p.start,
+          maxLength: atts[p.i].encodedSize - p.start
+        }))
+      },
+      { uid: true }
+    );
+    parts = msg ? msg.bodyParts : void 0;
+  } catch {
+    return out;
+  }
+  for (const p of probes) {
+    const a = atts[p.i];
+    const buf = parts?.get(a.part.toLowerCase());
+    if (!buf) continue;
+    let exact;
+    if (p.kind === "qp") {
+      exact = quotedPrintableDecodedLength(buf);
+    } else {
+      const requested = a.encodedSize - p.start;
+      const total = buf.length < requested ? p.start + buf.length : a.encodedSize;
+      exact = base64DecodedSizeFromTail(total, buf);
+    }
+    if (exact !== void 0) out[p.i] = { size: exact, exact: true };
+  }
+  return out;
+}
 async function imapListAttachments(id, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
@@ -66725,12 +66828,18 @@ async function imapListAttachments(id, deps = {}) {
     if (!msg || !msg.bodyStructure) {
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
     }
-    const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
-      id: `${id}#${a.part}`,
-      name: a.filename,
-      mimeType: a.mimeType,
-      size: a.size
-    }));
+    const atts = collectAttachments(msg.bodyStructure);
+    const sizes = await resolveDecodedSizes(client, ref.uid, atts);
+    const attachments = atts.map((a, i) => {
+      const info = {
+        id: `${id}#${a.part}`,
+        name: a.filename,
+        mimeType: a.mimeType,
+        size: sizes[i].size
+      };
+      if (!sizes[i].exact) info.sizeApproximate = true;
+      return info;
+    });
     return { success: true, attachments };
   });
 }
@@ -66751,10 +66860,11 @@ async function imapFetchAttachment(id, attachmentName, deps = {}) {
         error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`
       };
     }
-    if (match.size > MAX_IMAP_ATTACHMENT_BYTES) {
+    const expected = decodedSizeWithoutBody(match).size;
+    if (expected > MAX_IMAP_ATTACHMENT_BYTES) {
       return {
         success: false,
-        error: `IMAP attachment "${attachmentName}" is ${match.size} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`
+        error: `IMAP attachment "${attachmentName}" is ${expected} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`
       };
     }
     try {
@@ -66942,7 +67052,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -67047,6 +67157,8 @@ var init_imapClient = __esm({
     imapMarkRead = (id, deps = {}) => flagOp(id, "\\Seen", true, deps);
     imapMarkUnread = (id, deps = {}) => flagOp(id, "\\Seen", false, deps);
     FALLBACK_TRASH_PATH = "Trash";
+    BASE64_TAIL_WINDOW = 1024;
+    QP_EXACT_MAX_BYTES = 64 * 1024;
     imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
       assertMutated(
         await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true }),
@@ -89721,7 +89833,7 @@ registerTool(
 registerTool(
   "list-attachments",
   {
-    description: "Use when: enumerating a message's attachments (by id) to discover their names, MIME types, and sizes \u2014 typically before saving or fetching one.\nReturns: each attachment's name, MIME type, and size, plus a count.\nDo not use when: you want the bytes (use fetch-attachment for inline base64, or save-attachment to write to disk). Get the message id from search-messages or list-messages first.",
+    description: "Use when: enumerating a message's attachments (by id) to discover their names, MIME types, and sizes \u2014 typically before saving or fetching one.\nReturns: each attachment's name, MIME type, and decoded size in bytes (what fetch-attachment returns), plus a count; sizeApproximate: true marks the rare IMAP size that is an estimate.\nDo not use when: you want the bytes (use fetch-attachment for inline base64, or save-attachment to write to disk). Get the message id from search-messages or list-messages first.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA
     },
@@ -89741,8 +89853,9 @@ registerTool(
       return successResponse("No attachments found", structured);
     }
     const attachmentList = attachments.map((a) => {
-      const sizeKb = Math.round(a.size / 1024);
-      return `  - ${a.name} (${a.mimeType}, ${sizeKb} KB)`;
+      const approx = "sizeApproximate" in a && a.sizeApproximate ? "~" : "";
+      const size = a.size < 1024 ? `${a.size} bytes` : `${Math.round(a.size / 1024)} KB`;
+      return `  - ${a.name} (${a.mimeType}, ${approx}${size})`;
     }).join("\n");
     return successResponse(
       `Found ${attachments.length} attachment(s):

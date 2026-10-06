@@ -1027,7 +1027,18 @@ List attachments on a message.
 | --------- | ------ | -------- | ----------- |
 | `id`      | string | Yes      | Message ID  |
 
-**Returns:** List of attachments with name, MIME type, and size.
+**Returns:** List of attachments with name, MIME type, and `size` — the **decoded** byte count,
+i.e. what `fetch-attachment` returns.
+
+**Sizes over IMAP.** `BODYSTRUCTURE` reports a part's size in its transfer encoding, so a
+base64 attachment's raw figure is ~4/3 of the file. `list-attachments` converts it: a
+`Content-Disposition` `size=` parameter wins when present; 7bit/8bit/binary parts are exact
+as reported; base64 parts are measured exactly from a short tail of each part (padding and
+line wrap), fetched in one batched `FETCH` for the whole message; quoted-printable parts up
+to 64 KiB are fetched and counted exactly. If a part can't be measured (the probe fails, the
+wrap is irregular, or a quoted-printable part is larger), the size is an estimate within a
+few bytes for base64 — an upper bound for quoted-printable — and the entry carries
+`sizeApproximate: true`. `fetch-attachment` always reports the exact `bytes`.
 
 ---
 

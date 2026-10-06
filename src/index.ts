@@ -2248,7 +2248,7 @@ registerTool(
   "list-attachments",
   {
     description:
-      "Use when: enumerating a message's attachments (by id) to discover their names, MIME types, and sizes — typically before saving or fetching one.\nReturns: each attachment's name, MIME type, and size, plus a count.\nDo not use when: you want the bytes (use fetch-attachment for inline base64, or save-attachment to write to disk). Get the message id from search-messages or list-messages first.",
+      "Use when: enumerating a message's attachments (by id) to discover their names, MIME types, and sizes — typically before saving or fetching one.\nReturns: each attachment's name, MIME type, and decoded size in bytes (what fetch-attachment returns), plus a count; sizeApproximate: true marks the rare IMAP size that is an estimate.\nDo not use when: you want the bytes (use fetch-attachment for inline base64, or save-attachment to write to disk). Get the message id from search-messages or list-messages first.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
     },
@@ -2275,8 +2275,10 @@ registerTool(
 
     const attachmentList = attachments
       .map((a) => {
-        const sizeKb = Math.round(a.size / 1024);
-        return `  - ${a.name} (${a.mimeType}, ${sizeKb} KB)`;
+        // Decoded bytes (#270). Small files in bytes — "0 KB" told nothing.
+        const approx = "sizeApproximate" in a && a.sizeApproximate ? "~" : "";
+        const size = a.size < 1024 ? `${a.size} bytes` : `${Math.round(a.size / 1024)} KB`;
+        return `  - ${a.name} (${a.mimeType}, ${approx}${size})`;
       })
       .join("\n");
 

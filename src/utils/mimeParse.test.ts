@@ -4,6 +4,7 @@ import {
   extractMimeAttachment,
   extractHtmlBody,
   extractRfcMessageIdFromSource,
+  base64DecodedSize,
 } from "./mimeParse.js";
 
 describe("extractRfcMessageIdFromSource", () => {
@@ -423,5 +424,60 @@ describe("parseMimeAttachments — recursion depth cap (#defense-in-depth)", () 
     // point is that the call completes safely.
     const result = parseMimeAttachments(deep);
     expect(Array.isArray(result)).toBe(true);
+  });
+});
+
+describe("decoded attachment size on the MIME fallback path (#270)", () => {
+  function mimeWith(body: string, disposition = 'attachment; filename="f.bin"'): string {
+    return [
+      'Content-Type: multipart/mixed; boundary="B270"',
+      "",
+      "--B270",
+      "Content-Type: text/plain",
+      "",
+      "hi",
+      "--B270",
+      'Content-Type: application/octet-stream; name="f.bin"',
+      `Content-Disposition: ${disposition}`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      body,
+      "--B270--",
+    ].join("\r\n");
+  }
+  const b64 = (n: number) => Buffer.alloc(n, 0x41).toString("base64");
+
+  it.each([
+    [29, 40], // the reporter's cases: one `=` pad
+    [25, 36], // two pads
+    [14, 20], // one pad
+    [30, 40], // no pad
+  ])("a %i-byte attachment (%i base64 chars) reports %i bytes", (bytes, chars) => {
+    expect(b64(bytes)).toHaveLength(chars);
+    expect(parseMimeAttachments(mimeWith(b64(bytes)))[0].size).toBe(bytes);
+  });
+
+  it("subtracts padding exactly: 0, 1 and 2 `=`", () => {
+    expect(base64DecodedSize("QUFB")).toBe(3);
+    expect(base64DecodedSize("QUE=")).toBe(2);
+    expect(base64DecodedSize("QQ==")).toBe(1);
+  });
+
+  it("ignores CRLF line wrapping in a long body", () => {
+    const wrapped = (b64(3001).match(/.{1,76}/g) as string[]).join("\r\n") + "\r\n";
+    expect(base64DecodedSize(wrapped)).toBe(3001);
+    expect(parseMimeAttachments(mimeWith(wrapped))[0].size).toBe(3001);
+  });
+
+  it("prefers the Content-Disposition size= parameter when present", () => {
+    const r = parseMimeAttachments(mimeWith(b64(29), 'attachment; filename="f.bin"; size=29'));
+    expect(r[0].size).toBe(29);
+  });
+
+  it("does not mistake another parameter ending in 'size' for size=", () => {
+    const r = parseMimeAttachments(
+      mimeWith(b64(29), 'attachment; filename="f.bin"; x-file-size=9999')
+    );
+    expect(r[0].size).toBe(29);
   });
 });
