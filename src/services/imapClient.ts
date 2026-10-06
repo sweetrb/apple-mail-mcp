@@ -126,6 +126,9 @@ interface ImapMessage {
   /** `RFC822.SIZE` — the server's own byte count for the stored message,
    *  present when the fetch asked for `size: true`. */
   size?: number;
+  /** Requested `bodyParts`, keyed by lower-cased part id (any `<start.len>`
+   *  partial suffix stripped by imapflow). Encoded bytes, as stored. */
+  bodyParts?: Map<string, Buffer>;
   /** Set by {@link fetchRows} on a row read with a reduced item set because
    *  the full FETCH response for it could not be parsed (#256 follow-up):
    *  `bodystructure` = no BODYSTRUCTURE; `envelope` = rebuilt from raw headers. */
@@ -3055,14 +3058,117 @@ interface AttachmentPart {
   part: string;
   filename: string;
   mimeType: string;
-  size: number;
+  /** BODYSTRUCTURE body size: octets **in the transfer encoding** (RFC 3501
+   *  §7.4.2) — for base64 that is the encoded text, line breaks included. */
+  encodedSize: number;
+  /** Content-Transfer-Encoding, lower-cased ("" when absent). */
+  encoding: string;
+  /** Content-Disposition `size=` — the DECODED size per RFC 2183 §2.7. */
+  declaredSize?: number;
 }
 
 export interface ImapAttachmentInfo {
   id: string;
   name: string;
   mimeType: string;
+  /** Decoded byte count — what `fetch-attachment` returns. */
   size: number;
+  /** Present (true) only when `size` is an estimate rather than exact. */
+  sizeApproximate?: true;
+}
+
+/** Tail window fetched per base64 part to measure padding + line wrapping. */
+const BASE64_TAIL_WINDOW = 1024;
+/** Quoted-printable parts up to this size are fetched whole and counted exactly. */
+const QP_EXACT_MAX_BYTES = 64 * 1024;
+
+/** The `size=` Content-Disposition parameter, when it is a plain integer. */
+function dispositionSize(params?: Record<string, string>): number | undefined {
+  const raw = params?.size?.trim();
+  return raw && /^\d+$/.test(raw) ? Number(raw) : undefined;
+}
+
+/**
+ * Decoded size of a COMPLETE base64 body: every alphabet character carries 6
+ * bits, so `floor(n * 3 / 4)` over the non-pad alphabet characters is exact
+ * whatever the line wrapping, padding or (missing) trailing newline.
+ */
+export function base64DecodedLength(body: string | Buffer): number {
+  const s = typeof body === "string" ? body : body.toString("latin1");
+  const n = s.replace(/[^A-Za-z0-9+/]/g, "").length;
+  return Math.floor((n * 3) / 4);
+}
+
+/**
+ * Exact decoded size of a base64 body from its total encoded length plus its
+ * last `tail.length` bytes — no full download.
+ *
+ * The tail shows the padding and the line wrapping: the complete lines inside
+ * it give the line length `L` and terminator (CRLF or LF), the last line gives
+ * the remainder. With `k` full lines before the last, `total = k*(L+t) + r +
+ * trailing terminators`, which must solve for an integer `k`; any shape that
+ * does not (ragged wrapping, stray whitespace, a line longer than the window)
+ * returns `undefined` so the caller falls back to an estimate instead of
+ * reporting a wrong "exact" number.
+ */
+export function base64DecodedSizeFromTail(total: number, tail: Buffer): number | undefined {
+  if (tail.length >= total) return base64DecodedLength(tail);
+  const s = tail.toString("latin1");
+  const term = s.includes("\r\n") ? "\r\n" : "\n";
+  const segs = s.split(term);
+  // segs[0] starts mid-line; nothing before a terminator is usable.
+  if (segs.length < 3) return undefined;
+  let trailing = 0;
+  while (segs.length > 1 && segs[segs.length - 1] === "") {
+    segs.pop();
+    trailing++;
+  }
+  const last = segs[segs.length - 1];
+  const full = segs.slice(1, -1);
+  if (full.length === 0 || !last) return undefined;
+  const L = full[0].length;
+  const alphabet = /^[A-Za-z0-9+/]+$/;
+  if (L === 0 || L % 4 !== 0 || !full.every((l) => l.length === L && alphabet.test(l))) {
+    return undefined;
+  }
+  const m = /^([A-Za-z0-9+/]*)(=*)$/.exec(last);
+  if (!m || m[2].length > 2 || last.length > L) return undefined;
+  const before = total - trailing * term.length - last.length;
+  if (before < 0 || before % (L + term.length) !== 0) return undefined;
+  const chars = (before / (L + term.length)) * L + last.length;
+  if (chars % 4 !== 0) return undefined;
+  return (chars / 4) * 3 - m[2].length;
+}
+
+/** Decoded size of a complete quoted-printable body (RFC 2045 §6.7). */
+export function quotedPrintableDecodedLength(body: string | Buffer): number {
+  const s = (typeof body === "string" ? body : body.toString("latin1")).replace(/=\r?\n/g, "");
+  const escapes = s.match(/=[0-9A-Fa-f]{2}/g)?.length ?? 0;
+  return s.length - escapes * 2;
+}
+
+/**
+ * Best decoded-size answer available WITHOUT fetching any body bytes.
+ * `exact` is false when the value is an estimate.
+ *
+ * - `size=` disposition parameter → that (RFC 2183 defines it as decoded).
+ * - base64 → strip the line breaks a standard 76-column CRLF wrap adds, ×3/4.
+ *   Within a few bytes (padding unknown, wrap assumed).
+ * - quoted-printable → the encoded size, an upper bound.
+ * - 7bit / 8bit / binary / absent → the encoded size IS the decoded size.
+ */
+export function decodedSizeWithoutBody(a: {
+  encodedSize: number;
+  encoding: string;
+  declaredSize?: number;
+}): { size: number; exact: boolean } {
+  if (a.declaredSize !== undefined) return { size: a.declaredSize, exact: true };
+  if (a.encoding === "base64") {
+    const chars = a.encodedSize - 2 * Math.floor(a.encodedSize / 78);
+    return { size: Math.floor((chars * 3) / 4), exact: false };
+  }
+  if (a.encoding === "quoted-printable") return { size: a.encodedSize, exact: false };
+  return { size: a.encodedSize, exact: true };
 }
 
 /**
@@ -3100,7 +3206,9 @@ function collectAttachments(node: ImapBodyStructure, out: AttachmentPart[] = [])
       part: node.part as string,
       filename: filename || `part-${node.part}`,
       mimeType: node.type || "application/octet-stream",
-      size: node.size ?? 0,
+      encodedSize: node.size ?? 0,
+      encoding: (node.encoding || "").toLowerCase().trim(),
+      declaredSize: dispositionSize(node.dispositionParameters),
     });
   }
   for (const child of node.childNodes ?? []) collectAttachments(child, out);
@@ -3134,6 +3242,72 @@ async function streamToBuffer(
   return Buffer.concat(chunks);
 }
 
+/**
+ * Resolve each attachment's DECODED size (#270).
+ *
+ * BODYSTRUCTURE reports a part's size in its transfer encoding, so a base64
+ * attachment read ~4/3 too large (29 bytes → 40). In order of preference:
+ * the `size=` disposition parameter (decoded by definition); identity
+ * encodings as-is; otherwise ONE batched FETCH of a short tail of every base64
+ * part (enough to see padding and line wrap — see
+ * {@link base64DecodedSizeFromTail}) and of every small quoted-printable part
+ * whole. Anything that still can't be made exact — the measure fetch failing,
+ * an irregular wrap, a large QP part — falls back to
+ * {@link decodedSizeWithoutBody} and is marked `sizeApproximate`.
+ */
+async function resolveDecodedSizes(
+  client: ImapClientLike,
+  uid: number,
+  atts: AttachmentPart[]
+): Promise<{ size: number; exact: boolean }[]> {
+  const out = atts.map(decodedSizeWithoutBody);
+  const probes: { i: number; start: number; kind: "b64" | "qp" }[] = [];
+  atts.forEach((a, i) => {
+    if (a.declaredSize !== undefined || a.encodedSize <= 0) return;
+    if (a.encoding === "base64") {
+      probes.push({ i, start: Math.max(0, a.encodedSize - BASE64_TAIL_WINDOW), kind: "b64" });
+    } else if (a.encoding === "quoted-printable" && a.encodedSize <= QP_EXACT_MAX_BYTES) {
+      probes.push({ i, start: 0, kind: "qp" });
+    }
+  });
+  if (probes.length === 0) return out;
+  let parts: Map<string, Buffer> | undefined;
+  try {
+    const msg = await client.fetchOne(
+      String(uid),
+      {
+        uid: true,
+        bodyParts: probes.map((p) => ({
+          key: atts[p.i].part,
+          start: p.start,
+          maxLength: atts[p.i].encodedSize - p.start,
+        })),
+      },
+      { uid: true }
+    );
+    parts = msg ? msg.bodyParts : undefined;
+  } catch {
+    return out; // estimates stand; listing must not fail over a size probe
+  }
+  for (const p of probes) {
+    const a = atts[p.i];
+    const buf = parts?.get(a.part.toLowerCase());
+    if (!buf) continue;
+    let exact: number | undefined;
+    if (p.kind === "qp") {
+      exact = quotedPrintableDecodedLength(buf);
+    } else {
+      // A short read means the stored body is shorter than BODYSTRUCTURE
+      // claimed: the true length is where the read ended.
+      const requested = a.encodedSize - p.start;
+      const total = buf.length < requested ? p.start + buf.length : a.encodedSize;
+      exact = base64DecodedSizeFromTail(total, buf);
+    }
+    if (exact !== undefined) out[p.i] = { size: exact, exact: true };
+  }
+  return out;
+}
+
 /** List a message's attachments via IMAP BODYSTRUCTURE (no full download). */
 export async function imapListAttachments(
   id: string,
@@ -3146,12 +3320,18 @@ export async function imapListAttachments(
     if (!msg || !msg.bodyStructure) {
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
     }
-    const attachments = collectAttachments(msg.bodyStructure).map((a) => ({
-      id: `${id}#${a.part}`,
-      name: a.filename,
-      mimeType: a.mimeType,
-      size: a.size,
-    }));
+    const atts = collectAttachments(msg.bodyStructure);
+    const sizes = await resolveDecodedSizes(client, ref.uid, atts);
+    const attachments = atts.map((a, i): ImapAttachmentInfo => {
+      const info: ImapAttachmentInfo = {
+        id: `${id}#${a.part}`,
+        name: a.filename,
+        mimeType: a.mimeType,
+        size: sizes[i].size,
+      };
+      if (!sizes[i].exact) info.sizeApproximate = true;
+      return info;
+    });
     return { success: true, attachments };
   });
 }
@@ -3184,10 +3364,15 @@ export async function imapFetchAttachment(
         error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`,
       };
     }
-    if (match.size > MAX_IMAP_ATTACHMENT_BYTES) {
+    // Pre-check on the decoded size (the limit applies to decoded bytes, which
+    // is what streamToBuffer counts) — a base64 part's encoded size is ~4/3 of
+    // it and would refuse files that fit. Estimate only; the stream cut-off
+    // below stays the hard guard.
+    const expected = decodedSizeWithoutBody(match).size;
+    if (expected > MAX_IMAP_ATTACHMENT_BYTES) {
       return {
         success: false,
-        error: `IMAP attachment "${attachmentName}" is ${match.size} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`,
+        error: `IMAP attachment "${attachmentName}" is ${expected} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`,
       };
     }
     try {

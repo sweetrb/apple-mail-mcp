@@ -82,7 +82,8 @@ function isInlineDisposition(headers: string): boolean {
 function extractSize(headers: string): number {
   const dispHeader = getHeader(headers, "Content-Disposition");
   if (dispHeader) {
-    const sizeMatch = dispHeader.match(/size=(\d+)/i);
+    // Anchored to a parameter boundary so `file-size=` / `x-size=` can't match.
+    const sizeMatch = dispHeader.match(/(?:^|;)\s*size\s*=\s*"?(\d+)/i);
     if (sizeMatch) return parseInt(sizeMatch[1], 10);
   }
   return 0;
@@ -133,10 +134,12 @@ function decodePartText(bytes: Buffer, charset: string | null): string {
 }
 
 /**
- * Estimate decoded size from base64 content length.
+ * Decoded size of a complete base64 body. Exact: each non-pad alphabet
+ * character carries 6 bits, so `=` padding, line breaks and any other
+ * whitespace drop out (40 chars with one `=` → 29 bytes, not 30). #270
  */
-function estimateBase64Size(base64Body: string): number {
-  const cleaned = base64Body.replace(/[\s\r\n]/g, "");
+export function base64DecodedSize(base64Body: string): number {
+  const cleaned = base64Body.replace(/[^A-Za-z0-9+/]/g, "");
   return Math.floor((cleaned.length * 3) / 4);
 }
 
@@ -242,12 +245,14 @@ function decodeQuotedPrintable(body: string): Buffer {
 }
 
 /**
- * Estimate body size for metadata when Content-Disposition size is absent.
+ * Decoded body size for metadata when Content-Disposition size is absent.
+ * base64 and quoted-printable are decoded-counted exactly (the whole body is
+ * in hand here); other encodings are identity.
  */
 function estimateSize(body: string, encoding: string | null): number {
   const enc = (encoding || "").toLowerCase().trim();
-  if (enc === "base64") return estimateBase64Size(body);
-  // For other encodings the body length is a reasonable proxy
+  if (enc === "base64") return base64DecodedSize(body);
+  if (enc === "quoted-printable") return decodeQuotedPrintable(body).length;
   return body.length;
 }
 
