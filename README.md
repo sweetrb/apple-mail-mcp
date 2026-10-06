@@ -813,7 +813,10 @@ Save an email to Drafts without sending.
 so a draft with `inReplyTo`/`references` cannot go through AppleScript. Instead the
 server composes it with the same MIME builder as the SMTP send (attachments included) and
 files it over IMAP into the account's Drafts mailbox (SPECIAL-USE `\Drafts`), flagged
-`\Draft`. The account is `account` when given (it must be a configured IMAP account);
+`\Draft`. The account is `account` when given (it must be a configured IMAP account —
+pass the exact `accountLabel` or login from `list-accounts`/your `APPLE_MAIL_MCP_IMAP_*`
+config, e.g. `"j5pu@icloud.com"`; a generic provider name like `"iCloud"` is not a
+recognized alias and is refused);
 otherwise the IMAP account whose login is the SMTP identity, else the only configured
 IMAP account. When none qualifies — IMAP unconfigured, an unknown `account`, or several
 accounts and no way to choose — the call **fails and files nothing**; it never falls back
