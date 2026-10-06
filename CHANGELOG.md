@@ -249,7 +249,7 @@ exist` — completing what 2.19.14 set out to surface.
   @j5pu confirmed `list-mailboxes` now correctly reports their real INBOX
   count (the original fabricated-count bug is fixed) — but `list-messages`
   started failing outright with `IMAP list failed in every requested mailbox
-for account j5pu@icloud.com: INBOX.` and no further detail. The per-mailbox
+for account user@icloud.com: INBOX.` and no further detail. The per-mailbox
   error was logged server-side and then discarded before reaching the tool
   response, so neither the reporter nor a maintainer could tell a SELECT
   failure from anything else. A new `failedMailboxReasons` map (keyed the
@@ -306,7 +306,7 @@ yes` after the existing save, closing the window without discarding the
 - **`list-messages`/`search-messages` no longer trust an IMAP search total
   that exceeds the mailbox's own message count**
   ([#246](https://github.com/sweetrb/apple-mail-mcp/issues/246), reported by
-  @j5pu): on their `j5pu@icloud.com` account, `list-messages` on `INBOX`
+  @j5pu): on their `user@icloud.com` account, `list-messages` on `INBOX`
   reported `100085` total listed against a mailbox `list-mailboxes` and a
   direct IMAP `SEARCH ALL` both agreed held exactly 14 messages, and paginated
   `list-messages` calls beyond offset 0 silently returned zero messages with
