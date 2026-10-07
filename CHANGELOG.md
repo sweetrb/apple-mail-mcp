@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+## [2.20.3] - 2026-10-07
+
+### Fixed
+
+- A numeric Mail.app id whose AppleScript resolution is wedged — observed
+  (#270) after an AppleScript reply draft was created from it via
+  `reply-to-message`/`send: false` and the original was then moved to Deleted
+  Messages — hung every subsequent read (`get-message`, `get-message-headers`,
+  `get-thread`, raw-source fetches) for the full 60-120s mutation timeout, with
+  no diagnostic beyond a bare "Operation timed out" message. These read-only
+  by-id lookups now use a much shorter 15s timeout — a plain miss or
+  scoped-mailbox hit normally resolves in well under a second, so anything
+  still running past 15s is already pathological — and surface a specific
+  "AppleScript timed out resolving id N — Mail.app's scripting bridge may be
+  wedged; try health-check" error instead of stalling silently. Mutation and
+  compose paths (mark-as-read, flag, delete, move, reply, forward) are
+  unchanged and still use their existing 60s timeout with no retry, since a
+  retried send/move could duplicate work Mail.app already accepted. The
+  underlying cause of the wedge itself is not fixed here and remains open.
+
 ## [2.20.2] - 2026-10-07
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
