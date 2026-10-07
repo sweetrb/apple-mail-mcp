@@ -88980,7 +88980,7 @@ function collectForensics(tool, args) {
 registerTool(
   "search-messages",
   {
-    description: "Use when: finding messages by query/sender/subject/date/read/flag filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, and read state (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.",
+    description: "Use when: finding messages by query/sender/subject/date/read/flag filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, and read state (plus partial-coverage diagnostics when some mailboxes were skipped). An IMAP search stops at its deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, default 45s) or when the request is cancelled, returning the matches found so far with partial: true and timedOutMailboxes \u2014 narrow with mailbox/dateFrom rather than repeating it.\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.",
     inputSchema: {
       query: external_exports.string().optional().describe("Text to search for in subject or sender"),
       body: external_exports.string().optional().describe(
