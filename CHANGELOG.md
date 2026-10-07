@@ -1,5 +1,53 @@
 ## [Unreleased]
 
+## [2.20.4] - 2026-10-07
+
+### Fixed
+
+- **A numeric id that is not where the lookup expects it no longer scans every
+  mailbox until the 15s timeout** (#270, root cause found by @j5pu). When a
+  numeric id missed, `get-message`, `get-message-headers`, `get-thread`'s seed
+  lookup and the raw-source reads behind `reply-to-message` / `forward-message`
+  and the attachment tools fell back to `messages of mb whose id is N` over
+  every mailbox of every account. @j5pu timed that probe directly: ~1s on a
+  25k-message mailbox, 8–17s on 255k and 10–32s on 794k, so the full scan took
+  21–53s — the 2.20.3 "timed out resolving id" error was this scan, not a
+  wedged bridge (`health-check` passed right after), and the draft and the
+  trash were irrelevant. Earlier instant "not found" results were warm-cache
+  luck. Now:
+  - an explicit `account` + `mailbox` that misses returns
+    `Message N not found in <account> / <mailbox>` (or that the mailbox does not
+    exist) and **never** falls back to the cross-mailbox scan;
+  - a remembered location that turns out stale (the message was moved, e.g. by
+    another client) is evicted, and the read falls back to the bounded scan;
+  - the cross-mailbox scan skips mailboxes holding more than
+    `APPLE_MAIL_MAX_BYID_SCAN_MAILBOX` messages (default `50000`; `0` disables)
+    — the by-id counterpart of search's `skippedLargeMailboxes` guard, set
+    higher because an id probe is far cheaper than a content scan — and stops
+    after a 9s in-script budget. A miss then names the mailboxes it did not
+    scan and says to pass `account` + `mailbox` or use the `imap:` id;
+  - a timeout of the scoped read is reported without a second 15s scan on top,
+    and a timeout of the cross-mailbox scan now says it was the scan (large
+    mailboxes) rather than only suggesting a wedged bridge.
+
+  All four read-only by-id lookups (`getMessageById`, `getMessageContent`,
+  `getMessageHeaders`, `getRawSource`) now go through one resolver, so the
+  seven call sites 2.20.3 touched cannot drift apart again; `getMessageById`
+  also gains the remembered-location fast path and the local-store walk the
+  others had. `reply-to-message` / `forward-message` over SMTP now include the
+  lookup's reason when the original's source cannot be read. Mutation paths
+  are unchanged. Verified with unit tests only (AppleScript is mocked); no live
+  Mail.app run.
+
+### Security
+
+- Floored the transitive `source-map-js` to `>=1.2.2 <2` (#277), clearing
+  [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)
+  (high, event-loop denial of service via indexed source-map section offsets).
+  Development scope only (vitest → vite → postcss, and
+  `@vitest/coverage-v8` → magicast); not in the shipped bundle, which that
+  change left byte-identical.
+
 ## [2.20.3] - 2026-10-07
 
 ### Fixed
@@ -21,7 +69,9 @@
   underlying cause of the wedge itself is not fixed here and remains open.
 
 ## [2.20.2] - 2026-10-07
+
 ### Changed
+
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
 
 ## [2.20.1] - 2026-10-06

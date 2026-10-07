@@ -78,7 +78,6 @@ import type {
   SerialEmailResult,
   SearchDiagnostics,
   SearchResult,
-  AppleScriptResult,
   SmartMailbox,
 } from "@/types.js";
 
@@ -141,6 +140,108 @@ const READ_ONLY_BYID_TIMEOUT_MS = 15000;
  */
 function timedOutResolvingId(id: string): string {
   return `AppleScript timed out resolving id ${Number(id)} — Mail.app's scripting bridge may be wedged; try health-check.`;
+}
+
+/**
+ * Same timeout, but on the UNSCOPED cross-mailbox scan (#270). @j5pu showed
+ * that this one is usually not a wedged bridge at all: `messages of mb whose id
+ * is N` costs ~1s on a 25k-message mailbox, 8-17s on 255k and 10-32s on 794k,
+ * so a full scan of a large account simply outlives the timeout — and
+ * `health-check` passes right afterwards. Say so, and say what avoids the scan.
+ */
+function timedOutScanningForId(id: string): string {
+  return `AppleScript timed out scanning every mailbox for id ${Number(id)} — the cross-mailbox scan did not finish within ${READ_ONLY_BYID_TIMEOUT_MS / 1000}s (very large mailboxes; if health-check also fails, Mail.app's scripting bridge may be wedged). Pass account + mailbox to read it from one mailbox, or use the message's imap: id from list-messages/search-messages.`;
+}
+
+/**
+ * Mailboxes larger than this are SKIPPED by the unscoped by-id fallback scan
+ * (#270) and named in the not-found error instead — the by-id counterpart of
+ * search's `skippedLargeMailboxes` guard (same `count of messages` probe, same
+ * "Account / Mailbox (count)" reporting).
+ *
+ * The value is deliberately higher than search's `APPLE_MAIL_MAX_SEARCH_MAILBOX`
+ * (5000): that guard protects a predicate scan over message CONTENT, while an
+ * id probe is far cheaper per message. @j5pu's osascript timings put it at
+ * ~0.7-1.4s for a 25k-message mailbox, 8-17s for 255k and 10-32s for 794k — so
+ * 50k (a few seconds at worst) keeps the ordinary INBOX / Sent / All Mail
+ * sizes reachable from a cold index while excluding exactly the archive-sized
+ * mailboxes that made a single miss outlive the 15s by-id timeout.
+ *
+ * Override with APPLE_MAIL_MAX_BYID_SCAN_MAILBOX (0 disables the guard).
+ * An explicit `account` + `mailbox` is never subject to it.
+ */
+export function getByIdScanThreshold(): number {
+  const raw = process.env.APPLE_MAIL_MAX_BYID_SCAN_MAILBOX;
+  if (raw !== undefined && raw.trim() !== "") {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  }
+  return 50000;
+}
+
+/**
+ * Wall-clock budget (seconds) for the unscoped by-id scan, enforced INSIDE the
+ * AppleScript so the scan stops and reports which part of the store it never
+ * reached, rather than being SIGKILLed at READ_ONLY_BYID_TIMEOUT_MS with no
+ * diagnostics. Leaves headroom for one in-flight probe of a mailbox just under
+ * the size threshold (a few seconds at most).
+ */
+const BYID_SCAN_BUDGET_SECONDS = 9;
+
+/**
+ * Trailer on the unscoped by-id "not found" outcome carrying what the scan did
+ * NOT cover: `{BYID_COVERAGE_MARKER}<skipped list>{DIAG_FIELD_SEP}<budgetHit>`,
+ * the list DIAG_ITEM_SEP-separated "Account / Mailbox (count)" entries.
+ */
+const BYID_COVERAGE_MARKER = "\x1dCOV\x1d";
+
+/**
+ * Prefix (after LOOKUP_ERROR_MARKER) of a scoped by-id lookup's own miss —
+ * `nomailbox`, `nomessage` or `error:<Mail's text>` — so the caller can tell a
+ * definite "not in that mailbox" from a hit, and decide whether falling back
+ * to the cross-mailbox scan is appropriate (it is not for an explicit hint).
+ */
+const SCOPED_MISS_MARKER = "\x1dSCOPED\x1d";
+
+/** Where a by-id lookup was scoped, and whether the caller named it. */
+type ByIdLocation = { account: string; mailbox: string; explicit: boolean };
+
+/**
+ * Turn the unscoped scan's not-found outcome (the text after
+ * LOOKUP_ERROR_MARKER) into the user-facing error. A plain "Message not found"
+ * stays as it was; one whose BYID_COVERAGE_MARKER trailer says mailboxes were
+ * skipped for size, or the walk ran out of budget, says so and names them
+ * (#270) — the message may well be in one of them, so a flat "not found" would
+ * be false.
+ */
+export function describeUnscopedMiss(id: string, raw: string): string {
+  const covIdx = raw.indexOf(BYID_COVERAGE_MARKER);
+  if (covIdx === -1) return raw.trim();
+  const base = raw.slice(0, covIdx).trim();
+  const [skippedRaw = "", budgetRaw = ""] = raw
+    .slice(covIdx + BYID_COVERAGE_MARKER.length)
+    .split(DIAG_FIELD_SEP);
+  const skipped = skippedRaw
+    .split(DIAG_ITEM_SEP)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const budgetHit = budgetRaw.trim() === "true";
+  if (skipped.length === 0 && !budgetHit) return base;
+  const parts = [`Message ${Number(id)} not found in the mailboxes scanned.`];
+  if (skipped.length > 0) {
+    parts.push(
+      `Not scanned — too large for a cross-mailbox id scan (over ${getByIdScanThreshold()} messages; APPLE_MAIL_MAX_BYID_SCAN_MAILBOX): ${skipped.join(", ")}.`
+    );
+  }
+  if (budgetHit) {
+    parts.push(
+      `The scan also stopped after its ${BYID_SCAN_BUDGET_SECONDS}s budget before reaching every mailbox.`
+    );
+  }
+  parts.push(
+    "If the message is in a mailbox that was not scanned, pass account + mailbox to read it from that mailbox directly, or use its imap: id from list-messages/search-messages."
+  );
+  return parts.join(" ");
 }
 
 /**
@@ -1287,8 +1388,9 @@ export class AppleMailManager {
    * Items") isn't reached before the AppleScript timeout fires, so the fetch
    * returns a false "not found" (only INBOX ids, reached early, worked). Every
    * search/list/by-id result records its id→location here so a subsequent fetch
-   * opens the one right mailbox directly. A stale entry (message moved) simply
-   * misses and falls back to the full scan, so it can never wedge a lookup.
+   * opens the one right mailbox directly. A stale entry (message moved by
+   * another client) misses, is EVICTED, and the read falls back to the bounded
+   * cross-mailbox scan — see `resolveScopedById` (#270).
    */
   private idLocationIndex = new Map<string, { account: string; mailbox: string }>();
 
@@ -2676,8 +2778,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   /**
    * Get a message by ID.
    *
-   * Note: Mail.app message IDs are unique per mailbox. This method searches
-   * all mailboxes in all accounts to find the message.
+   * Note: Mail.app message IDs are unique per mailbox. Resolution goes through
+   * `resolveById` — the remembered location first, then the bounded
+   * cross-mailbox scan — taking the FIRST copy found rather than refusing an id
+   * a label store repeats across INBOX / "All Mail": every caller of this reads
+   * per-message metadata (get-thread's seed subject, a mutation error's mailbox
+   * hint) that is identical across those copies.
    */
   getMessageById(id: string, deepAttachmentCheck = false): Message | null {
     this.lastMessageLookupError = undefined;
@@ -2695,14 +2801,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                   end try
                 end if`
       : "";
-    const script = buildAppLevelScript(`
-      try
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
+    // `msg`, `_hitMb` (its mailbox) and `_hitAcct` (its account's name) are
+    // bound by both resolvers before this runs.
+    const innerFetch = `
                 set msgSubject to subject of msg
                 set msgSender to sender of msg
                 set d to date received of msg
@@ -2712,34 +2813,22 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 set msgJunk to junk mail status of msg as string
                 set msgDeleted to deleted status of msg as string
                 set msgMailbox to ""
-                ${mailboxPathFragment("mb", "msgMailbox")}
-                set msgAccount to name of acct
+                try
+                  ${mailboxPathFragment("_hitMb", "msgMailbox")}
+                end try
+                set msgAccount to _hitAcct
                 set hasAtt to "false"
                 try
                   set attCount to count of mail attachments of msg
                   if attCount > 0 then set hasAtt to "true"
                 end try
                 ${deepScan}
-                return msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgJunk & "${FIELD_SEP}" & msgDeleted & "${FIELD_SEP}" & msgMailbox & "${FIELD_SEP}" & msgAccount & "${FIELD_SEP}" & hasAtt
-              end if
-            end try
-          end repeat
-        end repeat
-        return ""
-      on error errMsg
-        return ""
-      end try
-    `);
+                return msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgJunk & "${FIELD_SEP}" & msgDeleted & "${FIELD_SEP}" & msgMailbox & "${FIELD_SEP}" & msgAccount & "${FIELD_SEP}" & hasAtt`;
 
-    const result = executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
+    const output = this.resolveById(id, innerFetch, undefined, { firstHit: true });
+    if (output === null) return null;
 
-    if (!result.success || !result.output.trim()) {
-      if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
-      console.error(`Failed to get message ${id}: ${result.error}`);
-      return null;
-    }
-
-    const parts = result.output.split(FIELD_SEP);
+    const parts = output.split(FIELD_SEP);
     if (parts.length < 9) return null;
 
     // Record id→location so a subsequent content/source fetch skips the scan.
@@ -2762,46 +2851,232 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   }
 
   /**
+   * Resolve numeric `id` and run `innerAction` against it — the ONE resolution
+   * path behind every read-only by-id lookup (getMessageById,
+   * getMessageContent, getMessageHeaders, getRawSource), so the four cannot
+   * drift apart again. Returns the action's output, or null with
+   * `lastMessageLookupError` set when there is something to say (#270):
+   *
+   *  1. Scoped, when a location is known — the caller's explicit `account` +
+   *     `mailbox`, else the `idLocationIndex` entry (see `resolveScopedById`):
+   *     - explicit hint, miss → a clean "not found in <account> / <mailbox>".
+   *       NO fallback: the caller said where to look, and the cross-mailbox
+   *       scan it would fall back to is the 20-50s operation @j5pu timed.
+   *     - index entry, miss → the entry is stale (the message was moved, by
+   *       another client or in Mail itself): evict it, then fall back to (2).
+   *     - timeout on either → report it; no second 15s scan on top.
+   *  2. Unscoped: every mailbox of every account plus the local store, but
+   *     mailboxes above `getByIdScanThreshold()` are skipped and the walk stops
+   *     at `BYID_SCAN_BUDGET_SECONDS`; a miss names what was not covered.
+   */
+  private resolveById(
+    id: string,
+    innerAction: string,
+    hint: { account?: string; mailbox?: string } | undefined,
+    opts: { firstHit?: boolean } = {}
+  ): string | null {
+    const remembered = this.idLocationIndex.get(String(id));
+    const loc: ByIdLocation | undefined =
+      hint?.account && hint?.mailbox
+        ? { account: hint.account, mailbox: hint.mailbox, explicit: true }
+        : remembered
+          ? { ...remembered, explicit: false }
+          : undefined;
+
+    if (loc) {
+      const scoped = this.resolveScopedById(id, loc, innerAction);
+      if (scoped.kind === "hit") return scoped.output;
+      if (scoped.kind === "done") return null;
+      // kind === "fallback": stale index entry, already evicted.
+    }
+
+    const result = executeAppleScript(this.unscopedByIdScript(id, innerAction, opts), {
+      timeoutMs: READ_ONLY_BYID_TIMEOUT_MS,
+    });
+    if (!result.success || !result.output.trim()) {
+      if (!result.success) {
+        if (result.timedOut) this.lastMessageLookupError = timedOutScanningForId(id);
+        console.error(`Failed to resolve message ${id}: ${result.error}`);
+      }
+      return null;
+    }
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
+      this.lastMessageLookupError = describeUnscopedMiss(
+        id,
+        result.output.slice(LOOKUP_ERROR_MARKER.length)
+      );
+      return null;
+    }
+    return result.output;
+  }
+
+  /**
+   * The scoped half of `resolveById`: open exactly `loc`'s mailbox and look for
+   * the id there. `hit` carries the action's output; `done` means stop with
+   * `lastMessageLookupError` set; `fallback` means the remembered location was
+   * stale and has been evicted, so the caller should try the bounded scan.
+   */
+  private resolveScopedById(
+    id: string,
+    loc: ByIdLocation,
+    innerAction: string
+  ): { kind: "hit"; output: string } | { kind: "done" } | { kind: "fallback" } {
+    const result = executeAppleScript(
+      this.scopedByIdScript(loc.account, loc.mailbox, id, innerAction),
+      { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }
+    );
+    const where = `${loc.account} / ${loc.mailbox}`;
+
+    if (!result.success) {
+      console.error(`Failed to read message ${id} from ${where}: ${result.error}`);
+      if (result.timedOut) {
+        // One mailbox did not answer in 15s — a second full scan would only
+        // push the call past the client's own timeout.
+        this.lastMessageLookupError = timedOutResolvingId(id);
+        return { kind: "done" };
+      }
+      if (loc.explicit) {
+        this.lastMessageLookupError = `Could not read message ${Number(id)} from ${where}: ${result.error ?? "AppleScript error"}`;
+        return { kind: "done" };
+      }
+      this.forgetLocation(id);
+      return { kind: "fallback" };
+    }
+
+    const scopedPrefix = LOOKUP_ERROR_MARKER + SCOPED_MISS_MARKER;
+    if (result.output.trim() && !result.output.startsWith(scopedPrefix)) {
+      return { kind: "hit", output: result.output };
+    }
+
+    if (!loc.explicit) {
+      // Stale index entry: the message is no longer where it was last seen.
+      this.forgetLocation(id);
+      return { kind: "fallback" };
+    }
+
+    const reason = result.output.startsWith(scopedPrefix)
+      ? result.output.slice(scopedPrefix.length)
+      : "nomessage";
+    if (reason === "nomailbox") {
+      this.lastMessageLookupError = `Mailbox "${loc.mailbox}" not found in account "${loc.account}" — message ${Number(id)} was not looked up. Check the names with list-mailboxes, or omit account/mailbox to scan every mailbox.`;
+    } else if (reason.startsWith("error:")) {
+      this.lastMessageLookupError = `Could not read message ${Number(id)} from ${where}: ${reason.slice("error:".length)}`;
+    } else {
+      this.lastMessageLookupError = `Message ${Number(id)} not found in ${where} — it may have been moved or deleted. Re-list or search to get its current id, or omit account/mailbox to scan every mailbox.`;
+    }
+    return { kind: "done" };
+  }
+
+  /** Drop a stale id→location entry (#270) so the next read doesn't retry it. */
+  private forgetLocation(id: string): void {
+    this.idLocationIndex.delete(String(id));
+  }
+
+  /**
    * The unscoped by-id resolution: walk every mailbox of every account, then the
    * local store (#183), and run `innerAction` with `msg` bound when EXACTLY one
-   * mailbox holds the id — `{LOOKUP_ERROR_MARKER}` prefixes both the not-found
-   * and the ambiguous outcome. Shared by getMessageContent, getRawSource and
-   * getMessageHeaders so the three reads cannot drift apart (the pre-#224 code
-   * carried two byte-identical copies).
+   * mailbox holds the id (or on the first hit, with `firstHit`) —
+   * `{LOOKUP_ERROR_MARKER}` prefixes both the not-found and the ambiguous
+   * outcome. `_hitMb` / `_hitAcct` are bound to the hit's mailbox and account
+   * name alongside `msg`.
+   *
+   * Bounded (#270): a mailbox above `getByIdScanThreshold()` messages is
+   * skipped rather than probed, and the walk stops once it has run for
+   * `BYID_SCAN_BUDGET_SECONDS`. Either way the not-found outcome carries a
+   * `BYID_COVERAGE_MARKER` trailer naming what was not covered, so the caller
+   * can say "not found in the mailboxes scanned; these large ones were not"
+   * instead of a false flat "not found". A copy that sits only in a skipped
+   * mailbox therefore no longer counts toward the ambiguity check — harmless
+   * for these read-only lookups, whose copies are the same message.
    */
-  private unscopedByIdScript(id: string, innerAction: string): string {
+  private unscopedByIdScript(
+    id: string,
+    innerAction: string,
+    opts: { firstHit?: boolean } = {}
+  ): string {
+    const threshold = getByIdScanThreshold();
+    // The probe runs only when the guard is on; `count of messages` is cached
+    // by Mail and cheap even on a 794k-message mailbox (search relies on the
+    // same property for its skippedLargeMailboxes guard).
+    const sizeGuard = (mbVar: string, acctNameExpr: string): string =>
+      threshold > 0
+        ? `set _mbCount to 0
+            try
+              set _mbCount to count of messages of ${mbVar}
+            end try
+            if _mbCount > ${threshold} then
+              set _skipPath to ""
+              try
+                ${mailboxPathFragment(mbVar, "_skipPath")}
+              end try
+              set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & (_mbCount as string) & ")${DIAG_ITEM_SEP}"
+              set _probe to false
+            end if`
+        : "";
+    const budgetCheck = `if ((current date) - _startedAt) > ${BYID_SCAN_BUDGET_SECONDS} then
+              set _budgetHit to true
+              exit repeat
+            end if`;
+    const stopOnHit = opts.firstHit ? `if (count of _hits) > 0 then exit repeat` : "";
     return buildAppLevelScript(`
       try
         set _hits to {}
+        set _hitMbs to {}
+        set _hitAccts to {}
         set _names to ""
+        set _skipped to ""
+        set _budgetHit to false
+        set _startedAt to current date
         repeat with acct in accounts
+          if _budgetHit then exit repeat
+          ${stopOnHit}
           repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set end of _hits to item 1 of matchingMsgs
-                set _names to _names & (name of acct) & "/" & (name of mb) & ", "
-              end if
-            end try
+            ${budgetCheck}
+            set _probe to true
+            ${sizeGuard("mb", "(name of acct)")}
+            if _probe then
+              try
+                set matchingMsgs to (messages of mb whose id is ${Number(id)})
+                if (count of matchingMsgs) > 0 then
+                  set end of _hits to item 1 of matchingMsgs
+                  set end of _hitMbs to (contents of mb)
+                  set end of _hitAccts to (name of acct)
+                  set _names to _names & (name of acct) & "/" & (name of mb) & ", "
+                end if
+              end try
+            end if
+            ${stopOnHit}
           end repeat
         end repeat
         -- #183: local mailboxes belong to no account, so the walk above cannot
         -- reach them. Collect into the SAME _hits/_names, which means an id
         -- present both in an account and locally is now correctly reported as
-        -- ambiguous rather than silently resolving to the account copy.${localMailboxBindingFragment()}
-        repeat with mb in _mbs
-          try
-            set matchingMsgs to (messages of mb whose id is ${Number(id)})
-            if (count of matchingMsgs) > 0 then
-              set end of _hits to item 1 of matchingMsgs
-              set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
+        -- ambiguous rather than silently resolving to the account copy.
+        if (not _budgetHit) and ${opts.firstHit ? "(count of _hits) is 0" : "true"} then${localMailboxBindingFragment()}
+          repeat with mb in _mbs
+            ${budgetCheck}
+            set _probe to true
+            ${sizeGuard("mb", `"${LOCAL_STORE_LABEL}"`)}
+            if _probe then
+              try
+                set matchingMsgs to (messages of mb whose id is ${Number(id)})
+                if (count of matchingMsgs) > 0 then
+                  set end of _hits to item 1 of matchingMsgs
+                  set end of _hitMbs to (contents of mb)
+                  set end of _hitAccts to "${LOCAL_STORE_LABEL}"
+                  set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
+                end if
+              end try
             end if
-          end try
-        end repeat
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found"
-        if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"
-        if (count of _hits) is 1 then
+            ${stopOnHit}
+          end repeat
+        end if
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string)
+        ${opts.firstHit ? "" : `if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"`}
+        if (count of _hits) ${opts.firstHit ? "> 0" : "is 1"} then
           set msg to item 1 of _hits
+          set _hitMb to item 1 of _hitMbs
+          set _hitAcct to item 1 of _hitAccts
           ${innerAction}
         end if
         return ""
@@ -2814,16 +3089,20 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   /**
    * Build an app-level AppleScript that opens exactly one account+mailbox, finds
    * the message with numeric `id` in it, and runs `innerAction` (which may assume
-   * `msg` is bound). Used by the by-id fast paths (getMessageContent/getRawSource)
-   * so a message in a late-iterated large folder resolves directly instead of via
-   * the timeout-prone full-mailbox scan.
+   * `msg`, `_hitMb` and `_hitAcct` are bound). Used by the by-id fast path
+   * (`resolveScopedById`) so a message in a late-iterated large folder resolves
+   * directly instead of via the timeout-prone full-mailbox scan.
    *
    * The mailbox name is resolved through `resolveMailbox` (so an alias like
    * "Sent"→"Sent Items" or a casing mismatch like "INBOX"→"Inbox" still opens the
    * right folder), and matched case-insensitively by iterating the account's
    * mailboxes — `mailbox "INBOX" of account …` throws on accounts whose inbox is
    * actually named "Inbox", which would silently drop us back to the slow scan.
-   * Returns "" (found nothing) on any error, so the caller falls back safely.
+   *
+   * A miss is reported, not swallowed (#270): `{LOOKUP_ERROR_MARKER}
+   * {SCOPED_MISS_MARKER}` followed by `nomailbox`, `nomessage` or
+   * `error:<Mail's text>`, so the caller can return a clean "not found in
+   * <mailbox>" for an explicit hint instead of guessing.
    */
   private scopedByIdScript(
     account: string,
@@ -2838,6 +3117,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     // level instead, through the same ownership filter.
     const bind = isLocalStoreLabel(account)
       ? `${localMailboxBindingFragment()}
+        set _hitAcct to "${LOCAL_STORE_LABEL}"
         set targetMb to missing value
         ignoring case
           repeat with mb in _mbs
@@ -2850,6 +3130,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           end repeat
         end ignoring`
       : `set acct to (first account whose name is "${escapeForAppleScript(account)}")
+        set _hitAcct to (name of acct)
         set targetMb to missing value
         ignoring case
           repeat with mb in mailboxes of acct
@@ -2861,19 +3142,19 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end if
           end repeat
         end ignoring`;
+    const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
     return buildAppLevelScript(`
       try
         ${bind}
-        if targetMb is not missing value then
-          set matchingMsgs to (messages of targetMb whose id is ${Number(id)})
-          if (count of matchingMsgs) > 0 then
-            set msg to item 1 of matchingMsgs
-            ${innerAction}
-          end if
-        end if
+        if targetMb is missing value then return "${miss}nomailbox"
+        set _hitMb to (contents of targetMb)
+        set matchingMsgs to (messages of targetMb whose id is ${Number(id)})
+        if (count of matchingMsgs) is 0 then return "${miss}nomessage"
+        set msg to item 1 of matchingMsgs
+        ${innerAction}
         return ""
       on error errMsg
-        return ""
+        return "${miss}error:" & errMsg
       end try
     `);
   }
@@ -2887,6 +3168,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    *   source can be MB-sized (it includes base64 attachments) and the plain-text
    *   path doesn't need it; fetching it unconditionally was both slow and, worse,
    *   returned the entire raw MIME blob mislabeled as HTML (#32).
+   * @param hint - Explicit account + mailbox (both required to take effect):
+   *   the read opens that one mailbox and, on a miss, reports "not found in
+   *   <account> / <mailbox>" without scanning anywhere else (#270).
    */
   getMessageContent(
     id: string,
@@ -2914,62 +3198,22 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 ${AS_MESSAGE_DATES_FRAGMENT}
                 return msgSubject & "${MSGID_MARKER}" & msgRfcId & "${DATES_MARKER}" & msgDates & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource`;
 
-    // Fast path: when we know which account+mailbox holds this id (explicit hint
-    // from the caller, or remembered from a prior search/list/by-id lookup), open
-    // just that one mailbox. The unscoped scan below walks every mailbox of every
-    // account (700+ on a real multi-account setup) and, for a message in a
-    // late-iterated folder like a large "Sent Items", never reaches it before the
-    // AppleScript timeout — returning a false "not found". See idLocationIndex.
-    const loc =
-      hint?.account && hint?.mailbox
-        ? { account: hint.account, mailbox: hint.mailbox }
-        : this.idLocationIndex.get(id.toString());
-
-    if (loc) {
-      const scopedScript = this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch);
-      const scoped = this.parseMessageContent(
-        id,
-        executeAppleScript(scopedScript, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }),
-        includeHtml
-      );
-      if (scoped) return scoped;
-      // Scoped lookup missed (stale index — e.g. the message was moved). Fall
-      // through to the full scan below rather than returning a false "not found".
-    }
-
-    const script = this.unscopedByIdScript(id, innerFetch);
-
-    return this.parseMessageContent(
-      id,
-      executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }),
-      includeHtml
-    );
+    // Scoped fast path (explicit hint, else the remembered location), then the
+    // bounded cross-mailbox scan — see resolveById.
+    const output = this.resolveById(id, innerFetch, hint);
+    return output === null ? null : this.parseMessageContent(id, output, includeHtml);
   }
 
   /**
    * Parse the marker-delimited output of a getMessageContent AppleScript into a
-   * MessageContent, or null when nothing was found / the fetch failed. Shared by
-   * the scoped fast path and the full-mailbox-scan fallback.
+   * MessageContent, or null when the payload is malformed.
    */
   private parseMessageContent(
     id: string,
-    result: AppleScriptResult,
+    output: string,
     includeHtml: boolean
   ): MessageContent | null {
-    if (!result.success || !result.output.trim()) {
-      if (!result.success) {
-        if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
-        console.error(`Failed to get message content: ${result.error}`);
-      }
-      return null;
-    }
-
-    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
-      this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
-      return null;
-    }
-
-    const htmlSplit = result.output.split(HTML_MARKER);
+    const htmlSplit = output.split(HTML_MARKER);
     const contentPart = htmlSplit[0];
     const rawSource = htmlSplit.length > 1 ? htmlSplit[1] : "";
 
@@ -3012,8 +3256,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   /**
    * Fetch ONLY the raw RFC 5322 header block of a message (#224) — Mail's
    * `all headers` property — plus its `date received`, so the caller can show the
-   * arrival timestamp beside the author's `Date:` header. Same scoped-fast-path /
-   * full-scan resolution as getMessageContent; never reads the body or source.
+   * arrival timestamp beside the author's `Date:` header. Same resolution as
+   * getMessageContent (resolveById); never reads the body or source.
    * Returns null (with `lastMessageLookupError` set when Mail said why) on a miss.
    */
   getMessageHeaders(
@@ -3029,44 +3273,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 ${AS_MESSAGE_DATES_FRAGMENT}
                 return msgDates & "${DATES_MARKER}" & msgHeaders`;
 
-    const parse = (result: AppleScriptResult): { raw: string; dateReceived?: Date } | null => {
-      if (!result.success || !result.output.trim()) {
-        if (!result.success) {
-          if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
-          console.error(`Failed to get message headers: ${result.error}`);
-        }
-        return null;
-      }
-      if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
-        this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
-        return null;
-      }
-      const idx = result.output.indexOf(DATES_MARKER);
-      if (idx === -1) return null;
-      const { dateReceived } = parseMessageDates(result.output.slice(0, idx));
-      const raw = result.output.slice(idx + DATES_MARKER.length);
-      if (!raw.trim()) return null;
-      return { raw, ...(dateReceived ? { dateReceived } : {}) };
-    };
-
-    const loc =
-      hint?.account && hint?.mailbox
-        ? { account: hint.account, mailbox: hint.mailbox }
-        : this.idLocationIndex.get(id.toString());
-    if (loc) {
-      const scoped = parse(
-        executeAppleScript(this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch), {
-          timeoutMs: READ_ONLY_BYID_TIMEOUT_MS,
-        })
-      );
-      if (scoped) return scoped;
-      // Scoped miss (stale index) → full scan, as getMessageContent does.
-    }
-    return parse(
-      executeAppleScript(this.unscopedByIdScript(id, innerFetch), {
-        timeoutMs: READ_ONLY_BYID_TIMEOUT_MS,
-      })
-    );
+    const output = this.resolveById(id, innerFetch, hint);
+    if (output === null) return null;
+    const idx = output.indexOf(DATES_MARKER);
+    if (idx === -1) return null;
+    const { dateReceived } = parseMessageDates(output.slice(0, idx));
+    const raw = output.slice(idx + DATES_MARKER.length);
+    if (!raw.trim()) return null;
+    return { raw, ...(dateReceived ? { dateReceived } : {}) };
   }
 
   /**
@@ -3081,54 +3295,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * that budget; a call still running past it is a wedged scripting bridge,
    * not legitimate transfer time, so there is no case where the old 120s
    * ceiling was buying a real result a shorter one would have missed.
+   * Same resolution as getMessageContent (resolveById).
    */
   getRawSource(id: string, hint?: { account?: string; mailbox?: string }): string | null {
     this.lastMessageLookupError = undefined;
-    // Fast path: fetch from the known mailbox directly (same rationale as
-    // getMessageContent — the unscoped scan below times out for a message in a
-    // late-iterated large folder like "Sent Items"). See idLocationIndex.
-    const loc =
-      hint?.account && hint?.mailbox
-        ? { account: hint.account, mailbox: hint.mailbox }
-        : this.idLocationIndex.get(id.toString());
-
-    if (loc) {
-      const scopedScript = this.scopedByIdScript(
-        loc.account,
-        loc.mailbox,
-        id,
-        "return source of msg"
-      );
-      const scoped = executeAppleScript(scopedScript, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
-      if (
-        scoped.success &&
-        scoped.output.trim() &&
-        !scoped.output.startsWith(LOOKUP_ERROR_MARKER)
-      ) {
-        return scoped.output;
-      }
-      if (scoped.success && scoped.output.startsWith(LOOKUP_ERROR_MARKER)) {
-        this.lastMessageLookupError = scoped.output.slice(LOOKUP_ERROR_MARKER.length).trim();
-      } else if (!scoped.success && scoped.timedOut) {
-        this.lastMessageLookupError = timedOutResolvingId(id);
-      }
-      // Miss (stale index) → fall through to the full scan.
-    }
-
-    const script = this.unscopedByIdScript(id, "return source of msg");
-
-    const result = executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
-
-    if (!result.success || !result.output.trim()) {
-      if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
-      return null;
-    }
-    if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
-      this.lastMessageLookupError = result.output.slice(LOOKUP_ERROR_MARKER.length).trim();
-      return null;
-    }
-
-    return result.output;
+    return this.resolveById(id, "return source of msg", hint);
   }
 
   /**
