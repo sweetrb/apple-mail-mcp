@@ -72,6 +72,17 @@ describe("createCallStop", () => {
 });
 
 describe("raceStop", () => {
+  it("passes the work through untouched with no signal", async () => {
+    await expect(raceStop(Promise.resolve("x"))).resolves.toBe("x");
+  });
+
+  it("resolves STOPPED at once for an already-aborted signal, swallowing the work's rejection", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(raceStop(Promise.reject(new Error("closed")), ctrl.signal)).resolves.toBe(STOPPED);
+    await tick(0);
+  });
+
   it("returns the work's value when it wins", async () => {
     const ctrl = new AbortController();
     await expect(raceStop(Promise.resolve(3), ctrl.signal)).resolves.toBe(3);
