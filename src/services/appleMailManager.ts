@@ -118,6 +118,32 @@ const SEARCH_ACCOUNT_BUDGET_SECONDS = 30;
 const SEARCH_ACCOUNT_TIMEOUT_MS = 45000;
 
 /**
+ * Timeout (ms) for READ-ONLY by-id lookups — getMessageById, getMessageContent,
+ * getMessageHeaders and getRawSource. These never compose, send or move
+ * anything, so unlike the mutation/compose paths (which stay at 60-120s: a
+ * retried send/move could duplicate work Mail.app already accepted) there is
+ * no duplicate-side-effect risk to a short timeout here.
+ *
+ * A plain miss or scoped-mailbox hit resolves in well under a second, so
+ * anything still running at this point is already pathological — issue #270
+ * found a numeric id that hung for the full 60-120s on every read after an
+ * AppleScript reply draft was created from it and the original was then moved
+ * to Deleted Messages, with no diagnostic beyond a bare timeout. Failing fast
+ * with an actionable error beats a long silent stall either way.
+ */
+const READ_ONLY_BYID_TIMEOUT_MS = 15000;
+
+/**
+ * User-facing error for a read-only by-id lookup that hit
+ * `READ_ONLY_BYID_TIMEOUT_MS` (#270) — Mail.app's scripting bridge is wedged
+ * rather than the id genuinely missing, so point at health-check instead of
+ * the ordinary "not found" message.
+ */
+function timedOutResolvingId(id: string): string {
+  return `AppleScript timed out resolving id ${Number(id)} — Mail.app's scripting bridge may be wedged; try health-check.`;
+}
+
+/**
  * Result serialization separators (issue #30).
  *
  * AppleScript emits structured results as delimited strings that TS then splits.
@@ -2654,6 +2680,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * all mailboxes in all accounts to find the message.
    */
   getMessageById(id: string, deepAttachmentCheck = false): Message | null {
+    this.lastMessageLookupError = undefined;
     // MIME-embedded attachments are invisible to AppleScript's `mail attachments`
     // object, so the only way to detect them is to scan the raw `source of msg`.
     // That reads the entire message (can be MB-sized), so it's the slowest part
@@ -2704,9 +2731,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       end try
     `);
 
-    const result = executeAppleScript(script, { timeoutMs: 60000 }); // Longer timeout for search
+    const result = executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
 
     if (!result.success || !result.output.trim()) {
+      if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
       console.error(`Failed to get message ${id}: ${result.error}`);
       return null;
     }
@@ -2901,7 +2929,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const scopedScript = this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch);
       const scoped = this.parseMessageContent(
         id,
-        executeAppleScript(scopedScript, { timeoutMs: 60000 }),
+        executeAppleScript(scopedScript, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }),
         includeHtml
       );
       if (scoped) return scoped;
@@ -2913,7 +2941,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     return this.parseMessageContent(
       id,
-      executeAppleScript(script, { timeoutMs: 60000 }),
+      executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }),
       includeHtml
     );
   }
@@ -2929,7 +2957,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     includeHtml: boolean
   ): MessageContent | null {
     if (!result.success || !result.output.trim()) {
-      if (!result.success) console.error(`Failed to get message content: ${result.error}`);
+      if (!result.success) {
+        if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
+        console.error(`Failed to get message content: ${result.error}`);
+      }
       return null;
     }
 
@@ -3000,7 +3031,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     const parse = (result: AppleScriptResult): { raw: string; dateReceived?: Date } | null => {
       if (!result.success || !result.output.trim()) {
-        if (!result.success) console.error(`Failed to get message headers: ${result.error}`);
+        if (!result.success) {
+          if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
+          console.error(`Failed to get message headers: ${result.error}`);
+        }
         return null;
       }
       if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
@@ -3022,13 +3056,17 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (loc) {
       const scoped = parse(
         executeAppleScript(this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch), {
-          timeoutMs: 60000,
+          timeoutMs: READ_ONLY_BYID_TIMEOUT_MS,
         })
       );
       if (scoped) return scoped;
       // Scoped miss (stale index) → full scan, as getMessageContent does.
     }
-    return parse(executeAppleScript(this.unscopedByIdScript(id, innerFetch), { timeoutMs: 60000 }));
+    return parse(
+      executeAppleScript(this.unscopedByIdScript(id, innerFetch), {
+        timeoutMs: READ_ONLY_BYID_TIMEOUT_MS,
+      })
+    );
   }
 
   /**
@@ -3036,9 +3074,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * Used as fallback for attachment extraction when AppleScript
    * mail attachments returns empty.
    *
-   * Timeout is 2x the default (120s) because `source of msg` returns
-   * the entire raw message including base64-encoded attachments —
-   * a 20MB attachment can take several seconds over Exchange/IMAP.
+   * Uses the same short `READ_ONLY_BYID_TIMEOUT_MS` as the other by-id reads
+   * (#270) — `source of msg` returning the entire raw message, base64
+   * attachments included, is documented elsewhere as taking "several
+   * seconds" for a 20MB attachment over Exchange/IMAP, comfortably inside
+   * that budget; a call still running past it is a wedged scripting bridge,
+   * not legitimate transfer time, so there is no case where the old 120s
+   * ceiling was buying a real result a shorter one would have missed.
    */
   getRawSource(id: string, hint?: { account?: string; mailbox?: string }): string | null {
     this.lastMessageLookupError = undefined;
@@ -3057,7 +3099,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         id,
         "return source of msg"
       );
-      const scoped = executeAppleScript(scopedScript, { timeoutMs: 120000 });
+      const scoped = executeAppleScript(scopedScript, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
       if (
         scoped.success &&
         scoped.output.trim() &&
@@ -3067,15 +3109,18 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       }
       if (scoped.success && scoped.output.startsWith(LOOKUP_ERROR_MARKER)) {
         this.lastMessageLookupError = scoped.output.slice(LOOKUP_ERROR_MARKER.length).trim();
+      } else if (!scoped.success && scoped.timedOut) {
+        this.lastMessageLookupError = timedOutResolvingId(id);
       }
       // Miss (stale index) → fall through to the full scan.
     }
 
     const script = this.unscopedByIdScript(id, "return source of msg");
 
-    const result = executeAppleScript(script, { timeoutMs: 120000 });
+    const result = executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
 
     if (!result.success || !result.output.trim()) {
+      if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
       return null;
     }
     if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {

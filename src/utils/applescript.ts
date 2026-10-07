@@ -512,6 +512,7 @@ export function executeAppleScript(
         success: false,
         output: "",
         error: errorMessage,
+        ...(isTimeout ? { timedOut: true } : {}),
       };
 
       // Check if we should retry

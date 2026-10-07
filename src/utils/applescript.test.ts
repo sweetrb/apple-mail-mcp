@@ -304,6 +304,34 @@ describe("executeAppleScript", () => {
       expect(result.error).toContain("Mail.app may be unresponsive");
     });
 
+    it("sets timedOut:true on a timeout (#270) so callers can distinguish it from an ordinary AppleScript error", () => {
+      const timeoutError = new Error("Command failed: SIGTERM") as Error & {
+        killed: boolean;
+        signal: string;
+      };
+      timeoutError.killed = true;
+      timeoutError.signal = "SIGTERM";
+
+      mockExecSync.mockImplementation(() => {
+        throw timeoutError;
+      });
+
+      const result = executeAppleScript("test");
+
+      expect(result.timedOut).toBe(true);
+    });
+
+    it("does not set timedOut on an ordinary (non-timeout) AppleScript error", () => {
+      mockExecSync.mockImplementation(() => {
+        throw new Error("execution error: Can't get message 42. (-1728)");
+      });
+
+      const result = executeAppleScript("test");
+
+      expect(result.success).toBe(false);
+      expect(result.timedOut).toBeUndefined();
+    });
+
     it("includes custom timeout value in error message", () => {
       const timeoutError = new Error("Command failed: SIGTERM") as Error & {
         killed: boolean;

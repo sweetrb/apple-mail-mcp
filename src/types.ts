@@ -234,6 +234,14 @@ export interface AppleScriptResult {
 
   /** Error message if execution failed */
   error?: string;
+
+  /**
+   * True when the failure was the osascript process timeout firing (#270) —
+   * distinguishes "Mail.app's scripting bridge is wedged" from an ordinary
+   * AppleScript error, so a caller can surface a diagnosable message instead
+   * of a generic failure.
+   */
+  timedOut?: boolean;
 }
 
 // =============================================================================

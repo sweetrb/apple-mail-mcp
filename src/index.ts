@@ -1134,7 +1134,10 @@ registerTool(
       seedSubject = subjectFromGetMessage(r.info);
     } else {
       const msg = mailManager.getMessageById(id);
-      if (!msg) return errorResponse(`Message with ID "${id}" not found`);
+      if (!msg) {
+        const lookupError = mailManager.consumeLastMessageLookupError();
+        return errorResponse(lookupError ?? `Message with ID "${id}" not found`);
+      }
       seedSubject = msg.subject;
     }
     if (!seedSubject) return errorResponse(`Could not determine the subject of message "${id}"`);
