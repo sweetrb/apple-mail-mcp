@@ -142,6 +142,14 @@ export interface CallTiming {
   arrivedAt: number;
   /** ms the call spent queued behind other calls before its handler ran. */
   queueWaitMs: number;
+  /**
+   * The MCP request's abort signal (`extra.signal`), aborted when the client
+   * sends `notifications/cancelled` for this request or the transport closes
+   * (#276). Long-running handlers (the IMAP mailbox fan-out) watch it so a
+   * cancelled call stops and releases the serial gate instead of running to
+   * completion while every later call waits behind it.
+   */
+  signal?: AbortSignal;
 }
 
 const callTiming = new AsyncLocalStorage<CallTiming>();
@@ -167,10 +175,17 @@ export function withErrorHandling<T extends Record<string, unknown>>(
   handler: (params: T) => ToolResponse | Promise<ToolResponse>,
   errorPrefix: string
 ) {
-  return async (params: T) => {
+  return async (params: T, extra?: { signal?: AbortSignal }) => {
     const arrivedAt = Date.now();
+    const signal = extra?.signal;
     return serializeAppleScript(async () => {
-      const timing: CallTiming = { arrivedAt, queueWaitMs: Date.now() - arrivedAt };
+      // #276: a request the client cancelled while it sat in the queue has no
+      // one waiting for its answer (the SDK drops the response of a cancelled
+      // request), so don't spend the gate on it — every call behind it waits.
+      if (signal?.aborted) {
+        return errorResponse(`${errorPrefix}: request was cancelled before it started`);
+      }
+      const timing: CallTiming = { arrivedAt, queueWaitMs: Date.now() - arrivedAt, signal };
       return callTiming.run(timing, async () => {
         try {
           return await handler(params);

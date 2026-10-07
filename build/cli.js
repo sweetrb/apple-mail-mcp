@@ -12259,6 +12259,51 @@ var init_docsUrls = __esm({
   }
 });
 
+// src/utils/callStop.ts
+function describeStop(signal) {
+  const reason = signal?.reason;
+  if (reason && typeof reason === "object" && reason.kind === "deadline") {
+    return `the ${Math.round(reason.deadlineMs / 1e3)}s search deadline (${reason.envVar})`;
+  }
+  return "the request being cancelled";
+}
+function stoppedByDeadline(signal) {
+  const reason = signal?.reason;
+  return !!reason && typeof reason === "object" && reason.kind === "deadline";
+}
+function raceStop(work, signal) {
+  if (!signal) return work;
+  if (signal.aborted) {
+    work.catch(() => void 0);
+    return Promise.resolve(STOPPED);
+  }
+  return new Promise((resolve4, reject) => {
+    const onAbort = () => {
+      work.catch(() => void 0);
+      resolve4(STOPPED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve4(value);
+      },
+      (error2) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error2);
+      }
+    );
+  });
+}
+var SEARCH_DEADLINE_ENV, STOPPED;
+var init_callStop = __esm({
+  "src/utils/callStop.ts"() {
+    "use strict";
+    SEARCH_DEADLINE_ENV = "APPLE_MAIL_MCP_SEARCH_DEADLINE_MS";
+    STOPPED = /* @__PURE__ */ Symbol("stopped");
+  }
+});
+
 // node_modules/.pnpm/pino-std-serializers@7.1.0/node_modules/pino-std-serializers/lib/err-helpers.js
 var require_err_helpers = __commonJS({
   "node_modules/.pnpm/pino-std-serializers@7.1.0/node_modules/pino-std-serializers/lib/err-helpers.js"(exports, module) {
@@ -58037,6 +58082,7 @@ __export(imapClient_exports, {
   resolveImapConfigs: () => resolveImapConfigs,
   resolveMailboxPath: () => resolveMailboxPath,
   shouldUseImap: () => shouldUseImap,
+  stoppedNote: () => stoppedNote,
   unscopedSearchOffsetError: () => unscopedSearchOffsetError
 });
 import { createHash } from "node:crypto";
@@ -58357,6 +58403,12 @@ function structuredRow(m, account, path3) {
     ...env.messageId ? { messageId: env.messageId } : {}
   };
 }
+function stoppedNote(timedOut, signal) {
+  if (timedOut.length === 0) return "";
+  return `
+
+Partial result. Stopped by ${describeStop(signal)} before finishing ${timedOut.length} mailbox(es): ${timedOut.map((m) => `"${m}"`).join(", ")}. This is NOT a confirmed "no such mail" \u2014 narrow the search with \`mailbox\` and/or \`dateFrom\`, or raise ${SEARCH_DEADLINE_ENV}.`;
+}
 function omittedNote(omitted, merged) {
   if (omitted.length === 0) return "";
   const list = omitted.map((o) => `UID ${o.uid} in "${o.mailbox}" (${o.id})`).join(", ");
@@ -58646,9 +58698,23 @@ async function run(args, listMode, deps) {
       const omittedMessages = [];
       let totalMatched = 0;
       let totalExact = true;
-      for (const path3 of paths) {
+      const timedOutMailboxes = [];
+      for (const [index, path3] of paths.entries()) {
+        if (deps.signal?.aborted) {
+          timedOutMailboxes.push(...paths.slice(index));
+          break;
+        }
         try {
-          const result = await fetchMailboxMatches(client, path3, criteria, page);
+          const outcome = await raceStop(
+            fetchMailboxMatches(client, path3, criteria, page),
+            deps.signal
+          );
+          if (outcome === STOPPED) {
+            abandonClient(client, cfg, deps);
+            timedOutMailboxes.push(...paths.slice(index));
+            break;
+          }
+          const result = outcome;
           totalMatched += result.total;
           totalExact &&= result.totalExact;
           fetched.push(...result.messages.map((message) => ({ message, path: path3 })));
@@ -58688,10 +58754,14 @@ async function run(args, listMode, deps) {
       const messages = ordered.map(
         ({ message, path: path3 }) => structuredRow(message, cfg.accountLabel, path3)
       );
-      const partial = failedMailboxes.length > 0 || omittedMessages.length > 0;
+      const partial = failedMailboxes.length > 0 || omittedMessages.length > 0 || timedOutMailboxes.length > 0;
+      const stopped = timedOutMailboxes.length > 0 ? {
+        timedOutMailboxes,
+        stoppedBy: stoppedByDeadline(deps.signal) ? "deadline" : "cancelled"
+      } : {};
       const failureNote = (failedMailboxes.length > 0 ? `
 
-Partial result. Could not search mailbox(es): ${failedMailboxes.map((path3) => `"${path3}" (${failedMailboxReasons[path3]})`).join(", ")}.` : "") + omittedNote(omittedMessages, unscopedSearch);
+Partial result. Could not search mailbox(es): ${failedMailboxes.map((path3) => `"${path3}" (${failedMailboxReasons[path3]})`).join(", ")}.` : "") + omittedNote(omittedMessages, unscopedSearch) + stoppedNote(timedOutMailboxes, deps.signal);
       const verb = listMode ? "listed" : "matched";
       const totalText = totalExact ? `${totalMatched} total` : `at least ${totalMatched} total`;
       const scope = unscopedSearch ? allMailboxCount === 1 ? `mailbox "${paths[0]}"` : `${allMailboxCount} selectable mailboxes` : `mailbox "${paths[0]}"`;
@@ -58703,7 +58773,8 @@ Partial result. Could not search mailbox(es): ${failedMailboxes.map((path3) => `
           partial,
           failedMailboxes,
           failedMailboxReasons,
-          omittedMessages
+          omittedMessages,
+          ...stopped
         };
       }
       const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalText} ${verb}):
@@ -58717,7 +58788,8 @@ Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutatio
         partial,
         failedMailboxes,
         failedMailboxReasons,
-        omittedMessages
+        omittedMessages,
+        ...stopped
       };
     },
     true
@@ -58859,6 +58931,20 @@ async function dropPool(key) {
   pools.delete(key);
   await e.client.logout().catch(() => void 0);
   e.client.close?.();
+}
+function abandonClient(client, cfg, deps) {
+  if (!deps.connect) {
+    const key = poolKey(cfg);
+    const entry = pools.get(key);
+    if (entry && entry.client === client) {
+      if (entry.idle) clearTimeout(entry.idle);
+      pools.delete(key);
+    }
+  }
+  try {
+    client.close?.();
+  } catch {
+  }
 }
 async function dropAllPools() {
   await Promise.all([...pools.keys()].map((k) => dropPool(k)));
@@ -59858,6 +59944,7 @@ var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED,
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
+    init_callStop();
     import_imapflow = __toESM(require_imap_flow(), 1);
     init_smtpMailer();
     init_docsUrls();
