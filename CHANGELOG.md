@@ -1,5 +1,43 @@
 ## [Unreleased]
 
+## [2.20.5] - 2026-10-07
+
+### Fixed
+
+- **One slow IMAP `search-messages` no longer blocks every other tool call
+  until it finishes** (#276, reported with a precise stdio repro by @j5pu). An
+  unscoped body search over 32 iCloud mailboxes ran 134–141s (Archive alone
+  96s); because tool calls are serialized so they cannot race into Mail.app
+  (#11), `list-accounts` sent 3s later returned after 126s, and
+  `notifications/cancelled` changed nothing — the search ran to completion
+  and kept the queue. Now:
+  - **Cancellation is honoured.** The request's abort signal (`extra.signal`)
+    reaches the handler; the IMAP mailbox fan-out stops, abandons the mailbox
+    in flight by hard-closing its connection (the server drops the command,
+    the pooled slot is freed, the next call reconnects — one connection
+    replaced by one), starts no further mailboxes or accounts, and releases
+    the queue. A request cancelled while still queued is skipped outright.
+  - **A per-call deadline**, `APPLE_MAIL_MCP_SEARCH_DEADLINE_MS` (default
+    `45000`, minimum `2000`), measured from the request's arrival like
+    `APPLE_MAIL_MCP_STATS_DEADLINE_MS`, so time spent queued counts. On expiry
+    the search returns the matches it already has with `partial: true`,
+    `timedOutMailboxes` (`"Account / Mailbox"`; `"Account / *"` for an account
+    never reached) and `stoppedBy: "deadline" | "cancelled"`, plus a prose
+    note. AppleScript-only accounts are not started once the call is stopped
+    and are reported under `timedOutAccounts`.
+
+  Live-verified against real Gmail and iCloud IMAP: with a 5s deadline an
+  all-account body search returned at 5.0s with the in-flight
+  `[Gmail]/All Mail` and the two accounts it never reached listed in
+  `timedOutMailboxes`, and the next search on the abandoned account succeeded
+  on a fresh connection. Letting IMAP-only calls bypass the queue (option (a)
+  in the issue) is **not** in this release: the IMAP connection pool keeps
+  one connection per account and relies on that serialization (any error
+  drops the shared connection; the idle timer can close it under a concurrent
+  call), and the "IMAP" search path still reads Mail.app's account list over
+  AppleScript to partition accounts. A slow search can still hold the queue
+  for up to the deadline.
+
 ## [2.20.4] - 2026-10-07
 
 ### Fixed
