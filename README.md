@@ -291,6 +291,20 @@ apart from _"I did not look everywhere"_ without parsing the text:
 | `failedMailboxReasons`  | object   | The IMAP server's own error text for each entry in `failedMailboxes`, keyed the same way.                                                                                                                                                                                                                             |
 | `omittedMessages`       | object[] | IMAP messages that belong on the page but whose `FETCH` response could not be read even with a reduced item set — `{ id, mailbox, uid, reason }`. The page is short by exactly these; the `id` still works with `get-message` / `get-message-headers`. ([#256](https://github.com/sweetrb/apple-mail-mcp/issues/256)) |
 
+| `timedOutMailboxes`     | string[] | IMAP mailboxes the search did not finish because the call was **cancelled** (`notifications/cancelled`) or reached its **deadline** (`APPLE_MAIL_MCP_SEARCH_DEADLINE_MS`, default 45s), formatted `"Account / Mailbox"`; an account never reached is `"Account / *"`. Results from the mailboxes that did finish are still returned. ([#276](https://github.com/sweetrb/apple-mail-mcp/issues/276)) |
+| `stoppedBy`             | string   | `"deadline"` or `"cancelled"` — present only with `timedOutMailboxes`. |
+
+**Deadline and cancellation ([#276](https://github.com/sweetrb/apple-mail-mcp/issues/276)).** Tool
+calls run one at a time (so they cannot race into Mail.app), which means a long search holds every
+later call behind it. An IMAP `search-messages` therefore stops at
+`APPLE_MAIL_MCP_SEARCH_DEADLINE_MS` (default `45000`, minimum `2000`, measured from when the request
+arrived — time queued behind other calls counts) and returns what it found plus `timedOutMailboxes`,
+and it stops the same way when the client cancels the request. The mailbox being searched at that
+moment is abandoned by closing its IMAP connection (the next call reconnects), so the queue is
+released promptly rather than after a server-side `SEARCH` that can take a minute and a half on a
+very large mailbox. A request cancelled while still queued is skipped. Keep the deadline below your
+client's own request timeout.
+
 Treat a non-empty `skippedLargeMailboxes` as actionable rather than
 informational: re-run scoped to the named mailbox with a `dateFrom`/`dateTo`
 window, or configure the [IMAP backend](#imap-backend--opt-in), which searches
@@ -635,6 +649,7 @@ for an explicitly-named IMAP account, never on an omitted account.
 | `APPLE_MAIL_MCP_IMAP_IDLE_MS`          | No       | `30000`          | Idle timeout (ms) before a pooled IMAP connection is closed (`0` = never close)                                                                                                                                                                                      |
 | `APPLE_MAIL_MCP_STATS_BUDGET_MS`       | No       | `25000`          | Per-account wall-clock budget for `get-mail-stats` (minimum `1000`). Raise it for very large accounts                                                                                                                                                                |
 | `APPLE_MAIL_MCP_STATS_DEADLINE_MS`     | No       | `50000`          | Overall wall-clock deadline for one `get-mail-stats` call (minimum `2000`), measured from when the request arrived and covering time queued behind other tool calls, account enumeration **and** every per-account read. Keep it below your client's request timeout |
+| `APPLE_MAIL_MCP_SEARCH_DEADLINE_MS`    | No       | `45000`          | Overall wall-clock deadline for one IMAP `search-messages` call (minimum `2000`), measured from when the request arrived. On expiry the search returns partial results plus `timedOutMailboxes` instead of holding the tool-call queue. Keep it below your client's request timeout|
 
 **Multiple IMAP accounts (C2):** set `APPLE_MAIL_MCP_IMAP_ACCOUNTS` to a JSON array, e.g.
 `[{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]`.

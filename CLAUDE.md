@@ -167,6 +167,7 @@ does not reattach original attachments.
 
 - Default account is Mail.app's configured default send account
 - `search-messages` searches all accounts when no `account` is specified
+- **`search-messages` (IMAP) stops at a 45s deadline and on cancel (#276)** and returns what it found with `partial: true` and `timedOutMailboxes`. That is not "no such mail": re-run scoped with `mailbox` and/or `dateFrom` rather than repeating the same unscoped search.
 - Use `list-accounts` to see available accounts
 - Pass `account` parameter to target specific account
 - **Two dates, and they can disagree (2.19.0, #224).** `get-message` returns `dateSent` (the `Date:` header — the author's send time) and `dateReceived` (arrival in the mailbox: IMAP `INTERNALDATE` / Mail's `date received`). A migration or re-import resets the arrival time, so on such a mailbox dozens of messages share one `dateReceived` while their `dateSent` values span years — use `dateSent` for chronology there. `get-message-headers` returns the raw header block (Message-ID, In-Reply-To/References, the `Received:` trace, custom `X-` headers) without downloading the body. `dateSent` is omitted when it is more than 7 days after `dateReceived` — that is Mail inventing one for a `Date:` it cannot parse, not a send time (2.19.6, #234). `get-message-headers` names its `backend`; a numeric id reads Mail's `all headers`, which can drop an unparseable `Date:` value (reported as absent, with `warnings[]`) — the `imap:` id for the same message has the real header.
