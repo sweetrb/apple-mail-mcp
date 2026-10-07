@@ -82325,7 +82325,8 @@ function executeAppleScript(script, options = {}) {
       lastError = {
         success: false,
         output: "",
-        error: errorMessage
+        error: errorMessage,
+        ...isTimeout ? { timedOut: true } : {}
       };
       const canRetry = isTimeout || isRetryableError(errorMessage);
       const hasAttemptsLeft = attempt < maxRetries;
@@ -82598,6 +82599,10 @@ function getMailboxScanThreshold() {
 }
 var SEARCH_ACCOUNT_BUDGET_SECONDS = 30;
 var SEARCH_ACCOUNT_TIMEOUT_MS = 45e3;
+var READ_ONLY_BYID_TIMEOUT_MS = 15e3;
+function timedOutResolvingId(id) {
+  return `AppleScript timed out resolving id ${Number(id)} \u2014 Mail.app's scripting bridge may be wedged; try health-check.`;
+}
 var GROUP_SEP = "";
 var FIELD_SEP = "";
 var RECORD_SEP = "";
@@ -84208,6 +84213,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * all mailboxes in all accounts to find the message.
    */
   getMessageById(id, deepAttachmentCheck = false) {
+    this.lastMessageLookupError = void 0;
     const deepScan = deepAttachmentCheck ? `if hasAtt is "false" then
                   try
                     set rawSrc to source of msg
@@ -84249,8 +84255,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         return ""
       end try
     `);
-    const result = executeAppleScript(script, { timeoutMs: 6e4 });
+    const result = executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
     if (!result.success || !result.output.trim()) {
+      if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
       console.error(`Failed to get message ${id}: ${result.error}`);
       return null;
     }
@@ -84407,7 +84414,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const scopedScript = this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch);
       const scoped = this.parseMessageContent(
         id,
-        executeAppleScript(scopedScript, { timeoutMs: 6e4 }),
+        executeAppleScript(scopedScript, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }),
         includeHtml
       );
       if (scoped) return scoped;
@@ -84415,7 +84422,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const script = this.unscopedByIdScript(id, innerFetch);
     return this.parseMessageContent(
       id,
-      executeAppleScript(script, { timeoutMs: 6e4 }),
+      executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }),
       includeHtml
     );
   }
@@ -84426,7 +84433,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   parseMessageContent(id, result, includeHtml) {
     if (!result.success || !result.output.trim()) {
-      if (!result.success) console.error(`Failed to get message content: ${result.error}`);
+      if (!result.success) {
+        if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
+        console.error(`Failed to get message content: ${result.error}`);
+      }
       return null;
     }
     if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
@@ -84473,7 +84483,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 return msgDates & "${DATES_MARKER}" & msgHeaders`;
     const parse4 = (result) => {
       if (!result.success || !result.output.trim()) {
-        if (!result.success) console.error(`Failed to get message headers: ${result.error}`);
+        if (!result.success) {
+          if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
+          console.error(`Failed to get message headers: ${result.error}`);
+        }
         return null;
       }
       if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
@@ -84491,21 +84504,29 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (loc) {
       const scoped = parse4(
         executeAppleScript(this.scopedByIdScript(loc.account, loc.mailbox, id, innerFetch), {
-          timeoutMs: 6e4
+          timeoutMs: READ_ONLY_BYID_TIMEOUT_MS
         })
       );
       if (scoped) return scoped;
     }
-    return parse4(executeAppleScript(this.unscopedByIdScript(id, innerFetch), { timeoutMs: 6e4 }));
+    return parse4(
+      executeAppleScript(this.unscopedByIdScript(id, innerFetch), {
+        timeoutMs: READ_ONLY_BYID_TIMEOUT_MS
+      })
+    );
   }
   /**
    * Get the raw MIME source of a message.
    * Used as fallback for attachment extraction when AppleScript
    * mail attachments returns empty.
    *
-   * Timeout is 2x the default (120s) because `source of msg` returns
-   * the entire raw message including base64-encoded attachments —
-   * a 20MB attachment can take several seconds over Exchange/IMAP.
+   * Uses the same short `READ_ONLY_BYID_TIMEOUT_MS` as the other by-id reads
+   * (#270) — `source of msg` returning the entire raw message, base64
+   * attachments included, is documented elsewhere as taking "several
+   * seconds" for a 20MB attachment over Exchange/IMAP, comfortably inside
+   * that budget; a call still running past it is a wedged scripting bridge,
+   * not legitimate transfer time, so there is no case where the old 120s
+   * ceiling was buying a real result a shorter one would have missed.
    */
   getRawSource(id, hint) {
     this.lastMessageLookupError = void 0;
@@ -84517,17 +84538,20 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         id,
         "return source of msg"
       );
-      const scoped = executeAppleScript(scopedScript, { timeoutMs: 12e4 });
+      const scoped = executeAppleScript(scopedScript, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
       if (scoped.success && scoped.output.trim() && !scoped.output.startsWith(LOOKUP_ERROR_MARKER)) {
         return scoped.output;
       }
       if (scoped.success && scoped.output.startsWith(LOOKUP_ERROR_MARKER)) {
         this.lastMessageLookupError = scoped.output.slice(LOOKUP_ERROR_MARKER.length).trim();
+      } else if (!scoped.success && scoped.timedOut) {
+        this.lastMessageLookupError = timedOutResolvingId(id);
       }
     }
     const script = this.unscopedByIdScript(id, "return source of msg");
-    const result = executeAppleScript(script, { timeoutMs: 12e4 });
+    const result = executeAppleScript(script, { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS });
     if (!result.success || !result.output.trim()) {
+      if (result.timedOut) this.lastMessageLookupError = timedOutResolvingId(id);
       return null;
     }
     if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
@@ -89151,7 +89175,10 @@ registerTool(
       seedSubject = subjectFromGetMessage(r.info);
     } else {
       const msg = mailManager.getMessageById(id);
-      if (!msg) return errorResponse(`Message with ID "${id}" not found`);
+      if (!msg) {
+        const lookupError = mailManager.consumeLastMessageLookupError();
+        return errorResponse(lookupError ?? `Message with ID "${id}" not found`);
+      }
       seedSubject = msg.subject;
     }
     if (!seedSubject) return errorResponse(`Could not determine the subject of message "${id}"`);
