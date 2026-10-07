@@ -145,14 +145,24 @@ export async function fanOutImapMessages(
   failedMailboxes: string[];
   failedMailboxReasons: Record<string, string>;
   omittedMessages: OmittedMessage[];
+  /** "<account> / <mailbox>" entries a stopped call never finished (#276); an
+   *  account the fan-out never reached is listed as "<account> / *". */
+  timedOutMailboxes: string[];
 }> {
   const rows: MessageRow[] = [];
+  const timedOutMailboxes: string[] = [];
   const accountsQueried: string[] = [];
   const accountsFailed: string[] = [];
   const failedMailboxes: string[] = [];
   const failedMailboxReasons: Record<string, string> = {};
   const omittedMessages: OmittedMessage[] = [];
   for (const config of configs) {
+    // #276: once the call is cancelled or out of time, later accounts are not
+    // started — they are reported, not silently dropped.
+    if (deps.signal?.aborted) {
+      timedOutMailboxes.push(`${config.accountLabel} / *`);
+      continue;
+    }
     // Keep an omitted mailbox omitted. The per-account search discovers an RFC
     // 6154 `\\All` mailbox when available (Gmail), otherwise it searches every
     // selectable mailbox (iCloud/generic IMAP). Hostname heuristics cannot tell
@@ -171,6 +181,9 @@ export async function fanOutImapMessages(
       for (const [mailbox, reason] of Object.entries(res.failedMailboxReasons)) {
         failedMailboxReasons[`${config.accountLabel} / ${mailbox}`] = reason;
       }
+      timedOutMailboxes.push(
+        ...(res.timedOutMailboxes ?? []).map((mailbox) => `${config.accountLabel} / ${mailbox}`)
+      );
       // The id already carries the account; the mailbox is prefixed like
       // failedMailboxes so rows from two accounts stay distinguishable.
       omittedMessages.push(
@@ -191,6 +204,7 @@ export async function fanOutImapMessages(
     failedMailboxes,
     failedMailboxReasons,
     omittedMessages,
+    timedOutMailboxes,
   };
 }
 

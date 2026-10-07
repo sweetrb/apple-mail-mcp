@@ -26,6 +26,13 @@
  *
  * @module services/imapClient
  */
+import {
+  describeStop,
+  raceStop,
+  STOPPED,
+  stoppedByDeadline,
+  SEARCH_DEADLINE_ENV,
+} from "@/utils/callStop.js";
 import { createHash } from "node:crypto";
 import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
@@ -265,6 +272,14 @@ export interface ImapDeps {
   connect?: ImapConnect;
   config?: ImapConfig;
   account?: string;
+  /**
+   * "Stop now" for a long multi-mailbox search (#276): the request's cancel
+   * and/or a per-call deadline (see utils/callStop). When it fires, the
+   * mailbox in flight is abandoned — its connection is closed so the server
+   * command dies and the pool slot is freed — and every mailbox not yet
+   * finished is reported in `timedOutMailboxes`.
+   */
+  signal?: AbortSignal;
 }
 
 type ImapMessageRef = NonNullable<ReturnType<typeof decodeImapId>>;
@@ -889,6 +904,22 @@ export interface ImapListResult {
    *  (#256 follow-up). Non-empty implies `partial: true`: a short page is
    *  never returned silently. */
   omittedMessages: OmittedMessage[];
+  /** Mailboxes not (fully) searched because the call was cancelled or hit its
+   *  deadline (#276) — the one in flight plus every one after it. Non-empty
+   *  implies `partial: true`. */
+  timedOutMailboxes?: string[];
+  /** Why `timedOutMailboxes` is non-empty. */
+  stoppedBy?: "deadline" | "cancelled";
+}
+
+/** The text a caller sees for {@link ImapListResult.timedOutMailboxes}. */
+export function stoppedNote(timedOut: string[], signal: AbortSignal | undefined): string {
+  if (timedOut.length === 0) return "";
+  return (
+    `\n\nPartial result. Stopped by ${describeStop(signal)} before finishing ${timedOut.length} ` +
+    `mailbox(es): ${timedOut.map((m) => `"${m}"`).join(", ")}. This is NOT a confirmed "no such mail" — ` +
+    `narrow the search with \`mailbox\` and/or \`dateFrom\`, or raise ${SEARCH_DEADLINE_ENV}.`
+  );
 }
 
 /** The text a caller sees for {@link ImapListResult.omittedMessages}. */
@@ -1535,9 +1566,31 @@ async function run(
       let totalMatched = 0;
       let totalExact = true;
 
-      for (const path of paths) {
+      const timedOutMailboxes: string[] = [];
+      for (const [index, path] of paths.entries()) {
+        // #276: a cancelled or out-of-time call stops here and names what it
+        // never reached, instead of walking the remaining mailboxes while every
+        // other tool call waits behind it in the serial gate.
+        if (deps.signal?.aborted) {
+          timedOutMailboxes.push(...paths.slice(index));
+          break;
+        }
         try {
-          const result = await fetchMailboxMatches(client, path, criteria, page);
+          const outcome = await raceStop(
+            fetchMailboxMatches(client, path, criteria, page),
+            deps.signal
+          );
+          if (outcome === STOPPED) {
+            // The mailbox in flight may be a single 90s SEARCH (793k-message
+            // iCloud Archive), so waiting for it to finish would not release
+            // the queue. Close the connection under it: the server abandons the
+            // command and the pooled slot is freed rather than held. The next
+            // call reconnects — one connection replaced by one, never more.
+            abandonClient(client, cfg, deps);
+            timedOutMailboxes.push(...paths.slice(index));
+            break;
+          }
+          const result = outcome;
           totalMatched += result.total;
           totalExact &&= result.totalExact;
           fetched.push(...result.messages.map((message) => ({ message, path })));
@@ -1559,6 +1612,8 @@ async function run(
       }
 
       if (failedMailboxes.length === paths.length) {
+        // (Every mailbox genuinely FAILED. A stopped call never lands here:
+        // whatever it did not reach is in timedOutMailboxes, not failedMailboxes.)
         const detail = failedMailboxes
           .map((path) => `${path} (${failedMailboxReasons[path]})`)
           .join(", ");
@@ -1584,13 +1639,25 @@ async function run(
       const messages = ordered.map(({ message, path }) =>
         structuredRow(message, cfg.accountLabel, path)
       );
-      const partial = failedMailboxes.length > 0 || omittedMessages.length > 0;
+      const partial =
+        failedMailboxes.length > 0 || omittedMessages.length > 0 || timedOutMailboxes.length > 0;
+      const stopped =
+        timedOutMailboxes.length > 0
+          ? {
+              timedOutMailboxes,
+              stoppedBy: stoppedByDeadline(deps.signal)
+                ? ("deadline" as const)
+                : ("cancelled" as const),
+            }
+          : {};
       const failureNote =
         (failedMailboxes.length > 0
           ? `\n\nPartial result. Could not search mailbox(es): ${failedMailboxes
               .map((path) => `"${path}" (${failedMailboxReasons[path]})`)
               .join(", ")}.`
-          : "") + omittedNote(omittedMessages, unscopedSearch);
+          : "") +
+        omittedNote(omittedMessages, unscopedSearch) +
+        stoppedNote(timedOutMailboxes, deps.signal);
       const verb = listMode ? "listed" : "matched";
       const totalText = totalExact ? `${totalMatched} total` : `at least ${totalMatched} total`;
       const scope = unscopedSearch
@@ -1608,6 +1675,7 @@ async function run(
           failedMailboxes,
           failedMailboxReasons,
           omittedMessages,
+          ...stopped,
         };
       }
 
@@ -1624,6 +1692,7 @@ async function run(
         failedMailboxes,
         failedMailboxReasons,
         omittedMessages,
+        ...stopped,
       };
     },
     true
@@ -1949,6 +2018,30 @@ async function dropPool(key: string): Promise<void> {
   // unconditionally so the FD/slot is always released.
   await e.client.logout().catch(() => undefined);
   e.client.close?.();
+}
+
+/**
+ * Hard-close `client` WITHOUT a logout and forget it if it is the pooled one
+ * (#276). Used when a stopped call abandons a command in flight: logout would
+ * queue behind that very command (a SEARCH that can run for 90s), so the socket
+ * is destroyed instead, which also makes the server drop the command. Only the
+ * entry still holding this exact client is removed, so a connection another
+ * acquisition already replaced is left alone.
+ */
+function abandonClient(client: ImapClientLike, cfg: ImapConfig, deps: ImapDeps): void {
+  if (!deps.connect) {
+    const key = poolKey(cfg);
+    const entry = pools.get(key);
+    if (entry && entry.client === client) {
+      if (entry.idle) clearTimeout(entry.idle);
+      pools.delete(key);
+    }
+  }
+  try {
+    client.close?.();
+  } catch {
+    /* already closed */
+  }
 }
 
 /**

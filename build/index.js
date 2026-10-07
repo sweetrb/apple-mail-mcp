@@ -19994,6 +19994,84 @@ var init_nodemailer = __esm({
   }
 });
 
+// src/utils/callStop.ts
+function searchDeadlineMs(env = process.env) {
+  const raw = env[SEARCH_DEADLINE_ENV];
+  if (raw === void 0 || raw.trim() === "") return DEFAULT_SEARCH_DEADLINE_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_SEARCH_DEADLINE_MS;
+  return Math.max(MIN_SEARCH_DEADLINE_MS, Math.floor(n));
+}
+function createCallStop(timing, deadlineMs, envVar = SEARCH_DEADLINE_ENV) {
+  const controller = new AbortController();
+  const upstream = timing?.signal;
+  const onCancel = () => {
+    if (!controller.signal.aborted) controller.abort({ kind: "cancelled" });
+  };
+  if (upstream?.aborted) onCancel();
+  else upstream?.addEventListener("abort", onCancel, { once: true });
+  const startedAt = timing?.arrivedAt ?? Date.now();
+  const remaining = Math.max(0, deadlineMs - (Date.now() - startedAt));
+  const timer = setTimeout(() => {
+    if (!controller.signal.aborted) {
+      controller.abort({ kind: "deadline", deadlineMs, envVar });
+    }
+  }, remaining);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timer);
+      upstream?.removeEventListener("abort", onCancel);
+    }
+  };
+}
+function describeStop(signal) {
+  const reason = signal?.reason;
+  if (reason && typeof reason === "object" && reason.kind === "deadline") {
+    return `the ${Math.round(reason.deadlineMs / 1e3)}s search deadline (${reason.envVar})`;
+  }
+  return "the request being cancelled";
+}
+function stoppedByDeadline(signal) {
+  const reason = signal?.reason;
+  return !!reason && typeof reason === "object" && reason.kind === "deadline";
+}
+function raceStop(work, signal) {
+  if (!signal) return work;
+  if (signal.aborted) {
+    work.catch(() => void 0);
+    return Promise.resolve(STOPPED);
+  }
+  return new Promise((resolve5, reject) => {
+    const onAbort = () => {
+      work.catch(() => void 0);
+      resolve5(STOPPED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve5(value);
+      },
+      (error3) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error3);
+      }
+    );
+  });
+}
+var DEFAULT_SEARCH_DEADLINE_MS, MIN_SEARCH_DEADLINE_MS, SEARCH_DEADLINE_ENV, STOPPED;
+var init_callStop = __esm({
+  "src/utils/callStop.ts"() {
+    "use strict";
+    DEFAULT_SEARCH_DEADLINE_MS = 45e3;
+    MIN_SEARCH_DEADLINE_MS = 2e3;
+    SEARCH_DEADLINE_ENV = "APPLE_MAIL_MCP_SEARCH_DEADLINE_MS";
+    STOPPED = /* @__PURE__ */ Symbol("stopped");
+  }
+});
+
 // node_modules/.pnpm/pino-std-serializers@7.1.0/node_modules/pino-std-serializers/lib/err-helpers.js
 var require_err_helpers = __commonJS({
   "node_modules/.pnpm/pino-std-serializers@7.1.0/node_modules/pino-std-serializers/lib/err-helpers.js"(exports, module) {
@@ -65379,6 +65457,7 @@ __export(imapClient_exports, {
   resolveImapConfigs: () => resolveImapConfigs,
   resolveMailboxPath: () => resolveMailboxPath,
   shouldUseImap: () => shouldUseImap,
+  stoppedNote: () => stoppedNote,
   unscopedSearchOffsetError: () => unscopedSearchOffsetError
 });
 import { createHash } from "node:crypto";
@@ -65699,6 +65778,12 @@ function structuredRow(m, account, path3) {
     ...env.messageId ? { messageId: env.messageId } : {}
   };
 }
+function stoppedNote(timedOut, signal) {
+  if (timedOut.length === 0) return "";
+  return `
+
+Partial result. Stopped by ${describeStop(signal)} before finishing ${timedOut.length} mailbox(es): ${timedOut.map((m) => `"${m}"`).join(", ")}. This is NOT a confirmed "no such mail" \u2014 narrow the search with \`mailbox\` and/or \`dateFrom\`, or raise ${SEARCH_DEADLINE_ENV}.`;
+}
 function omittedNote(omitted, merged) {
   if (omitted.length === 0) return "";
   const list = omitted.map((o) => `UID ${o.uid} in "${o.mailbox}" (${o.id})`).join(", ");
@@ -65988,9 +66073,23 @@ async function run(args, listMode, deps) {
       const omittedMessages = [];
       let totalMatched = 0;
       let totalExact = true;
-      for (const path3 of paths) {
+      const timedOutMailboxes = [];
+      for (const [index, path3] of paths.entries()) {
+        if (deps.signal?.aborted) {
+          timedOutMailboxes.push(...paths.slice(index));
+          break;
+        }
         try {
-          const result = await fetchMailboxMatches(client, path3, criteria, page);
+          const outcome = await raceStop(
+            fetchMailboxMatches(client, path3, criteria, page),
+            deps.signal
+          );
+          if (outcome === STOPPED) {
+            abandonClient(client, cfg, deps);
+            timedOutMailboxes.push(...paths.slice(index));
+            break;
+          }
+          const result = outcome;
           totalMatched += result.total;
           totalExact &&= result.totalExact;
           fetched.push(...result.messages.map((message) => ({ message, path: path3 })));
@@ -66030,10 +66129,14 @@ async function run(args, listMode, deps) {
       const messages = ordered.map(
         ({ message, path: path3 }) => structuredRow(message, cfg.accountLabel, path3)
       );
-      const partial2 = failedMailboxes.length > 0 || omittedMessages.length > 0;
+      const partial2 = failedMailboxes.length > 0 || omittedMessages.length > 0 || timedOutMailboxes.length > 0;
+      const stopped = timedOutMailboxes.length > 0 ? {
+        timedOutMailboxes,
+        stoppedBy: stoppedByDeadline(deps.signal) ? "deadline" : "cancelled"
+      } : {};
       const failureNote = (failedMailboxes.length > 0 ? `
 
-Partial result. Could not search mailbox(es): ${failedMailboxes.map((path3) => `"${path3}" (${failedMailboxReasons[path3]})`).join(", ")}.` : "") + omittedNote(omittedMessages, unscopedSearch);
+Partial result. Could not search mailbox(es): ${failedMailboxes.map((path3) => `"${path3}" (${failedMailboxReasons[path3]})`).join(", ")}.` : "") + omittedNote(omittedMessages, unscopedSearch) + stoppedNote(timedOutMailboxes, deps.signal);
       const verb = listMode ? "listed" : "matched";
       const totalText = totalExact ? `${totalMatched} total` : `at least ${totalMatched} total`;
       const scope = unscopedSearch ? allMailboxCount === 1 ? `mailbox "${paths[0]}"` : `${allMailboxCount} selectable mailboxes` : `mailbox "${paths[0]}"`;
@@ -66045,7 +66148,8 @@ Partial result. Could not search mailbox(es): ${failedMailboxes.map((path3) => `
           partial: partial2,
           failedMailboxes,
           failedMailboxReasons,
-          omittedMessages
+          omittedMessages,
+          ...stopped
         };
       }
       const text = `Found ${rows.length} message(s) via IMAP (server-side, account ${cfg.accountLabel}, ${scope}; ${totalText} ${verb}):
@@ -66059,7 +66163,8 @@ Note: these IMAP IDs (imap:\u2026) work with get-message and the message mutatio
         partial: partial2,
         failedMailboxes,
         failedMailboxReasons,
-        omittedMessages
+        omittedMessages,
+        ...stopped
       };
     },
     true
@@ -66201,6 +66306,20 @@ async function dropPool(key) {
   pools.delete(key);
   await e.client.logout().catch(() => void 0);
   e.client.close?.();
+}
+function abandonClient(client, cfg, deps) {
+  if (!deps.connect) {
+    const key = poolKey(cfg);
+    const entry = pools.get(key);
+    if (entry && entry.client === client) {
+      if (entry.idle) clearTimeout(entry.idle);
+      pools.delete(key);
+    }
+  }
+  try {
+    client.close?.();
+  } catch {
+  }
 }
 async function dropAllPools() {
   await Promise.all([...pools.keys()].map((k) => dropPool(k)));
@@ -67200,6 +67319,7 @@ var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED,
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
+    init_callStop();
     import_imapflow = __toESM(require_imap_flow(), 1);
     init_smtpMailer();
     init_docsUrls();
@@ -87600,10 +87720,14 @@ function currentCallTiming() {
   return callTiming.getStore();
 }
 function withErrorHandling(handler, errorPrefix) {
-  return async (params) => {
+  return async (params, extra) => {
     const arrivedAt = Date.now();
+    const signal = extra?.signal;
     return serializeAppleScript(async () => {
-      const timing = { arrivedAt, queueWaitMs: Date.now() - arrivedAt };
+      if (signal?.aborted) {
+        return errorResponse(`${errorPrefix}: request was cancelled before it started`);
+      }
+      const timing = { arrivedAt, queueWaitMs: Date.now() - arrivedAt, signal };
       return callTiming.run(timing, async () => {
         try {
           return await handler(params);
@@ -87864,6 +87988,9 @@ function unlistableStoreError(account, error3, knownAccounts) {
   return parts.join("\n\n");
 }
 
+// src/index.ts
+init_callStop();
+
 // src/tools/batchResults.ts
 async function hybridBatchCounts(ids, appleFn, imapFn) {
   const distinctIds = [...new Set(ids)];
@@ -88042,12 +88169,17 @@ function mergeMessages(imapRows, appleRows, limit) {
 }
 async function fanOutImapMessages(args, kind, deps = {}, configs = resolveImapConfigs()) {
   const rows = [];
+  const timedOutMailboxes = [];
   const accountsQueried = [];
   const accountsFailed = [];
   const failedMailboxes = [];
   const failedMailboxReasons = {};
   const omittedMessages = [];
   for (const config2 of configs) {
+    if (deps.signal?.aborted) {
+      timedOutMailboxes.push(`${config2.accountLabel} / *`);
+      continue;
+    }
     const perAccountArgs = { ...args, account: void 0 };
     try {
       const res = kind === "search" ? await imapSearchMessages(perAccountArgs, { ...deps, config: config2 }) : await imapListMessages(perAccountArgs, { ...deps, config: config2 });
@@ -88059,6 +88191,9 @@ async function fanOutImapMessages(args, kind, deps = {}, configs = resolveImapCo
       for (const [mailbox, reason] of Object.entries(res.failedMailboxReasons)) {
         failedMailboxReasons[`${config2.accountLabel} / ${mailbox}`] = reason;
       }
+      timedOutMailboxes.push(
+        ...(res.timedOutMailboxes ?? []).map((mailbox) => `${config2.accountLabel} / ${mailbox}`)
+      );
       omittedMessages.push(
         ...(res.omittedMessages ?? []).map((o) => ({
           ...o,
@@ -88076,7 +88211,8 @@ async function fanOutImapMessages(args, kind, deps = {}, configs = resolveImapCo
     accountsFailed,
     failedMailboxes,
     failedMailboxReasons,
-    omittedMessages
+    omittedMessages,
+    timedOutMailboxes
   };
 }
 function configMatchesAccount(config2, account) {
@@ -88694,7 +88830,11 @@ var LIST_OUTPUT_SCHEMA = {
   failedMailboxReasons: external_exports.record(external_exports.string(), external_exports.string()).optional(),
   // Messages that belong on the page but could not be read, each with its
   // imap: id and why (#256 follow-up). Non-empty implies `partial: true`.
-  omittedMessages: external_exports.array(external_exports.object({ id: external_exports.string(), mailbox: external_exports.string(), uid: external_exports.number(), reason: external_exports.string() })).optional()
+  omittedMessages: external_exports.array(external_exports.object({ id: external_exports.string(), mailbox: external_exports.string(), uid: external_exports.number(), reason: external_exports.string() })).optional(),
+  // Mailboxes a cancelled or out-of-time search-messages never finished (#276),
+  // and why. Non-empty implies `partial: true`.
+  timedOutMailboxes: external_exports.array(external_exports.string()).optional(),
+  stoppedBy: external_exports.enum(["deadline", "cancelled"]).optional()
 };
 var BATCH_COUNT_OUTPUT_SCHEMA = {
   ok: external_exports.boolean().optional(),
@@ -88769,11 +88909,12 @@ function appleScanForAccounts(accounts, scan) {
   }
   return { rows, diagnostics };
 }
-function mergedMessageResponse(fan, apple, limit, verb) {
+function mergedMessageResponse(fan, apple, limit, verb, stopSignal) {
   const merged = mergeMessages(fan.rows, apple.rows, limit);
+  const timedOutMailboxes = fan.timedOutMailboxes ?? [];
   const diagnostics = {
     ...apple.diagnostics,
-    partial: apple.diagnostics.partial || fan.accountsFailed.length > 0 || fan.failedMailboxes.length > 0 || fan.omittedMessages.length > 0,
+    partial: apple.diagnostics.partial || fan.accountsFailed.length > 0 || fan.failedMailboxes.length > 0 || fan.omittedMessages.length > 0 || timedOutMailboxes.length > 0,
     timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
     notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes]
   };
@@ -88786,9 +88927,13 @@ function mergedMessageResponse(fan, apple, limit, verb) {
     timedOutAccounts: diagnostics.timedOutAccounts,
     failedMailboxes: fan.failedMailboxes,
     failedMailboxReasons: fan.failedMailboxReasons,
-    omittedMessages: fan.omittedMessages
+    omittedMessages: fan.omittedMessages,
+    ...timedOutMailboxes.length > 0 ? {
+      timedOutMailboxes,
+      stoppedBy: stoppedByDeadline(stopSignal) ? "deadline" : "cancelled"
+    } : {}
   };
-  const coverageBlock = partialCoverageBlock(diagnostics) + omittedNote(fan.omittedMessages, true);
+  const coverageBlock = partialCoverageBlock(diagnostics) + omittedNote(fan.omittedMessages, true) + stoppedNote(timedOutMailboxes, stopSignal);
   if (merged.length === 0) {
     const base2 = diagnostics.partial ? `No messages found in the portions that were ${verb === "matched" ? "searched" : "listed"}.` : "No messages found";
     return successResponse(`${base2}${coverageBlock}`, structured);
@@ -88878,6 +89023,15 @@ registerTool(
         if (tooDeep) return errorResponse(tooDeep);
       }
       if (shouldUseImap(account)) {
+        const stop = createCallStop(currentCallTiming(), searchDeadlineMs());
+        try {
+          return await searchViaImap(stop.signal);
+        } finally {
+          stop.dispose();
+        }
+      }
+      return searchViaAppleScript();
+      async function searchViaImap(signal) {
         const imapArgs = {
           query,
           body,
@@ -88892,14 +89046,15 @@ registerTool(
           isFlagged
         };
         if (account !== void 0) {
-          const r = await imapSearchMessages({ ...imapArgs, account });
+          const r = await imapSearchMessages({ ...imapArgs, account }, { signal });
           return successResponse(r.text, {
             messages: r.messages,
             count: r.count,
             partial: r.partial,
             failedMailboxes: r.failedMailboxes,
             failedMailboxReasons: r.failedMailboxReasons,
-            omittedMessages: r.omittedMessages
+            omittedMessages: r.omittedMessages,
+            ...r.timedOutMailboxes?.length ? { timedOutMailboxes: r.timedOutMailboxes, stoppedBy: r.stoppedBy } : {}
           });
         }
         const { appleScriptOnly } = partitionAccountsForCounts(
@@ -88911,7 +89066,7 @@ registerTool(
             `offset is supported only on IMAP accounts, and ${appleScriptOnly.map((a) => `"${a.name}"`).join(", ")} ${appleScriptOnly.length === 1 ? "is" : "are"} AppleScript-only. Pass an IMAP account to page, or omit offset.`
           );
         }
-        const fan = await fanOutImapMessages(imapArgs, "search");
+        const fan = await fanOutImapMessages(imapArgs, "search", { signal });
         if (body) {
           const apple2 = {
             rows: [],
@@ -88923,7 +89078,18 @@ registerTool(
               )
             }
           };
-          return mergedMessageResponse(fan, apple2, limit, "matched");
+          return mergedMessageResponse(fan, apple2, limit, "matched", signal);
+        }
+        if (signal.aborted && appleScriptOnly.length > 0) {
+          const apple2 = {
+            rows: [],
+            diagnostics: {
+              ...emptyDiagnostics(),
+              partial: true,
+              timedOutAccounts: appleScriptOnly.map((a) => a.name)
+            }
+          };
+          return mergedMessageResponse(fan, apple2, limit, "matched", signal);
         }
         const apple = appleScanForAccounts(
           appleScriptOnly,
@@ -88940,51 +89106,53 @@ registerTool(
             isFlagged
           )
         );
-        return mergedMessageResponse(fan, apple, limit, "matched");
+        return mergedMessageResponse(fan, apple, limit, "matched", signal);
       }
-      if (offset > 0) {
-        return errorResponse(
-          `offset is supported only on IMAP accounts; IMAP is not configured for ${account ? `account "${account}"` : "any account"}. Omit offset, or narrow the search with dateFrom/dateTo instead.`
+      function searchViaAppleScript() {
+        if (offset > 0) {
+          return errorResponse(
+            `offset is supported only on IMAP accounts; IMAP is not configured for ${account ? `account "${account}"` : "any account"}. Omit offset, or narrow the search with dateFrom/dateTo instead.`
+          );
+        }
+        if (body) {
+          return errorResponse(
+            `Body search requires the IMAP backend, which is not configured for ${account ? `account "${account}"` : "any account"}. Configure IMAP (see the IMAP backend section of the README) or search by query/subject/from instead.`
+          );
+        }
+        const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
+          query,
+          mailbox,
+          account,
+          limit,
+          dateFrom,
+          dateTo,
+          from,
+          subject,
+          isRead,
+          isFlagged
         );
-      }
-      if (body) {
-        return errorResponse(
-          `Body search requires the IMAP backend, which is not configured for ${account ? `account "${account}"` : "any account"}. Configure IMAP (see the IMAP backend section of the README) or search by query/subject/from instead.`
-        );
-      }
-      const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
-        query,
-        mailbox,
-        account,
-        limit,
-        dateFrom,
-        dateTo,
-        from,
-        subject,
-        isRead,
-        isFlagged
-      );
-      const coverageBlock = partialCoverageBlock(diagnostics);
-      const structured = {
-        messages: messages.map(messageSummary),
-        count: messages.length,
-        partial: diagnostics.partial,
-        skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
-        notSearchedMailboxes: diagnostics.notSearchedMailboxes,
-        timedOutAccounts: diagnostics.timedOutAccounts
-      };
-      if (messages.length === 0) {
-        const base2 = diagnostics.partial ? "No messages found in the portions that were searched." : "No messages found matching criteria";
-        return successResponse(`${base2}${coverageBlock}`, structured);
-      }
-      const messageList = messages.map(
-        (m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
-      ).join("\n");
-      return successResponse(
-        `Found ${messages.length} message(s):
+        const coverageBlock = partialCoverageBlock(diagnostics);
+        const structured = {
+          messages: messages.map(messageSummary),
+          count: messages.length,
+          partial: diagnostics.partial,
+          skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
+          notSearchedMailboxes: diagnostics.notSearchedMailboxes,
+          timedOutAccounts: diagnostics.timedOutAccounts
+        };
+        if (messages.length === 0) {
+          const base2 = diagnostics.partial ? "No messages found in the portions that were searched." : "No messages found matching criteria";
+          return successResponse(`${base2}${coverageBlock}`, structured);
+        }
+        const messageList = messages.map(
+          (m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
+        ).join("\n");
+        return successResponse(
+          `Found ${messages.length} message(s):
 ${messageList}${coverageBlock}`,
-        structured
-      );
+          structured
+        );
+      }
     },
     "Error searching messages"
   )

@@ -73,6 +73,7 @@ import {
   imapBatchMove,
   imapThread,
   omittedNote,
+  stoppedNote,
   unscopedSearchOffsetError,
   type OmittedMessage,
   imapCreateMailbox,
@@ -104,6 +105,7 @@ import {
   messageSummary,
 } from "@/tools/respond.js";
 import { unlistableStoreError } from "@/tools/mailboxListing.js";
+import { createCallStop, searchDeadlineMs, stoppedByDeadline } from "@/utils/callStop.js";
 import { hybridBatchCounts, batchResponse } from "@/tools/batchResults.js";
 import { runBatchDelete, runBatchMove } from "@/tools/batchMutations.js";
 import {
@@ -222,6 +224,10 @@ const LIST_OUTPUT_SCHEMA = {
   omittedMessages: z
     .array(z.object({ id: z.string(), mailbox: z.string(), uid: z.number(), reason: z.string() }))
     .optional(),
+  // Mailboxes a cancelled or out-of-time search-messages never finished (#276),
+  // and why. Non-empty implies `partial: true`.
+  timedOutMailboxes: z.array(z.string()).optional(),
+  stoppedBy: z.enum(["deadline", "cancelled"]).optional(),
 };
 
 /** Shape returned by the batch count tools. */
@@ -370,12 +376,15 @@ function mergedMessageResponse(
     failedMailboxes: string[];
     failedMailboxReasons: Record<string, string>;
     omittedMessages: OmittedMessage[];
+    timedOutMailboxes?: string[];
   },
   apple: AppleScan,
   limit: number,
-  verb: "matched" | "listed"
+  verb: "matched" | "listed",
+  stopSignal?: AbortSignal
 ) {
   const merged = mergeMessages(fan.rows, apple.rows, limit);
+  const timedOutMailboxes = fan.timedOutMailboxes ?? [];
   // Surface IMAP fan-out failures alongside the AppleScript diagnostics so a
   // partial merge is never mistaken for a confirmed "no such mail".
   const diagnostics: SearchDiagnostics = {
@@ -384,7 +393,8 @@ function mergedMessageResponse(
       apple.diagnostics.partial ||
       fan.accountsFailed.length > 0 ||
       fan.failedMailboxes.length > 0 ||
-      fan.omittedMessages.length > 0,
+      fan.omittedMessages.length > 0 ||
+      timedOutMailboxes.length > 0,
     timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
     notSearchedMailboxes: [...apple.diagnostics.notSearchedMailboxes, ...fan.failedMailboxes],
   };
@@ -398,8 +408,17 @@ function mergedMessageResponse(
     failedMailboxes: fan.failedMailboxes,
     failedMailboxReasons: fan.failedMailboxReasons,
     omittedMessages: fan.omittedMessages,
+    ...(timedOutMailboxes.length > 0
+      ? {
+          timedOutMailboxes,
+          stoppedBy: stoppedByDeadline(stopSignal) ? ("deadline" as const) : ("cancelled" as const),
+        }
+      : {}),
   };
-  const coverageBlock = partialCoverageBlock(diagnostics) + omittedNote(fan.omittedMessages, true);
+  const coverageBlock =
+    partialCoverageBlock(diagnostics) +
+    omittedNote(fan.omittedMessages, true) +
+    stoppedNote(timedOutMailboxes, stopSignal);
   if (merged.length === 0) {
     const base = diagnostics.partial
       ? `No messages found in the portions that were ${verb === "matched" ? "searched" : "listed"}.`
@@ -603,6 +622,21 @@ registerTool(
         if (tooDeep) return errorResponse(tooDeep);
       }
       if (shouldUseImap(account)) {
+        // #276: one signal for "stop now" — the client's notifications/cancelled
+        // or the per-call deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, measured
+        // from arrival so queue wait counts). The IMAP mailbox fan-out watches
+        // it and returns what it found plus `timedOutMailboxes`, instead of
+        // holding the serial gate for minutes (134-141s observed on iCloud).
+        const stop = createCallStop(currentCallTiming(), searchDeadlineMs());
+        try {
+          return await searchViaImap(stop.signal);
+        } finally {
+          stop.dispose();
+        }
+      }
+      return searchViaAppleScript();
+
+      async function searchViaImap(signal: AbortSignal) {
         const imapArgs = {
           query,
           body,
@@ -617,7 +651,7 @@ registerTool(
           isFlagged,
         };
         if (account !== undefined) {
-          const r = await imapSearchMessages({ ...imapArgs, account });
+          const r = await imapSearchMessages({ ...imapArgs, account }, { signal });
           return successResponse(r.text, {
             messages: r.messages,
             count: r.count,
@@ -625,6 +659,9 @@ registerTool(
             failedMailboxes: r.failedMailboxes,
             failedMailboxReasons: r.failedMailboxReasons,
             omittedMessages: r.omittedMessages,
+            ...(r.timedOutMailboxes?.length
+              ? { timedOutMailboxes: r.timedOutMailboxes, stoppedBy: r.stoppedBy }
+              : {}),
           });
         }
         const { appleScriptOnly } = partitionAccountsForCounts(
@@ -639,7 +676,7 @@ registerTool(
               `Pass an IMAP account to page, or omit offset.`
           );
         }
-        const fan = await fanOutImapMessages(imapArgs, "search");
+        const fan = await fanOutImapMessages(imapArgs, "search", { signal });
         // Body search is IMAP-only: AppleScript's `content contains` has to pull
         // every message body through the Apple Event bridge and times out on
         // real mailboxes. Rather than silently drop the body filter (and return
@@ -656,7 +693,20 @@ registerTool(
               ),
             },
           };
-          return mergedMessageResponse(fan, apple, limit, "matched");
+          return mergedMessageResponse(fan, apple, limit, "matched", signal);
+        }
+        if (signal.aborted && appleScriptOnly.length > 0) {
+          // Out of time (or cancelled) after the IMAP fan-out: don't start a
+          // blocking AppleScript scan nobody will wait for — report it instead.
+          const apple: AppleScan = {
+            rows: [],
+            diagnostics: {
+              ...emptyDiagnostics(),
+              partial: true,
+              timedOutAccounts: appleScriptOnly.map((a) => a.name),
+            },
+          };
+          return mergedMessageResponse(fan, apple, limit, "matched", signal);
         }
         const apple = appleScanForAccounts(appleScriptOnly, (acctName) =>
           mailManager.searchMessagesWithDiagnostics(
@@ -672,66 +722,68 @@ registerTool(
             isFlagged
           )
         );
-        return mergedMessageResponse(fan, apple, limit, "matched");
+        return mergedMessageResponse(fan, apple, limit, "matched", signal);
       }
 
-      if (offset > 0) {
-        return errorResponse(
-          `offset is supported only on IMAP accounts; IMAP is not configured for ${
-            account ? `account "${account}"` : "any account"
-          }. Omit offset, or narrow the search with dateFrom/dateTo instead.`
+      function searchViaAppleScript() {
+        if (offset > 0) {
+          return errorResponse(
+            `offset is supported only on IMAP accounts; IMAP is not configured for ${
+              account ? `account "${account}"` : "any account"
+            }. Omit offset, or narrow the search with dateFrom/dateTo instead.`
+          );
+        }
+
+        if (body) {
+          return errorResponse(
+            `Body search requires the IMAP backend, which is not configured for ${
+              account ? `account "${account}"` : "any account"
+            }. Configure IMAP (see the IMAP backend section of the README) or search by query/subject/from instead.`
+          );
+        }
+
+        const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
+          query,
+          mailbox,
+          account,
+          limit,
+          dateFrom,
+          dateTo,
+          from,
+          subject,
+          isRead,
+          isFlagged
+        );
+
+        const coverageBlock = partialCoverageBlock(diagnostics);
+        const structured = {
+          messages: messages.map(messageSummary),
+          count: messages.length,
+          partial: diagnostics.partial,
+          skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
+          notSearchedMailboxes: diagnostics.notSearchedMailboxes,
+          timedOutAccounts: diagnostics.timedOutAccounts,
+        };
+
+        if (messages.length === 0) {
+          const base = diagnostics.partial
+            ? "No messages found in the portions that were searched."
+            : "No messages found matching criteria";
+          return successResponse(`${base}${coverageBlock}`, structured);
+        }
+
+        const messageList = messages
+          .map(
+            (m) =>
+              `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
+          )
+          .join("\n");
+
+        return successResponse(
+          `Found ${messages.length} message(s):\n${messageList}${coverageBlock}`,
+          structured
         );
       }
-
-      if (body) {
-        return errorResponse(
-          `Body search requires the IMAP backend, which is not configured for ${
-            account ? `account "${account}"` : "any account"
-          }. Configure IMAP (see the IMAP backend section of the README) or search by query/subject/from instead.`
-        );
-      }
-
-      const { messages, diagnostics } = mailManager.searchMessagesWithDiagnostics(
-        query,
-        mailbox,
-        account,
-        limit,
-        dateFrom,
-        dateTo,
-        from,
-        subject,
-        isRead,
-        isFlagged
-      );
-
-      const coverageBlock = partialCoverageBlock(diagnostics);
-      const structured = {
-        messages: messages.map(messageSummary),
-        count: messages.length,
-        partial: diagnostics.partial,
-        skippedLargeMailboxes: diagnostics.skippedLargeMailboxes,
-        notSearchedMailboxes: diagnostics.notSearchedMailboxes,
-        timedOutAccounts: diagnostics.timedOutAccounts,
-      };
-
-      if (messages.length === 0) {
-        const base = diagnostics.partial
-          ? "No messages found in the portions that were searched."
-          : "No messages found matching criteria";
-        return successResponse(`${base}${coverageBlock}`, structured);
-      }
-
-      const messageList = messages
-        .map(
-          (m) =>
-            `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
-        )
-        .join("\n");
-
-      return successResponse(
-        `Found ${messages.length} message(s):\n${messageList}${coverageBlock}`,
-        structured
-      );
     },
     "Error searching messages"
   )
