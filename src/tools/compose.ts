@@ -19,7 +19,9 @@ export interface ComposeDeps {
   mail: Pick<
     AppleMailManager,
     "getRawSource" | "getMessageContent" | "replyToMessage" | "forwardMessage"
-  >;
+  > &
+    // Optional so test doubles needn't stub it; the real manager always has it.
+    Partial<Pick<AppleMailManager, "consumeLastMessageLookupError">>;
   imapSource: (id: string) => Promise<ImapMessageSource>;
   numericId: (id: string) => Promise<{ numericId?: string; error?: string }>;
   smtpConfigured: () => boolean;
@@ -69,10 +71,14 @@ async function readOriginal(deps: ComposeDeps, id: string, cfg: SmtpConfig) {
     return { original, plainText: extractTextBody(source.raw) };
   }
   const raw = deps.mail.getRawSource(id);
-  if (!raw)
+  if (!raw) {
+    // Say WHY when the lookup knows (#270): a bounded scan that skipped a large
+    // mailbox, an ambiguous id, a timeout — each has its own remedy.
+    const why = deps.mail.consumeLastMessageLookupError?.();
     throw new Error(
-      "Cannot read the original message source. Re-list the intended mailbox and retry with its message id."
+      `Cannot read the original message source${why ? ` (${why})` : ""}. Re-list the intended mailbox and retry with its message id.`
     );
+  }
   const content = deps.mail.getMessageContent(id);
   return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? null };
 }

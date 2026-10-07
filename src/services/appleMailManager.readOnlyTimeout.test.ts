@@ -51,6 +51,12 @@ import { AppleMailManager } from "@/services/appleMailManager.js";
 
 const READ_ONLY_BYID_TIMEOUT_MS = 15000;
 const MUTATION_TIMEOUT_MS = 60000;
+// With no remembered location these all run the UNSCOPED cross-mailbox scan,
+// whose timeout is usually a slow scan of very large mailboxes rather than a
+// wedged bridge (@j5pu's timings on #270) — so the message says that, and what
+// avoids the scan. The scoped-timeout wording is pinned in byIdScanBound.test.
+const SCAN_TIMEOUT_270 =
+  "AppleScript timed out scanning every mailbox for id 270 — the cross-mailbox scan did not finish within 15s (very large mailboxes; if health-check also fails, Mail.app's scripting bridge may be wedged). Pass account + mailbox to read it from one mailbox, or use the message's imap: id from list-messages/search-messages.";
 
 describe("#270 — read-only by-id lookups use a short, fail-fast timeout", () => {
   let mgr: AppleMailManager;
@@ -98,9 +104,7 @@ describe("#270 — read-only by-id lookups use a short, fail-fast timeout", () =
     });
     const content = mgr.getMessageContent("270");
     expect(content).toBeNull();
-    expect(mgr.consumeLastMessageLookupError()).toBe(
-      "AppleScript timed out resolving id 270 — Mail.app's scripting bridge may be wedged; try health-check."
-    );
+    expect(mgr.consumeLastMessageLookupError()).toBe(SCAN_TIMEOUT_270);
     // consumeLastMessageLookupError() clears it.
     expect(mgr.consumeLastMessageLookupError()).toBeUndefined();
   });
@@ -114,9 +118,7 @@ describe("#270 — read-only by-id lookups use a short, fail-fast timeout", () =
     });
     const msg = mgr.getMessageById("270");
     expect(msg).toBeNull();
-    expect(mgr.consumeLastMessageLookupError()).toBe(
-      "AppleScript timed out resolving id 270 — Mail.app's scripting bridge may be wedged; try health-check."
-    );
+    expect(mgr.consumeLastMessageLookupError()).toBe(SCAN_TIMEOUT_270);
   });
 
   it("surfaces the same actionable error on timeout for getMessageHeaders", () => {
@@ -128,9 +130,7 @@ describe("#270 — read-only by-id lookups use a short, fail-fast timeout", () =
     });
     const headers = mgr.getMessageHeaders("270");
     expect(headers).toBeNull();
-    expect(mgr.consumeLastMessageLookupError()).toBe(
-      "AppleScript timed out resolving id 270 — Mail.app's scripting bridge may be wedged; try health-check."
-    );
+    expect(mgr.consumeLastMessageLookupError()).toBe(SCAN_TIMEOUT_270);
   });
 
   it("surfaces the same actionable error on timeout for getRawSource", () => {
@@ -142,9 +142,7 @@ describe("#270 — read-only by-id lookups use a short, fail-fast timeout", () =
     });
     const raw = mgr.getRawSource("270");
     expect(raw).toBeNull();
-    expect(mgr.consumeLastMessageLookupError()).toBe(
-      "AppleScript timed out resolving id 270 — Mail.app's scripting bridge may be wedged; try health-check."
-    );
+    expect(mgr.consumeLastMessageLookupError()).toBe(SCAN_TIMEOUT_270);
   });
 
   it("does NOT set the actionable timeout error for an ordinary (non-timeout) AppleScript failure", () => {

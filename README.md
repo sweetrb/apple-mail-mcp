@@ -309,14 +309,16 @@ inferred from the top-level `Content-Type`.
 
 Get the full content of a message.
 
-| Parameter    | Type    | Required | Description                                                                                                                                                                      |
-| ------------ | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`         | string  | Yes      | Message ID                                                                                                                                                                       |
-| `preferHtml` | boolean | No       | Return HTML source instead of plain text                                                                                                                                         |
-| `mailbox`    | string  | No       | Mailbox holding the message (e.g. `"Sent Items"`). With `account`, opens that mailbox directly instead of scanning every mailbox — this is the fix for timeouts on large folders |
-| `account`    | string  | No       | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan                                                                                                  |
+| Parameter    | Type    | Required | Description                                                                                                                                                                                                                                                                                       |
+| ------------ | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`         | string  | Yes      | Message ID                                                                                                                                                                                                                                                                                        |
+| `preferHtml` | boolean | No       | Return HTML source instead of plain text                                                                                                                                                                                                                                                          |
+| `mailbox`    | string  | No       | Mailbox holding the message (e.g. `"Sent Items"`). With `account`, opens that mailbox directly instead of scanning every mailbox — this is the fix for timeouts on large folders. A miss there is reported as "not found in <account> / <mailbox>"; it never falls back to the cross-mailbox scan |
+| `account`    | string  | No       | Account holding the message. Pair with `mailbox` to skip the cross-mailbox scan                                                                                                                                                                                                                   |
 
 **Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available). `structuredContent` also carries `rfcMessageId` and, since 2.19.0, two dates: `dateSent` (the message's `Date:` header — Mail's `date sent`) and `dateReceived` (arrival in the mailbox — Mail's `date received` / IMAP `INTERNALDATE`). They differ legitimately by transit time; when they differ by **years**, the mailbox was migrated or re-imported and the arrival timestamp was reset — trust `dateSent` for chronology ([#224](https://github.com/sweetrb/apple-mail-mcp/issues/224)). Since 2.19.6 `dateSent` is **omitted** when it is more than 7 days later than `dateReceived`: a message cannot be sent after it arrived, and Mail.app substitutes a timestamp of its own for a `Date:` header it cannot parse ([#234](https://github.com/sweetrb/apple-mail-mcp/issues/234)). `isHtml` reports what was actually returned — a message with no `text/plain` part returns its HTML part with `isHtml: true`. Bodies are decoded by each part's declared `charset`, falling back to windows-1252 for bytes that are not valid UTF-8.
+
+**Numeric ids — how the message is found ([#270](https://github.com/sweetrb/apple-mail-mcp/issues/270)):** with `account` + `mailbox` the read opens that one mailbox and stops there. Otherwise it opens the mailbox the id was last listed or searched from (a remembered location that turns out stale — the message was moved, e.g. by another client — is forgotten), and only then scans every mailbox. That cross-mailbox scan skips any mailbox holding more than `APPLE_MAIL_MAX_BYID_SCAN_MAILBOX` messages (default `50000`; `0` disables the guard) and stops after ~9s, because Mail's `whose id is` probe costs seconds per hundred thousand messages; a miss then names the mailboxes it did not scan. Pass `account` + `mailbox` to read from one of those, or use the message's `imap:` id, which never scans. The same resolution backs `get-message-headers`, `get-thread`'s seed lookup, and the original-message read of `reply-to-message` / `forward-message` and the attachment tools.
 
 > **Large messages / attachments:** reading a full message routes through
 > `osascript`, whose captured output buffer defaults to **64 MB**. Override it
@@ -2127,6 +2129,10 @@ In a JSON string literal, `\\` — two characters — denotes **one** literal ba
 - Message may have been deleted or moved
 - Message IDs change if the message is moved between mailboxes
 - Use `search-messages` to find the current message ID
+- "**not found in the mailboxes scanned**" with a list of mailboxes means the numeric-id scan
+  skipped those because they hold more than `APPLE_MAIL_MAX_BYID_SCAN_MAILBOX` messages (default
+  `50000`). The message may be in one of them: pass `account` + `mailbox` to read it from there, or
+  use its `imap:` id ([#270](https://github.com/sweetrb/apple-mail-mcp/issues/270)).
 
 ### "... is present in more than one mailbox"
 

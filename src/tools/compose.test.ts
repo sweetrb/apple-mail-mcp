@@ -163,6 +163,17 @@ describe("reply and forward transport routing", () => {
     expect(d.mail.replyToMessage).not.toHaveBeenCalled();
   });
 
+  it("says why a numeric original could not be read (#270)", async () => {
+    const d = fixture();
+    const why =
+      "Message 42 not found in the mailboxes scanned. Not scanned — too large for a cross-mailbox id scan (over 50000 messages; APPLE_MAIL_MAX_BYID_SCAN_MAILBOX): iCloud / Archive (793630).";
+    const mail = { ...d.mail, consumeLastMessageLookupError: vi.fn(() => why) };
+    const result = await runReply({ ...d, mail }, { ...args, id: "42" });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain(`Cannot read the original message source (${why})`);
+    expect(d.smtpSend).not.toHaveBeenCalled();
+  });
+
   it("refuses an HTML-only IMAP forward instead of silently omitting its body", async () => {
     const d = fixture();
     d.imapSource.mockResolvedValue({
