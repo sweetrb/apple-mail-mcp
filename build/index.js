@@ -82735,6 +82735,7 @@ function getByIdScanThreshold() {
   return 5e4;
 }
 var BYID_SCAN_BUDGET_SECONDS = 9;
+var BYID_PROBE_TIMEOUT_SECONDS = 3;
 var BYID_COVERAGE_MARKER = "COV";
 var SCOPED_MISS_MARKER = "SCOPED";
 function describeUnscopedMiss(id, raw) {
@@ -84536,16 +84537,20 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   unscopedByIdScript(id, innerAction, opts = {}) {
     const threshold = getByIdScanThreshold();
-    const sizeGuard = (mbVar, acctNameExpr) => threshold > 0 ? `set _mbCount to 0
+    const sizeGuard = (mbVar, acctNameExpr) => threshold > 0 ? `set _mbCount to -1
             try
-              set _mbCount to count of messages of ${mbVar}
+              with timeout of ${BYID_PROBE_TIMEOUT_SECONDS} seconds
+                set _mbCount to count of messages of ${mbVar}
+              end timeout
             end try
-            if _mbCount > ${threshold} then
+            if _mbCount < 0 or _mbCount > ${threshold} then
               set _skipPath to ""
               try
                 ${mailboxPathFragment(mbVar, "_skipPath")}
               end try
-              set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & (_mbCount as string) & ")${DIAG_ITEM_SEP}"
+              set _sizeLabel to "size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s)"
+              if _mbCount > -1 then set _sizeLabel to (_mbCount as string)
+              set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & _sizeLabel & ")${DIAG_ITEM_SEP}"
               set _probe to false
             end if` : "";
     const budgetCheck = `if ((current date) - _startedAt) > ${BYID_SCAN_BUDGET_SECONDS} then

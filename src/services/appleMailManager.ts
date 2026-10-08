@@ -184,9 +184,31 @@ export function getByIdScanThreshold(): number {
  * AppleScript so the scan stops and reports which part of the store it never
  * reached, rather than being SIGKILLed at READ_ONLY_BYID_TIMEOUT_MS with no
  * diagnostics. Leaves headroom for one in-flight probe of a mailbox just under
- * the size threshold (a few seconds at most).
+ * the size threshold — bounded to BYID_PROBE_TIMEOUT_SECONDS by the per-probe
+ * timeout below (#270 follow-up), rather than merely assumed to be short.
  */
 const BYID_SCAN_BUDGET_SECONDS = 9;
+
+/**
+ * Per-probe cap (seconds) on the unscoped by-id scan's own size-guard
+ * `count of messages` call (#270 follow-up, @j5pu). Measured live against a
+ * real multi-hundred-thousand-message store: ~5s on a 255k-message mailbox
+ * and ~7s on a 794k one (three runs each) — not the "cached by Mail, cheap"
+ * cost the original #270 fix assumed. That count runs on EVERY mailbox this
+ * walk visits, including ones about to be skipped for size, so without a cap
+ * two or three large mailboxes in a row burn through the whole
+ * BYID_SCAN_BUDGET_SECONDS window before the per-mailbox budget check — which
+ * only runs BETWEEN mailboxes, not while one probe is in flight — ever gets a
+ * chance to stop the walk. That pushes the whole scan past
+ * READ_ONLY_BYID_TIMEOUT_MS with no graceful diagnostic at all: exactly what
+ * @j5pu reproduced in 2 of 2 runs on both getMessageById and getMessageContent
+ * (used by get-message and get-thread). `with timeout of` bounds the Apple
+ * Event itself: a count that doesn't answer within this many seconds is
+ * caught by the surrounding `try` and treated the same as a confirmed
+ * over-threshold mailbox — skipped, and reported with its size as "unknown"
+ * rather than a real count — instead of being allowed to run unbounded.
+ */
+const BYID_PROBE_TIMEOUT_SECONDS = 3;
 
 /**
  * Trailer on the unscoped by-id "not found" outcome carrying what the scan did
@@ -2995,21 +3017,30 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     opts: { firstHit?: boolean } = {}
   ): string {
     const threshold = getByIdScanThreshold();
-    // The probe runs only when the guard is on; `count of messages` is cached
-    // by Mail and cheap even on a 794k-message mailbox (search relies on the
-    // same property for its skippedLargeMailboxes guard).
+    // The probe runs only when the guard is on. `count of messages` is NOT
+    // reliably cheap (#270 follow-up, @j5pu measured ~5-7s on real
+    // multi-hundred-thousand-message mailboxes), so it is wrapped in its own
+    // `with timeout of` — a count that doesn't answer within
+    // BYID_PROBE_TIMEOUT_SECONDS is caught by the outer `try`, leaving
+    // `_mbCount` at its -1 sentinel, and is treated exactly like a confirmed
+    // over-threshold mailbox: skipped, with its size reported as "unknown"
+    // rather than a real count (see BYID_PROBE_TIMEOUT_SECONDS).
     const sizeGuard = (mbVar: string, acctNameExpr: string): string =>
       threshold > 0
-        ? `set _mbCount to 0
+        ? `set _mbCount to -1
             try
-              set _mbCount to count of messages of ${mbVar}
+              with timeout of ${BYID_PROBE_TIMEOUT_SECONDS} seconds
+                set _mbCount to count of messages of ${mbVar}
+              end timeout
             end try
-            if _mbCount > ${threshold} then
+            if _mbCount < 0 or _mbCount > ${threshold} then
               set _skipPath to ""
               try
                 ${mailboxPathFragment(mbVar, "_skipPath")}
               end try
-              set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & (_mbCount as string) & ")${DIAG_ITEM_SEP}"
+              set _sizeLabel to "size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s)"
+              if _mbCount > -1 then set _sizeLabel to (_mbCount as string)
+              set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & _sizeLabel & ")${DIAG_ITEM_SEP}"
               set _probe to false
             end if`
         : "";
