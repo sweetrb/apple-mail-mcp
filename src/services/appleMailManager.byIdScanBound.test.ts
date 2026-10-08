@@ -213,7 +213,8 @@ describe("#270 (c) — the unscoped scan is bounded and says what it skipped", (
     h.router.fn = () => ({ success: true, output: "" });
     mgr.getMessageContent("42");
     const s = byId()[0].script;
-    expect((s.match(/if _mbCount > 50000 then/g) ?? []).length).toBe(2);
+    expect((s.match(/if _mbCount < 0 or _mbCount > 50000 then/g) ?? []).length).toBe(2);
+    expect((s.match(/with timeout of 3 seconds/g) ?? []).length).toBe(2);
     expect((s.match(/if \(\(current date\) - _startedAt\) > 9 then/g) ?? []).length).toBe(2);
     expect(s).toContain('set _skipped to _skipped & (name of acct) & " / " & _skipPath');
     expect(s).toContain(
@@ -225,10 +226,40 @@ describe("#270 (c) — the unscoped scan is bounded and says what it skipped", (
     );
   });
 
+  it("#270 follow-up (@j5pu) — the count probe itself is capped and fails toward 'skip'", () => {
+    h.router.fn = () => ({ success: true, output: "" });
+    mgr.getMessageContent("42");
+    const s = byId()[0].script;
+    // The probe defaults to the -1 sentinel, is wrapped in its own timeout,
+    // and a probe that never reset the sentinel (timed out) gets the same
+    // "too large, skip it" treatment as a confirmed over-threshold mailbox —
+    // never falls through to default-small.
+    expect(s).toContain("set _mbCount to -1");
+    expect(s).toMatch(
+      /try\s+with timeout of 3 seconds\s+set _mbCount to count of messages of mb\s+end timeout\s+end try/
+    );
+    expect(s).toContain('set _sizeLabel to "size unknown (count probe exceeded 3s)"');
+    expect(s).toContain("if _mbCount > -1 then set _sizeLabel to (_mbCount as string)");
+    expect(s).toContain(
+      'set _skipped to _skipped & (name of acct) & " / " & _skipPath & " (" & _sizeLabel & ")'
+    );
+  });
+
+  it("a miss naming a size-unknown (probe-timed-out) mailbox reads the same as a counted one", () => {
+    h.router.fn = () => ({
+      success: true,
+      output: `${ERR}Message not found${COV}iCloud / Archive (size unknown (count probe exceeded 3s))${F}false`,
+    });
+    expect(mgr.getMessageContent("1297094")).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toBe(
+      "Message 1297094 not found in the mailboxes scanned. Not scanned — too large for a cross-mailbox id scan (over 50000 messages; APPLE_MAIL_MAX_BYID_SCAN_MAILBOX): iCloud / Archive (size unknown (count probe exceeded 3s)). If the message is in a mailbox that was not scanned, pass account + mailbox to read it from that mailbox directly, or use its imap: id from list-messages/search-messages."
+    );
+  });
+
   it("APPLE_MAIL_MAX_BYID_SCAN_MAILBOX overrides the threshold; 0 disables the guard", () => {
     process.env.APPLE_MAIL_MAX_BYID_SCAN_MAILBOX = "100000";
     mgr.getRawSource("42");
-    expect(byId()[0].script).toContain("if _mbCount > 100000 then");
+    expect(byId()[0].script).toContain("if _mbCount < 0 or _mbCount > 100000 then");
 
     process.env.APPLE_MAIL_MAX_BYID_SCAN_MAILBOX = "0";
     mgr.getRawSource("42");
@@ -309,7 +340,7 @@ describe("#270 — getMessageById shares the resolver", () => {
     const s = byId()[0].script;
     expect(s).not.toContain("if (count of _hits) > 1 then return");
     expect(s).toContain("if (count of _hits) > 0 then exit repeat");
-    expect(s).toContain("if _mbCount > 50000 then");
+    expect(s).toContain("if _mbCount < 0 or _mbCount > 50000 then");
     expect(s).toContain("set msgAccount to _hitAcct");
 
     // The recorded location now scopes the next read.

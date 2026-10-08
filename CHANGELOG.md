@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+## [2.20.6] - 2026-10-08
+
+### Fixed
+
+- **The unscoped by-id scan's own size-guard probe could outlast the 15s
+  by-id timeout, losing its graceful diagnostic** (#270 follow-up, found by
+  @j5pu after the #278 fix shipped). `count of messages of mb` — the cheap
+  probe used to skip mailboxes above `APPLE_MAIL_MAX_BYID_SCAN_MAILBOX` — is
+  not reliably cheap: @j5pu measured ~5s on a real 255k-message mailbox and
+  ~7s on a 794k one (three runs each). That probe runs on every mailbox the
+  unscoped scan visits, including ones about to be skipped for size, so two
+  or three large mailboxes in a row burned through the whole in-script
+  budget before the per-mailbox check — which only fires BETWEEN
+  mailboxes — ever got a chance to stop the walk, and the whole scan was
+  SIGKILLed with no diagnostic. Reproduced by @j5pu in 2 of 2 runs on both
+  `get-message` and `get-thread`. The probe is now wrapped in its own
+  `with timeout of 3 seconds`: a count that doesn't answer in time is caught
+  and treated exactly like a confirmed over-threshold mailbox — skipped, and
+  named with "size unknown" rather than a real count — instead of running
+  unbounded.
+
 ## [2.20.5] - 2026-10-07
 
 ### Fixed
