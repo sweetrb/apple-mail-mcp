@@ -6542,7 +6542,18 @@ end tell`;
 
     const result = executeAppleScript(guardMailRunning(script));
     if (result.success && result.output.startsWith(MAIL_NOT_RUNNING_MARKER)) return null;
-    if (!result.success || !result.output) {
+    if (!result.success) {
+      // A compile-time failure (-2741: Mail's own classes unresolved because
+      // its dictionary isn't loaded) never reaches the MAIL_NOT_RUNNING_MARKER
+      // return above — the running guard is part of the same compiled script
+      // and never gets to execute (#270 follow-up). Without this check it
+      // fell through to the `return []` below, which getCachedMailboxNames
+      // then wrongly cached as "this account has no mailboxes" for the full
+      // TTL instead of leaving the cache empty to retry once Mail reopens.
+      if (looksLikeMailNotRunning(result.error)) return null;
+      return [];
+    }
+    if (!result.output) {
       return [];
     }
 

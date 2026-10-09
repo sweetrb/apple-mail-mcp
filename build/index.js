@@ -82348,6 +82348,9 @@ function parseErrorMessage(errorOutput) {
   if (PERMISSION_DENIED_PATTERN.test(errorOutput)) {
     return PERMISSION_DENIED_MESSAGE;
   }
+  if (/\(-2741\)/.test(errorOutput)) {
+    return "Mail.app is not responding. Try opening Mail.app manually.";
+  }
   for (const { pattern, message } of ERROR_MAPPINGS) {
     const match = coreError.match(pattern);
     if (match) {
@@ -87321,7 +87324,11 @@ end tell`;
     const script = isLocalStoreLabel(account) ? buildAppLevelScript(`${localMailboxBindingFragment()}${body}`) : buildAccountScopedScript(account, body);
     const result = executeAppleScript(guardMailRunning(script));
     if (result.success && result.output.startsWith(MAIL_NOT_RUNNING_MARKER)) return null;
-    if (!result.success || !result.output) {
+    if (!result.success) {
+      if (looksLikeMailNotRunning(result.error)) return null;
+      return [];
+    }
+    if (!result.output) {
       return [];
     }
     return result.output.split(", ").map((s) => s.trim());
