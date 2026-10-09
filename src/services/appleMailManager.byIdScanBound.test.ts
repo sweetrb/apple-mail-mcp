@@ -215,11 +215,13 @@ describe("#270 (c) — the unscoped scan is bounded and says what it skipped", (
     mgr.getMessageContent("42");
     const s = byId()[0].script;
     expect((s.match(/if _mbCount < 0 or _mbCount > 50000 then/g) ?? []).length).toBe(2);
-    expect((s.match(/with timeout of 3 seconds/g) ?? []).length).toBe(2);
+    // Two size probes (accounts, local store) plus the busy check on the
+    // account-name prefetch.
+    expect((s.match(/with timeout of 3 seconds/g) ?? []).length).toBe(3);
     expect((s.match(/if \(\(current date\) - _startedAt\) > 9 then/g) ?? []).length).toBe(2);
-    expect(s).toContain('set _skipped to _skipped & (name of acct) & " / " & _skipPath');
+    expect(s).toContain('set _skipped to _skipped & _acctName & " / " & _skipPath');
     expect(s).toContain(
-      `return "${ERR}Message not found${COV}" & _skipped & "${F}" & (_budgetHit as string)`
+      `return "${ERR}Message not found${COV}" & _skipped & "${F}" & (_budgetHit as string) & "${F}" & (_probeStalled as string) & "${F}" & _unreached`
     );
     // The id probe itself only runs for a mailbox that passed the guard.
     expect(s).toMatch(
@@ -237,12 +239,21 @@ describe("#270 (c) — the unscoped scan is bounded and says what it skipped", (
     // never falls through to default-small.
     expect(s).toContain("set _mbCount to -1");
     expect(s).toMatch(
-      /try\s+with timeout of 3 seconds\s+set _mbCount to count of messages of mb\s+end timeout\s+end try/
+      /try\s+with timeout of 3 seconds\s+set _mbCount to count of messages of mb\s+end timeout\s+on error number _probeErrNum\s+set _probeErr to _probeErrNum\s+end try/
     );
-    expect(s).toContain('set _sizeLabel to "size unknown (count probe exceeded 3s)"');
+    // A timeout (-1712) is recorded from the PREFETCHED leaf name — no Apple
+    // event, since Mail.app is still busy with the abandoned count — and
+    // stops the walk.
+    expect(s).toMatch(
+      /if _probeErr is -1712 then\s+set _skipped to _skipped & _acctName & " \/ " & _mbName & " \(size unknown \(count probe exceeded 3s\)\)/
+    );
+    expect(s).toMatch(/set _probeStalled to true/);
+    expect(s).toMatch(/if _probeStalled then\s+set _stopAt to _mi \+ 1\s+exit repeat/);
+    // Any other count failure still skips (labelled), but is not "stalled".
+    expect(s).toContain('set _sizeLabel to "size unknown (count failed)"');
     expect(s).toContain("if _mbCount > -1 then set _sizeLabel to (_mbCount as string)");
     expect(s).toContain(
-      'set _skipped to _skipped & (name of acct) & " / " & _skipPath & " (" & _sizeLabel & ")'
+      'set _skipped to _skipped & _acctName & " / " & _skipPath & " (" & _sizeLabel & ")'
     );
   });
 
@@ -412,7 +423,8 @@ describe("#270 follow-up (@j5pu) — a mailbox that stalled once is never re-pro
     h.router.fn = () => ({ success: true, output: "" });
     mgr.getMessageContent("2");
     const s = byId()[1].script;
-    expect(s).toContain('if ((name of acct) is "iCloud" and (name of mb) is "Archive") then');
+    expect(s).toContain(`set _stalledKeys to {"iCloud${FS}Archive"}`);
+    expect(s).toContain(`if _stalledKeys contains {(_acctName & "${FS}" & _mbName)} then`);
     expect(s).toContain('" (" & "size unknown (previously timed out)" & ")');
   });
 
@@ -428,5 +440,190 @@ describe("#270 follow-up (@j5pu) — a mailbox that stalled once is never re-pro
     const s = byId()[1].script;
     expect(s).not.toContain("previously timed out");
     expect(s).toMatch(/with timeout of 3 seconds\s+set _mbCount to count of messages of mb/);
+  });
+});
+
+describe("#270 follow-up (@j5pu, 2.20.7 retest) — learn on the spot, remember across restarts", () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+  });
+
+  const stalledMiss = (unreached: string) =>
+    `${ERR}Message not found${COV}iCloud / Archive (size unknown (count probe exceeded 3s))${M}${F}false${F}true${F}${unreached}`;
+
+  it("(1) an early-stopped walk (probe timed out) is learned and explained, naming what it never reached", () => {
+    const mgr = new AppleMailManager();
+    h.router.fn = () => ({
+      success: true,
+      output: stalledMiss(
+        `iCloud / Recovered${M}iCloud / Notes${M}Gmail (every mailbox)${M}On My Mac (any local mailboxes)${M}`
+      ),
+    });
+    expect(mgr.getMessageById("7")).toBeNull();
+    const err = mgr.consumeLastMessageLookupError()!;
+    expect(err).toContain("iCloud / Archive (size unknown (count probe exceeded 3s))");
+    expect(err).toContain(
+      "The scan stopped early, before reaching: iCloud / Recovered, iCloud / Notes, Gmail (every mailbox), On My Mac (any local mailboxes)."
+    );
+    expect(err).toContain("remembered and skipped for 7 days");
+
+    h.router.fn = () => ({ success: true, output: "" });
+    mgr.getMessageById("8");
+    expect(byId()[1].script).toContain(`set _stalledKeys to {"iCloud${FS}Archive"}`);
+  });
+
+  it("(2) the learned list survives a restart — a NEW manager skips the mailbox from its first call", () => {
+    h.router.fn = () => ({ success: true, output: stalledMiss("") });
+    new AppleMailManager().getMessageContent("1");
+
+    h.calls.length = 0;
+    h.router.fn = () => ({ success: true, output: "" });
+    new AppleMailManager().getMessageContent("2");
+    const s = byId()[0].script;
+    expect(s).toContain(`set _stalledKeys to {"iCloud${FS}Archive"}`);
+    expect(s).toContain('" (" & "size unknown (previously timed out)" & ")');
+  });
+
+  it("the walk never sends an Apple event after a probe times out", () => {
+    const mgr = new AppleMailManager();
+    h.router.fn = () => ({ success: true, output: "" });
+    mgr.getMessageContent("1");
+    const s = byId()[0].script;
+    // The stalled skip entry uses the prefetched leaf name — no container walk.
+    const stalledBranch = s.slice(s.indexOf("if _probeErr is -1712 then"));
+    const branchBody = stalledBranch.slice(0, stalledBranch.indexOf("else if"));
+    expect(branchBody).not.toContain("container of");
+    expect(branchBody).not.toContain("name of mb");
+    // …and the stop lists the rest from prefetched names.
+    expect(s).toContain("set _mbNames to name of mailboxes of acct");
+    expect(s).toMatch(/repeat with _ri from _stopAt to \(length of _mbNames\)/);
+    expect(s).toContain('set _unreached to _unreached & _acctName & " (every mailbox)');
+  });
+
+  it("(3) a budget stop names the mailboxes it did not reach, capped with a count", () => {
+    const mgr = new AppleMailManager();
+    const names = Array.from({ length: 18 }, (_, i) => `Work / Folder ${i + 1}`);
+    h.router.fn = () => ({
+      success: true,
+      output: `${ERR}Message not found${COV}${F}true${F}false${F}${names.join(M)}${M}`,
+    });
+    expect(mgr.getRawSource("5")).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toBe(
+      `Message 5 not found in the mailboxes scanned. The scan also stopped after its 9s budget before reaching: ${names.slice(0, 15).join(", ")} and 3 more. If the message is in a mailbox that was not scanned, pass account + mailbox to read it from that mailbox directly, or use its imap: id from list-messages/search-messages.`
+    );
+  });
+
+  it("(3) the remembered-stalled check reads prefetched names, not one Apple event per mailbox", () => {
+    const mgr = new AppleMailManager();
+    h.router.fn = () => ({ success: true, output: stalledMiss("") });
+    mgr.getMessageContent("1");
+    h.router.fn = () => ({ success: true, output: "" });
+    mgr.getMessageContent("2");
+    const s = byId()[1].script;
+    expect(s).not.toContain("(name of acct) is");
+    expect(s).not.toContain("(name of mb) is");
+    expect(s).toContain("set _acctNames to name of every account");
+  });
+
+  it("Mail.app busy before the walk starts → a clear 'busy' error, nothing learned", () => {
+    const mgr = new AppleMailManager();
+    h.router.fn = () => ({ success: true, output: `${ERR}\x1dBUSY\x1d` });
+    expect(mgr.getMessageHeaders("9")).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toMatch(
+      /^Mail\.app did not answer within 3s, so message 9 was not looked up — it is still busy/
+    );
+    h.router.fn = () => ({ success: true, output: "" });
+    mgr.getMessageHeaders("10");
+    expect(byId()[1].script).toContain("set _stalledKeys to {}");
+    // The busy probe is the capped account-name prefetch.
+    expect(byId()[1].script).toMatch(
+      /with timeout of 3 seconds\s+set _acctNames to name of every account\s+end timeout\s+on error number _busyErrNum\s+if _busyErrNum is -1712 then return "/
+    );
+    expect(byId()[1].script).toContain(`if _busyErrNum is -1712 then return "${ERR}\x1dBUSY\x1d"`);
+  });
+});
+
+describe("#270 follow-up (@j5pu) — (4) Mail.app not running: say so, never launch it", () => {
+  const NOT_RUNNING = "\x1dNOTRUNNING\x1d";
+  const EXPECTED =
+    "Mail.app is not running, so message 7 could not be looked up by its numeric Mail.app id (this server does not launch Mail.app by itself). Open Mail.app and retry, or use the message's imap: id from list-messages/search-messages, which reads over IMAP without Mail.app.";
+  let mgr: AppleMailManager;
+  beforeEach(() => {
+    h.calls.length = 0;
+    mgr = new AppleMailManager();
+  });
+
+  it('every by-id script checks `application "Mail" is running` BEFORE its tell', () => {
+    h.router.fn = () => ({ success: true, output: "" });
+    mgr.getMessageContent("7");
+    mgr.getMessageContent("7", false, { account: "Work", mailbox: "INBOX" });
+    for (const { script } of h.calls) {
+      const guard = script.indexOf('if application "Mail" is running then');
+      expect(guard).toBeGreaterThanOrEqual(0);
+      expect(guard).toBeLessThan(script.indexOf('tell application "Mail"'));
+      expect(script).toContain(`return "${NOT_RUNNING}"`);
+    }
+  });
+
+  for (const [name, read] of [
+    ["get-message (getMessageContent)", (m: AppleMailManager) => m.getMessageContent("7")],
+    ["get-thread (getMessageById)", (m: AppleMailManager) => m.getMessageById("7")],
+    ["get-message-headers", (m: AppleMailManager) => m.getMessageHeaders("7")],
+    ["getRawSource", (m: AppleMailManager) => m.getRawSource("7")],
+  ] as const) {
+    it(`${name}: unscoped read reports Mail.app not running`, () => {
+      h.router.fn = () => ({ success: true, output: NOT_RUNNING });
+      expect(read(mgr)).toBeNull();
+      expect(mgr.consumeLastMessageLookupError()).toBe(EXPECTED);
+    });
+  }
+
+  it("a scoped read (explicit hint) reports it too — and no unscoped fallback is tried", () => {
+    h.router.fn = () => ({ success: true, output: NOT_RUNNING });
+    expect(mgr.getMessageContent("7", false, { account: "Work", mailbox: "INBOX" })).toBeNull();
+    expect(kinds()).toEqual(["scoped"]);
+    expect(mgr.consumeLastMessageLookupError()).toBe(EXPECTED);
+  });
+
+  it("a remembered location is NOT evicted or followed by a scan when Mail.app is not running", () => {
+    mgr.noteMessageLocation("7", "Work", "INBOX");
+    h.router.fn = () => ({ success: true, output: NOT_RUNNING });
+    expect(mgr.getMessageHeaders("7")).toBeNull();
+    expect(kinds()).toEqual(["scoped"]);
+    expect(mgr.consumeLastMessageLookupError()).toBe(EXPECTED);
+    // Still remembered: the next read goes straight to the scoped lookup.
+    h.calls.length = 0;
+    mgr.getMessageHeaders("7");
+    expect(kinds()).toEqual(["scoped"]);
+  });
+
+  it("Mail quitting mid-call (osascript 'isn't running' error) is reported the same way", () => {
+    h.router.fn = () => ({
+      success: false,
+      output: "",
+      error: "Mail.app is not responding. Try opening Mail.app manually.",
+    });
+    expect(mgr.getMessageContent("7")).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toBe(EXPECTED);
+    h.router.fn = () => ({
+      success: false,
+      output: "",
+      error: "execution error: Mail got an error: Application isn't running. (-600)",
+    });
+    expect(mgr.getMessageContent("7", false, { account: "Work", mailbox: "INBOX" })).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toBe(EXPECTED);
+  });
+
+  it("resolving the hinted mailbox name does not launch Mail.app, and is not cached while it is down", () => {
+    h.router.fn = () => ({ success: true, output: NOT_RUNNING });
+    mgr.getMessageContent("7", false, { account: "Work", mailbox: "INBOX" });
+    mgr.getMessageContent("7", false, { account: "Work", mailbox: "INBOX" });
+    const nameFetches = h.calls.filter((c) => !isScoped(c.script) && !isUnscoped(c.script));
+    expect(nameFetches).toHaveLength(2);
+    for (const { script } of nameFetches) {
+      expect(script.indexOf('if application "Mail" is running then')).toBeLessThan(
+        script.indexOf('tell application "Mail"')
+      );
+    }
   });
 });

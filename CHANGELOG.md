@@ -1,5 +1,58 @@
 ## [Unreleased]
 
+## [2.20.8] - 2026-10-09
+
+### Fixed
+
+Four gaps @j5pu found re-testing 2.20.7 on a store with 255k- and
+794k-message mailboxes (#270 follow-up):
+
+- **A timed-out size probe is now learned on the spot, not only when the
+  walk happens to finish.** When a mailbox's `count of messages` probe hit
+  its 3s cap, 2.20.7 kept walking — and Mail.app, still running the abandoned
+  count, made every later event queue behind it: the next probes (which then
+  also "timed out", so small mailboxes could be wrongly remembered as
+  stalled), the `whose id` scans, and even the container walk that built the
+  skipped mailbox's display path. The walk was then SIGKILLed at the 15s
+  by-id timeout and the result recording the stall was lost, so each large
+  mailbox cost at least one failed call. The scan now stops the moment a
+  probe times out (error -1712), builds that entry from a prefetched name
+  with no further Apple event, and returns within a few seconds, so the
+  stall is always recorded. A count that fails for any other reason is
+  skipped as "size unknown (count failed)" and is not remembered.
+- **The learned list is persisted.** It now lives in
+  `~/Library/Application Support/apple-mail-mcp/stalled-mailboxes.json`
+  (`APPLE_MAIL_MCP_STALLED_MAILBOXES_FILE`), keyed by account + mailbox with
+  a 7-day TTL, so a client restart no longer repeats the failed calls, and
+  every server process on the Mac shares it. Writes are atomic (temp file +
+  rename) and merge with other processes' entries; a missing, corrupt or
+  unwritable file is treated as an empty list (the in-memory copy still
+  works) and is never fatal. Delete the file to forget the list.
+- **A scan that stops early now names the mailboxes it never reached**
+  ("…stopped after its 9s budget before reaching: Work / Projects, Gmail
+  (every mailbox), …", the first 15 named, then a count), so "not found" is
+  no longer silently partial. Investigating why the budget still ran out
+  after learning turned up one real cost: 2.20.7's remembered-mailbox check
+  sent Mail.app two Apple events (`name of acct`, `name of mb`) per
+  remembered entry for every mailbox visited. Account and mailbox names are
+  now prefetched once per account and compared locally. The rest of the
+  budget goes on the `whose id is` probes themselves (about 1s per 25k
+  messages), so a store with many mid-size mailboxes can still exceed 9s —
+  which is now stated, with the unreached mailboxes listed. Mail.app being
+  busy when a lookup starts (its first, trivially cheap request does not
+  answer within 3s — typically while it finishes a count an earlier call
+  abandoned) now returns a clear "Mail.app did not answer" error instead of
+  walking on and mislearning small mailboxes.
+- **With Mail.app not running, numeric-id reads say so — and no longer
+  launch it.** `get-message`, `get-thread`, `get-message-headers` and the
+  other by-id reads returned a plain `Message with ID "N" not found` within
+  ~2s. Their scripts — and the mailbox-name lookup a scoped read does first —
+  now check `application "Mail" is running` (which does not launch the app)
+  before addressing Mail.app, and return "Mail.app is not running, so
+  message N could not be looked up…", pointing at `imap:` ids, which work
+  without Mail.app. A remembered location is not evicted, and no fallback
+  scan is attempted, when Mail.app is simply not running.
+
 ## [2.20.7] - 2026-10-09
 
 ### Fixed
