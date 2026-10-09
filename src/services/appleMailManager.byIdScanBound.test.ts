@@ -41,6 +41,7 @@ vi.mock("@/utils/applescript.js", async (importOriginal) => {
 import {
   AppleMailManager,
   describeUnscopedMiss,
+  extractFreshlyStalledMailboxes,
   getByIdScanThreshold,
 } from "@/services/appleMailManager.js";
 
@@ -386,5 +387,46 @@ describe("describeUnscopedMiss / getByIdScanThreshold", () => {
     expect(getByIdScanThreshold()).toBe(50000);
     process.env.APPLE_MAIL_MAX_BYID_SCAN_MAILBOX = "0";
     expect(getByIdScanThreshold()).toBe(0);
+  });
+});
+
+describe("#270 follow-up (@j5pu) — a mailbox that stalled once is never re-probed", () => {
+  let mgr: AppleMailManager;
+  beforeEach(() => {
+    h.calls.length = 0;
+    mgr = new AppleMailManager();
+  });
+
+  it("extractFreshlyStalledMailboxes pulls Account\\x1fLeaf keys from probe-timeout entries only", () => {
+    const raw = `Message not found${COV}iCloud / Archive/Nested (size unknown (count probe exceeded 3s))${M}iCloud / Recovered (255104)${M}${F}false`;
+    expect(extractFreshlyStalledMailboxes(raw)).toEqual(["iCloud\x1fNested"]);
+  });
+
+  it("a miss naming a probe-timeout mailbox makes the NEXT scan skip it with no count call", () => {
+    h.router.fn = () => ({
+      success: true,
+      output: `${ERR}Message not found${COV}iCloud / Archive (size unknown (count probe exceeded 3s))${F}false`,
+    });
+    expect(mgr.getMessageContent("1")).toBeNull();
+
+    h.router.fn = () => ({ success: true, output: "" });
+    mgr.getMessageContent("2");
+    const s = byId()[1].script;
+    expect(s).toContain('if ((name of acct) is "iCloud" and (name of mb) is "Archive") then');
+    expect(s).toContain('" (" & "size unknown (previously timed out)" & ")');
+  });
+
+  it("a confirmed over-threshold mailbox (real count, no timeout) is NOT remembered — it still gets probed next time", () => {
+    h.router.fn = () => ({
+      success: true,
+      output: `${ERR}Message not found${COV}iCloud / Archive (793630)${F}false`,
+    });
+    expect(mgr.getMessageContent("1")).toBeNull();
+
+    h.router.fn = () => ({ success: true, output: "" });
+    mgr.getMessageContent("2");
+    const s = byId()[1].script;
+    expect(s).not.toContain("previously timed out");
+    expect(s).toMatch(/with timeout of 3 seconds\s+set _mbCount to count of messages of mb/);
   });
 });
