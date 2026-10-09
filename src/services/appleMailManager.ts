@@ -38,6 +38,11 @@ import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/
 import { plausibleDateSent } from "@/utils/headers.js";
 import { mailboxNameKey } from "@/utils/mailboxName.js";
 import { TemplateStore } from "@/services/templateStore.js";
+import {
+  StalledMailboxStore,
+  STALLED_KEY_SEP,
+  STALLED_MAILBOX_TTL_MS,
+} from "@/services/stalledMailboxStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
 import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
 import { searchContactsDb } from "@/utils/contactsDb.js";
@@ -212,10 +217,34 @@ const BYID_PROBE_TIMEOUT_SECONDS = 3;
 
 /**
  * Trailer on the unscoped by-id "not found" outcome carrying what the scan did
- * NOT cover: `{BYID_COVERAGE_MARKER}<skipped list>{DIAG_FIELD_SEP}<budgetHit>`,
- * the list DIAG_ITEM_SEP-separated "Account / Mailbox (count)" entries.
+ * NOT cover: `{BYID_COVERAGE_MARKER}<skipped>{F}<budgetHit>{F}<probeStalled>{F}<unreached>`
+ * (F = DIAG_FIELD_SEP). `skipped` is DIAG_ITEM_SEP-separated "Account /
+ * Mailbox (count)" entries; `unreached` is DIAG_ITEM_SEP-separated "Account /
+ * Mailbox" entries the walk never got to because it stopped early (#270
+ * follow-up). The last two fields are absent from pre-2.20.8 scripts.
  */
 const BYID_COVERAGE_MARKER = "\x1dCOV\x1d";
+
+/**
+ * Prefix (after LOOKUP_ERROR_MARKER) of an unscoped scan that never started
+ * because Mail.app did not answer its first, trivially cheap request (the
+ * account names) within BYID_PROBE_TIMEOUT_SECONDS — i.e. Mail.app is still
+ * busy, typically draining a size count an earlier lookup abandoned (#270
+ * follow-up). Walking on would only queue behind it and, worse, could time
+ * out SMALL mailboxes' probes and wrongly remember them as stalled.
+ */
+const BYID_BUSY_MARKER = "\x1dBUSY\x1d";
+
+/**
+ * Whole output of a by-id script that found Mail.app not running (#270
+ * follow-up, @j5pu). The script checks `application "Mail" is running`
+ * BEFORE its `tell`, so a read never launches Mail.app as a side effect —
+ * and says so instead of a misleading "not found".
+ */
+const MAIL_NOT_RUNNING_MARKER = "\x1dNOTRUNNING\x1d";
+
+/** How many not-reached mailboxes a miss names before summarising the rest. */
+const UNREACHED_LIST_MAX = 15;
 
 /**
  * Prefix (after LOOKUP_ERROR_MARKER) of a scoped by-id lookup's own miss —
@@ -228,37 +257,64 @@ const SCOPED_MISS_MARKER = "\x1dSCOPED\x1d";
 /** Where a by-id lookup was scoped, and whether the caller named it. */
 type ByIdLocation = { account: string; mailbox: string; explicit: boolean };
 
+/** User-facing error when a by-id read finds Mail.app not running (#270 follow-up). */
+export function mailNotRunningForId(id: string): string {
+  return `Mail.app is not running, so message ${Number(id)} could not be looked up by its numeric Mail.app id (this server does not launch Mail.app by itself). Open Mail.app and retry, or use the message's imap: id from list-messages/search-messages, which reads over IMAP without Mail.app.`;
+}
+
+/** User-facing error when Mail.app was too busy to start an unscoped scan (#270 follow-up). */
+export function mailBusyForId(id: string): string {
+  return `Mail.app did not answer within ${BYID_PROBE_TIMEOUT_SECONDS}s, so message ${Number(id)} was not looked up — it is still busy with an earlier request (most often a size count on a very large mailbox that a previous lookup gave up on; Mail.app finishes it regardless). Retry in a little while, or use the message's imap: id from list-messages/search-messages.`;
+}
+
+/** "A, B, C, … and N more" */
+function summariseList(items: string[], max: number): string {
+  if (items.length <= max) return items.join(", ");
+  return `${items.slice(0, max).join(", ")} and ${items.length - max} more`;
+}
+
 /**
  * Turn the unscoped scan's not-found outcome (the text after
  * LOOKUP_ERROR_MARKER) into the user-facing error. A plain "Message not found"
  * stays as it was; one whose BYID_COVERAGE_MARKER trailer says mailboxes were
- * skipped for size, or the walk ran out of budget, says so and names them
+ * skipped for size, or the walk stopped early, says so and names them
  * (#270) — the message may well be in one of them, so a flat "not found" would
- * be false.
+ * be false. An early stop names the mailboxes it never reached (#270
+ * follow-up), so "not found" is never silently partial.
  */
 export function describeUnscopedMiss(id: string, raw: string): string {
   const covIdx = raw.indexOf(BYID_COVERAGE_MARKER);
   if (covIdx === -1) return raw.trim();
   const base = raw.slice(0, covIdx).trim();
-  const [skippedRaw = "", budgetRaw = ""] = raw
+  const [skippedRaw = "", budgetRaw = "", stalledRaw = "", unreachedRaw = ""] = raw
     .slice(covIdx + BYID_COVERAGE_MARKER.length)
     .split(DIAG_FIELD_SEP);
-  const skipped = skippedRaw
-    .split(DIAG_ITEM_SEP)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const list = (s: string) =>
+    s
+      .split(DIAG_ITEM_SEP)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  const skipped = list(skippedRaw);
+  const unreached = list(unreachedRaw);
   const budgetHit = budgetRaw.trim() === "true";
-  if (skipped.length === 0 && !budgetHit) return base;
+  const probeStalled = stalledRaw.trim() === "true";
+  if (skipped.length === 0 && !budgetHit && !probeStalled) return base;
   const parts = [`Message ${Number(id)} not found in the mailboxes scanned.`];
   if (skipped.length > 0) {
     parts.push(
       `Not scanned — too large for a cross-mailbox id scan (over ${getByIdScanThreshold()} messages; APPLE_MAIL_MAX_BYID_SCAN_MAILBOX): ${skipped.join(", ")}.`
     );
   }
-  if (budgetHit) {
+  const reach =
+    unreached.length > 0
+      ? `before reaching: ${summariseList(unreached, UNREACHED_LIST_MAX)}.`
+      : "before reaching every mailbox.";
+  if (probeStalled) {
     parts.push(
-      `The scan also stopped after its ${BYID_SCAN_BUDGET_SECONDS}s budget before reaching every mailbox.`
+      `The scan stopped early, ${reach} A mailbox's size count did not answer within ${BYID_PROBE_TIMEOUT_SECONDS}s, and Mail.app keeps working on an abandoned count, so anything asked after it would only queue behind it. That mailbox is now remembered and skipped for ${Math.round(STALLED_MAILBOX_TTL_MS / 86400000)} days — retry in a little while to scan the rest.`
     );
+  } else if (budgetHit) {
+    parts.push(`The scan also stopped after its ${BYID_SCAN_BUDGET_SECONDS}s budget ${reach}`);
   }
   parts.push(
     "If the message is in a mailbox that was not scanned, pass account + mailbox to read it from that mailbox directly, or use its imap: id from list-messages/search-messages."
@@ -274,10 +330,10 @@ const STALLED_PROBE_SUFFIX = ` (size unknown (count probe exceeded ${BYID_PROBE_
  * for entries whose `count of messages` probe itself timed out — as opposed
  * to one that answered with a real count over the threshold — so the caller
  * can remember never to probe them again (#270 follow-up). Each raw entry is
- * "Account / container/walked/path (size unknown (count probe exceeded Ns))";
- * " / " (spaced) separates the account from the path, which itself uses bare
- * "/" between segments, so splitting on the first " / " and taking the
- * path's last segment recovers the leaf name `knownStalledMailboxes` keys on.
+ * "Account / Mailbox (size unknown (count probe exceeded Ns))", the mailbox
+ * the leaf name (older scripts sent a container-walked path); " / " (spaced)
+ * separates the account from it, so splitting on the first " / " and taking
+ * the last "/" segment recovers the leaf name the stalled list keys on.
  */
 export function extractFreshlyStalledMailboxes(raw: string): string[] {
   const covIdx = raw.indexOf(BYID_COVERAGE_MARKER);
@@ -293,7 +349,7 @@ export function extractFreshlyStalledMailboxes(raw: string): string[] {
     const account = withoutSuffix.slice(0, sepIdx);
     const path = withoutSuffix.slice(sepIdx + 3);
     const leaf = path.split("/").pop();
-    if (account && leaf) out.push(`${account}\x1f${leaf}`);
+    if (account && leaf) out.push(`${account}${STALLED_KEY_SEP}${leaf}`);
   }
   return out;
 }
@@ -1171,6 +1227,42 @@ function buildAppLevelScript(command: string): string {
 }
 
 /**
+ * Like buildAppLevelScript, but checks `application "Mail" is running` first —
+ * a property test that does NOT launch the app — and returns
+ * MAIL_NOT_RUNNING_MARKER instead of entering the `tell` when it is not
+ * (#270 follow-up, @j5pu). Without it a by-id read launched Mail.app as a side
+ * effect and, with its accounts not yet loaded, reported a misleading plain
+ * "not found".
+ */
+function buildAppLevelScriptIfRunning(command: string): string {
+  return guardMailRunning(buildAppLevelScript(command));
+}
+
+/** Wrap a whole `tell application "Mail"` script in the not-launching running check. */
+function guardMailRunning(script: string): string {
+  return `
+    if application "Mail" is running then
+      ${script}
+    else
+      return "${MAIL_NOT_RUNNING_MARKER}"
+    end if
+  `;
+}
+
+/**
+ * A failed osascript whose error says Mail.app is not running — the raw
+ * AppleScript text ("Application isn't running", -600) or its normalised form
+ * from executeAppleScript's error mapping. Covers Mail quitting between the
+ * running check and the first event.
+ */
+function looksLikeMailNotRunning(error: string | undefined): boolean {
+  if (!error) return false;
+  return /application isn't running|\(-600\)|Mail\.app is not responding\. Try opening Mail\.app/i.test(
+    error
+  );
+}
+
+/**
  * AppleScript fragment that writes an account-relative mailbox path into
  * `outputVar` by walking the mailbox's container chain. Mail.app exposes an
  * account's `mailboxes` collection recursively, but `name of mailbox` is only
@@ -1459,13 +1551,12 @@ export class AppleMailManager {
    * demonstrated this, the unscoped scan skips the probe for it entirely —
    * no `count of messages` call at all — straight to "size unknown,
    * previously timed out". Keyed on the leaf mailbox name (not the
-   * container-walked path `mailboxPathFragment` builds for display) so
-   * checking it costs nothing extra per mailbox visited. Remembered for the
-   * life of the process: nothing ever evicts an entry, because there is no
-   * signal that an abandoned Apple event has finished, and a mailbox that
-   * stalled once on a store this large has no reason to get faster.
+   * container-walked path `mailboxPathFragment` builds for display), matched
+   * against names the scan prefetches once per account, so checking it costs
+   * no Apple event per mailbox visited. Persisted across restarts and shared
+   * between server processes, with a 7-day TTL (see StalledMailboxStore).
    */
-  private knownStalledMailboxes = new Set<string>();
+  private stalledMailboxes = new StalledMailboxStore();
 
   /** Error from the most recent numeric message read, if it was refused. */
   private lastMessageLookupError: string | undefined;
@@ -2306,6 +2397,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return cached.data;
     }
     const names = this.fetchMailboxNames(account);
+    // Mail.app not running: resolve against nothing this time, but do not
+    // cache that — the real list is there as soon as Mail.app is opened.
+    if (names === null) return [];
     this.cache.mailboxNames.set(account, { data: names, expiry: now + this.CACHE_TTL_MS });
     return names;
   }
@@ -2969,14 +3063,26 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (!result.success || !result.output.trim()) {
       if (!result.success) {
         if (result.timedOut) this.lastMessageLookupError = timedOutScanningForId(id);
+        else if (looksLikeMailNotRunning(result.error))
+          this.lastMessageLookupError = mailNotRunningForId(id);
         console.error(`Failed to resolve message ${id}: ${result.error}`);
       }
       return null;
     }
+    if (result.output.startsWith(MAIL_NOT_RUNNING_MARKER)) {
+      this.lastMessageLookupError = mailNotRunningForId(id);
+      return null;
+    }
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER + BYID_BUSY_MARKER)) {
+      this.lastMessageLookupError = mailBusyForId(id);
+      return null;
+    }
     if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
       const rawTail = result.output.slice(LOOKUP_ERROR_MARKER.length);
-      for (const key of extractFreshlyStalledMailboxes(rawTail))
-        this.knownStalledMailboxes.add(key);
+      // Persisted the moment the script reports it: the walk now stops right
+      // after a probe times out (see unscopedByIdScript), so this outcome
+      // always arrives instead of being lost to the 15s SIGKILL.
+      this.stalledMailboxes.record(extractFreshlyStalledMailboxes(rawTail));
       this.lastMessageLookupError = describeUnscopedMiss(id, rawTail);
       return null;
     }
@@ -2999,6 +3105,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }
     );
     const where = `${loc.account} / ${loc.mailbox}`;
+
+    if (
+      (result.success && result.output.startsWith(MAIL_NOT_RUNNING_MARKER)) ||
+      (!result.success && !result.timedOut && looksLikeMailNotRunning(result.error))
+    ) {
+      // No fallback: the unscoped scan would find Mail.app just as absent.
+      this.lastMessageLookupError = mailNotRunningForId(id);
+      return { kind: "done" };
+    }
 
     if (!result.success) {
       console.error(`Failed to read message ${id} from ${where}: ${result.error}`);
@@ -3061,6 +3176,27 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * instead of a false flat "not found". A copy that sits only in a skipped
    * mailbox therefore no longer counts toward the ambiguity check — harmless
    * for these read-only lookups, whose copies are the same message.
+   *
+   * #270 follow-up (@j5pu, 2.20.7 retest) — three refinements:
+   *
+   *  - Names are prefetched: account names once (`name of every account`)
+   *    and each account's mailbox leaf names once (`name of mailboxes of
+   *    acct`), so the remembered-stalled check is a local string comparison
+   *    instead of two Apple events per remembered entry per mailbox visited,
+   *    and an early stop can name every mailbox it never reached without
+   *    asking Mail.app anything more.
+   *  - The account-name prefetch is itself capped at BYID_PROBE_TIMEOUT_SECONDS.
+   *    It is trivially cheap, so if it does not answer Mail.app is still busy
+   *    (usually draining a count an earlier call abandoned): return
+   *    BYID_BUSY_MARKER rather than walk on and let small mailboxes' probes
+   *    time out behind it — which would wrongly remember THEM as stalled.
+   *  - A probe that times out (-1712) STOPS the walk on the spot. Mail.app
+   *    keeps running the abandoned count, so every later event — the next
+   *    probe, a `whose` scan, even the container walk that used to build the
+   *    skip entry's display path — would queue behind it until the 15s
+   *    SIGKILL, losing the very result that records the stall. The skip entry
+   *    is built from the prefetched leaf name (no Apple event) and the script
+   *    returns at once, so the caller always learns and persists it.
    */
   private unscopedByIdScript(
     id: string,
@@ -3068,30 +3204,24 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     opts: { firstHit?: boolean } = {}
   ): string {
     const threshold = getByIdScanThreshold();
-    // A mailbox that has already demonstrated a probe timeout (#270
-    // follow-up) is skipped with no AppleScript call at all — re-running
-    // `count of messages` on it wouldn't just risk another 3s wait, it would
-    // queue behind whatever is still draining inside Mail.app from the
-    // earlier abandoned probe. See `knownStalledMailboxes`.
-    const stalledCheck = (mbVar: string, acctNameExpr: string): string | undefined => {
-      if (this.knownStalledMailboxes.size === 0) return undefined;
-      const clauses = Array.from(this.knownStalledMailboxes).map((key) => {
-        const [acct = "", leaf = ""] = key.split("\x1f");
-        return `(${acctNameExpr} is "${escapeForAppleScript(acct)}" and (name of ${mbVar}) is "${escapeForAppleScript(leaf)}")`;
-      });
-      return clauses.join(" or ");
-    };
-    // The probe runs only when the guard is on. `count of messages` is NOT
-    // reliably cheap (#270 follow-up, @j5pu measured ~5-7s on real
-    // multi-hundred-thousand-message mailboxes), so it is wrapped in its own
-    // `with timeout of` — a count that doesn't answer within
-    // BYID_PROBE_TIMEOUT_SECONDS is caught by the outer `try`, leaving
-    // `_mbCount` at its -1 sentinel, and is treated exactly like a confirmed
-    // over-threshold mailbox: skipped, with its size reported as "unknown"
-    // rather than a real count (see BYID_PROBE_TIMEOUT_SECONDS).
-    const sizeGuard = (mbVar: string, acctNameExpr: string): string => {
+    // Remembered stalled mailboxes as one AppleScript list of
+    // "Account<US>Leaf" strings, matched against prefetched names.
+    const stalledKeys = threshold > 0 ? this.stalledMailboxes.keys() : [];
+    const stalledList = `{${stalledKeys
+      .map((key) => {
+        const i = key.indexOf(STALLED_KEY_SEP);
+        return `"${escapeForAppleScript(key.slice(0, i))}${FIELD_SEP}${escapeForAppleScript(key.slice(i + 1))}"`;
+      })
+      .join(", ")}}`;
+    const stalledLabel = `size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s)`;
+    // Size guard for `mbVar`, whose account label is `acctNameExpr` and leaf
+    // name `mbNameExpr` (both already-bound locals: no Apple event to read).
+    // Runs only when the guard is on. `count of messages` is NOT reliably
+    // cheap (#270 follow-up: ~5-7s on multi-hundred-thousand-message
+    // mailboxes), so it is capped at BYID_PROBE_TIMEOUT_SECONDS; a cap hit
+    // sets `_probeStalled`, which the caller turns into an immediate stop.
+    const sizeGuard = (mbVar: string, acctNameExpr: string, mbNameExpr: string): string => {
       if (threshold <= 0) return "";
-      const stalled = stalledCheck(mbVar, acctNameExpr);
       const skipEntry = (sizeLabelExpr: string): string => `
               set _skipPath to ""
               try
@@ -3100,67 +3230,133 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
               set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & ${sizeLabelExpr} & ")${DIAG_ITEM_SEP}"
               set _probe to false`;
       const probeBlock = `set _mbCount to -1
+            set _probeErr to 0
             try
               with timeout of ${BYID_PROBE_TIMEOUT_SECONDS} seconds
                 set _mbCount to count of messages of ${mbVar}
               end timeout
+            on error number _probeErrNum
+              set _probeErr to _probeErrNum
             end try
-            if _mbCount < 0 or _mbCount > ${threshold} then
-              set _sizeLabel to "size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s)"
+            if _probeErr is -1712 then
+              set _skipped to _skipped & ${acctNameExpr} & " / " & ${mbNameExpr} & " (${stalledLabel})${DIAG_ITEM_SEP}"
+              set _probe to false
+              set _probeStalled to true
+            else if _mbCount < 0 or _mbCount > ${threshold} then
+              set _sizeLabel to "size unknown (count failed)"
               if _mbCount > -1 then set _sizeLabel to (_mbCount as string)
               ${skipEntry("_sizeLabel")}
             end if`;
-      if (!stalled) return probeBlock;
-      return `if ${stalled} then
+      if (stalledKeys.length === 0) return probeBlock;
+      return `if _stalledKeys contains {(${acctNameExpr} & "${FIELD_SEP}" & ${mbNameExpr})} then
               ${skipEntry('"size unknown (previously timed out)"')}
             else
               ${probeBlock}
             end if`;
     };
-    const budgetCheck = `if ((current date) - _startedAt) > ${BYID_SCAN_BUDGET_SECONDS} then
+    const budgetCheck = (
+      stopAtExpr: string
+    ) => `if ((current date) - _startedAt) > ${BYID_SCAN_BUDGET_SECONDS} then
               set _budgetHit to true
+              set _stopAt to ${stopAtExpr}
               exit repeat
             end if`;
+    const hitFound = opts.firstHit ? "(count of _hits) > 0" : "false";
     const stopOnHit = opts.firstHit ? `if (count of _hits) > 0 then exit repeat` : "";
-    return buildAppLevelScript(`
+    return buildAppLevelScriptIfRunning(`
       try
         set _hits to {}
         set _hitMbs to {}
         set _hitAccts to {}
         set _names to ""
         set _skipped to ""
+        set _unreached to ""
         set _budgetHit to false
+        set _probeStalled to false
+        set _stopAt to 0
+        set _stalledKeys to ${stalledList}
         set _startedAt to current date
+        set _acctNames to {}
+        try
+          with timeout of ${BYID_PROBE_TIMEOUT_SECONDS} seconds
+            set _acctNames to name of every account
+          end timeout
+        on error number _busyErrNum
+          if _busyErrNum is -1712 then return "${LOOKUP_ERROR_MARKER}${BYID_BUSY_MARKER}"
+        end try
+        set _ai to 0
         repeat with acct in accounts
-          if _budgetHit then exit repeat
-          ${stopOnHit}
-          repeat with mb in mailboxes of acct
-            ${budgetCheck}
-            set _probe to true
-            ${sizeGuard("mb", "(name of acct)")}
-            if _probe then
-              try
-                set matchingMsgs to (messages of mb whose id is ${Number(id)})
-                if (count of matchingMsgs) > 0 then
-                  set end of _hits to item 1 of matchingMsgs
-                  set end of _hitMbs to (contents of mb)
-                  set end of _hitAccts to (name of acct)
-                  set _names to _names & (name of acct) & "/" & (name of mb) & ", "
-                end if
-              end try
+          set _ai to _ai + 1
+          if ${hitFound} then exit repeat
+          set _acctName to ""
+          if _ai <= (length of _acctNames) then set _acctName to item _ai of _acctNames
+          if _acctName is "" then set _acctName to (name of acct)
+          if _budgetHit or _probeStalled then
+            -- Stopped early: name what is left without asking Mail.app.
+            set _unreached to _unreached & _acctName & " (every mailbox)${DIAG_ITEM_SEP}"
+          else
+            set _mbNames to {}
+            try
+              set _mbNames to name of mailboxes of acct
+            end try
+            set _mi to 0
+            repeat with mb in mailboxes of acct
+              set _mi to _mi + 1
+              ${budgetCheck("_mi")}
+              set _mbName to ""
+              if _mi <= (length of _mbNames) then set _mbName to item _mi of _mbNames
+              if _mbName is "" then set _mbName to (name of mb)
+              set _probe to true
+              ${sizeGuard("mb", "_acctName", "_mbName")}
+              if _probeStalled then
+                set _stopAt to _mi + 1
+                exit repeat
+              end if
+              if _probe then
+                try
+                  set matchingMsgs to (messages of mb whose id is ${Number(id)})
+                  if (count of matchingMsgs) > 0 then
+                    set end of _hits to item 1 of matchingMsgs
+                    set end of _hitMbs to (contents of mb)
+                    set end of _hitAccts to _acctName
+                    set _names to _names & _acctName & "/" & _mbName & ", "
+                  end if
+                end try
+              end if
+              ${stopOnHit}
+            end repeat
+            if _budgetHit or _probeStalled then
+              if (length of _mbNames) > 0 then
+                repeat with _ri from _stopAt to (length of _mbNames)
+                  set _unreached to _unreached & _acctName & " / " & (item _ri of _mbNames) & "${DIAG_ITEM_SEP}"
+                end repeat
+              else
+                set _unreached to _unreached & _acctName & " (remaining mailboxes)${DIAG_ITEM_SEP}"
+              end if
             end if
-            ${stopOnHit}
-          end repeat
+          end if
         end repeat
         -- #183: local mailboxes belong to no account, so the walk above cannot
         -- reach them. Collect into the SAME _hits/_names, which means an id
         -- present both in an account and locally is now correctly reported as
         -- ambiguous rather than silently resolving to the account copy.
-        if (not _budgetHit) and ${opts.firstHit ? "(count of _hits) is 0" : "true"} then${localMailboxBindingFragment()}
+        if _budgetHit or _probeStalled then
+          set _unreached to _unreached & "${LOCAL_STORE_LABEL} (any local mailboxes)${DIAG_ITEM_SEP}"
+        else if not (${hitFound}) then${localMailboxBindingFragment()}
+          set _mi to 0
           repeat with mb in _mbs
-            ${budgetCheck}
+            set _mi to _mi + 1
+            ${budgetCheck("_mi")}
+            set _mbName to ""
+            try
+              set _mbName to (name of mb)
+            end try
             set _probe to true
-            ${sizeGuard("mb", `"${LOCAL_STORE_LABEL}"`)}
+            ${sizeGuard("mb", `"${LOCAL_STORE_LABEL}"`, "_mbName")}
+            if _probeStalled then
+              set _stopAt to _mi + 1
+              exit repeat
+            end if
             if _probe then
               try
                 set matchingMsgs to (messages of mb whose id is ${Number(id)})
@@ -3168,14 +3364,17 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                   set end of _hits to item 1 of matchingMsgs
                   set end of _hitMbs to (contents of mb)
                   set end of _hitAccts to "${LOCAL_STORE_LABEL}"
-                  set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
+                  set _names to _names & "${LOCAL_STORE_LABEL}/" & _mbName & ", "
                 end if
               end try
             end if
             ${stopOnHit}
           end repeat
+          if (_budgetHit or _probeStalled) and _stopAt <= (length of _mbs) then
+            set _unreached to _unreached & "${LOCAL_STORE_LABEL} (" & ((length of _mbs) - _stopAt + 1) & " more local mailboxes)${DIAG_ITEM_SEP}"
+          end if
         end if
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string)
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached
         ${opts.firstHit ? "" : `if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"`}
         if (count of _hits) ${opts.firstHit ? "> 0" : "is 1"} then
           set msg to item 1 of _hits
@@ -3247,7 +3446,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           end repeat
         end ignoring`;
     const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
-    return buildAppLevelScript(`
+    return buildAppLevelScriptIfRunning(`
       try
         ${bind}
         if targetMb is missing value then return "${miss}nomailbox"
@@ -6319,9 +6518,12 @@ end tell`;
 
   /**
    * Fetches canonical mailbox paths for an account directly from Mail.app.
-   * Used internally by the cache; prefer getCachedMailboxNames().
+   * Used internally by the cache; prefer getCachedMailboxNames(). Returns null
+   * when Mail.app is not running — checked without launching it, so resolving
+   * a mailbox name (e.g. for a scoped by-id read, #270 follow-up) never starts
+   * Mail.app as a side effect.
    */
-  private fetchMailboxNames(account: string): string[] {
+  private fetchMailboxNames(account: string): string[] | null {
     const body = `
       set mbNames to {}
       repeat with mb in ${isLocalStoreLabel(account) ? "_mbs" : "mailboxes"}
@@ -6338,7 +6540,8 @@ end tell`;
       ? buildAppLevelScript(`${localMailboxBindingFragment()}${body}`)
       : buildAccountScopedScript(account, body);
 
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(guardMailRunning(script));
+    if (result.success && result.output.startsWith(MAIL_NOT_RUNNING_MARKER)) return null;
     if (!result.success || !result.output) {
       return [];
     }

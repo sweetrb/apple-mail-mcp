@@ -7739,8 +7739,8 @@ var init_attachmentLimits = __esm({
 
 // src/utils/attachmentReadPolicy.ts
 import { realpathSync, statSync } from "fs";
-import { homedir as homedir2, tmpdir } from "os";
-import { delimiter, isAbsolute, join as join2, resolve, sep } from "path";
+import { homedir as homedir3, tmpdir } from "os";
+import { delimiter, isAbsolute, join as join3, resolve, sep } from "path";
 function canonicalize(path3) {
   return realpathSync.native(path3);
 }
@@ -7764,9 +7764,9 @@ function isProtectedPath(candidate) {
   if (sensitiveRoots().some((root) => isWithinRoot(candidate, root))) return true;
   let home;
   try {
-    home = canonicalize(homedir2());
+    home = canonicalize(homedir3());
   } catch {
-    home = resolve(homedir2());
+    home = resolve(homedir3());
   }
   if (!isWithinRoot(candidate, home)) return false;
   const relative = candidate.slice(home.length).split(sep).filter(Boolean);
@@ -7826,12 +7826,12 @@ var init_attachmentReadPolicy = __esm({
   "src/utils/attachmentReadPolicy.ts"() {
     "use strict";
     ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
-    DEFAULT_ATTACHMENT_READ_ROOTS = [homedir2(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
+    DEFAULT_ATTACHMENT_READ_ROOTS = [homedir3(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
     SENSITIVE_HOME_ROOTS = [
-      join2(homedir2(), ".ssh"),
-      join2(homedir2(), ".aws"),
-      join2(homedir2(), ".config", "gh"),
-      join2(homedir2(), "Library", "Keychains")
+      join3(homedir3(), ".ssh"),
+      join3(homedir3(), ".aws"),
+      join3(homedir3(), ".config", "gh"),
+      join3(homedir3(), "Library", "Keychains")
     ];
   }
 });
@@ -22061,7 +22061,7 @@ var require_thread_stream = __commonJS({
     var { version: version4 } = require_package();
     var { EventEmitter: EventEmitter7 } = __require("events");
     var { Worker } = __require("worker_threads");
-    var { join: join7 } = __require("path");
+    var { join: join8 } = __require("path");
     var { pathToFileURL } = __require("url");
     var { wait } = require_wait();
     var {
@@ -22112,7 +22112,7 @@ var require_thread_stream = __commonJS({
     function createWorker(stream, opts) {
       const { filename, workerData } = opts;
       const bundlerOverrides = "__bundlerPathsOverrides" in globalThis ? globalThis.__bundlerPathsOverrides : {};
-      const toExecute = bundlerOverrides["thread-stream-worker"] || join7(__dirname, "lib", "worker.js");
+      const toExecute = bundlerOverrides["thread-stream-worker"] || join8(__dirname, "lib", "worker.js");
       const worker = new Worker(toExecute, {
         ...opts.workerOpts,
         name: opts.workerOpts?.name || "thread-stream",
@@ -22580,7 +22580,7 @@ var require_transport = __commonJS({
     var { createRequire: createRequire2 } = __require("module");
     var { existsSync: existsSync5 } = __require("node:fs");
     var getCallers = require_caller();
-    var { join: join7, isAbsolute: isAbsolute2, sep: sep3 } = __require("node:path");
+    var { join: join8, isAbsolute: isAbsolute2, sep: sep3 } = __require("node:path");
     var { fileURLToPath } = __require("node:url");
     var sleep2 = require_atomic_sleep();
     var onExit = require_on_exit_leak_free();
@@ -22733,7 +22733,7 @@ var require_transport = __commonJS({
         throw new Error("only one of target or targets can be specified");
       }
       if (targets) {
-        target = bundlerOverrides["pino-worker"] || join7(__dirname, "worker.js");
+        target = bundlerOverrides["pino-worker"] || join8(__dirname, "worker.js");
         options.targets = targets.filter((dest) => dest.target).map((dest) => {
           return {
             ...dest,
@@ -22751,7 +22751,7 @@ var require_transport = __commonJS({
           });
         });
       } else if (pipeline) {
-        target = bundlerOverrides["pino-worker"] || join7(__dirname, "worker.js");
+        target = bundlerOverrides["pino-worker"] || join8(__dirname, "worker.js");
         options.pipelines = [pipeline.map((dest) => {
           return {
             ...dest,
@@ -22774,7 +22774,7 @@ var require_transport = __commonJS({
           return origin;
         }
         if (origin === "pino/file") {
-          return join7(__dirname, "..", "file.js");
+          return join8(__dirname, "..", "file.js");
         }
         let fixTarget2;
         for (const filePath of callers) {
@@ -23754,7 +23754,7 @@ var require_safe_stable_stringify = __commonJS({
               return circularValue;
             }
             let res = "";
-            let join7 = ",";
+            let join8 = ",";
             const originalIndentation = indentation;
             if (Array.isArray(value)) {
               if (value.length === 0) {
@@ -23768,7 +23768,7 @@ var require_safe_stable_stringify = __commonJS({
                 indentation += spacer;
                 res += `
 ${indentation}`;
-                join7 = `,
+                join8 = `,
 ${indentation}`;
               }
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
@@ -23776,13 +23776,13 @@ ${indentation}`;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyFnReplacer(String(i), value, stack, replacer, spacer, indentation);
                 res += tmp2 !== void 0 ? tmp2 : "null";
-                res += join7;
+                res += join8;
               }
               const tmp = stringifyFnReplacer(String(i), value, stack, replacer, spacer, indentation);
               res += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res += `${join7}"... ${getItemCount(removedKeys)} not stringified"`;
+                res += `${join8}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               if (spacer !== "") {
                 res += `
@@ -23803,7 +23803,7 @@ ${originalIndentation}`;
             let separator = "";
             if (spacer !== "") {
               indentation += spacer;
-              join7 = `,
+              join8 = `,
 ${indentation}`;
               whitespace = " ";
             }
@@ -23817,13 +23817,13 @@ ${indentation}`;
               const tmp = stringifyFnReplacer(key2, value, stack, replacer, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}:${whitespace}${tmp}`;
-                separator = join7;
+                separator = join8;
               }
             }
             if (keyLength > maximumBreadth) {
               const removedKeys = keyLength - maximumBreadth;
               res += `${separator}"...":${whitespace}"${getItemCount(removedKeys)} not stringified"`;
-              separator = join7;
+              separator = join8;
             }
             if (spacer !== "" && separator.length > 1) {
               res = `
@@ -23864,7 +23864,7 @@ ${originalIndentation}`;
             }
             const originalIndentation = indentation;
             let res = "";
-            let join7 = ",";
+            let join8 = ",";
             if (Array.isArray(value)) {
               if (value.length === 0) {
                 return "[]";
@@ -23877,7 +23877,7 @@ ${originalIndentation}`;
                 indentation += spacer;
                 res += `
 ${indentation}`;
-                join7 = `,
+                join8 = `,
 ${indentation}`;
               }
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
@@ -23885,13 +23885,13 @@ ${indentation}`;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyArrayReplacer(String(i), value[i], stack, replacer, spacer, indentation);
                 res += tmp2 !== void 0 ? tmp2 : "null";
-                res += join7;
+                res += join8;
               }
               const tmp = stringifyArrayReplacer(String(i), value[i], stack, replacer, spacer, indentation);
               res += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res += `${join7}"... ${getItemCount(removedKeys)} not stringified"`;
+                res += `${join8}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               if (spacer !== "") {
                 res += `
@@ -23904,7 +23904,7 @@ ${originalIndentation}`;
             let whitespace = "";
             if (spacer !== "") {
               indentation += spacer;
-              join7 = `,
+              join8 = `,
 ${indentation}`;
               whitespace = " ";
             }
@@ -23913,7 +23913,7 @@ ${indentation}`;
               const tmp = stringifyArrayReplacer(key2, value[key2], stack, replacer, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}:${whitespace}${tmp}`;
-                separator = join7;
+                separator = join8;
               }
             }
             if (spacer !== "" && separator.length > 1) {
@@ -23971,20 +23971,20 @@ ${originalIndentation}`;
               indentation += spacer;
               let res2 = `
 ${indentation}`;
-              const join8 = `,
+              const join9 = `,
 ${indentation}`;
               const maximumValuesToStringify = Math.min(value.length, maximumBreadth);
               let i = 0;
               for (; i < maximumValuesToStringify - 1; i++) {
                 const tmp2 = stringifyIndent(String(i), value[i], stack, spacer, indentation);
                 res2 += tmp2 !== void 0 ? tmp2 : "null";
-                res2 += join8;
+                res2 += join9;
               }
               const tmp = stringifyIndent(String(i), value[i], stack, spacer, indentation);
               res2 += tmp !== void 0 ? tmp : "null";
               if (value.length - 1 > maximumBreadth) {
                 const removedKeys = value.length - maximumBreadth - 1;
-                res2 += `${join8}"... ${getItemCount(removedKeys)} not stringified"`;
+                res2 += `${join9}"... ${getItemCount(removedKeys)} not stringified"`;
               }
               res2 += `
 ${originalIndentation}`;
@@ -24000,16 +24000,16 @@ ${originalIndentation}`;
               return '"[Object]"';
             }
             indentation += spacer;
-            const join7 = `,
+            const join8 = `,
 ${indentation}`;
             let res = "";
             let separator = "";
             let maximumPropertiesToStringify = Math.min(keyLength, maximumBreadth);
             if (isTypedArrayWithEntries(value)) {
-              res += stringifyTypedArray(value, join7, maximumBreadth);
+              res += stringifyTypedArray(value, join8, maximumBreadth);
               keys = keys.slice(value.length);
               maximumPropertiesToStringify -= value.length;
-              separator = join7;
+              separator = join8;
             }
             if (deterministic) {
               keys = sort(keys, comparator);
@@ -24020,13 +24020,13 @@ ${indentation}`;
               const tmp = stringifyIndent(key2, value[key2], stack, spacer, indentation);
               if (tmp !== void 0) {
                 res += `${separator}${strEscape(key2)}: ${tmp}`;
-                separator = join7;
+                separator = join8;
               }
             }
             if (keyLength > maximumBreadth) {
               const removedKeys = keyLength - maximumBreadth;
               res += `${separator}"...": "${getItemCount(removedKeys)} not stringified"`;
-              separator = join7;
+              separator = join8;
             }
             if (separator !== "") {
               res = `
@@ -82202,19 +82202,19 @@ import {
   constants as fsConstants,
   chmodSync,
   existsSync as existsSync3,
-  writeFileSync as writeFileSync3,
-  readFileSync as readFileSync2,
+  writeFileSync as writeFileSync4,
+  readFileSync as readFileSync3,
   readdirSync as readdirSync2,
-  unlinkSync,
+  unlinkSync as unlinkSync2,
   copyFileSync,
-  renameSync,
+  renameSync as renameSync2,
   mkdtempSync as mkdtempSync2,
   rmSync as rmSync2,
   realpathSync as realpathSync2,
   lstatSync
 } from "fs";
-import { resolve as resolve2, sep as sep2, join as join5 } from "path";
-import { homedir as homedir4 } from "os";
+import { resolve as resolve2, sep as sep2, join as join6 } from "path";
+import { homedir as homedir5 } from "os";
 import { randomUUID } from "crypto";
 
 // src/utils/applescript.ts
@@ -82548,11 +82548,120 @@ var TemplateStore = class {
   }
 };
 
+// src/services/stalledMailboxStore.ts
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
+import { dirname as dirname2, join as join2 } from "path";
+import { homedir as homedir2 } from "os";
+var STALLED_MAILBOX_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
+var STALLED_KEY_SEP = "";
+function defaultStalledMailboxesFile() {
+  const env = process.env.APPLE_MAIL_MCP_STALLED_MAILBOXES_FILE;
+  if (env && env.trim()) return env.trim();
+  return join2(
+    homedir2(),
+    "Library",
+    "Application Support",
+    "apple-mail-mcp",
+    "stalled-mailboxes.json"
+  );
+}
+var StalledMailboxStore = class {
+  fileOverride;
+  ttlMs;
+  now;
+  /** key → recordedAt. Holds everything learned, even when the disk write failed. */
+  memory = /* @__PURE__ */ new Map();
+  constructor(opts = {}) {
+    this.fileOverride = opts.file;
+    this.ttlMs = opts.ttlMs ?? STALLED_MAILBOX_TTL_MS;
+    this.now = opts.now ?? Date.now;
+  }
+  /** Resolved per call so an env override set after construction (tests) is honoured. */
+  get file() {
+    return this.fileOverride ?? defaultStalledMailboxesFile();
+  }
+  /**
+   * Every live (unexpired) key, merging what is on disk — possibly written by
+   * another server process — with what this process learned. Re-read on each
+   * call: the file is a handful of entries and is only consulted once per
+   * unscoped scan, which itself costs seconds.
+   */
+  keys() {
+    const merged = this.merged();
+    return Array.from(merged.keys());
+  }
+  /** Record keys whose probe just timed out, and persist them. */
+  record(keys) {
+    const fresh = keys.filter((k) => k.includes(STALLED_KEY_SEP));
+    if (fresh.length === 0) return;
+    const at = this.now();
+    for (const k of fresh) this.memory.set(k, at);
+    this.persist(this.merged());
+  }
+  /** Disk ∪ memory, newest timestamp per key, expired entries dropped. */
+  merged() {
+    const cutoff = this.now() - this.ttlMs;
+    const out = /* @__PURE__ */ new Map();
+    const put = (k, at) => {
+      if (at < cutoff) return;
+      const prev = out.get(k);
+      if (prev === void 0 || at > prev) out.set(k, at);
+    };
+    for (const [k, at] of this.readDisk()) put(k, at);
+    for (const [k, at] of this.memory) put(k, at);
+    for (const [k, at] of this.memory) if (at < cutoff) this.memory.delete(k);
+    return out;
+  }
+  readDisk() {
+    const out = /* @__PURE__ */ new Map();
+    let text;
+    try {
+      text = readFileSync2(this.file, "utf8");
+    } catch {
+      return out;
+    }
+    try {
+      const parsed = JSON.parse(text);
+      const entries = parsed && Array.isArray(parsed.entries) ? parsed.entries : [];
+      for (const e of entries) {
+        if (e && typeof e.account === "string" && typeof e.mailbox === "string" && e.account && e.mailbox && typeof e.recordedAt === "number" && Number.isFinite(e.recordedAt)) {
+          out.set(`${e.account}${STALLED_KEY_SEP}${e.mailbox}`, e.recordedAt);
+        }
+      }
+    } catch (err) {
+      console.error(`Ignoring unreadable stalled-mailbox list ${this.file}: ${String(err)}`);
+    }
+    return out;
+  }
+  persist(entries) {
+    const data = {
+      version: 1,
+      entries: Array.from(entries, ([k, recordedAt]) => {
+        const i = k.indexOf(STALLED_KEY_SEP);
+        return { account: k.slice(0, i), mailbox: k.slice(i + 1), recordedAt };
+      })
+    };
+    const file = this.file;
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      mkdirSync2(dirname2(file), { recursive: true });
+      writeFileSync2(tmp, JSON.stringify(data, null, 2) + "\n");
+      renameSync(tmp, file);
+    } catch (err) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+      }
+      console.error(`Failed to persist stalled-mailbox list to ${file}: ${String(err)}`);
+    }
+  }
+};
+
 // src/utils/attachmentMaterialize.ts
 init_attachmentLimits();
 init_attachmentReadPolicy();
-import { writeFileSync as writeFileSync2, rmSync, mkdtempSync } from "fs";
-import { join as join3 } from "path";
+import { writeFileSync as writeFileSync3, rmSync, mkdtempSync } from "fs";
+import { join as join4 } from "path";
 import { tmpdir as tmpdir2 } from "os";
 function materializeAttachments(attachments) {
   if (!attachments || attachments.length === 0) {
@@ -82566,10 +82675,10 @@ function materializeAttachments(attachments) {
       if (!a.filename || !a.contentBase64) {
         throw new Error("Inline attachment requires both filename and contentBase64.");
       }
-      if (!dir) dir = mkdtempSync(join3(tmpdir2(), "amcp-att-"));
+      if (!dir) dir = mkdtempSync(join4(tmpdir2(), "amcp-att-"));
       const safeName = a.filename.replace(/[/\\]/g, "_");
-      const p = join3(dir, safeName);
-      writeFileSync2(p, decodeInlineAttachment(a.contentBase64), { mode: 384 });
+      const p = join4(dir, safeName);
+      writeFileSync3(p, decodeInlineAttachment(a.contentBase64), { mode: 384 });
       return p;
     });
   } catch (error3) {
@@ -82601,8 +82710,8 @@ init_attachmentReadPolicy();
 
 // src/utils/contactsDb.ts
 import { existsSync as existsSync2, readdirSync } from "fs";
-import { join as join4 } from "path";
-import { homedir as homedir3 } from "os";
+import { join as join5 } from "path";
+import { homedir as homedir4 } from "os";
 function loadSqlite() {
   try {
     const mod = __require("node:sqlite");
@@ -82621,11 +82730,11 @@ function loadSqlite() {
   }
 }
 function resolveContactsDbPaths(baseDir) {
-  const root = baseDir ?? join4(homedir3(), "Library", "Application Support", "AddressBook");
+  const root = baseDir ?? join5(homedir4(), "Library", "Application Support", "AddressBook");
   const paths = [];
-  const topLevel = join4(root, "AddressBook-v22.abcddb");
+  const topLevel = join5(root, "AddressBook-v22.abcddb");
   if (existsSync2(topLevel)) paths.push(topLevel);
-  const sourcesDir = join4(root, "Sources");
+  const sourcesDir = join5(root, "Sources");
   if (existsSync2(sourcesDir)) {
     let entries = [];
     try {
@@ -82634,7 +82743,7 @@ function resolveContactsDbPaths(baseDir) {
       entries = [];
     }
     for (const entry of entries) {
-      const candidate = join4(sourcesDir, entry, "AddressBook-v22.abcddb");
+      const candidate = join5(sourcesDir, entry, "AddressBook-v22.abcddb");
       if (existsSync2(candidate)) paths.push(candidate);
     }
   }
@@ -82737,25 +82846,44 @@ function getByIdScanThreshold() {
 var BYID_SCAN_BUDGET_SECONDS = 9;
 var BYID_PROBE_TIMEOUT_SECONDS = 3;
 var BYID_COVERAGE_MARKER = "COV";
+var BYID_BUSY_MARKER = "BUSY";
+var MAIL_NOT_RUNNING_MARKER = "NOTRUNNING";
+var UNREACHED_LIST_MAX = 15;
 var SCOPED_MISS_MARKER = "SCOPED";
+function mailNotRunningForId(id) {
+  return `Mail.app is not running, so message ${Number(id)} could not be looked up by its numeric Mail.app id (this server does not launch Mail.app by itself). Open Mail.app and retry, or use the message's imap: id from list-messages/search-messages, which reads over IMAP without Mail.app.`;
+}
+function mailBusyForId(id) {
+  return `Mail.app did not answer within ${BYID_PROBE_TIMEOUT_SECONDS}s, so message ${Number(id)} was not looked up \u2014 it is still busy with an earlier request (most often a size count on a very large mailbox that a previous lookup gave up on; Mail.app finishes it regardless). Retry in a little while, or use the message's imap: id from list-messages/search-messages.`;
+}
+function summariseList(items, max) {
+  if (items.length <= max) return items.join(", ");
+  return `${items.slice(0, max).join(", ")} and ${items.length - max} more`;
+}
 function describeUnscopedMiss(id, raw) {
   const covIdx = raw.indexOf(BYID_COVERAGE_MARKER);
   if (covIdx === -1) return raw.trim();
   const base2 = raw.slice(0, covIdx).trim();
-  const [skippedRaw = "", budgetRaw = ""] = raw.slice(covIdx + BYID_COVERAGE_MARKER.length).split(DIAG_FIELD_SEP);
-  const skipped = skippedRaw.split(DIAG_ITEM_SEP).map((s) => s.trim()).filter(Boolean);
+  const [skippedRaw = "", budgetRaw = "", stalledRaw = "", unreachedRaw = ""] = raw.slice(covIdx + BYID_COVERAGE_MARKER.length).split(DIAG_FIELD_SEP);
+  const list = (s) => s.split(DIAG_ITEM_SEP).map((x) => x.trim()).filter(Boolean);
+  const skipped = list(skippedRaw);
+  const unreached = list(unreachedRaw);
   const budgetHit = budgetRaw.trim() === "true";
-  if (skipped.length === 0 && !budgetHit) return base2;
+  const probeStalled = stalledRaw.trim() === "true";
+  if (skipped.length === 0 && !budgetHit && !probeStalled) return base2;
   const parts = [`Message ${Number(id)} not found in the mailboxes scanned.`];
   if (skipped.length > 0) {
     parts.push(
       `Not scanned \u2014 too large for a cross-mailbox id scan (over ${getByIdScanThreshold()} messages; APPLE_MAIL_MAX_BYID_SCAN_MAILBOX): ${skipped.join(", ")}.`
     );
   }
-  if (budgetHit) {
+  const reach = unreached.length > 0 ? `before reaching: ${summariseList(unreached, UNREACHED_LIST_MAX)}.` : "before reaching every mailbox.";
+  if (probeStalled) {
     parts.push(
-      `The scan also stopped after its ${BYID_SCAN_BUDGET_SECONDS}s budget before reaching every mailbox.`
+      `The scan stopped early, ${reach} A mailbox's size count did not answer within ${BYID_PROBE_TIMEOUT_SECONDS}s, and Mail.app keeps working on an abandoned count, so anything asked after it would only queue behind it. That mailbox is now remembered and skipped for ${Math.round(STALLED_MAILBOX_TTL_MS / 864e5)} days \u2014 retry in a little while to scan the rest.`
     );
+  } else if (budgetHit) {
+    parts.push(`The scan also stopped after its ${BYID_SCAN_BUDGET_SECONDS}s budget ${reach}`);
   }
   parts.push(
     "If the message is in a mailbox that was not scanned, pass account + mailbox to read it from that mailbox directly, or use its imap: id from list-messages/search-messages."
@@ -82777,7 +82905,7 @@ function extractFreshlyStalledMailboxes(raw) {
     const account = withoutSuffix.slice(0, sepIdx);
     const path3 = withoutSuffix.slice(sepIdx + 3);
     const leaf = path3.split("/").pop();
-    if (account && leaf) out.push(`${account}${leaf}`);
+    if (account && leaf) out.push(`${account}${STALLED_KEY_SEP}${leaf}`);
   }
   return out;
 }
@@ -82845,7 +82973,7 @@ function splitSearchDiagnostics(output, account) {
   }
   return { payload, diagnostics };
 }
-var ALLOWED_SAVE_ROOTS = [homedir4(), "/tmp", "/private/tmp", "/Volumes"];
+var ALLOWED_SAVE_ROOTS = [homedir5(), "/tmp", "/private/tmp", "/Volumes"];
 function isPathWithinAllowedRoots(resolvedPath) {
   return ALLOWED_SAVE_ROOTS.some((root) => {
     const base2 = root.endsWith(sep2) ? root.slice(0, -1) : root;
@@ -83139,6 +83267,24 @@ function buildAppLevelScript(command) {
     end tell
   `;
 }
+function buildAppLevelScriptIfRunning(command) {
+  return guardMailRunning(buildAppLevelScript(command));
+}
+function guardMailRunning(script) {
+  return `
+    if application "Mail" is running then
+      ${script}
+    else
+      return "${MAIL_NOT_RUNNING_MARKER}"
+    end if
+  `;
+}
+function looksLikeMailNotRunning(error3) {
+  if (!error3) return false;
+  return /application isn't running|\(-600\)|Mail\.app is not responding\. Try opening Mail\.app/i.test(
+    error3
+  );
+}
 function mailboxPathFragment(mailboxVar, outputVar) {
   return `
         set ${outputVar} to name of ${mailboxVar}
@@ -83302,13 +83448,12 @@ var AppleMailManager = class {
    * demonstrated this, the unscoped scan skips the probe for it entirely —
    * no `count of messages` call at all — straight to "size unknown,
    * previously timed out". Keyed on the leaf mailbox name (not the
-   * container-walked path `mailboxPathFragment` builds for display) so
-   * checking it costs nothing extra per mailbox visited. Remembered for the
-   * life of the process: nothing ever evicts an entry, because there is no
-   * signal that an abandoned Apple event has finished, and a mailbox that
-   * stalled once on a store this large has no reason to get faster.
+   * container-walked path `mailboxPathFragment` builds for display), matched
+   * against names the scan prefetches once per account, so checking it costs
+   * no Apple event per mailbox visited. Persisted across restarts and shared
+   * between server processes, with a 7-day TTL (see StalledMailboxStore).
    */
-  knownStalledMailboxes = /* @__PURE__ */ new Set();
+  stalledMailboxes = new StalledMailboxStore();
   /** Error from the most recent numeric message read, if it was refused. */
   lastMessageLookupError;
   /** Cap on the id→location index so a long-lived process can't grow unbounded. */
@@ -83971,6 +84116,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return cached2.data;
     }
     const names = this.fetchMailboxNames(account);
+    if (names === null) return [];
     this.cache.mailboxNames.set(account, { data: names, expiry: now + this.CACHE_TTL_MS });
     return names;
   }
@@ -84495,14 +84641,23 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (!result.success || !result.output.trim()) {
       if (!result.success) {
         if (result.timedOut) this.lastMessageLookupError = timedOutScanningForId(id);
+        else if (looksLikeMailNotRunning(result.error))
+          this.lastMessageLookupError = mailNotRunningForId(id);
         console.error(`Failed to resolve message ${id}: ${result.error}`);
       }
       return null;
     }
+    if (result.output.startsWith(MAIL_NOT_RUNNING_MARKER)) {
+      this.lastMessageLookupError = mailNotRunningForId(id);
+      return null;
+    }
+    if (result.output.startsWith(LOOKUP_ERROR_MARKER + BYID_BUSY_MARKER)) {
+      this.lastMessageLookupError = mailBusyForId(id);
+      return null;
+    }
     if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
       const rawTail = result.output.slice(LOOKUP_ERROR_MARKER.length);
-      for (const key of extractFreshlyStalledMailboxes(rawTail))
-        this.knownStalledMailboxes.add(key);
+      this.stalledMailboxes.record(extractFreshlyStalledMailboxes(rawTail));
       this.lastMessageLookupError = describeUnscopedMiss(id, rawTail);
       return null;
     }
@@ -84520,6 +84675,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }
     );
     const where = `${loc.account} / ${loc.mailbox}`;
+    if (result.success && result.output.startsWith(MAIL_NOT_RUNNING_MARKER) || !result.success && !result.timedOut && looksLikeMailNotRunning(result.error)) {
+      this.lastMessageLookupError = mailNotRunningForId(id);
+      return { kind: "done" };
+    }
     if (!result.success) {
       console.error(`Failed to read message ${id} from ${where}: ${result.error}`);
       if (result.timedOut) {
@@ -84571,20 +84730,38 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * instead of a false flat "not found". A copy that sits only in a skipped
    * mailbox therefore no longer counts toward the ambiguity check — harmless
    * for these read-only lookups, whose copies are the same message.
+   *
+   * #270 follow-up (@j5pu, 2.20.7 retest) — three refinements:
+   *
+   *  - Names are prefetched: account names once (`name of every account`)
+   *    and each account's mailbox leaf names once (`name of mailboxes of
+   *    acct`), so the remembered-stalled check is a local string comparison
+   *    instead of two Apple events per remembered entry per mailbox visited,
+   *    and an early stop can name every mailbox it never reached without
+   *    asking Mail.app anything more.
+   *  - The account-name prefetch is itself capped at BYID_PROBE_TIMEOUT_SECONDS.
+   *    It is trivially cheap, so if it does not answer Mail.app is still busy
+   *    (usually draining a count an earlier call abandoned): return
+   *    BYID_BUSY_MARKER rather than walk on and let small mailboxes' probes
+   *    time out behind it — which would wrongly remember THEM as stalled.
+   *  - A probe that times out (-1712) STOPS the walk on the spot. Mail.app
+   *    keeps running the abandoned count, so every later event — the next
+   *    probe, a `whose` scan, even the container walk that used to build the
+   *    skip entry's display path — would queue behind it until the 15s
+   *    SIGKILL, losing the very result that records the stall. The skip entry
+   *    is built from the prefetched leaf name (no Apple event) and the script
+   *    returns at once, so the caller always learns and persists it.
    */
   unscopedByIdScript(id, innerAction, opts = {}) {
     const threshold = getByIdScanThreshold();
-    const stalledCheck = (mbVar, acctNameExpr) => {
-      if (this.knownStalledMailboxes.size === 0) return void 0;
-      const clauses = Array.from(this.knownStalledMailboxes).map((key) => {
-        const [acct = "", leaf = ""] = key.split("");
-        return `(${acctNameExpr} is "${escapeForAppleScript(acct)}" and (name of ${mbVar}) is "${escapeForAppleScript(leaf)}")`;
-      });
-      return clauses.join(" or ");
-    };
-    const sizeGuard = (mbVar, acctNameExpr) => {
+    const stalledKeys = threshold > 0 ? this.stalledMailboxes.keys() : [];
+    const stalledList = `{${stalledKeys.map((key) => {
+      const i = key.indexOf(STALLED_KEY_SEP);
+      return `"${escapeForAppleScript(key.slice(0, i))}${FIELD_SEP}${escapeForAppleScript(key.slice(i + 1))}"`;
+    }).join(", ")}}`;
+    const stalledLabel = `size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s)`;
+    const sizeGuard = (mbVar, acctNameExpr, mbNameExpr) => {
       if (threshold <= 0) return "";
-      const stalled = stalledCheck(mbVar, acctNameExpr);
       const skipEntry = (sizeLabelExpr) => `
               set _skipPath to ""
               try
@@ -84593,67 +84770,131 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
               set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & ${sizeLabelExpr} & ")${DIAG_ITEM_SEP}"
               set _probe to false`;
       const probeBlock = `set _mbCount to -1
+            set _probeErr to 0
             try
               with timeout of ${BYID_PROBE_TIMEOUT_SECONDS} seconds
                 set _mbCount to count of messages of ${mbVar}
               end timeout
+            on error number _probeErrNum
+              set _probeErr to _probeErrNum
             end try
-            if _mbCount < 0 or _mbCount > ${threshold} then
-              set _sizeLabel to "size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s)"
+            if _probeErr is -1712 then
+              set _skipped to _skipped & ${acctNameExpr} & " / " & ${mbNameExpr} & " (${stalledLabel})${DIAG_ITEM_SEP}"
+              set _probe to false
+              set _probeStalled to true
+            else if _mbCount < 0 or _mbCount > ${threshold} then
+              set _sizeLabel to "size unknown (count failed)"
               if _mbCount > -1 then set _sizeLabel to (_mbCount as string)
               ${skipEntry("_sizeLabel")}
             end if`;
-      if (!stalled) return probeBlock;
-      return `if ${stalled} then
+      if (stalledKeys.length === 0) return probeBlock;
+      return `if _stalledKeys contains {(${acctNameExpr} & "${FIELD_SEP}" & ${mbNameExpr})} then
               ${skipEntry('"size unknown (previously timed out)"')}
             else
               ${probeBlock}
             end if`;
     };
-    const budgetCheck = `if ((current date) - _startedAt) > ${BYID_SCAN_BUDGET_SECONDS} then
+    const budgetCheck = (stopAtExpr) => `if ((current date) - _startedAt) > ${BYID_SCAN_BUDGET_SECONDS} then
               set _budgetHit to true
+              set _stopAt to ${stopAtExpr}
               exit repeat
             end if`;
+    const hitFound = opts.firstHit ? "(count of _hits) > 0" : "false";
     const stopOnHit = opts.firstHit ? `if (count of _hits) > 0 then exit repeat` : "";
-    return buildAppLevelScript(`
+    return buildAppLevelScriptIfRunning(`
       try
         set _hits to {}
         set _hitMbs to {}
         set _hitAccts to {}
         set _names to ""
         set _skipped to ""
+        set _unreached to ""
         set _budgetHit to false
+        set _probeStalled to false
+        set _stopAt to 0
+        set _stalledKeys to ${stalledList}
         set _startedAt to current date
+        set _acctNames to {}
+        try
+          with timeout of ${BYID_PROBE_TIMEOUT_SECONDS} seconds
+            set _acctNames to name of every account
+          end timeout
+        on error number _busyErrNum
+          if _busyErrNum is -1712 then return "${LOOKUP_ERROR_MARKER}${BYID_BUSY_MARKER}"
+        end try
+        set _ai to 0
         repeat with acct in accounts
-          if _budgetHit then exit repeat
-          ${stopOnHit}
-          repeat with mb in mailboxes of acct
-            ${budgetCheck}
-            set _probe to true
-            ${sizeGuard("mb", "(name of acct)")}
-            if _probe then
-              try
-                set matchingMsgs to (messages of mb whose id is ${Number(id)})
-                if (count of matchingMsgs) > 0 then
-                  set end of _hits to item 1 of matchingMsgs
-                  set end of _hitMbs to (contents of mb)
-                  set end of _hitAccts to (name of acct)
-                  set _names to _names & (name of acct) & "/" & (name of mb) & ", "
-                end if
-              end try
+          set _ai to _ai + 1
+          if ${hitFound} then exit repeat
+          set _acctName to ""
+          if _ai <= (length of _acctNames) then set _acctName to item _ai of _acctNames
+          if _acctName is "" then set _acctName to (name of acct)
+          if _budgetHit or _probeStalled then
+            -- Stopped early: name what is left without asking Mail.app.
+            set _unreached to _unreached & _acctName & " (every mailbox)${DIAG_ITEM_SEP}"
+          else
+            set _mbNames to {}
+            try
+              set _mbNames to name of mailboxes of acct
+            end try
+            set _mi to 0
+            repeat with mb in mailboxes of acct
+              set _mi to _mi + 1
+              ${budgetCheck("_mi")}
+              set _mbName to ""
+              if _mi <= (length of _mbNames) then set _mbName to item _mi of _mbNames
+              if _mbName is "" then set _mbName to (name of mb)
+              set _probe to true
+              ${sizeGuard("mb", "_acctName", "_mbName")}
+              if _probeStalled then
+                set _stopAt to _mi + 1
+                exit repeat
+              end if
+              if _probe then
+                try
+                  set matchingMsgs to (messages of mb whose id is ${Number(id)})
+                  if (count of matchingMsgs) > 0 then
+                    set end of _hits to item 1 of matchingMsgs
+                    set end of _hitMbs to (contents of mb)
+                    set end of _hitAccts to _acctName
+                    set _names to _names & _acctName & "/" & _mbName & ", "
+                  end if
+                end try
+              end if
+              ${stopOnHit}
+            end repeat
+            if _budgetHit or _probeStalled then
+              if (length of _mbNames) > 0 then
+                repeat with _ri from _stopAt to (length of _mbNames)
+                  set _unreached to _unreached & _acctName & " / " & (item _ri of _mbNames) & "${DIAG_ITEM_SEP}"
+                end repeat
+              else
+                set _unreached to _unreached & _acctName & " (remaining mailboxes)${DIAG_ITEM_SEP}"
+              end if
             end if
-            ${stopOnHit}
-          end repeat
+          end if
         end repeat
         -- #183: local mailboxes belong to no account, so the walk above cannot
         -- reach them. Collect into the SAME _hits/_names, which means an id
         -- present both in an account and locally is now correctly reported as
         -- ambiguous rather than silently resolving to the account copy.
-        if (not _budgetHit) and ${opts.firstHit ? "(count of _hits) is 0" : "true"} then${localMailboxBindingFragment()}
+        if _budgetHit or _probeStalled then
+          set _unreached to _unreached & "${LOCAL_STORE_LABEL} (any local mailboxes)${DIAG_ITEM_SEP}"
+        else if not (${hitFound}) then${localMailboxBindingFragment()}
+          set _mi to 0
           repeat with mb in _mbs
-            ${budgetCheck}
+            set _mi to _mi + 1
+            ${budgetCheck("_mi")}
+            set _mbName to ""
+            try
+              set _mbName to (name of mb)
+            end try
             set _probe to true
-            ${sizeGuard("mb", `"${LOCAL_STORE_LABEL}"`)}
+            ${sizeGuard("mb", `"${LOCAL_STORE_LABEL}"`, "_mbName")}
+            if _probeStalled then
+              set _stopAt to _mi + 1
+              exit repeat
+            end if
             if _probe then
               try
                 set matchingMsgs to (messages of mb whose id is ${Number(id)})
@@ -84661,14 +84902,17 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                   set end of _hits to item 1 of matchingMsgs
                   set end of _hitMbs to (contents of mb)
                   set end of _hitAccts to "${LOCAL_STORE_LABEL}"
-                  set _names to _names & "${LOCAL_STORE_LABEL}/" & (name of mb) & ", "
+                  set _names to _names & "${LOCAL_STORE_LABEL}/" & _mbName & ", "
                 end if
               end try
             end if
             ${stopOnHit}
           end repeat
+          if (_budgetHit or _probeStalled) and _stopAt <= (length of _mbs) then
+            set _unreached to _unreached & "${LOCAL_STORE_LABEL} (" & ((length of _mbs) - _stopAt + 1) & " more local mailboxes)${DIAG_ITEM_SEP}"
+          end if
         end if
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string)
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached
         ${opts.firstHit ? "" : `if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"`}
         if (count of _hits) ${opts.firstHit ? "> 0" : "is 1"} then
           set msg to item 1 of _hits
@@ -84728,7 +84972,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           end repeat
         end ignoring`;
     const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
-    return buildAppLevelScript(`
+    return buildAppLevelScriptIfRunning(`
       try
         ${bind}
         if targetMb is missing value then return "${miss}nomailbox"
@@ -86231,12 +86475,12 @@ ${this.errorEmit("              ")}
     const safeName = escapeForAppleScript(attachmentName);
     let temporaryDirectory;
     try {
-      temporaryDirectory = mkdtempSync2(join5(target.saveDirectory, ".apple-mail-mcp-"));
+      temporaryDirectory = mkdtempSync2(join6(target.saveDirectory, ".apple-mail-mcp-"));
     } catch (error3) {
       console.error(`Failed to create attachment staging directory: ${error3}`);
       return false;
     }
-    const temporaryPath = join5(temporaryDirectory, "attachment");
+    const temporaryPath = join6(temporaryDirectory, "attachment");
     const safeTemporaryPath = escapeForAppleScript(temporaryPath);
     const cleanupTemporaryDirectory = () => {
       try {
@@ -86296,9 +86540,9 @@ ${this.errorEmit("              ")}
     }
     let mimeTemporaryDirectory;
     try {
-      mimeTemporaryDirectory = mkdtempSync2(join5(target.saveDirectory, ".apple-mail-mcp-"));
-      const mimeTemporaryPath = join5(mimeTemporaryDirectory, "attachment");
-      writeFileSync3(mimeTemporaryPath, attachment.data, { flag: "wx", mode: 384 });
+      mimeTemporaryDirectory = mkdtempSync2(join6(target.saveDirectory, ".apple-mail-mcp-"));
+      const mimeTemporaryPath = join6(mimeTemporaryDirectory, "attachment");
+      writeFileSync4(mimeTemporaryPath, attachment.data, { flag: "wx", mode: 384 });
       copyFileSync(mimeTemporaryPath, target.savedPath, fsConstants.COPYFILE_EXCL);
       chmodSync(target.savedPath, 384);
       return true;
@@ -86323,7 +86567,7 @@ ${this.errorEmit("              ")}
     let dir = null;
     try {
       dir = mkdtempSync2("/private/tmp/amcp-fetch-");
-      const dest = join5(dir, attachmentName.replace(/[/\\]/g, "_"));
+      const dest = join6(dir, attachmentName.replace(/[/\\]/g, "_"));
       const ok = this.saveAttachment(id, attachmentName, dir);
       if (!ok) {
         return {
@@ -86331,7 +86575,7 @@ ${this.errorEmit("              ")}
           error: `Attachment "${attachmentName}" not found on message ${id}`
         };
       }
-      const buf = readFileSync2(dest);
+      const buf = readFileSync3(dest);
       return { success: true, base64: buf.toString("base64"), bytes: buf.length };
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) };
@@ -86575,12 +86819,12 @@ ${this.errorEmit("              ")}
   // gives full control over criteria without UI/GUI scripting.
   // ===========================================================================
   findSyncedSmartPlist() {
-    const base2 = join5(homedir4(), "Library", "Mail");
+    const base2 = join6(homedir5(), "Library", "Mail");
     try {
       const versions = readdirSync2(base2).filter((d) => d.startsWith("V"));
       versions.sort().reverse();
       for (const v of versions) {
-        const p = join5(base2, v, "MailData", "SyncedSmartMailboxes.plist");
+        const p = join6(base2, v, "MailData", "SyncedSmartMailboxes.plist");
         if (existsSync3(p)) return p;
       }
     } catch {
@@ -86668,12 +86912,12 @@ ${this.errorEmit("              ")}
     const lint = spawnSync2("plutil", ["-lint", temp], { encoding: "utf8" });
     if (lint.status !== 0) {
       try {
-        unlinkSync(temp);
+        unlinkSync2(temp);
       } catch {
       }
       return false;
     }
-    renameSync(temp, plistPath);
+    renameSync2(temp, plistPath);
     return true;
   }
   buildSmartMailboxEntry(name2, fromContains = "", subjectContains = "", bodyContains = "") {
@@ -86766,19 +87010,19 @@ ${this.errorEmit("              ")}
     const cleanupEntryFiles = () => {
       for (const f of [entryJson, entryPlist]) {
         try {
-          unlinkSync(f);
+          unlinkSync2(f);
         } catch {
         }
       }
     };
-    writeFileSync3(entryJson, JSON.stringify([entry]), "utf8");
+    writeFileSync4(entryJson, JSON.stringify([entry]), "utf8");
     const conv = spawnSync2("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
       encoding: "utf8"
     });
     if (conv.status !== 0) {
       cleanupEntryFiles();
       try {
-        unlinkSync(temp);
+        unlinkSync2(temp);
       } catch {
       }
       return {
@@ -86793,7 +87037,7 @@ ${this.errorEmit("              ")}
     cleanupEntryFiles();
     if (ins.status !== 0) {
       try {
-        unlinkSync(temp);
+        unlinkSync2(temp);
       } catch {
       }
       return {
@@ -86836,7 +87080,7 @@ ${this.errorEmit("              ")}
     });
     if (del.status !== 0) {
       try {
-        unlinkSync(temp);
+        unlinkSync2(temp);
       } catch {
       }
       return { deleted: false, error: (del.stderr || "PlistBuddy delete failed").trim() };
@@ -87059,7 +87303,10 @@ end tell`;
   }
   /**
    * Fetches canonical mailbox paths for an account directly from Mail.app.
-   * Used internally by the cache; prefer getCachedMailboxNames().
+   * Used internally by the cache; prefer getCachedMailboxNames(). Returns null
+   * when Mail.app is not running — checked without launching it, so resolving
+   * a mailbox name (e.g. for a scoped by-id read, #270 follow-up) never starts
+   * Mail.app as a side effect.
    */
   fetchMailboxNames(account) {
     const body = `
@@ -87072,7 +87319,8 @@ end tell`;
       return mbNames
     `;
     const script = isLocalStoreLabel(account) ? buildAppLevelScript(`${localMailboxBindingFragment()}${body}`) : buildAccountScopedScript(account, body);
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(guardMailRunning(script));
+    if (result.success && result.output.startsWith(MAIL_NOT_RUNNING_MARKER)) return null;
     if (!result.success || !result.output) {
       return [];
     }
@@ -87558,7 +87806,7 @@ ${actionStmts.join("\n")}
 
 // src/index.ts
 init_smtpMailer();
-import { writeFileSync as writeFileSync4 } from "fs";
+import { writeFileSync as writeFileSync5 } from "fs";
 import { join as joinPath } from "path";
 
 // src/tools/compose.ts
@@ -88713,19 +88961,19 @@ var ImapIdleWatcher = class {
 };
 
 // src/services/fileConfig.ts
-import { existsSync as existsSync4, readFileSync as readFileSync3 } from "fs";
-import { join as join6 } from "path";
-import { homedir as homedir5 } from "os";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
+import { join as join7 } from "path";
+import { homedir as homedir6 } from "os";
 function fileConfigPath(env = process.env) {
   const override = env.APPLE_MAIL_MCP_CONFIG_FILE;
   if (override && override.trim()) return override.trim();
-  return join6(homedir5(), "Library", "Application Support", "apple-mail-mcp", "config.json");
+  return join7(homedir6(), "Library", "Application Support", "apple-mail-mcp", "config.json");
 }
 function loadFileConfig(env = process.env, path3 = fileConfigPath(env)) {
   const applied = [];
   try {
     if (!existsSync4(path3)) return applied;
-    const parsed = JSON.parse(readFileSync3(path3, "utf8"));
+    const parsed = JSON.parse(readFileSync4(path3, "utf8"));
     if (!parsed || typeof parsed !== "object") return applied;
     for (const [k, v] of Object.entries(parsed)) {
       if (typeof v !== "string") continue;
@@ -89471,7 +89719,7 @@ registerTool(
     } catch (error3) {
       return errorResponse(error3 instanceof Error ? error3.message : String(error3));
     }
-    writeFileSync4(target.savedPath, a.bytes, { flag: "wx", mode: 384 });
+    writeFileSync5(target.savedPath, a.bytes, { flag: "wx", mode: 384 });
     return successResponse(`${summary}. Written to ${target.savedPath}.`, {
       ...record2,
       savedPath: target.savedPath
@@ -90400,7 +90648,7 @@ registerTool(
       if (!r.success || !r.base64) {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
-      writeFileSync4(target.savedPath, Buffer.from(r.base64, "base64"), { flag: "wx", mode: 384 });
+      writeFileSync5(target.savedPath, Buffer.from(r.base64, "base64"), { flag: "wx", mode: 384 });
       return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`, {
         ok: true,
         attachmentName,

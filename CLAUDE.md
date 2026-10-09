@@ -82,8 +82,11 @@ Practical consequences:
   several do, the call **fails** and names them — re-list the mailbox you meant rather than retrying
   the same id or trying a different tool.
 - Reading an unseen numeric id scans every mailbox, but **skips mailboxes above 50,000 messages**
-  (`APPLE_MAIL_MAX_BYID_SCAN_MAILBOX`) and names them on a miss (#270). If you know where the
-  message is, pass `account` + `mailbox` to `get-message` / `get-message-headers` — that reads one
+  (`APPLE_MAIL_MAX_BYID_SCAN_MAILBOX`) and names them on a miss (#270), along with any mailboxes an
+  early stop never reached. A "not found in the mailboxes scanned" is therefore partial — read the
+  list before concluding the message is gone. If the error says Mail.app is not running or did not
+  answer, that is the answer: don't retry in a loop, and don't treat it as a missing message. If you
+  know where the message is, pass `account` + `mailbox` to `get-message` / `get-message-headers` — that reads one
   mailbox and a miss there is final (no fallback scan).
 - `imap:…` ids (returned when an IMAP account is configured) already encode account + mailbox +
   UID, so they are unambiguous anywhere and are never subject to this.
