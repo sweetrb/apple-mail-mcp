@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+## [2.20.9] - 2026-10-09
+
+### Fixed
+
+- **With Mail.app quit, numeric-id reads now say so even when the running
+  check itself can't run.** @j5pu retested 2.20.8's guard and found Mail
+  closed still produced the plain `Message with ID "N" not found` — on
+  macOS 27.2, `tell application "Mail" to get name of every account` fails
+  to *compile* (not merely execute) with `-2741` ("Expected class name but
+  found identifier") when Mail.app isn't already running, because osascript
+  can't resolve Mail's own classes until its dictionary is loaded. The
+  `if application "Mail" is running then … end if` guard added in 2.20.8
+  can't help: the whole script compiles as one unit before any line
+  executes, so the compile error fires before the `if` is ever evaluated.
+  `-2741` is now mapped to the same friendly "Mail.app is not responding"
+  classification as every other not-running case, and the mailbox-name
+  lookup a scoped read does first no longer mis-caches that failure as "this
+  account has no mailboxes" (#270 follow-up, thanks @j5pu for the minimal
+  `osascript` repro that pinned down the exact failure mode).
+
 ## [2.20.8] - 2026-10-09
 
 ### Fixed

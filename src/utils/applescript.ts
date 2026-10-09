@@ -332,6 +332,24 @@ function parseErrorMessage(errorOutput: string): string {
     return PERMISSION_DENIED_MESSAGE;
   }
 
+  // AppleScript error -2741 ("Expected class name but found identifier") is a
+  // *compile*-time failure, not a runtime one: osascript can't resolve a
+  // Mail-specific class (`account`, `mailbox`, ...) until Mail.app's own
+  // scripting dictionary is loaded, which only happens once Mail.app is
+  // actually running. A guard like `if application "Mail" is running then …
+  // end if` wrapped around the SAME script can't help — the whole script is
+  // compiled as one unit before any line executes, so this error fires
+  // before the `if` is ever evaluated (#270, @j5pu's repro). Map it to the
+  // exact same message as "application isn't running" below so
+  // `looksLikeMailNotRunning` (appleMailManager.ts) classifies it correctly
+  // instead of it falling through to the generic "Internal error" bucket.
+  // Tested against the raw errorOutput, like the permission check above,
+  // because a compile error has no "execution error:" prefix for the
+  // extraction regex above to strip the OSStatus from.
+  if (/\(-2741\)/.test(errorOutput)) {
+    return "Mail.app is not responding. Try opening Mail.app manually.";
+  }
+
   // Try to match against known error patterns for user-friendly messages
   for (const { pattern, message } of ERROR_MAPPINGS) {
     const match = coreError.match(pattern);

@@ -144,6 +144,26 @@ describe("executeAppleScript", () => {
       expect(result.error).toContain("System Settings");
     });
 
+    it("maps the -2741 compile error (Mail dictionary unresolved while Mail isn't running) to the same message as 'application isn't running' (#270 follow-up, @j5pu)", () => {
+      // @j5pu's exact repro: `tell application "Mail" to get name of every
+      // account` fails to COMPILE (not merely execute) with -2741 when
+      // Mail.app isn't already running, because osascript can't resolve
+      // Mail's own `account` class until its dictionary is loaded. A static
+      // `if application "Mail" is running then … end if` guard around the
+      // same script can't help — the whole script compiles as one unit
+      // before any line runs — so this must be classified from the error
+      // text instead.
+      mockExecSync.mockImplementation(() => {
+        throw new Error("31:68: syntax error: Expected class name but found identifier. (-2741)");
+      });
+
+      const result = executeAppleScript('tell application "Mail" to get name of every account');
+
+      expect(result.error).toBe("Mail.app is not responding. Try opening Mail.app manually.");
+      // Never the generic catch-all this previously fell into.
+      expect(result.error).not.toContain("Internal error");
+    });
+
     it("provides helpful message for mailbox not found", () => {
       mockExecSync.mockImplementation(() => {
         throw new Error('Can\'t get mailbox "Work".');

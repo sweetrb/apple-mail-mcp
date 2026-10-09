@@ -626,4 +626,30 @@ describe("#270 follow-up (@j5pu) — (4) Mail.app not running: say so, never lau
       );
     }
   });
+
+  it("a -2741 compile failure resolving the mailbox name is reported the same way, and not cached as 'no mailboxes' (#270 follow-up, @j5pu)", () => {
+    // @j5pu's exact repro: the mailbox-name-fetch script itself fails to
+    // COMPILE (not just execute) with -2741 when Mail isn't running, because
+    // osascript can't resolve Mail's own classes until its dictionary loads.
+    // parseErrorMessage now maps that raw text to the same "not responding"
+    // message as every other not-running case, so this must behave exactly
+    // like the MAIL_NOT_RUNNING_MARKER case above — not get treated as a
+    // successful "this account has zero mailboxes" and cached as such.
+    h.router.fn = () => ({
+      success: false,
+      output: "",
+      error: "Mail.app is not responding. Try opening Mail.app manually.",
+    });
+    expect(mgr.getMessageContent("7", false, { account: "Work", mailbox: "INBOX" })).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toBe(EXPECTED);
+    const nameFetches = h.calls.filter((c) => !isScoped(c.script) && !isUnscoped(c.script));
+    expect(nameFetches).toHaveLength(1);
+
+    // A second read still tries to resolve the mailbox name fresh — proof
+    // the empty result above was never cached.
+    h.calls.length = 0;
+    mgr.getMessageContent("7", false, { account: "Work", mailbox: "INBOX" });
+    const nameFetches2 = h.calls.filter((c) => !isScoped(c.script) && !isUnscoped(c.script));
+    expect(nameFetches2).toHaveLength(1);
+  });
 });
