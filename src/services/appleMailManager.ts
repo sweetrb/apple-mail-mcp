@@ -266,6 +266,38 @@ export function describeUnscopedMiss(id: string, raw: string): string {
   return parts.join(" ");
 }
 
+/** Suffix appended to a skip entry whose probe itself timed out (vs. a confirmed over-threshold count). */
+const STALLED_PROBE_SUFFIX = ` (size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s))`;
+
+/**
+ * Pull "Account\x1fLeafMailboxName" keys out of an unscoped scan's skip list
+ * for entries whose `count of messages` probe itself timed out — as opposed
+ * to one that answered with a real count over the threshold — so the caller
+ * can remember never to probe them again (#270 follow-up). Each raw entry is
+ * "Account / container/walked/path (size unknown (count probe exceeded Ns))";
+ * " / " (spaced) separates the account from the path, which itself uses bare
+ * "/" between segments, so splitting on the first " / " and taking the
+ * path's last segment recovers the leaf name `knownStalledMailboxes` keys on.
+ */
+export function extractFreshlyStalledMailboxes(raw: string): string[] {
+  const covIdx = raw.indexOf(BYID_COVERAGE_MARKER);
+  if (covIdx === -1) return [];
+  const [skippedRaw = ""] = raw.slice(covIdx + BYID_COVERAGE_MARKER.length).split(DIAG_FIELD_SEP);
+  const out: string[] = [];
+  for (const entry of skippedRaw.split(DIAG_ITEM_SEP)) {
+    const trimmed = entry.trim();
+    if (!trimmed.endsWith(STALLED_PROBE_SUFFIX)) continue;
+    const withoutSuffix = trimmed.slice(0, -STALLED_PROBE_SUFFIX.length);
+    const sepIdx = withoutSuffix.indexOf(" / ");
+    if (sepIdx === -1) continue;
+    const account = withoutSuffix.slice(0, sepIdx);
+    const path = withoutSuffix.slice(sepIdx + 3);
+    const leaf = path.split("/").pop();
+    if (account && leaf) out.push(`${account}\x1f${leaf}`);
+  }
+  return out;
+}
+
 /**
  * Result serialization separators (issue #30).
  *
@@ -1415,6 +1447,25 @@ export class AppleMailManager {
    * cross-mailbox scan — see `resolveScopedById` (#270).
    */
   private idLocationIndex = new Map<string, { account: string; mailbox: string }>();
+
+  /**
+   * "Account\x1fLeafMailboxName" pairs whose `count of messages` size-guard
+   * probe has previously exceeded BYID_PROBE_TIMEOUT_SECONDS (#270 follow-up,
+   * @j5pu). The 3s `with timeout of` wrapper only stops the SERVER's script
+   * from waiting — Mail.app handles Apple events one at a time and keeps
+   * running the abandoned count to completion regardless, so re-probing the
+   * same mailbox on the next call doesn't just waste its own 3s, it queues
+   * behind whatever is still draining inside Mail.app. Once a mailbox has
+   * demonstrated this, the unscoped scan skips the probe for it entirely —
+   * no `count of messages` call at all — straight to "size unknown,
+   * previously timed out". Keyed on the leaf mailbox name (not the
+   * container-walked path `mailboxPathFragment` builds for display) so
+   * checking it costs nothing extra per mailbox visited. Remembered for the
+   * life of the process: nothing ever evicts an entry, because there is no
+   * signal that an abandoned Apple event has finished, and a mailbox that
+   * stalled once on a store this large has no reason to get faster.
+   */
+  private knownStalledMailboxes = new Set<string>();
 
   /** Error from the most recent numeric message read, if it was refused. */
   private lastMessageLookupError: string | undefined;
@@ -2923,10 +2974,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return null;
     }
     if (result.output.startsWith(LOOKUP_ERROR_MARKER)) {
-      this.lastMessageLookupError = describeUnscopedMiss(
-        id,
-        result.output.slice(LOOKUP_ERROR_MARKER.length)
-      );
+      const rawTail = result.output.slice(LOOKUP_ERROR_MARKER.length);
+      for (const key of extractFreshlyStalledMailboxes(rawTail))
+        this.knownStalledMailboxes.add(key);
+      this.lastMessageLookupError = describeUnscopedMiss(id, rawTail);
       return null;
     }
     return result.output;
@@ -3017,6 +3068,19 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     opts: { firstHit?: boolean } = {}
   ): string {
     const threshold = getByIdScanThreshold();
+    // A mailbox that has already demonstrated a probe timeout (#270
+    // follow-up) is skipped with no AppleScript call at all — re-running
+    // `count of messages` on it wouldn't just risk another 3s wait, it would
+    // queue behind whatever is still draining inside Mail.app from the
+    // earlier abandoned probe. See `knownStalledMailboxes`.
+    const stalledCheck = (mbVar: string, acctNameExpr: string): string | undefined => {
+      if (this.knownStalledMailboxes.size === 0) return undefined;
+      const clauses = Array.from(this.knownStalledMailboxes).map((key) => {
+        const [acct = "", leaf = ""] = key.split("\x1f");
+        return `(${acctNameExpr} is "${escapeForAppleScript(acct)}" and (name of ${mbVar}) is "${escapeForAppleScript(leaf)}")`;
+      });
+      return clauses.join(" or ");
+    };
     // The probe runs only when the guard is on. `count of messages` is NOT
     // reliably cheap (#270 follow-up, @j5pu measured ~5-7s on real
     // multi-hundred-thousand-message mailboxes), so it is wrapped in its own
@@ -3025,25 +3089,34 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     // `_mbCount` at its -1 sentinel, and is treated exactly like a confirmed
     // over-threshold mailbox: skipped, with its size reported as "unknown"
     // rather than a real count (see BYID_PROBE_TIMEOUT_SECONDS).
-    const sizeGuard = (mbVar: string, acctNameExpr: string): string =>
-      threshold > 0
-        ? `set _mbCount to -1
+    const sizeGuard = (mbVar: string, acctNameExpr: string): string => {
+      if (threshold <= 0) return "";
+      const stalled = stalledCheck(mbVar, acctNameExpr);
+      const skipEntry = (sizeLabelExpr: string): string => `
+              set _skipPath to ""
+              try
+                ${mailboxPathFragment(mbVar, "_skipPath")}
+              end try
+              set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & ${sizeLabelExpr} & ")${DIAG_ITEM_SEP}"
+              set _probe to false`;
+      const probeBlock = `set _mbCount to -1
             try
               with timeout of ${BYID_PROBE_TIMEOUT_SECONDS} seconds
                 set _mbCount to count of messages of ${mbVar}
               end timeout
             end try
             if _mbCount < 0 or _mbCount > ${threshold} then
-              set _skipPath to ""
-              try
-                ${mailboxPathFragment(mbVar, "_skipPath")}
-              end try
               set _sizeLabel to "size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s)"
               if _mbCount > -1 then set _sizeLabel to (_mbCount as string)
-              set _skipped to _skipped & ${acctNameExpr} & " / " & _skipPath & " (" & _sizeLabel & ")${DIAG_ITEM_SEP}"
-              set _probe to false
-            end if`
-        : "";
+              ${skipEntry("_sizeLabel")}
+            end if`;
+      if (!stalled) return probeBlock;
+      return `if ${stalled} then
+              ${skipEntry('"size unknown (previously timed out)"')}
+            else
+              ${probeBlock}
+            end if`;
+    };
     const budgetCheck = `if ((current date) - _startedAt) > ${BYID_SCAN_BUDGET_SECONDS} then
               set _budgetHit to true
               exit repeat
