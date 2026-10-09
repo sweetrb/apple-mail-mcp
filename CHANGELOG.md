@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+## [2.20.7] - 2026-10-09
+
+### Fixed
+
+- **The unscoped by-id scan no longer re-probes a mailbox that has already
+  demonstrated it stalls the size-guard count** (#270 follow-up, found by
+  @j5pu re-testing 2.20.6's own fix). 2.20.6 capped the `count of messages`
+  probe at 3s so a slow count couldn't exhaust the whole scan budget, but
+  @j5pu measured that the cap doesn't free Mail.app: Mail.app handles Apple
+  events one at a time, so an abandoned count on a 794k-message mailbox keeps
+  running inside Mail.app to completion regardless of the client giving up
+  waiting on it, and every later probe — including on small mailboxes —
+  queues behind it. The scan now remembers, for the life of the server
+  process, every "Account / Mailbox" whose probe has ever timed out, and
+  skips the `count of messages` call entirely for it on every subsequent
+  unscoped by-id lookup (`get-message` / `get-thread` / `get-message-headers`
+  / `get-raw-source`), going straight to "size unknown, previously timed
+  out" with no Apple event sent to Mail.app at all. A mailbox whose probe
+  returns a real count over the threshold (confirmed large, not stalled) is
+  not remembered and is still probed next time, since a fast confirmed count
+  carries no cost to repeat. This does not need IMAP `STATUS` or the
+  connection-pool leasing work tracked separately in #276(a); it only avoids
+  re-entering Mail.app for a mailbox that has already shown doing so is
+  unsafe.
+
 ## [2.20.6] - 2026-10-08
 
 ### Fixed
