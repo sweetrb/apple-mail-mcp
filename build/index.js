@@ -66006,6 +66006,7 @@ function isoOrEmpty(d) {
 }
 function structuredRow(m, account, path3) {
   const env = m.envelope ?? {};
+  const flagColorIndex = mailFlagColorIndex(m.flags);
   return {
     id: encodeImapId(account, path3, m.uid),
     subject: env.subject || "(no subject)",
@@ -66033,8 +66034,8 @@ function structuredRow(m, account, path3) {
     // matches a plain flag). Inherent to Apple's bitfield encoding, not
     // fixable from the client side; the AppleScript route is unaffected (Mail's
     // own `flag index` is 0 for red, -1 for none).
-    flagColorIndex: mailFlagColorIndex(m.flags),
-    flagColor: flagColorName(mailFlagColorIndex(m.flags)),
+    flagColorIndex,
+    flagColor: flagColorName(flagColorIndex),
     mailbox: path3,
     account,
     // Derived from BODYSTRUCTURE, which the list/search fetch now requests.
