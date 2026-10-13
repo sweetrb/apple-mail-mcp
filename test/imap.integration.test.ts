@@ -133,6 +133,39 @@ run("IMAP backend (GreenMail) integration", () => {
     expect((await imapUnflagMessage(id, deps)).success).toBe(true);
   });
 
+  it("flagColor filter + read-back round-trip over a real server (#286)", async () => {
+    const list = (await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps)).text;
+    const id = firstImapId(list);
+    try {
+      // 5 = purple = bit0 + bit2 — set via the existing flag-message path.
+      expect((await imapFlagMessage(id, 5, deps)).success).toBe(true);
+
+      // Read-back: the flagged message's row carries the palette name.
+      const listed = await imapListMessages({ mailbox: "INBOX", limit: 10 }, deps);
+      const row = listed.messages.find((m) => m.id === id);
+      expect(row?.flagColor).toBe("purple");
+      expect(row?.flagColorIndex).toBe(5);
+
+      // Filter: searching for purple finds it — this exercises the real
+      // KEYWORD/UNKEYWORD NOT/OR SearchObject against a real IMAP SEARCH
+      // parser, not just the mocked unit tests.
+      const hit = await imapSearchMessages(
+        { mailbox: "INBOX", flagColorIndex: 5, limit: 10 },
+        deps
+      );
+      expect(hit.messages.some((m) => m.id === id)).toBe(true);
+
+      // A different color must not match the same message.
+      const miss = await imapSearchMessages(
+        { mailbox: "INBOX", flagColorIndex: 4, limit: 10 },
+        deps
+      );
+      expect(miss.messages.some((m) => m.id === id)).toBe(false);
+    } finally {
+      expect((await imapUnflagMessage(id, deps)).success).toBe(true);
+    }
+  });
+
   it("create / rename / delete mailbox round-trips", async () => {
     expect((await imapCreateMailbox("ITbox", deps)).success).toBe(true);
     expect((await imapRenameMailbox("ITbox", "ITbox2", deps)).success).toBe(true);
