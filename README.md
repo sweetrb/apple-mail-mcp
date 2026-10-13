@@ -237,12 +237,29 @@ Search for messages matching criteria. Searches all accounts by default.
 | `account`   | string  | No       | Account to search in (omit to search all accounts)                                                                                        |
 | `isRead`    | boolean | No       | Filter by read status                                                                                                                     |
 | `isFlagged` | boolean | No       | Filter by flagged status                                                                                                                  |
+| `flagColor` | string  | No       | Filter to messages flagged with exactly this color — see [`flag-message`](#flag-message--unflag-message) for the palette. Implies `isFlagged: true`; pairing this with `isFlagged: false` is rejected. See the flag-color note below. |
 | `dateFrom`  | string  | No       | Start date filter (e.g., "January 1, 2026")                                                                                               |
 | `dateTo`    | string  | No       | End date filter (e.g., "March 1, 2026")                                                                                                   |
 | `limit`     | number  | No       | Max results, 1–500 (default: 50)                                                                                                          |
 | `offset`    | number  | No       | Newest matches to skip, ≥ 0 (for pagination). IMAP accounts only; without a `mailbox`, `offset` + `limit` may not exceed 5,000            |
 
-**Returns:** List of matching messages with ID, date, subject, sender, and read state.
+**Returns:** List of matching messages with ID, date, subject, sender, read state,
+and `flagColor` when flagged with an explicit color.
+
+**Flag color as a label (#286).** Every row from both backends carries
+`flagColor` (the palette name — `red`, `orange`, `yellow`, `green`, `blue`,
+`purple`, `gray`) whenever the message is flagged with an explicit color;
+omitted for an unflagged message or one flagged with Mail's plain default (no
+color chosen). Combined with the `flagColor` filter above, a colored flag
+works as a label across mailboxes: flag a set of messages with
+`flag-message`/`batch-flag-messages`, then find exactly that set later with
+`search-messages`, without moving anything into a dedicated folder. **Known
+limitation, inherent to Apple's `$MailFlagBit0/1/2` IMAP wire encoding, not
+specific to this server:** `red` (palette index 0) sets no keyword bits, so
+over IMAP it is indistinguishable from a plain colorless flag, both when
+reading `flagColor` back and when filtering on it. AppleScript-backed
+accounts are unaffected (Mail's own `flag index` property is `0` for red, `-1`
+for none).
 
 ⚠️ **Row dates.** Since 2.19.7 every row — on both the IMAP and AppleScript
 backends — carries both `dateSent` (the message's `Date:` header) and
@@ -392,7 +409,9 @@ List messages in a mailbox.
 | `from`       | string  | No       | Filter by sender email address or name           |
 | `unreadOnly` | boolean | No       | Only show unread messages                        |
 
-**Returns:** List of messages with ID, date, subject, and sender.
+**Returns:** List of messages with ID, date, subject, sender, and `flagColor`
+when flagged with an explicit color (see the flag-color note under
+[`search-messages`](#search-messages), which also supports filtering by it).
 
 ⚠️ **Row dates.** Since 2.19.7 every row — on both the **IMAP** and
 **AppleScript** backends — carries both `dateSent` (the message's `Date:`
@@ -995,7 +1014,12 @@ Flag or unflag a message. `flag-message` optionally takes a flag **color**; `unf
 
 **Flag colors** are an Apple Mail feature — the message's `flag index` (0 red, 1 orange, 2 yellow, 3 green, 4 blue, 5 purple, 6 gray), which is the property a Mail smart mailbox can match on. **The color is applied on both routes** (since 2.10.0): AppleScript sets the flag index directly, and for an **IMAP-routed** id (`imap:…`) the color is written as Mail.app's `$MailFlagBit0/1/2` keywords — a 3-bit field holding the same palette index. `\Flagged` on its own really is colorless, but those keywords ride alongside it in an ordinary `UID STORE`, so a smart mailbox keyed on flag color matches an IMAP-flagged message too. You do **not** need to resolve to a numeric id just to color a flag.
 
-To **read** a color, the IMAP read path returns `flagColorIndex` in `structuredContent` — the same 0-6 palette index, omitted when the message carries no color bits. The AppleScript read path does not populate it.
+To **read** a color back, or **find** messages by color, use
+[`search-messages`](#search-messages) (or [`list-messages`](#list-messages) for
+read-back only) — both routes now return `flagColor` (the palette name) on
+every flagged-with-a-color row, and `search-messages` takes a `flagColor`
+filter using this same palette (#286). The IMAP route additionally still
+carries the raw 0-6 `flagColorIndex` for back-compat.
 
 ---
 

@@ -1,5 +1,41 @@
 ## [Unreleased]
 
+## [2.20.10] - 2026-10-13
+
+### Added
+
+- **`search-messages`/`list-messages` now report a message's flag color, and
+  `search-messages` can filter by it** (#286, thanks @j5pu). Flag colors could
+  be SET since 2.10.0 (`flag-message`/`batch-flag-messages`, `color`) but never
+  read back or searched, so they couldn't be used as cross-mailbox labels: tag
+  a set of messages one color, then later ask for exactly that set, without
+  moving anything into a dedicated folder.
+  - Rows from both backends now carry `flagColor` (the palette name — red,
+    orange, yellow, green, blue, purple, gray) whenever a message is flagged
+    with an explicit color; omitted for an unflagged message or one flagged
+    with Mail's plain default (no color chosen). The IMAP route had already
+    been computing a raw `flagColorIndex` internally since 2.19.x — it just
+    never reached a caller in friendly form; `flagColorIndex` stays for
+    back-compat alongside the new `flagColor`.
+  - `search-messages` gains a `flagColor` input filter, accepting the same
+    palette as `flag-message` (`grey` also accepted). Over IMAP this compiles
+    to a single `imapflow` `SearchObject` — most colors need 2-3
+    `KEYWORD`/`UNKEYWORD` `$MailFlagBit0/1/2` conditions ANDed together, which
+    a plain query object can't express directly (it can carry only one
+    `keyword` and one `unKeyword` key), so it's built as a `NOT`/`OR` of the
+    negated terms (De Morgan's law). Over AppleScript it compiles to
+    `whose flag index is N`. Passing `isFlagged: false` together with
+    `flagColor` is rejected as contradictory.
+  - **Known limitation, inherent to Apple's `$MailFlagBit0/1/2` wire encoding,
+    not specific to this server:** "red" (palette index 0) sets no keyword
+    bits, so over IMAP it is indistinguishable from a plain colorless flag —
+    both when reading `flagColor` back and when filtering on it. The
+    AppleScript route is unaffected (Mail's own `flag index` property is `0`
+    for red, `-1` for none).
+  - `get-message`/`get-message-headers` do not yet surface flag color — out
+    of scope for this change; `search-messages`/`list-messages` already cover
+    the "find my labeled messages" use case the issue asked for.
+
 ## [2.20.9] - 2026-10-09
 
 ### Fixed
