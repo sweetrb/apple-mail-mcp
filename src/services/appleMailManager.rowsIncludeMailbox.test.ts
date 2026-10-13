@@ -65,7 +65,7 @@ beforeEach(() => {
 
 describe("listMessages(mailbox: '') takes the all-mailboxes row shape", () => {
   it("reports the real per-message mailbox and attachment flag, not a fallback", () => {
-    // 9-field all-mailboxes row: id|subject|sender|dateReceived|dateSent|read|flagged|mailbox|hasAtt
+    // 10-field all-mailboxes row: id|subject|sender|dateReceived|dateSent|read|flagged|flagColorRaw|mailbox|hasAtt
     const row = [
       "77",
       "Invoice",
@@ -74,6 +74,7 @@ describe("listMessages(mailbox: '') takes the all-mailboxes row shape", () => {
       "2026-8-19-22-0-0",
       "false",
       "false",
+      "-1",
       "Work/Receipts",
       "true",
     ].join(FIELD_SEP);
@@ -96,6 +97,7 @@ describe("listMessages(mailbox: '') takes the all-mailboxes row shape", () => {
       "2026-8-19-22-0-0",
       "false",
       "false",
+      "-1",
       "Work/Receipts",
       "true",
     ].join(FIELD_SEP);
@@ -115,8 +117,8 @@ describe("listMessages(mailbox: '') takes the all-mailboxes row shape", () => {
 
 describe("searchMessages(mailbox: '') takes the all-mailboxes row shape", () => {
   it("reports the real per-message mailbox, not the 'INBOX' fallback", () => {
-    // 8-field all-mailboxes row (search never requests attachments):
-    // id|subject|sender|dateReceived|dateSent|read|flagged|mailbox
+    // 9-field all-mailboxes row (search never requests attachments):
+    // id|subject|sender|dateReceived|dateSent|read|flagged|flagColorRaw|mailbox
     const row = [
       "88",
       "Statement",
@@ -125,6 +127,7 @@ describe("searchMessages(mailbox: '') takes the all-mailboxes row shape", () => 
       "2026-8-19-22-0-0",
       "false",
       "false",
+      "-1",
       "Work/Receipts",
     ].join(FIELD_SEP);
     h.router.fn = makeRouter({ mailboxNames: MAILBOXES, searchOutput: row });

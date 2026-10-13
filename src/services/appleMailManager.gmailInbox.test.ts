@@ -128,6 +128,7 @@ describe("A1: INBOX-scoped search on a Gmail-style account", () => {
       "",
       "false",
       "false",
+      "-1",
       "[Gmail]/All Mail",
     ].join(FIELD_SEP);
     h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, searchOutput: row });
@@ -199,6 +200,7 @@ describe("A3: INBOX-scoped list-messages on a Gmail-style account", () => {
       "",
       "false",
       "false",
+      "-1",
       "[Gmail]/All Mail",
       "false",
     ].join(FIELD_SEP);

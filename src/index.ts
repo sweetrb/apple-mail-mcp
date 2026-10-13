@@ -95,6 +95,7 @@ import {
   decodeImapId,
   imapAppendDraft,
   resolveDraftImapAccount,
+  FLAG_COLOR_NAMES,
 } from "@/services/imapClient.js";
 import {
   successResponse,
@@ -173,21 +174,23 @@ const BATCH_SOURCE_ACCOUNT_SCHEMA = z
  *  the same index as the `$MailFlagBit0/1/2` keyword bitfield Mail.app uses on the
  *  wire. `\Flagged` alone is colorless, but the bits ride alongside it, so a smart
  *  mailbox keyed on flag color matches either way. */
-const FLAG_COLOR_INDEX: Record<string, number> = {
-  red: 0,
-  orange: 1,
-  yellow: 2,
-  green: 3,
-  blue: 4,
-  purple: 5,
-  gray: 6,
-  grey: 6,
-};
+// FLAG_COLOR_NAMES (imapClient.js) is the index<->name source of truth;
+// FLAG_COLOR_INDEX is just its reverse (name -> index) plus the 'grey' alias.
+const FLAG_COLOR_INDEX: Record<string, number> = Object.fromEntries(
+  FLAG_COLOR_NAMES.map((name, index) => [name, index])
+);
+FLAG_COLOR_INDEX.grey = FLAG_COLOR_INDEX.gray;
 const FLAG_COLOR_SCHEMA = z
   .enum(["red", "orange", "yellow", "green", "blue", "purple", "gray", "grey"])
   .optional()
   .describe(
     "Optional flag color (Apple Mail palette: red, orange, yellow, green, blue, purple, gray — 'grey' accepted). Omit for Mail's default flag. The color is applied on both routes: AppleScript sets the flag index, and IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads — so a smart mailbox keyed on flag color matches either way."
+  );
+const FLAG_COLOR_FILTER_SCHEMA = z
+  .enum(["red", "orange", "yellow", "green", "blue", "purple", "gray", "grey"])
+  .optional()
+  .describe(
+    "Filter to messages flagged with exactly this color (same palette as flag-message: red/orange/yellow/green/blue/purple/gray — 'grey' accepted). A message flagged with Mail's plain default (no explicit color) never matches. Implies isFlagged: true — pairing this with isFlagged: false is rejected as contradictory. Caveat on IMAP accounts only: 'red' is Mail's all-bits-clear encoding, wire-identical to a plain (colorless) flag, so red: true in results and flagColor: 'red' in this filter both also match a plain flag there — this is inherent to Apple's $MailFlagBit0/1/2 scheme, not specific to this server. AppleScript-only accounts distinguish red correctly (Mail's own `flag index` 0 vs -1)."
   );
 
 // =============================================================================
@@ -548,7 +551,7 @@ registerTool(
   "search-messages",
   {
     description:
-      "Use when: finding messages by query/sender/subject/date/read/flag filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, and read state (plus partial-coverage diagnostics when some mailboxes were skipped). An IMAP search stops at its deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, default 45s) or when the request is cancelled, returning the matches found so far with partial: true and timedOutMailboxes — narrow with mailbox/dateFrom rather than repeating it.\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.",
+      "Use when: finding messages by query/sender/subject/date/read/flag/flag-color filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, read state, and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped). An IMAP search stops at its deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, default 45s) or when the request is cancelled, returning the matches found so far with partial: true and timedOutMailboxes — narrow with mailbox/dateFrom rather than repeating it.\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.\nTip: use flagColor to find messages you tagged earlier (e.g. all 'orange' across mailboxes) — colored flags work as cross-mailbox labels this way, via flag-message/batch-flag-messages to set them and this filter to find them again, without moving anything into a dedicated folder.",
     inputSchema: {
       query: z.string().optional().describe("Text to search for in subject or sender"),
       body: z
@@ -571,6 +574,7 @@ registerTool(
       account: z.string().optional().describe("Account to search in (omit to search all accounts)"),
       isRead: z.boolean().optional().describe("Filter by read status"),
       isFlagged: z.boolean().optional().describe("Filter by flagged status"),
+      flagColor: FLAG_COLOR_FILTER_SCHEMA,
       dateFrom: DATE_FILTER_SCHEMA.describe("Start date filter (e.g., 'January 1, 2026')"),
       dateTo: DATE_FILTER_SCHEMA.describe("End date filter (e.g., 'March 1, 2026')"),
       limit: z
@@ -605,6 +609,7 @@ registerTool(
       subject,
       isRead,
       isFlagged,
+      flagColor,
     }) => {
       // IMAP backend: prefer direct IMAP whenever IMAP is configured (v2.6.0).
       //   - explicit IMAP account → single-account IMAP (fast path);
@@ -621,6 +626,15 @@ registerTool(
         const tooDeep = unscopedSearchOffsetError(offset, limit);
         if (tooDeep) return errorResponse(tooDeep);
       }
+      // #286: flagColor implies isFlagged: true — an explicit isFlagged: false
+      // alongside it can never match anything (a colored flag IS a flag), so
+      // reject the contradiction rather than silently return zero results.
+      if (flagColor && isFlagged === false) {
+        return errorResponse(
+          `flagColor ("${flagColor}") and isFlagged: false are contradictory — a message flagged with a color is always flagged. Drop isFlagged or set it to true.`
+        );
+      }
+      const flagColorIndex = flagColor ? FLAG_COLOR_INDEX[flagColor] : undefined;
       if (shouldUseImap(account)) {
         // #276: one signal for "stop now" — the client's notifications/cancelled
         // or the per-call deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, measured
@@ -649,6 +663,7 @@ registerTool(
           subject,
           isRead,
           isFlagged,
+          flagColorIndex,
         };
         if (account !== undefined) {
           const r = await imapSearchMessages({ ...imapArgs, account }, { signal });
@@ -719,7 +734,8 @@ registerTool(
             from,
             subject,
             isRead,
-            isFlagged
+            isFlagged,
+            flagColorIndex
           )
         );
         return mergedMessageResponse(fan, apple, limit, "matched", signal);
@@ -752,7 +768,8 @@ registerTool(
           from,
           subject,
           isRead,
-          isFlagged
+          isFlagged,
+          flagColorIndex
         );
 
         const coverageBlock = partialCoverageBlock(diagnostics);
@@ -1314,7 +1331,7 @@ registerTool(
   "list-messages",
   {
     description:
-      "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, and sender (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags (use search-messages) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.",
+      "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, sender, and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags/flag color (use search-messages, which also supports filtering by flagColor) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.",
     inputSchema: {
       mailbox: z
         .string()
@@ -1917,7 +1934,7 @@ registerTool(
   "flag-message",
   {
     description:
-      "Use when: flagging a single message (by id), optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: a confirmation that the message was flagged (and the color, when applied).\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.\nNote: the color is applied on both routes — AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads.",
+      "Use when: flagging a single message (by id), optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: a confirmation that the message was flagged (and the color, when applied).\nDo not use when: flagging several at once (use batch-flag-messages) or removing a flag (use unflag-message). Get the id from search-messages or list-messages first.\nNote: the color is applied on both routes — AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads — and search-messages' flagColor filter finds colored messages again later, so a color works as a cross-mailbox label.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       color: FLAG_COLOR_SCHEMA,
@@ -2194,7 +2211,7 @@ registerTool(
   "batch-flag-messages",
   {
     description:
-      "Use when: flagging multiple messages (1–100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.\nNote: the color is applied on both routes — AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads — so a mixed batch of numeric and `imap:` ids all end up colored.",
+      "Use when: flagging multiple messages (1–100 ids) in one call, optionally with a color (red/orange/yellow/green/blue/purple/gray).\nReturns: counts of how many were flagged and how many failed.\nDo not use when: flagging just one (use flag-message) or removing flags (use batch-unflag-messages). Get the ids from search-messages or list-messages first. Pass sourceMailbox/sourceAccount (the mailbox you listed the ids from) so each numeric id is pinned to that mailbox; an id that matches in several mailboxes is refused, not guessed.\nNote: the color is applied on both routes — AppleScript sets the flag index, IMAP writes the equivalent $MailFlagBit0/1/2 keywords Mail.app reads — so a mixed batch of numeric and `imap:` ids all end up colored, and search-messages' flagColor filter finds the whole set again later regardless of mailbox.",
     inputSchema: {
       ids: BATCH_IDS_SCHEMA,
       color: FLAG_COLOR_SCHEMA,

@@ -33,6 +33,7 @@ import { resolve, sep, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
+import { flagColorName } from "@/services/imapClient.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { plausibleDateSent } from "@/utils/headers.js";
@@ -855,7 +856,8 @@ function buildMessageRowLoop(opts: {
         set _sndrs to sender of _msgs
         set _dates to date received of _msgs
         set _reads to read status of _msgs
-        set _flags to flagged status of _msgs${attBulk}
+        set _flags to flagged status of _msgs
+        set _flagColors to flag index of _msgs${attBulk}
       on error
         set _bulkOK to false
       end try
@@ -886,12 +888,14 @@ function buildMessageRowLoop(opts: {
             set msgSender to item _i of _sndrs
             set msgRead to (item _i of _reads) as string
             set msgFlagged to (item _i of _flags) as string
+            set msgFlagColorRaw to (item _i of _flagColors) as string
           else
             set _m to item _i of _msgs
             set msgSubject to subject of _m
             set msgSender to sender of _m
             set msgRead to read status of _m as string
             set msgFlagged to flagged status of _m as string
+            set msgFlagColorRaw to flag index of _m as string
           end if${attRow}
           set msgDateStr to ${AS_DATE_TO_STRING}
           set msgDateSentStr to ""
@@ -904,7 +908,7 @@ function buildMessageRowLoop(opts: {
             set msgDateSentStr to ${asDateToString("dSent")}
           end try
           if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-          set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgDateSentStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged${trailing}${attField}
+          set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgDateSentStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgFlagColorRaw${trailing}${attField}
           set msgCount to msgCount + 1
           ${dateClose}
           ${offsetClose}
@@ -1454,6 +1458,10 @@ export interface SearchConditionFilters {
   subject?: string;
   isRead?: boolean;
   isFlagged?: boolean;
+  /** Apple's 0-6 flag-color palette index (see FLAG_COLOR_INDEX in index.ts),
+   *  already resolved from the caller's color name before reaching here, same
+   *  convention as flagMessage/batchFlagMessages's colorIndex (#286). */
+  flagColorIndex?: number;
 }
 
 /**
@@ -1470,7 +1478,7 @@ export interface SearchConditionFilters {
  * coverage independent of Mail.app.
  */
 export function buildSearchCondition(filters: SearchConditionFilters): string {
-  const { query, from, subject, isRead, isFlagged } = filters;
+  const { query, from, subject, isRead, isFlagged, flagColorIndex } = filters;
   const conditions: string[] = [];
   if (query) {
     const safeQuery = escapeForAppleScript(query);
@@ -1487,6 +1495,14 @@ export function buildSearchCondition(filters: SearchConditionFilters): string {
   }
   if (typeof isFlagged === "boolean") {
     conditions.push(`flagged status is ${isFlagged ? "true" : "false"}`);
+  }
+  // `flag index` is -1 for an unflagged message (or one flagged with Mail's
+  // plain default, no explicit color), so this alone is a complete color
+  // filter — no separate `flagged status is true` needed (#286). Validated to
+  // 0-6 by the schema layer (FLAG_COLOR_INDEX) and a number, so safe to
+  // interpolate, same reasoning as flagOperation's colorIndex below.
+  if (typeof flagColorIndex === "number") {
+    conditions.push(`flag index is ${flagColorIndex}`);
   }
   return conditions.length > 0 ? `whose ${conditions.join(" and ")}` : "";
 }
@@ -2653,7 +2669,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     from?: string,
     subject?: string,
     isRead?: boolean,
-    isFlagged?: boolean
+    isFlagged?: boolean,
+    flagColorIndex?: number
   ): Message[] {
     return this.searchMessagesWithDiagnostics(
       query,
@@ -2665,7 +2682,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       from,
       subject,
       isRead,
-      isFlagged
+      isFlagged,
+      flagColorIndex
     ).messages;
   }
 
@@ -2697,7 +2715,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     from?: string,
     subject?: string,
     isRead?: boolean,
-    isFlagged?: boolean
+    isFlagged?: boolean,
+    flagColorIndex?: number
   ): SearchResult {
     // If no account specified, search across all accounts and merge diagnostics.
     if (!account) {
@@ -2728,7 +2747,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             from,
             subject,
             isRead,
-            isFlagged
+            isFlagged,
+            flagColorIndex
           );
           allMessages.push(...res.messages);
           mergeSearchDiagnostics(diagnostics, res.diagnostics);
@@ -2752,7 +2772,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     // `query` is a subject-OR-sender substring match; from/subject/isRead/isFlagged
     // are additional AND filters. Date filtering stays post-fetch below — `whose`
     // date comparisons are unreliable in Mail.app AppleScript. See buildSearchCondition.
-    const searchCondition = buildSearchCondition({ query, from, subject, isRead, isFlagged });
+    const searchCondition = buildSearchCondition({
+      query,
+      from,
+      subject,
+      isRead,
+      isFlagged,
+      flagColorIndex,
+    });
 
     // Build the date-bound comparison. The comparison dates are constructed in
     // AppleScript from numeric components (see buildAppleScriptDate) and compared
@@ -3828,12 +3855,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   /**
    * Parse message list output from AppleScript.
    *
-   * Row shape (since the dateSent field was added — see buildMessageRowLoop):
-   *   id|subject|sender|dateReceived|dateSent|read|flagged[|mailbox][|hasAtt]
+   * Row shape (since the flagColor field was added, #286 — see
+   * buildMessageRowLoop):
+   *   id|subject|sender|dateReceived|dateSent|read|flagged|flagColorRaw[|mailbox][|hasAtt]
    *
    * Two emission schemas, disambiguated by length:
-   *   8 fields: single-mailbox — ...|hasAtt (mailbox from caller)
-   *   9 fields: all-mailboxes — ...|mailbox|hasAtt
+   *   9 fields: single-mailbox — ...|flagColorRaw|hasAtt (mailbox from caller)
+   *   10 fields: all-mailboxes — ...|flagColorRaw|mailbox|hasAtt
    *
    * `hasAttachments` here is the fast-path AppleScript count only; it will
    * false-negative for MIME-embedded attachments (a known AppleScript
@@ -3850,15 +3878,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     for (const item of items) {
       const parts = item.split(FIELD_SEP);
-      if (parts.length < 7) continue;
+      if (parts.length < 8) continue;
 
       let msgMailbox = mailbox;
       let hasAttachments = false;
-      if (rowsIncludeMailbox && parts.length >= 8) {
-        msgMailbox = parts[7];
-        hasAttachments = parts.length >= 9 ? parts[8] === "true" : false;
-      } else if (parts.length === 8) {
-        hasAttachments = parts[7] === "true";
+      if (rowsIncludeMailbox && parts.length >= 9) {
+        msgMailbox = parts[8];
+        hasAttachments = parts.length >= 10 ? parts[9] === "true" : false;
+      } else if (parts.length === 9) {
+        hasAttachments = parts[8] === "true";
       }
 
       const msgId = parts[0].trim();
@@ -3867,6 +3895,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       // (#224/#234): a message with no `Date:` header, or one Mail invented a
       // date for, must not surface as a real dateSent.
       const dateSent = plausibleDateSent(parseAppleScriptDate(parts[4]), dateReceived);
+      // Apple's `flag index`: -1 (or unparseable) means no explicit color —
+      // unflagged, or flagged with Mail's plain default (#286).
+      const flagColor = flagColorName(Number(parts[7]));
       messages.push({
         id: msgId,
         subject: parts[1],
@@ -3876,6 +3907,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         ...(dateSent ? { dateSent } : {}),
         isRead: parts[5] === "true",
         isFlagged: parts[6] === "true",
+        ...(flagColor ? { flagColor } : {}),
         isJunk: false,
         isDeleted: false,
         mailbox: msgMailbox,

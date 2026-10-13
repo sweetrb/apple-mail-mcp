@@ -10,7 +10,12 @@
  *   purple (5) = bit0 + bit2
  */
 import { describe, it, expect } from "vitest";
-import { mailFlagBitsFor, mailFlagColorIndex } from "@/services/imapClient.js";
+import {
+  mailFlagBitsFor,
+  mailFlagColorIndex,
+  flagColorName,
+  FLAG_COLOR_NAMES,
+} from "@/services/imapClient.js";
 
 const B0 = "$MailFlagBit0";
 const B1 = "$MailFlagBit1";
@@ -65,5 +70,41 @@ describe("mailFlagColorIndex", () => {
 
   it("ignores unrelated flags alongside the color bits", () => {
     expect(mailFlagColorIndex(["\\Seen", B0, "\\Flagged", B1, "$NotJunk"])).toBe(3);
+  });
+});
+
+describe("flagColorName (#286 read-back)", () => {
+  it("names every palette index 0-6, matching FLAG_COLOR_NAMES", () => {
+    expect(FLAG_COLOR_NAMES).toEqual([
+      "red",
+      "orange",
+      "yellow",
+      "green",
+      "blue",
+      "purple",
+      "gray",
+    ]);
+    for (let i = 0; i <= 6; i++) {
+      expect(flagColorName(i)).toBe(FLAG_COLOR_NAMES[i]);
+    }
+  });
+
+  it("emits 'gray', never the 'grey' input alias", () => {
+    expect(flagColorName(6)).toBe("gray");
+  });
+
+  it("returns undefined for an absent or out-of-range index", () => {
+    expect(flagColorName(undefined)).toBeUndefined();
+    expect(flagColorName(-1)).toBeUndefined();
+    expect(flagColorName(7)).toBeUndefined();
+  });
+
+  it("round-trips mailFlagColorIndex's output for every color but red", () => {
+    // index 0 (red) sets no bits, so it reads back as "no color" — the same
+    // inherent ambiguity mailFlagColorIndex's own round-trip test documents.
+    for (let i = 1; i <= 6; i++) {
+      const { set } = mailFlagBitsFor(i);
+      expect(flagColorName(mailFlagColorIndex(set))).toBe(FLAG_COLOR_NAMES[i]);
+    }
   });
 });

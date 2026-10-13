@@ -58021,6 +58021,7 @@ var init_auditLog = __esm({
 // src/services/imapClient.ts
 var imapClient_exports = {};
 __export(imapClient_exports, {
+  FLAG_COLOR_NAMES: () => FLAG_COLOR_NAMES,
   HEADER_WINDOW_BYTES: () => HEADER_WINDOW_BYTES,
   IMAP_ENV: () => IMAP_ENV,
   LARGE_MAILBOX_MESSAGES: () => LARGE_MAILBOX_MESSAGES,
@@ -58038,6 +58039,7 @@ __export(imapClient_exports, {
   decodedSizeWithoutBody: () => decodedSizeWithoutBody,
   dropAllPools: () => dropAllPools,
   encodeImapId: () => encodeImapId,
+  flagColorName: () => flagColorName,
   imapAppendDraft: () => imapAppendDraft,
   imapAppendSentCopy: () => imapAppendSentCopy,
   imapBatchDelete: () => imapBatchDelete,
@@ -58324,7 +58326,24 @@ function buildCriteria(a, listMode) {
   if (a.isFlagged === false) c.unflagged = true;
   if (a.dateFrom) c.since = new Date(a.dateFrom);
   if (a.dateTo) c.before = new Date(a.dateTo);
+  if (a.flagColorIndex !== void 0) {
+    c.flagged = true;
+    Object.assign(c, flagColorSearchTerm(a.flagColorIndex));
+  }
   return c;
+}
+function flagColorSearchTerm(colorIndex) {
+  const { set, clear } = mailFlagBitsFor(colorIndex);
+  const terms = [
+    ...set.map((kw) => ({ keyword: kw })),
+    ...clear.map((kw) => ({ unKeyword: kw }))
+  ];
+  if (terms.length === 0) return {};
+  if (terms.length === 1) return terms[0];
+  const negated = terms.map(
+    (t) => "keyword" in t ? { unKeyword: t.keyword } : { keyword: t.unKeyword }
+  );
+  return { not: { or: negated } };
 }
 function validDate(d) {
   if (!d) return void 0;
@@ -58382,7 +58401,19 @@ function structuredRow(m, account, path3) {
     dateReceived: isoOrEmpty(validDate(m.internalDate) ?? headerDate(m)),
     isRead: m.flags?.has("\\Seen") ?? false,
     isFlagged: m.flags?.has("\\Flagged") ?? false,
+    // flagColorIndex has been computed here since 2.19.x but never reached a
+    // caller in friendly form (#286, @j5pu) — flagColor is the palette name
+    // (e.g. "orange"), omitted whenever the index is (unflagged, or flagged
+    // with Mail's plain default and no explicit color). flagColorIndex stays
+    // for back-compat.
+    // ⚠️ "red" (index 0) sets no $MailFlagBit keyword — it is wire-identical to
+    // a plain colorless flag over IMAP, so a red-flagged message reads back
+    // here with no flagColor (and flagColor: "red" in search-messages also
+    // matches a plain flag). Inherent to Apple's bitfield encoding, not
+    // fixable from the client side; the AppleScript route is unaffected (Mail's
+    // own `flag index` is 0 for red, -1 for none).
     flagColorIndex: mailFlagColorIndex(m.flags),
+    flagColor: flagColorName(mailFlagColorIndex(m.flags)),
     mailbox: path3,
     account,
     // Derived from BODYSTRUCTURE, which the list/search fetch now requests.
@@ -59427,6 +59458,9 @@ function mailFlagColorIndex(flags) {
   }
   return any ? idx : void 0;
 }
+function flagColorName(index) {
+  return index === void 0 ? void 0 : FLAG_COLOR_NAMES[index];
+}
 function flagOp(id, flag, add, deps) {
   const ref = decodeImapId(id);
   if (!ref) return Promise.resolve({ success: false, error: `Not an IMAP message id: "${id}".` });
@@ -59940,7 +59974,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -60043,6 +60077,15 @@ var init_imapClient = __esm({
     MAX_RFC822_FILE_BYTES = MAX_COMPOSE_SOURCE_BYTES;
     HEADER_WINDOW_BYTES = 64 * 1024;
     MAIL_FLAG_BITS = ["$MailFlagBit0", "$MailFlagBit1", "$MailFlagBit2"];
+    FLAG_COLOR_NAMES = [
+      "red",
+      "orange",
+      "yellow",
+      "green",
+      "blue",
+      "purple",
+      "gray"
+    ];
     imapMarkRead = (id, deps = {}) => flagOp(id, "\\Seen", true, deps);
     imapMarkUnread = (id, deps = {}) => flagOp(id, "\\Seen", false, deps);
     FALLBACK_TRASH_PATH = "Trash";

@@ -89,6 +89,10 @@ export interface ImapSearchArgs {
   dateTo?: string;
   isRead?: boolean;
   isFlagged?: boolean;
+  /** Apple's 0-6 flag-color palette index (see FLAG_COLOR_INDEX in index.ts) —
+   *  already resolved from the caller's color name before reaching here, same
+   *  convention as flag-message/batch-flag-messages (#286). */
+  flagColorIndex?: number;
   unreadOnly?: boolean;
   offset?: number;
 }
@@ -747,8 +751,39 @@ function buildCriteria(a: ImapSearchArgs, listMode: boolean): Record<string, unk
   if (a.isFlagged === false) c.unflagged = true;
   if (a.dateFrom) c.since = new Date(a.dateFrom);
   if (a.dateTo) c.before = new Date(a.dateTo);
+  if (a.flagColorIndex !== undefined) {
+    c.flagged = true;
+    Object.assign(c, flagColorSearchTerm(a.flagColorIndex));
+  }
   // No `all: true` fallback: UNDELETED alone already means "every live message".
   return c;
+}
+
+/**
+ * The $MailFlagBit0/1/2 AND condition for one target color, as a single
+ * imapflow SearchObject fragment (#286).
+ *
+ * imapflow's SearchObject can carry at most one `keyword` and one `unKeyword`
+ * per object — a plain object literal can't repeat a key — but most colors
+ * need 2-3 of these ANDed together (e.g. green = bit0 AND bit1 AND NOT bit2).
+ * De Morgan's law rewrites that AND as a single NOT/OR the compiler CAN
+ * represent: AND(T1,T2,T3) = NOT(OR(not T1, not T2, not T3)), where negating a
+ * `keyword` term flips it to `unKeyword` and vice versa.
+ */
+function flagColorSearchTerm(colorIndex: number): Record<string, unknown> {
+  const { set, clear } = mailFlagBitsFor(colorIndex);
+  const terms: Record<string, unknown>[] = [
+    ...set.map((kw) => ({ keyword: kw })),
+    ...clear.map((kw) => ({ unKeyword: kw })),
+  ];
+  if (terms.length === 0) return {};
+  if (terms.length === 1) return terms[0];
+  const negated = terms.map((t) =>
+    "keyword" in t
+      ? { unKeyword: (t as { keyword: string }).keyword }
+      : { keyword: (t as { unKeyword: string }).unKeyword }
+  );
+  return { not: { or: negated } };
 }
 
 /** A valid Date from a Date or date string, else undefined. */
@@ -851,7 +886,19 @@ function structuredRow(m: ImapMessage, account: string, path: string): Record<st
     dateReceived: isoOrEmpty(validDate(m.internalDate) ?? headerDate(m)),
     isRead: m.flags?.has("\\Seen") ?? false,
     isFlagged: m.flags?.has("\\Flagged") ?? false,
+    // flagColorIndex has been computed here since 2.19.x but never reached a
+    // caller in friendly form (#286, @j5pu) — flagColor is the palette name
+    // (e.g. "orange"), omitted whenever the index is (unflagged, or flagged
+    // with Mail's plain default and no explicit color). flagColorIndex stays
+    // for back-compat.
+    // ⚠️ "red" (index 0) sets no $MailFlagBit keyword — it is wire-identical to
+    // a plain colorless flag over IMAP, so a red-flagged message reads back
+    // here with no flagColor (and flagColor: "red" in search-messages also
+    // matches a plain flag). Inherent to Apple's bitfield encoding, not
+    // fixable from the client side; the AppleScript route is unaffected (Mail's
+    // own `flag index` is 0 for red, -1 for none).
     flagColorIndex: mailFlagColorIndex(m.flags),
+    flagColor: flagColorName(mailFlagColorIndex(m.flags)),
     mailbox: path,
     account,
     // Derived from BODYSTRUCTURE, which the list/search fetch now requests.
@@ -2892,6 +2939,29 @@ export function mailFlagColorIndex(flags: Iterable<string> | undefined): number 
     }
   }
   return any ? idx : undefined;
+}
+
+/**
+ * Canonical Apple Mail flag-color palette, index 0-6 (see the bit-encoding
+ * comment above `MAIL_FLAG_BITS`). This is the single source of truth for the
+ * index<->name mapping; index.ts's FLAG_COLOR_INDEX (name -> index, the input
+ * side, which also accepts the 'grey' alias) is derived from it (#286).
+ */
+export const FLAG_COLOR_NAMES = [
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "blue",
+  "purple",
+  "gray",
+] as const;
+export type FlagColorName = (typeof FLAG_COLOR_NAMES)[number];
+
+/** Palette name for a 0-6 index, or undefined for an absent/out-of-range index
+ *  — the read-back half of {@link mailFlagColorIndex} (#286). */
+export function flagColorName(index: number | undefined): FlagColorName | undefined {
+  return index === undefined ? undefined : FLAG_COLOR_NAMES[index];
 }
 
 function flagOp(id: string, flag: string, add: boolean, deps: ImapDeps): Promise<ImapOpResult> {

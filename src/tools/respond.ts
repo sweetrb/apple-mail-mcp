@@ -48,6 +48,10 @@ export function messageSummary(m: Message): Record<string, unknown> {
         : "",
     isRead: m.isRead,
     isFlagged: m.isFlagged,
+    // Omitted (undefined -> dropped by JSON) when unflagged or flagged with
+    // Mail's plain default and no explicit color — same contract as the IMAP
+    // path's structuredRow (#286).
+    flagColor: m.flagColor,
     mailbox: m.mailbox,
     account: m.account,
     hasAttachments: m.hasAttachments,

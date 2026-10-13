@@ -52,6 +52,12 @@ export interface Message {
   /** Whether the message is flagged */
   isFlagged: boolean;
 
+  /** Apple Mail flag-color palette name (red/orange/yellow/green/blue/purple/
+   *  gray), present only when flagged with an explicit color — Mail's plain
+   *  default flag (isFlagged true, no color chosen) and an unflagged message
+   *  both omit this (#286). */
+  flagColor?: string;
+
   /** Whether the message is marked as junk */
   isJunk: boolean;
 

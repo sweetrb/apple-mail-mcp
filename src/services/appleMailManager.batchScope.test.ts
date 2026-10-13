@@ -29,7 +29,7 @@ const DIAG_FIELD_SEP = "\x1dF\x1d";
 
 const h = vi.hoisted(() => ({ calls: [] as string[] }));
 
-/** A list-messages payload: two ids, seven fields each (mailbox = the one asked for). */
+/** A list-messages payload: two ids, eight fields each (mailbox = the one asked for). */
 function listPayload(ids: string[]): string {
   const rows = ids
     .map((id) =>
@@ -41,6 +41,7 @@ function listPayload(ids: string[]): string {
         "",
         "false",
         "false",
+        "-1",
       ].join(FIELD_SEP)
     )
     .join(RECORD_SEP);
