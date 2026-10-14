@@ -146,9 +146,10 @@ run("IMAP backend (GreenMail) integration", () => {
       expect(row?.flagColor).toBe("purple");
       expect(row?.flagColorIndex).toBe(5);
 
-      // Filter: searching for purple finds it — this exercises the real
-      // KEYWORD/UNKEYWORD NOT/OR SearchObject against a real IMAP SEARCH
-      // parser, not just the mocked unit tests.
+      // Filter: searching for purple finds it — this exercises a real
+      // FLAGGED IMAP SEARCH plus the client-side flags-only FETCH that now
+      // narrows to the exact color (#286 follow-up), against a real server
+      // and parser, not just the mocked unit tests.
       const hit = await imapSearchMessages(
         { mailbox: "INBOX", flagColorIndex: 5, limit: 10 },
         deps

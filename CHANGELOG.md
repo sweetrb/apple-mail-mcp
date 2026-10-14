@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+## [2.20.11] - 2026-10-14
+
+### Fixed
+
+- **An unscoped `flagColor` search (no `mailbox`) could time out and miss real
+  matches on large accounts** (#286 follow-up, @j5pu). 2.20.10's `flagColor`
+  filter sent a compound `$MailFlagBit0/1/2` NOT/OR keyword clause to the IMAP
+  server; on iCloud that clause cost a near-linear scan of each mailbox even
+  ANDed with `FLAGGED`, so one or two huge mailboxes (255k/794k messages)
+  burned through the whole shared 45s search deadline before the other ~30
+  mailboxes — including the one holding the actual match — were ever reached.
+  Reported live: `partial: true` with every large mailbox in
+  `timedOutMailboxes`, and a known orange/yellow match returned 0 results.
+  The server-side query is now `FLAGGED` alone (confirmed fast by the
+  reporter), with the exact color decided client-side from the flags every
+  row fetch already carries — no extra round trip, and every mailbox in the
+  fan-out gets a chance to be searched. Scoped (`mailbox` given) searches are
+  unaffected either way; this only changes the unscoped, large-account case.
+
 ## [2.20.10] - 2026-10-13
 
 ### Added

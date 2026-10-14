@@ -58328,22 +58328,8 @@ function buildCriteria(a, listMode) {
   if (a.dateTo) c.before = new Date(a.dateTo);
   if (a.flagColorIndex !== void 0) {
     c.flagged = true;
-    Object.assign(c, flagColorSearchTerm(a.flagColorIndex));
   }
   return c;
-}
-function flagColorSearchTerm(colorIndex) {
-  const { set, clear } = mailFlagBitsFor(colorIndex);
-  const terms = [
-    ...set.map((kw) => ({ keyword: kw })),
-    ...clear.map((kw) => ({ unKeyword: kw }))
-  ];
-  if (terms.length === 0) return {};
-  if (terms.length === 1) return terms[0];
-  const negated = terms.map(
-    (t) => "keyword" in t ? { unKeyword: t.keyword } : { keyword: t.unKeyword }
-  );
-  return { not: { or: negated } };
 }
 function validDate(d) {
   if (!d) return void 0;
@@ -58492,6 +58478,16 @@ async function searchUids(client, path3, criteria, size) {
   throw new Error(
     `IMAP SEARCH on "${path3}"${sized} failed: ` + (cause ? errText(cause) : "the server rejected it or the connection dropped before it answered (on a mailbox this size, usually a server-side timeout)")
   );
+}
+async function filterUidsByColor(client, uids, colorIndex) {
+  if (uids.length === 0) return uids;
+  const keep = /* @__PURE__ */ new Set();
+  for await (const msg of client.fetch(uids.join(","), { uid: true, flags: true }, { uid: true })) {
+    if (typeof msg?.uid !== "number") continue;
+    const idx = mailFlagColorIndex(msg.flags);
+    if (colorIndex === 0 ? idx === void 0 : idx === colorIndex) keep.add(msg.uid);
+  }
+  return uids.filter((uid) => keep.has(uid));
 }
 function mergeFetched(into, msg) {
   const prev = into.get(msg.uid);
@@ -58648,14 +58644,15 @@ async function listLargeMailbox(client, exists, page) {
     totalExact: true
   };
 }
-async function searchLargeMailbox(client, path3, criteria, exists, page) {
+async function searchLargeMailbox(client, path3, criteria, exists, page, colorIndex) {
   const walk = await walkWindows(exists, page, FIRST_SEARCH_WINDOW, async (lo, hi, width) => {
-    const found = await searchUids(client, path3, { ...criteria, seq: `${lo}:${hi}` }, exists);
+    let found = await searchUids(client, path3, { ...criteria, seq: `${lo}:${hi}` }, exists);
     if (found.length > width) {
       throw new Error(
         `IMAP SEARCH on "${path3}" reported ${found.length} matches in a ${width}-message window \u2014 discarding as corrupted rather than trusting it (see #246).`
       );
     }
+    if (colorIndex !== void 0) found = await filterUidsByColor(client, found, colorIndex);
     return found;
   });
   return {
@@ -58664,14 +58661,14 @@ async function searchLargeMailbox(client, path3, criteria, exists, page) {
     totalExact: walk.exhausted
   };
 }
-async function fetchMailboxMatches(client, path3, criteria, page) {
+async function fetchMailboxMatches(client, path3, criteria, page, colorIndex) {
   const lock = await client.getMailboxLock(path3);
   try {
     const exists = await statusMessageCount(client, path3);
     if (exists === 0) return { messages: [], omitted: [], total: 0, totalExact: true };
     if (exists !== void 0 && exists > LARGE_MAILBOX_MESSAGES) {
       try {
-        return isUnfiltered(criteria) ? await listLargeMailbox(client, exists, page) : await searchLargeMailbox(client, path3, criteria, exists, page);
+        return isUnfiltered(criteria) ? await listLargeMailbox(client, exists, page) : await searchLargeMailbox(client, path3, criteria, exists, page, colorIndex);
       } catch (error2) {
         const detail = errText(error2);
         throw new Error(
@@ -58679,15 +58676,19 @@ async function fetchMailboxMatches(client, path3, criteria, page) {
         );
       }
     }
-    const uids = await searchUids(client, path3, criteria, exists);
-    if (uids.length === 0 || page.take === 0) {
-      return { messages: [], omitted: [], total: uids.length, totalExact: true };
+    const rawUids = await searchUids(client, path3, criteria, exists);
+    if (rawUids.length === 0) {
+      return { messages: [], omitted: [], total: 0, totalExact: true };
     }
     const messages = exists ?? (await client.status(path3, { messages: true })).messages ?? void 0;
-    if (typeof messages === "number" && uids.length > messages) {
+    if (typeof messages === "number" && rawUids.length > messages) {
       throw new Error(
-        `IMAP SEARCH on "${path3}" reported ${uids.length} matches, more than the mailbox's own ${messages} messages \u2014 discarding as corrupted rather than trusting it (see #246).`
+        `IMAP SEARCH on "${path3}" reported ${rawUids.length} matches, more than the mailbox's own ${messages} messages \u2014 discarding as corrupted rather than trusting it (see #246).`
       );
+    }
+    const uids = colorIndex !== void 0 ? await filterUidsByColor(client, rawUids, colorIndex) : rawUids;
+    if (uids.length === 0 || page.take === 0) {
+      return { messages: [], omitted: [], total: uids.length, totalExact: true };
     }
     const newest = uids.slice().reverse().slice(page.skip, page.skip + page.take);
     return { ...pageRows(await fetchRows(client, newest)), total: uids.length, totalExact: true };
@@ -58738,7 +58739,7 @@ async function run(args, listMode, deps) {
         }
         try {
           const outcome = await raceStop(
-            fetchMailboxMatches(client, path3, criteria, page),
+            fetchMailboxMatches(client, path3, criteria, page, args.flagColorIndex),
             deps.signal
           );
           if (outcome === STOPPED) {

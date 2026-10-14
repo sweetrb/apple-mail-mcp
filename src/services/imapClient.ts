@@ -752,38 +752,22 @@ function buildCriteria(a: ImapSearchArgs, listMode: boolean): Record<string, unk
   if (a.dateFrom) c.since = new Date(a.dateFrom);
   if (a.dateTo) c.before = new Date(a.dateTo);
   if (a.flagColorIndex !== undefined) {
+    // #286 follow-up (@j5pu): this used to also AND in a $MailFlagBit0/1/2
+    // NOT/OR compound (De Morgan's law over 2-3 keyword/unKeyword terms) so
+    // the server would return only the target color. Scoped to one mailbox
+    // that's fine, but on an unscoped search of a real iCloud account the
+    // compound keyword tree cost a near-linear scan per mailbox even ANDed
+    // with FLAGGED — enough to burn the whole shared 45s deadline on one or
+    // two huge mailboxes and leave ~30 smaller ones (including the one
+    // holding the actual match) never reached. `FLAGGED` alone is cheap on
+    // iCloud (confirmed directly by the reporter), and every row's flags are
+    // already fetched — see {@link filterUidsByColor} — so the server-side
+    // query now only narrows to "flagged at all" and the exact color is
+    // decided client-side on the (typically much smaller) candidate set.
     c.flagged = true;
-    Object.assign(c, flagColorSearchTerm(a.flagColorIndex));
   }
   // No `all: true` fallback: UNDELETED alone already means "every live message".
   return c;
-}
-
-/**
- * The $MailFlagBit0/1/2 AND condition for one target color, as a single
- * imapflow SearchObject fragment (#286).
- *
- * imapflow's SearchObject can carry at most one `keyword` and one `unKeyword`
- * per object — a plain object literal can't repeat a key — but most colors
- * need 2-3 of these ANDed together (e.g. green = bit0 AND bit1 AND NOT bit2).
- * De Morgan's law rewrites that AND as a single NOT/OR the compiler CAN
- * represent: AND(T1,T2,T3) = NOT(OR(not T1, not T2, not T3)), where negating a
- * `keyword` term flips it to `unKeyword` and vice versa.
- */
-function flagColorSearchTerm(colorIndex: number): Record<string, unknown> {
-  const { set, clear } = mailFlagBitsFor(colorIndex);
-  const terms: Record<string, unknown>[] = [
-    ...set.map((kw) => ({ keyword: kw })),
-    ...clear.map((kw) => ({ unKeyword: kw })),
-  ];
-  if (terms.length === 0) return {};
-  if (terms.length === 1) return terms[0];
-  const negated = terms.map((t) =>
-    "keyword" in t
-      ? { unKeyword: (t as { keyword: string }).keyword }
-      : { keyword: (t as { unKeyword: string }).unKeyword }
-  );
-  return { not: { or: negated } };
 }
 
 /** A valid Date from a Date or date string, else undefined. */
@@ -1127,6 +1111,35 @@ async function searchUids(
 }
 
 /**
+ * Narrows a FLAGGED-search candidate list to one exact color (#286 follow-up,
+ * @j5pu), with a flags-only FETCH rather than the full {@link ROW_QUERY} —
+ * cheap, and the only thing this decision needs.
+ *
+ * `colorIndex === 0` (red) is special: {@link mailFlagColorIndex} returns
+ * `undefined`, not `0`, for a flagged message with none of the three
+ * $MailFlagBit keywords set, because "no bits" is indistinguishable from "no
+ * color chosen" over IMAP (documented at {@link structuredRow}). Matching
+ * `undefined` for a red search preserves exactly the set the old server-side
+ * NOT/OR query matched — red was never actually distinguishable from plain,
+ * and this does not change that, just moves the same decision client-side.
+ */
+async function filterUidsByColor(
+  client: ImapClientLike,
+  uids: number[],
+  colorIndex: number
+): Promise<number[]> {
+  if (uids.length === 0) return uids;
+  const keep = new Set<number>();
+  for await (const msg of client.fetch(uids.join(","), { uid: true, flags: true }, { uid: true })) {
+    if (typeof msg?.uid !== "number") continue;
+    const idx = mailFlagColorIndex(msg.flags);
+    if (colorIndex === 0 ? idx === undefined : idx === colorIndex) keep.add(msg.uid);
+  }
+  // Preserve the caller's (search-result) ordering, not FETCH response order.
+  return uids.filter((uid) => keep.has(uid));
+}
+
+/**
  * The full row FETCH for list/search/thread.
  *
  * BODYSTRUCTURE rides along so `hasAttachments` is computed rather than
@@ -1460,18 +1473,22 @@ async function searchLargeMailbox(
   path: string,
   criteria: Record<string, unknown>,
   exists: number,
-  page: MailboxPage
+  page: MailboxPage,
+  colorIndex?: number
 ): Promise<MailboxMatches> {
   const walk = await walkWindows(exists, page, FIRST_SEARCH_WINDOW, async (lo, hi, width) => {
-    const found = await searchUids(client, path, { ...criteria, seq: `${lo}:${hi}` }, exists);
+    let found = await searchUids(client, path, { ...criteria, seq: `${lo}:${hi}` }, exists);
     // The #246 guard, per window: no criteria can match more messages than
-    // the window holds.
+    // the window holds. Checked against the raw (pre-color-filter) FLAGGED
+    // count — the thing it's actually guarding is a corrupted/over-wide
+    // server response, not the color narrowing below.
     if (found.length > width) {
       throw new Error(
         `IMAP SEARCH on "${path}" reported ${found.length} matches in a ${width}-message window — ` +
           `discarding as corrupted rather than trusting it (see #246).`
       );
     }
+    if (colorIndex !== undefined) found = await filterUidsByColor(client, found, colorIndex);
     return found;
   });
   return {
@@ -1485,7 +1502,8 @@ async function fetchMailboxMatches(
   client: ImapClientLike,
   path: string,
   criteria: Record<string, unknown>,
-  page: MailboxPage
+  page: MailboxPage,
+  colorIndex?: number
 ): Promise<MailboxMatches> {
   const lock = await client.getMailboxLock(path);
   try {
@@ -1499,7 +1517,7 @@ async function fetchMailboxMatches(
       try {
         return isUnfiltered(criteria)
           ? await listLargeMailbox(client, exists, page)
-          : await searchLargeMailbox(client, path, criteria, exists, page);
+          : await searchLargeMailbox(client, path, criteria, exists, page, colorIndex);
       } catch (error) {
         const detail = errText(error);
         throw new Error(
@@ -1510,9 +1528,9 @@ async function fetchMailboxMatches(
       }
     }
 
-    const uids = await searchUids(client, path, criteria, exists);
-    if (uids.length === 0 || page.take === 0) {
-      return { messages: [], omitted: [], total: uids.length, totalExact: true };
+    const rawUids = await searchUids(client, path, criteria, exists);
+    if (rawUids.length === 0) {
+      return { messages: [], omitted: [], total: 0, totalExact: true };
     }
 
     // A SEARCH match count can never exceed the mailbox's own total message
@@ -1549,11 +1567,21 @@ async function fetchMailboxMatches(
     // is asked again here, and a failure now fails the mailbox as it always has.
     const messages =
       exists ?? (await client.status(path, { messages: true })).messages ?? undefined;
-    if (typeof messages === "number" && uids.length > messages) {
+    if (typeof messages === "number" && rawUids.length > messages) {
       throw new Error(
-        `IMAP SEARCH on "${path}" reported ${uids.length} matches, more than the mailbox's own ` +
+        `IMAP SEARCH on "${path}" reported ${rawUids.length} matches, more than the mailbox's own ` +
           `${messages} messages — discarding as corrupted rather than trusting it (see #246).`
       );
+    }
+
+    // Color narrowing happens AFTER the #246 corruption guard above (which
+    // must see the raw FLAGGED count) and BEFORE paging (so skip/take and
+    // `total` operate on the exact color-matched set, not the broader
+    // FLAGGED one).
+    const uids =
+      colorIndex !== undefined ? await filterUidsByColor(client, rawUids, colorIndex) : rawUids;
+    if (uids.length === 0 || page.take === 0) {
+      return { messages: [], omitted: [], total: uids.length, totalExact: true };
     }
 
     const newest = uids
@@ -1625,7 +1653,7 @@ async function run(
         }
         try {
           const outcome = await raceStop(
-            fetchMailboxMatches(client, path, criteria, page),
+            fetchMailboxMatches(client, path, criteria, page, args.flagColorIndex),
             deps.signal
           );
           if (outcome === STOPPED) {
