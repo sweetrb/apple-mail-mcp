@@ -48,7 +48,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/punycode/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/punycode/index.js
 function error(type) {
   throw new RangeError(errors[type]);
 }
@@ -94,7 +94,7 @@ function ucs2decode(string) {
 }
 var maxInt, base, tMin, tMax, skew, damp, initialBias, initialN, delimiter, regexPunycode, regexNonASCII, regexSeparators, errors, baseMinusTMin, floor, stringFromCharCode, basicToDigit, digitToBasic, adapt, decode, encode, toUnicode, toASCII;
 var init_punycode = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/punycode/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/punycode/index.js"() {
     maxInt = 2147483647;
     base = 36;
     tMin = 1;
@@ -265,7 +265,7 @@ var init_punycode = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/shared/url.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/shared/url.js
 import net from "node:net";
 import urllib from "node:url";
 function invalidUrl(input) {
@@ -318,7 +318,7 @@ function normalizeHostname(raw, href) {
 }
 var SLASHLESS_AUTHORITY, SURROUNDING_WHITESPACE, LEGACY_TRIM, AUTHORITY, FORBIDDEN_HOST_CHARS, CONTROL_CHARS, parse, resolve;
 var init_url = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/shared/url.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/shared/url.js"() {
     init_punycode();
     SLASHLESS_AUTHORITY = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?!\/\/)([\s\S]+)$/;
     SURROUNDING_WHITESPACE = /^[\x00-\x20]+|[\x00-\x20]+$/g;
@@ -394,11 +394,11 @@ var init_url = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/fetch/cookies.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/fetch/cookies.js
 import net2 from "node:net";
 var SESSION_TIMEOUT, Cookies, cookies_default;
 var init_cookies = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/fetch/cookies.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/fetch/cookies.js"() {
     init_url();
     SESSION_TIMEOUT = 1800;
     Cookies = class {
@@ -476,15 +476,24 @@ var init_cookies = __esm({
        */
       parse(cookieStr) {
         const cookie = {};
+        let hasNameValue = false;
         (cookieStr || "").toString().split(";").forEach((cookiePart) => {
-          const valueParts = cookiePart.split("=");
-          const key = valueParts.shift().trim().toLowerCase();
-          let value = valueParts.join("=").trim();
-          let domain;
-          if (!key) {
+          if (!cookiePart.trim()) {
             return;
           }
-          switch (key) {
+          const valueParts = cookiePart.split("=");
+          const name2 = valueParts.shift().trim();
+          let value = valueParts.join("=").trim();
+          let domain;
+          if (!hasNameValue) {
+            hasNameValue = true;
+            if (name2) {
+              cookie.name = name2;
+              cookie.value = value;
+            }
+            return;
+          }
+          switch (name2.toLowerCase()) {
             case "expires": {
               const expires = new Date(value);
               if (expires.toString() !== "Invalid Date") {
@@ -511,11 +520,6 @@ var init_cookies = __esm({
             case "httponly":
               cookie.httponly = true;
               break;
-            default:
-              if (!cookie.name) {
-                cookie.name = key;
-                cookie.value = value;
-              }
           }
         });
         return cookie;
@@ -608,20 +612,20 @@ var init_cookies = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/package-info.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/package-info.js
 var name, version, homepage;
 var init_package_info = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/package-info.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/package-info.js"() {
     name = "nodemailer";
-    version = "10.0.13";
+    version = "10.0.16";
     homepage = "https://nodemailer.com/";
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/errors.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/errors.js
 var ECONNECTION, ENOAUTH, EOAUTH2, EMAXLIMIT, EMAXRECIPIENTS, ESENDMAIL, ESES, ECONFIG, EPROXY, EFILEACCESS, EURLACCESS, EFETCH;
 var init_errors = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/errors.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/errors.js"() {
     ECONNECTION = "ECONNECTION";
     ENOAUTH = "ENOAUTH";
     EOAUTH2 = "EOAUTH2";
@@ -637,10 +641,10 @@ var init_errors = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/shared/objects.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/shared/objects.js
 var isProtoKey, copyOwnKeys;
 var init_objects = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/shared/objects.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/shared/objects.js"() {
     isProtoKey = (key) => key === "__proto__";
     copyOwnKeys = (target, source, skip) => {
       Object.keys(source || {}).forEach((key) => {
@@ -654,7 +658,7 @@ var init_objects = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/fetch/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/fetch/index.js
 import http from "node:http";
 import https from "node:https";
 import zlib from "node:zlib";
@@ -901,7 +905,7 @@ function nmfetch(url, options) {
 }
 var MAX_REDIRECTS, DEFAULT_TIMEOUT, DEFAULT_MAX_BYTES, TLS_OPTION_KEYS, fetch_default;
 var init_fetch = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/fetch/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/fetch/index.js"() {
     init_url();
     init_cookies();
     init_package_info();
@@ -939,7 +943,7 @@ var init_fetch = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/shared/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/shared/index.js
 import util from "node:util";
 import fs from "node:fs";
 import dns from "node:dns";
@@ -1080,7 +1084,7 @@ function createDefaultLogger(levels) {
 }
 var DNS_TTL, CACHE_CLEANUP_INTERVAL, MAX_CACHE_SIZE, lastCacheCleanup, networkInterfaces, isFamilySupported, resolve2, dnsCache, formatDNSValue, resolveHostname, parseConnectionUrl, _logFunc, getLogger, callbackPromise, parseDataURI, assign, encodeXText;
 var init_shared = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/shared/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/shared/index.js"() {
     init_url();
     init_fetch();
     init_errors();
@@ -1460,7 +1464,7 @@ var init_shared = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-funcs/mime-types.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-funcs/mime-types.js
 import path from "node:path";
 function detectMimeType(filename) {
   if (!filename) {
@@ -1497,7 +1501,7 @@ function detectExtension(mimeType) {
 }
 var defaultMimeType, defaultExtension, mimeTypes, extensions;
 var init_mime_types = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-funcs/mime-types.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-funcs/mime-types.js"() {
     defaultMimeType = "application/octet-stream";
     defaultExtension = "bin";
     mimeTypes = /* @__PURE__ */ new Map([
@@ -3562,7 +3566,7 @@ var init_mime_types = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/base64/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/base64/index.js
 var base64_exports = {};
 __export(base64_exports, {
   Encoder: () => Encoder,
@@ -3595,7 +3599,7 @@ function wrap(str2, lineLength) {
 }
 var Encoder;
 var init_base64 = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/base64/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/base64/index.js"() {
     Encoder = class extends Transform {
       constructor(options) {
         super();
@@ -3663,7 +3667,7 @@ var init_base64 = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/qp/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/qp/index.js
 var qp_exports = {};
 __export(qp_exports, {
   Encoder: () => Encoder2,
@@ -3769,7 +3773,7 @@ function checkRanges(nr, ranges) {
 }
 var MIN_LINE_LENGTH, QP_RANGES, Encoder2;
 var init_qp = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/qp/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/qp/index.js"() {
     MIN_LINE_LENGTH = 4;
     QP_RANGES = [
       [9],
@@ -3834,7 +3838,7 @@ var init_qp = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-funcs/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-funcs/index.js
 function isPlainText(value, isParam) {
   const re = isParam ? /[\x00-\x1f\x7f"\u0080-\uFFFF]/ : /[\x00-\x08\x0b\x0c\x0e-\x1f\u0080-\uFFFF]/;
   return typeof value === "string" && !re.test(value);
@@ -3932,7 +3936,7 @@ function buildHeaderValue(structured) {
           paramsArray.push(encodedParam.key + "=" + JSON.stringify(encodedParam.value));
         }
       });
-    } else if (/[\s'"\\;:/=(),<>@[\]?]|^-/.test(value2)) {
+    } else if (!value2.length || /[\s'"\\;:/=(),<>@[\]?]|^-/.test(value2)) {
       paramsArray.push(param + "=" + JSON.stringify(value2));
     } else {
       paramsArray.push(param + "=" + value2);
@@ -4040,107 +4044,149 @@ function buildHeaderParam(key, data, maxLength) {
     value: item.line
   }));
 }
+function _isParamName(name2) {
+  return !!name2 && !isProtoKey(name2);
+}
 function parseHeaderValue(str2) {
   const response = {
     value: "",
     params: {}
   };
   const setParam = (name2, value2) => {
-    if (!isProtoKey(name2)) {
+    name2 = name2.toLowerCase();
+    if (_isParamName(name2) && !Object.prototype.hasOwnProperty.call(response.params, name2)) {
       response.params[name2] = value2;
     }
   };
   let key = false;
   let value = "";
-  let type = "value";
+  let stage = "value";
   let quote = false;
   let escaped = false;
   let chr;
+  let pendingSpace = "";
+  let quoteClosed = false;
+  const flushSpace = () => {
+    if (value.length) {
+      value += pendingSpace;
+    }
+    pendingSpace = "";
+  };
+  const addChr = (c) => {
+    flushSpace();
+    value += c;
+  };
+  const takeValue = () => {
+    const taken = value;
+    value = "";
+    pendingSpace = "";
+    quoteClosed = false;
+    return taken;
+  };
+  const storeValue = () => {
+    const taken = takeValue();
+    if (key === false) {
+      response.value = taken;
+    } else {
+      setParam(key, taken);
+    }
+  };
+  const storeEmptyKey = () => {
+    setParam(takeValue().trim(), "");
+  };
   for (let i = 0, len = str2.length; i < len; i++) {
     chr = str2.charAt(i);
-    if (type === "key") {
+    if (stage === "key") {
       if (chr === "=") {
-        key = value.trim().toLowerCase();
-        type = "value";
-        value = "";
+        key = takeValue().trim();
+        stage = "value";
+        continue;
+      }
+      if (chr === ";") {
+        storeEmptyKey();
         continue;
       }
       value += chr;
     } else {
+      if (quoteClosed && chr !== ";") {
+        escaped = false;
+        continue;
+      }
       if (escaped) {
-        value += chr;
-      } else if (chr === "\\") {
+        addChr(chr);
+      } else if (quote && chr === "\\") {
         escaped = true;
         continue;
       } else if (quote && chr === quote) {
         quote = false;
+        quoteClosed = true;
       } else if (!quote && chr === '"') {
         quote = chr;
+        flushSpace();
       } else if (!quote && chr === ";") {
-        if (key === false) {
-          response.value = value.trim();
-        } else {
-          setParam(key, value.trim());
-        }
-        type = "key";
-        value = "";
+        storeValue();
+        stage = "key";
+      } else if (!quote && (chr === " " || chr === "	")) {
+        pendingSpace += chr;
       } else {
-        value += chr;
+        addChr(chr);
       }
       escaped = false;
     }
   }
-  if (type === "value") {
-    if (key === false) {
-      response.value = value.trim();
-    } else {
-      setParam(key, value.trim());
-    }
-  } else if (value.trim()) {
-    setParam(value.trim().toLowerCase(), "");
+  if (stage === "value") {
+    storeValue();
+  } else {
+    storeEmptyKey();
   }
+  const continuations = /* @__PURE__ */ new Map();
   Object.keys(response.params).forEach((key2) => {
-    let actualKey, nr, match, value2;
-    if (match = key2.match(/(\*(\d+)|\*(\d+)\*|\*)$/)) {
-      actualKey = key2.substr(0, match.index);
-      nr = Number(match[2] || match[3]) || 0;
-      if (isProtoKey(actualKey)) {
-        delete response.params[key2];
-        return;
-      }
-      if (!response.params[actualKey] || typeof response.params[actualKey] !== "object") {
-        response.params[actualKey] = {
-          charset: false,
-          values: []
-        };
-      }
-      value2 = response.params[key2];
-      if (nr === 0 && match[0].substr(-1) === "*" && (match = value2.match(/^([^']*)'[^']*'(.*)$/))) {
-        response.params[actualKey].charset = match[1] || "iso-8859-1";
-        value2 = match[2];
-      }
-      response.params[actualKey].values[nr] = value2;
-      delete response.params[key2];
+    const match = key2.match(/(\*(\d+)|\*(\d+)\*|\*)$/);
+    if (!match) {
+      return;
     }
+    const actualKey = key2.substr(0, match.index);
+    const nr = Number(match[2] || match[3]) || 0;
+    const encoded = match[0].substr(-1) === "*";
+    let value2 = response.params[key2];
+    delete response.params[key2];
+    if (!_isParamName(actualKey)) {
+      return;
+    }
+    let continuation = continuations.get(actualKey);
+    if (!continuation) {
+      continuation = { charset: false, sections: [] };
+      continuations.set(actualKey, continuation);
+    }
+    const charsetMatch = nr === 0 && encoded ? value2.match(/^([^']*)'[^']*'(.*)$/) : null;
+    if (charsetMatch) {
+      continuation.charset = TOKEN.test(charsetMatch[1]) ? charsetMatch[1] : "iso-8859-1";
+      value2 = charsetMatch[2];
+    }
+    continuation.sections.push({ nr, value: value2, encoded });
   });
-  Object.keys(response.params).forEach((key2) => {
-    let value2;
-    if (response.params[key2] && Array.isArray(response.params[key2].values)) {
-      value2 = response.params[key2].values.map((val) => val || "").join("");
-      if (response.params[key2].charset) {
-        response.params[key2] = "=?" + response.params[key2].charset + "?Q?" + value2.replace(/[=?_\s]/g, (s) => {
-          const c = s.charCodeAt(0).toString(16);
-          if (s === " ") {
-            return "_";
-          }
-          return "%" + (c.length < 2 ? "0" : "") + c;
-        }).replace(/%/g, "=") + "?=";
-      } else {
-        response.params[key2] = value2;
-      }
+  continuations.forEach((continuation, key2) => {
+    if (Object.prototype.hasOwnProperty.call(response.params, key2)) {
+      return;
     }
+    continuation.sections.sort((a, b) => a.nr - b.nr);
+    if (!continuation.charset) {
+      response.params[key2] = continuation.sections.map((section) => section.value).join("");
+      return;
+    }
+    response.params[key2] = "=?" + continuation.charset + "?Q?" + continuation.sections.map(_encodeContinuationSection).join("") + "?=";
   });
   return response;
+}
+function _encodeContinuationSection(section) {
+  const specials = section.encoded ? /[=?_\s]/g : /[=?_\s%]/g;
+  return section.value.replace(specials, (s) => {
+    const c = s.charCodeAt(0).toString(16);
+    if (s === " ") {
+      return "_";
+    }
+    return "%" + (c.length < 2 ? "0" : "") + c;
+  }).replace(/%/g, "=");
 }
 function detectExtension2(mimeType) {
   return detectExtension(mimeType);
@@ -4232,16 +4278,18 @@ function safeEncodeURIComponent(str2) {
   }
   return str2.replace(/[\x00-\x1F *'()<>@,;:\\"[\]?=\u007F-\uFFFF]/g, (chr) => encodeURICharComponent(chr));
 }
+var TOKEN;
 var init_mime_funcs = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-funcs/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-funcs/index.js"() {
     init_base64();
     init_qp();
     init_mime_types();
     init_objects();
+    TOKEN = /^[^\x00-\x20\x7f()<>@,;:\\"/[\]?=]+$/;
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/addressparser/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/addressparser/index.js
 function _quoteLocalPart(address) {
   const lastAt = address.lastIndexOf("@");
   if (lastAt < 0) {
@@ -4474,7 +4522,7 @@ function _handleAddress(tokens, depth) {
     data.text = data.text.join(" ");
     let groupMembers = [];
     if (data.group.length) {
-      const parsedGroup = addressparser(data.group.join(","), { _depth: depth + 1 });
+      const parsedGroup = _parseAddressList(data.group.join(","), depth + 1);
       parsedGroup.forEach((member) => {
         if (member.group) {
           groupMembers = groupMembers.concat(member.group);
@@ -4546,7 +4594,7 @@ function _handleAddress(tokens, depth) {
     const addressFromQuotedText = !data.address.length && data.textWasQuoted.some((wasQuoted) => wasQuoted);
     data.text = data.text.join(" ");
     data.address = data.address.join(" ");
-    if (addressFromQuotedText && data.text) {
+    if (addressFromQuotedText && data.text.indexOf("@") >= 0) {
       data.address = _quoteLocalPart(data.text);
       data.text = "";
     }
@@ -4569,9 +4617,7 @@ function _handleAddress(tokens, depth) {
   }
   return addresses;
 }
-function addressparser(str2, options) {
-  options = options || {};
-  const depth = options._depth || 0;
+function _parseAddressList(str2, depth) {
   if (depth > MAX_NESTED_GROUP_DEPTH) {
     return [];
   }
@@ -4579,7 +4625,7 @@ function addressparser(str2, options) {
   const tokens = tokenizer.tokenize();
   const addresses = [];
   let address = [];
-  let parsedAddresses = [];
+  const parsedAddresses = [];
   tokens.forEach((token) => {
     if (token.type === "operator" && (token.value === "," || token.value === ";")) {
       if (address.length) {
@@ -4610,8 +4656,11 @@ function addressparser(str2, options) {
     }
   }
   mergedAddresses.reverse();
-  parsedAddresses = mergedAddresses;
-  if (options.flatten) {
+  return mergedAddresses;
+}
+function addressparser(str2, options) {
+  const parsedAddresses = _parseAddressList(str2, 0);
+  if (options?.flatten) {
     const flatAddresses = [];
     const walkAddressList = (list) => {
       list.forEach((entry) => {
@@ -4628,7 +4677,7 @@ function addressparser(str2, options) {
 }
 var HAS_WHITESPACE, QUOTED_LOCAL_ADDR, ADDR_SPEC, LOOSE_ADDR_SPEC, LOOSE_TEXT_ADDR, Tokenizer, MAX_NESTED_GROUP_DEPTH, addressparser_default;
 var init_addressparser = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/addressparser/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/addressparser/index.js"() {
     HAS_WHITESPACE = /\s/;
     QUOTED_LOCAL_ADDR = /^("(?:[^"\\]|\\[\s\S])*"@\S+)(?:\s+([\s\S]+))?$/;
     ADDR_SPEC = /^[^@\s]+@[^@\s]+$/;
@@ -4642,6 +4691,7 @@ var init_addressparser = __esm({
         this.node = null;
         this.escaped = false;
         this.inDomainLiteral = false;
+        this.afterAt = false;
         this.list = [];
         this.operators = {
           '"': '"',
@@ -4682,10 +4732,11 @@ var init_addressparser = __esm({
        * Checks if a character is an operator or text and acts accordingly
        *
        * @param chr Character from the address field
+       * @param nextChr Character following chr, null at the end of the field
        */
       checkChar(chr, nextChr) {
         if (!this.escaped && !this.operatorExpecting) {
-          if (!this.inDomainLiteral && chr === "[") {
+          if (!this.inDomainLiteral && chr === "[" && this.afterAt) {
             this.inDomainLiteral = true;
           } else if (this.inDomainLiteral && (chr === "]" || chr === "," || chr === ";")) {
             this.inDomainLiteral = false;
@@ -4702,20 +4753,26 @@ var init_addressparser = __esm({
           }
           this.list.push(this.node);
           this.node = null;
+          if (chr !== ")") {
+            this.afterAt = false;
+          }
           this.operatorExpecting = "";
           this.escaped = false;
           return;
-        } else if (!this.operatorExpecting && !this.inDomainLiteral && chr in this.operators) {
+        } else if (!this.operatorExpecting && !(this.inDomainLiteral && chr === ":") && chr in this.operators) {
           this.node = {
             type: "operator",
             value: chr
           };
           this.list.push(this.node);
           this.node = null;
+          if (chr !== "(") {
+            this.afterAt = false;
+          }
           this.operatorExpecting = this.operators[chr];
           this.escaped = false;
           return;
-        } else if (['"', "'"].includes(this.operatorExpecting) && chr === "\\") {
+        } else if (['"', "'", ")"].includes(this.operatorExpecting) && chr === "\\") {
           this.escaped = true;
           return;
         }
@@ -4731,6 +4788,9 @@ var init_addressparser = __esm({
         }
         if (chr.charCodeAt(0) >= 33 || [" ", "	"].includes(chr)) {
           this.node.value += chr;
+          if (!this.operatorExpecting && chr !== " " && chr !== "	") {
+            this.afterAt = chr === "@";
+          }
         }
         this.escaped = false;
       }
@@ -4740,11 +4800,11 @@ var init_addressparser = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-node/last-newline.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-node/last-newline.js
 import { Transform as Transform3 } from "node:stream";
 var LastNewline;
 var init_last_newline = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-node/last-newline.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-node/last-newline.js"() {
     LastNewline = class extends Transform3 {
       constructor() {
         super();
@@ -4774,11 +4834,11 @@ var init_last_newline = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-node/le-windows.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-node/le-windows.js
 import { Transform as Transform4 } from "node:stream";
 var LeWindows;
 var init_le_windows = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-node/le-windows.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-node/le-windows.js"() {
     LeWindows = class extends Transform4 {
       constructor(options) {
         super(options);
@@ -4816,11 +4876,11 @@ var init_le_windows = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-node/le-unix.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-node/le-unix.js
 import { Transform as Transform5 } from "node:stream";
 var LeUnix;
 var init_le_unix = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-node/le-unix.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-node/le-unix.js"() {
     LeUnix = class extends Transform5 {
       constructor(options) {
         super(options);
@@ -4851,7 +4911,7 @@ var init_le_unix = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-node/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-node/index.js
 import crypto from "node:crypto";
 import fs2 from "node:fs";
 import { PassThrough as PassThrough2 } from "node:stream";
@@ -4871,7 +4931,7 @@ function _stripBoundaryControls(value) {
 }
 var FORMATTED_HEADERS, ATEXT, DOT_ATOM, QUOTED_STRING, PLAIN_ADDRESS, URL_PARSER_UNSAFE, MimeNode, mime_node_default;
 var init_mime_node = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mime-node/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mime-node/index.js"() {
     init_punycode();
     init_shared();
     init_mime_funcs();
@@ -5837,6 +5897,7 @@ var init_mime_node = __esm({
        *
        * @param addresses An array of address objects
        * @param [uniqueList] An array to be populated with addresses
+       * @param [seenAddresses] Addresses already added to uniqueList, shared with recursive calls to keep deduplication linear
        * @return address string
        * @internal
        */
@@ -5948,7 +6009,7 @@ var init_mime_node = __esm({
       /**
        * If needed, mime encodes the name part
        *
-       * @param name Name part of an address
+       * @param value Name part of an address
        * @returns Mime word encoded string if needed
        * @internal
        */
@@ -5998,14 +6059,14 @@ var init_mime_node = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mail-composer/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mail-composer/index.js
 function isContentObject(value) {
   const content = value;
   return typeof value === "object" && !!(content.content || content.path || content.href || content.raw);
 }
 var MailComposer, mail_composer_default;
 var init_mail_composer = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mail-composer/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mail-composer/index.js"() {
     init_mime_node();
     init_mime_funcs();
     init_shared();
@@ -6492,11 +6553,22 @@ var init_mail_composer = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/dkim/message-parser.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/dkim/message-parser.js
 import { Transform as Transform6 } from "node:stream";
+function _trimFieldName(str2) {
+  let start = 0;
+  let end = str2.length;
+  while (start < end && (str2.charCodeAt(start) === 32 || str2.charCodeAt(start) === 9)) {
+    start++;
+  }
+  while (end > start && (str2.charCodeAt(end - 1) === 32 || str2.charCodeAt(end - 1) === 9)) {
+    end--;
+  }
+  return str2.slice(start, end);
+}
 var MessageParser, message_parser_default;
 var init_message_parser = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/dkim/message-parser.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/dkim/message-parser.js"() {
     MessageParser = class extends Transform6 {
       constructor(options) {
         super(options);
@@ -6615,7 +6687,7 @@ var init_message_parser = __esm({
           }
         }
         return lines.filter((line) => /[^ \t\r]/.test(line)).map((line) => ({
-          key: line.substr(0, line.indexOf(":")).replace(/^[ \t]+|[ \t]+$/g, "").toLowerCase(),
+          key: _trimFieldName(line.substr(0, line.indexOf(":"))).toLowerCase(),
           line
         }));
       }
@@ -6624,12 +6696,12 @@ var init_message_parser = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/dkim/relaxed-body.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/dkim/relaxed-body.js
 import { Transform as Transform7 } from "node:stream";
 import crypto2 from "node:crypto";
 var CHAR_CR, CHAR_LF, CHAR_SPACE, CHAR_TAB, CRLF, EMPTY_LINES, RelaxedBody, relaxed_body_default;
 var init_relaxed_body = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/dkim/relaxed-body.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/dkim/relaxed-body.js"() {
     CHAR_CR = 13;
     CHAR_LF = 10;
     CHAR_SPACE = 32;
@@ -6751,7 +6823,7 @@ var init_relaxed_body = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/dkim/sign.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/dkim/sign.js
 import crypto3 from "node:crypto";
 function unsupportedHashAlgoError(hashAlgo) {
   const err = new Error('Unsupported DKIM hash algorithm "' + hashAlgo + '"');
@@ -6828,7 +6900,7 @@ function relaxedHeaderLine(line) {
 }
 var sign_default;
 var init_sign = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/dkim/sign.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/dkim/sign.js"() {
     init_punycode();
     init_mime_funcs();
     init_errors();
@@ -6838,14 +6910,14 @@ var init_sign = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/dkim/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/dkim/index.js
 import { PassThrough as PassThrough3 } from "node:stream";
 import fs3 from "node:fs";
 import path2 from "node:path";
 import crypto4 from "node:crypto";
 var DKIM_ALGO, MAX_MESSAGE_SIZE, DKIMSigner, DKIM, dkim_default;
 var init_dkim = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/dkim/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/dkim/index.js"() {
     init_message_parser();
     init_relaxed_body();
     init_sign();
@@ -7049,7 +7121,7 @@ var init_dkim = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-connection/http-proxy-client.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-connection/http-proxy-client.js
 import net5 from "node:net";
 import tls from "node:tls";
 function httpProxyClient(proxyUrl, destinationPort, destinationHost, tlsOptions, callback) {
@@ -7113,18 +7185,25 @@ function httpProxyClient(proxyUrl, destinationPort, destinationHost, tlsOptions,
       Object.keys(reqHeaders).map((key) => key + ": " + reqHeaders[key]).join("\r\n") + // End request
       "\r\n\r\n"
     );
-    let headers = "";
+    const chunks = [];
+    let received = 0;
+    let tail = "";
     const onSocketData = (chunk) => {
       let match;
-      let remainder;
       if (finished) {
         return;
       }
-      headers += chunk.toString("binary");
-      if (match = headers.match(/\r\n\r\n/)) {
+      const window = tail + chunk.toString("binary");
+      const windowEnd = window.indexOf("\r\n\r\n");
+      chunks.push(chunk);
+      received += chunk.length;
+      tail = window.slice(-3);
+      if (windowEnd >= 0) {
         socket.removeListener("data", onSocketData);
-        remainder = headers.substr(match.index + match[0].length);
-        headers = headers.substr(0, match.index);
+        const headerEnd = received - window.length + windowEnd;
+        const response = Buffer.concat(chunks, received).toString("binary");
+        const headers = response.substr(0, headerEnd);
+        const remainder = response.substr(headerEnd + 4);
         if (remainder) {
           socket.unshift(Buffer.from(remainder, "binary"));
         }
@@ -7144,7 +7223,7 @@ function httpProxyClient(proxyUrl, destinationPort, destinationHost, tlsOptions,
         socket.setTimeout(0);
         return done(null, socket);
       }
-      if (headers.length > MAX_RESPONSE_HEADER_BYTES) {
+      if (received > MAX_RESPONSE_HEADER_BYTES) {
         socket.removeListener("data", onSocketData);
         const err = new Error("Proxy response headers too large");
         err.code = EPROXY;
@@ -7159,7 +7238,7 @@ function httpProxyClient(proxyUrl, destinationPort, destinationHost, tlsOptions,
 }
 var MAX_RESPONSE_HEADER_BYTES, http_proxy_client_default;
 var init_http_proxy_client = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-connection/http-proxy-client.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-connection/http-proxy-client.js"() {
     init_url();
     init_errors();
     MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
@@ -7167,10 +7246,10 @@ var init_http_proxy_client = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mailer/mail-message.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mailer/mail-message.js
 var hasOwn, MailMessage;
 var init_mail_message = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mailer/mail-message.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mailer/mail-message.js"() {
     init_shared();
     init_mime_node();
     init_mime_funcs();
@@ -7427,7 +7506,7 @@ var init_mail_message = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mailer/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mailer/index.js
 import { EventEmitter } from "node:events";
 import util2 from "node:util";
 import net6 from "node:net";
@@ -7435,7 +7514,7 @@ import dns2 from "node:dns";
 import crypto5 from "node:crypto";
 var DEFAULT_MAX_RECIPIENTS, Mail, mailer_default;
 var init_mailer = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/mailer/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/mailer/index.js"() {
     init_shared();
     init_mime_types();
     init_mail_composer();
@@ -7780,11 +7859,11 @@ var init_mailer = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-connection/data-stream.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-connection/data-stream.js
 import { Transform as Transform8 } from "node:stream";
 var INSERT_LF, INSERT_LF_DOT, INSERT_CR, INSERT_DOT, DataStream;
 var init_data_stream = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-connection/data-stream.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-connection/data-stream.js"() {
     INSERT_LF = Buffer.from("\n");
     INSERT_LF_DOT = Buffer.from("\n.");
     INSERT_CR = Buffer.from("\r");
@@ -7871,7 +7950,7 @@ var init_data_stream = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-connection/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-connection/index.js
 import { EventEmitter as EventEmitter2 } from "node:events";
 import net7 from "node:net";
 import tls2 from "node:tls";
@@ -7893,7 +7972,7 @@ function isPartialLine(line) {
 }
 var CONNECTION_TIMEOUT, SOCKET_TIMEOUT, GREETING_TIMEOUT, DNS_TIMEOUT, TEARDOWN_NOOP, MAX_RESPONSE_SIZE, SMTPConnection, smtp_connection_default;
 var init_smtp_connection = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-connection/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-connection/index.js"() {
     init_package_info();
     init_data_stream();
     init_shared();
@@ -8338,7 +8417,7 @@ var init_smtp_connection = __esm({
        *
        * @param envelope Envelope object, {from: addr, to: [addr]}
        * @param message String, Buffer or a Stream
-       * @param callback Callback to return once sending is completed
+       * @param done Callback to return once sending is completed
        */
       send(envelope, message, done) {
         let returned = false;
@@ -8526,6 +8605,8 @@ var init_smtp_connection = __esm({
        * @event
        * @param err Error object
        * @param type Error name
+       * @param data Server response that triggered the error, false if there is none
+       * @param command SMTP command that was in flight
        * @internal
        */
       _onError(err, type, data, command) {
@@ -8753,6 +8834,7 @@ var init_smtp_connection = __esm({
        *        {from:'...', to:['...']}
        *        or
        *        {from:{address:'...',name:'...'}, to:[address:'...',name:'...']}
+       * @param callback Callback to run once the envelope is processed
        * @internal
        */
       _setEnvelope(envelope, callback) {
@@ -9097,6 +9179,7 @@ var init_smtp_connection = __esm({
        * hosts invalidly use a longer message than VXNlcm5hbWU6
        *
        * @param str Message from the server
+       * @param callback Callback to run once the authentication sequence completes
        * @internal
        */
       _actionAUTH_LOGIN_USER(str2, callback) {
@@ -9117,6 +9200,7 @@ var init_smtp_connection = __esm({
        * base64 encoded again.
        *
        * @param str Message from the server
+       * @param callback Callback to run once the authentication sequence completes
        * @internal
        */
       _actionAUTH_CRAM_MD5(str2, callback) {
@@ -9142,6 +9226,7 @@ var init_smtp_connection = __esm({
        * the user can be considered logged in. Start waiting for a message to send
        *
        * @param str Message from the server
+       * @param callback Callback to run once the authentication sequence completes
        * @internal
        */
       _actionAUTH_CRAM_MD5_PASS(str2, callback) {
@@ -9163,6 +9248,7 @@ var init_smtp_connection = __esm({
        * response needs to be base64 encoded password.
        *
        * @param str Message from the server
+       * @param callback Callback to run once the authentication sequence completes
        * @internal
        */
       _actionAUTH_LOGIN_PASS(str2, callback) {
@@ -9183,6 +9269,8 @@ var init_smtp_connection = __esm({
        * the user can be considered logged in. Start waiting for a message to send
        *
        * @param str Message from the server
+       * @param isRetry True if this is a retry after a failed login, or the callback itself
+       * @param [callback] Callback to run once the authentication sequence completes
        * @internal
        */
       _actionAUTHComplete(str2, isRetry, callback) {
@@ -9223,6 +9311,7 @@ var init_smtp_connection = __esm({
        * Handle response for a MAIL FROM: command
        *
        * @param str Message from the server
+       * @param callback Callback to run once the envelope is processed
        * @internal
        */
       _actionMAIL(str2, callback) {
@@ -9249,6 +9338,7 @@ var init_smtp_connection = __esm({
        * Handle response for a RCPT TO: command
        *
        * @param str Message from the server
+       * @param callback Callback to run once the envelope is processed
        * @internal
        */
       _actionRCPT(str2, callback) {
@@ -9291,6 +9381,7 @@ var init_smtp_connection = __esm({
        * Handle response for a DATA command
        *
        * @param str Message from the server
+       * @param callback Callback to run once the envelope is processed
        * @internal
        */
       _actionDATA(str2, callback) {
@@ -9315,6 +9406,7 @@ var init_smtp_connection = __esm({
        * We expect a single response that defines if the sending succeeded or failed
        *
        * @param str Message from the server
+       * @param callback Callback to run with the final send result
        * @internal
        */
       _actionSMTPStream(str2, callback) {
@@ -9331,6 +9423,7 @@ var init_smtp_connection = __esm({
        * @param recipient The recipient this response applies to
        * @param final Is this the final recipient?
        * @param str Message from the server
+       * @param callback Callback to run with the final send result
        * @internal
        */
       _actionLMTPStream(recipient, final, str2, callback) {
@@ -9412,12 +9505,12 @@ var init_smtp_connection = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/xoauth2/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/xoauth2/index.js
 import { Stream } from "node:stream";
 import crypto7 from "node:crypto";
 var XOAuth2, xoauth2_default;
 var init_xoauth2 = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/xoauth2/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/xoauth2/index.js"() {
     init_fetch();
     init_shared();
     init_errors();
@@ -9747,11 +9840,11 @@ var init_xoauth2 = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-pool/pool-resource.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-pool/pool-resource.js
 import { EventEmitter as EventEmitter3 } from "node:events";
 var PoolResource;
 var init_pool_resource = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-pool/pool-resource.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-pool/pool-resource.js"() {
     init_smtp_connection();
     init_shared();
     init_xoauth2();
@@ -9955,10 +10048,10 @@ var init_pool_resource = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/well-known/services.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/well-known/services.js
 var services;
 var init_services = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/well-known/services.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/well-known/services.js"() {
     services = {
       "126": {
         "description": "126 Mail (NetEase)",
@@ -10270,6 +10363,12 @@ var init_services = __esm({
         "description": "Mailosaur (email testing service)",
         "host": "mailosaur.io",
         "port": 25
+      },
+      "MailSenpai": {
+        "description": "MailSenpai (SMTP Senpai, EU)",
+        "host": "relay.mailsenpai.com",
+        "port": 2525,
+        "secure": false
       },
       "Mailtrap": {
         "description": "Mailtrap",
@@ -10626,7 +10725,7 @@ var init_services = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/well-known/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/well-known/index.js
 function normalizeKey(key) {
   return key.replace(/[^a-zA-Z0-9.-]/g, "").toLowerCase();
 }
@@ -10645,7 +10744,7 @@ function wellKnown(key) {
 }
 var normalized;
 var init_well_known = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/well-known/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/well-known/index.js"() {
     init_services();
     normalized = {};
     Object.keys(services).forEach((key) => {
@@ -10662,11 +10761,11 @@ var init_well_known = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-pool/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-pool/index.js
 import { EventEmitter as EventEmitter4 } from "node:events";
 var REQUEUE_BASE_DELAY, REQUEUE_MAX_DELAY, SMTPPool, smtp_pool_default;
 var init_smtp_pool = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-pool/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-pool/index.js"() {
     init_pool_resource();
     init_smtp_connection();
     init_well_known();
@@ -11155,11 +11254,11 @@ var init_smtp_pool = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-transport/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-transport/index.js
 import { EventEmitter as EventEmitter5 } from "node:events";
 var SMTPTransport, smtp_transport_default;
 var init_smtp_transport = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/smtp-transport/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/smtp-transport/index.js"() {
     init_smtp_connection();
     init_well_known();
     init_shared();
@@ -11479,11 +11578,11 @@ var init_smtp_transport = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/sendmail-transport/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/sendmail-transport/index.js
 import { spawn } from "node:child_process";
 var SendmailTransport, sendmail_transport_default;
 var init_sendmail_transport = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/sendmail-transport/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/sendmail-transport/index.js"() {
     init_package_info();
     init_shared();
     init_errors();
@@ -11624,10 +11723,10 @@ var init_sendmail_transport = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/stream-transport/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/stream-transport/index.js
 var StreamTransport, stream_transport_default;
 var init_stream_transport = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/stream-transport/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/stream-transport/index.js"() {
     init_package_info();
     init_shared();
     init_le_windows();
@@ -11721,10 +11820,10 @@ var init_stream_transport = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/json-transport/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/json-transport/index.js
 var JSONTransport, json_transport_default;
 var init_json_transport = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/json-transport/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/json-transport/index.js"() {
     init_package_info();
     init_shared();
     JSONTransport = class {
@@ -11780,7 +11879,7 @@ var init_json_transport = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/ses-transport/index.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/ses-transport/index.js
 import EventEmitter6 from "node:events";
 function tagSesError(err) {
   if (err && typeof err === "object" && !err.code) {
@@ -11790,7 +11889,7 @@ function tagSesError(err) {
 }
 var SESTransport, ses_transport_default;
 var init_ses_transport = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/ses-transport/index.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/ses-transport/index.js"() {
     init_package_info();
     init_shared();
     init_errors();
@@ -11972,7 +12071,7 @@ var init_ses_transport = __esm({
   }
 });
 
-// node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/nodemailer.js
+// node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/nodemailer.js
 function createTransport(transporter, defaults) {
   let options;
   if (
@@ -12094,7 +12193,7 @@ function getTestMessageUrl(info) {
 }
 var ETHEREAL_API, ETHEREAL_WEB, ETHEREAL_API_KEY, ETHEREAL_CACHE, testAccount, nodemailer, nodemailer_default;
 var init_nodemailer = __esm({
-  "node_modules/.pnpm/nodemailer@10.0.13/node_modules/nodemailer/dist/esm/nodemailer.js"() {
+  "node_modules/.pnpm/nodemailer@10.0.16/node_modules/nodemailer/dist/esm/nodemailer.js"() {
     init_mailer();
     init_shared();
     init_smtp_pool();
