@@ -82916,6 +82916,49 @@ function preflightAttachments(attachments) {
   }
 }
 
+// src/utils/senderAccount.ts
+function extractAddress(sender) {
+  const angle = /<([^<>]*)>\s*$/.exec(sender);
+  return (angle ? angle[1] : sender).trim();
+}
+var same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+function describe(accounts) {
+  const usable = accounts.filter((a) => a.enabled && a.addresses.length > 0);
+  if (usable.length === 0) return "No enabled Mail account with an address was found.";
+  return `Available: ${usable.map((a) => `${a.name} <${a.addresses.join(", ")}>`).join("; ")}`;
+}
+function pickSenderAddress(input, accounts) {
+  const wanted = extractAddress(input);
+  const enabled = accounts.filter((a) => a.enabled);
+  const address = enabled.flatMap((a) => a.addresses).find((addr) => same(addr, wanted));
+  if (address) return { address };
+  const byName = enabled.filter((a) => same(a.name, input));
+  if (byName.length > 1) {
+    return {
+      error: `Account name "${input}" matches ${byName.length} accounts; pass the exact sender address instead. ${describe(accounts)}`
+    };
+  }
+  if (byName.length === 1) {
+    const { addresses } = byName[0];
+    if (addresses.length === 1) return { address: addresses[0] };
+    return {
+      error: `Account "${input}" has ${addresses.length === 0 ? "no address" : `${addresses.length} addresses`}; pass the exact sender address instead. ${describe(accounts)}`
+    };
+  }
+  return {
+    error: `No enabled Mail account or address matches "${input}", so nothing was sent or saved. ${describe(accounts)}`
+  };
+}
+function senderGuardScript(safeAddress) {
+  const check2 = safeAddress ? `
+        if not (actualSender is "${safeAddress}" or actualSender ends with "<${safeAddress}>") then
+          delete newMessage
+          return "error:Mail.app would send as " & actualSender & " instead of ${safeAddress}, so nothing was sent or saved."
+        end if` : "";
+  return `
+        set actualSender to sender of newMessage as text${check2}`;
+}
+
 // src/services/appleMailManager.ts
 init_attachmentReadPolicy();
 
@@ -83123,6 +83166,9 @@ function extractFreshlyStalledMailboxes(raw) {
 var GROUP_SEP = "";
 var FIELD_SEP = "";
 var RECORD_SEP = "";
+var ITEM_SEP = "";
+var SENT_PREFIX = "sent:";
+var DRAFT_PREFIX = "draft created:";
 var DIAG_MARKER = "DIAG";
 var DIAG_FIELD_SEP = "F";
 var DIAG_ITEM_SEP = "M";
@@ -83498,6 +83544,13 @@ function looksLikeMailNotRunning(error3) {
   return /application isn't running|\(-600\)|Mail\.app is not responding\. Try opening Mail\.app/i.test(
     error3
   );
+}
+function parseComposeOutput(output, prefix) {
+  const out = output.trim();
+  if (out.startsWith(prefix)) return { success: true, from: out.slice(prefix.length) };
+  if (out.startsWith("error:")) return { success: false, error: out.slice("error:".length) };
+  console.error(`Unexpected compose output: ${out.slice(0, 200)}`);
+  return { success: false };
 }
 function mailboxPathFragment(mailboxVar, outputVar) {
   return `
@@ -85546,8 +85599,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param body - Email body (plain text)
    * @param cc - CC recipients
    * @param bcc - BCC recipients
-   * @param account - Account to send from
-   * @returns true if sent successfully
+   * @param account - Account name or exact address to send from; resolved to one
+   *   address and verified before sending (see `utils/senderAccount.ts`)
+   * @returns `from` is the sender Mail.app actually used
    */
   // ───────────────────────────────────────────────────────────────────
   // KNOWN BUG: outgoing emails sent via AppleScript on macOS 15+ get wrapped
@@ -85593,7 +85647,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
     const mat = materializeAttachments(attachments);
     try {
-      return this.sendEmailWithPaths(
+      return this.composeWithCommands(
+        "send",
         recipientCommands,
         safeSubject,
         safeBody,
@@ -85604,38 +85659,55 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       mat.cleanup();
     }
   }
-  sendEmailWithPaths(recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
-    let sendCommand;
-    if (account) {
-      const safeAccount = escapeForAppleScript(account);
-      sendCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:true}
+  /**
+   * Build and run the AppleScript compose for send-email (`send`) and
+   * create-draft (`draft`): pin the sender when `account` is given, verify it
+   * before the message leaves, and report the sender Mail actually used.
+   */
+  composeWithCommands(mode, recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
+    const sender = this.resolveSender(account);
+    if ("error" in sender) return { success: false, error: sender.error };
+    const prefix = mode === "send" ? SENT_PREFIX : DRAFT_PREFIX;
+    const script = buildAppLevelScript(`
+        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:${mode === "send"}}
         tell newMessage
           ${recipientCommands}
-          set sender to "${safeAccount}"
+          ${sender.setSender}
           ${attachmentCommands}
         end tell
-        send newMessage
-        return "sent"
-      `;
-    } else {
-      sendCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:true}
-        tell newMessage
-          ${recipientCommands}
-          ${attachmentCommands}
-        end tell
-        send newMessage
-        return "sent"
-      `;
-    }
-    const script = buildAppLevelScript(sendCommand);
+        ${sender.guard}
+        ${mode === "send" ? "send newMessage" : ""}
+        return "${prefix}" & actualSender
+      `);
     const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 1 });
     if (!result.success) {
-      console.error(`Failed to send email: ${result.error}`);
-      return false;
+      console.error(
+        `Failed to ${mode === "send" ? "send email" : "create draft"}: ${result.error}`
+      );
+      return { success: false };
     }
-    return result.output.includes("sent");
+    return parseComposeOutput(result.output, prefix);
+  }
+  /**
+   * Turn the caller's `account` into the AppleScript pieces that pin the
+   * sender and verify it. No `account` → no pin, but the script still reports
+   * the sender Mail picked. Uses the cached account list: a stale list can only
+   * turn a valid account into a refusal, and the in-script guard re-checks the
+   * real sender before anything leaves.
+   */
+  resolveSender(account) {
+    if (!account) return { setSender: "", guard: senderGuardScript(void 0) };
+    const { accounts, failed } = this.listAccountsChecked({ timeoutMs: 3e4 });
+    if (failed) {
+      return { error: "Could not read Mail accounts to resolve the sender; nothing was sent." };
+    }
+    const picked = pickSenderAddress(account, accounts);
+    if ("error" in picked) return { error: picked.error };
+    const safeAddress = escapeForAppleScript(picked.address);
+    return {
+      setSender: `set sender to "${safeAddress}"`,
+      guard: senderGuardScript(safeAddress)
+    };
   }
   /**
    * Send individual personalized emails to a list of recipients (mail merge).
@@ -85653,6 +85725,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   sendSerialEmail(recipients, subject, body, account, delayMs = 500) {
     const effectiveDelay = Math.min(Math.max(delayMs, 0), 1e4);
     const results = [];
+    const sender = this.resolveSender(account);
+    if ("error" in sender) {
+      return recipients.map((r) => ({ email: r.email, success: false, error: sender.error }));
+    }
     for (let i = 0; i < recipients.length; i++) {
       const recipient = recipients[i];
       try {
@@ -85664,7 +85740,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           personalizedSubject = personalizedSubject.replace(placeholder, value);
           personalizedBody = personalizedBody.replace(placeholder, value);
         }
-        const success = this.sendEmail(
+        const sent = this.sendEmail(
           [recipient.email],
           personalizedSubject,
           personalizedBody,
@@ -85674,8 +85750,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         );
         results.push({
           email: recipient.email,
-          success,
-          error: success ? void 0 : "Failed to send email"
+          success: sent.success,
+          error: sent.success ? void 0 : sent.error ?? "Failed to send email"
         });
       } catch (error3) {
         results.push({
@@ -85699,7 +85775,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param cc - CC recipients
    * @param bcc - BCC recipients
    * @param account - Account to create draft in
-   * @returns true if draft created successfully
+   * @returns `from` is the sender Mail.app actually used
    */
   createDraft(to, subject, body, cc, bcc, account, attachments) {
     const safeSubject = escapeForAppleScript(subject);
@@ -85724,7 +85800,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const mat = materializeAttachments(attachments);
     const attachmentCommands = buildAttachmentCommands(mat.paths);
     try {
-      return this.createDraftWithCommands(
+      return this.composeWithCommands(
+        "draft",
         recipientCommands,
         safeSubject,
         safeBody,
@@ -85734,37 +85811,6 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     } finally {
       mat.cleanup();
     }
-  }
-  createDraftWithCommands(recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
-    let draftCommand;
-    if (account) {
-      const safeAccount = escapeForAppleScript(account);
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          set sender to "${safeAccount}"
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    } else {
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    }
-    const script = buildAppLevelScript(draftCommand);
-    const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 1 });
-    if (!result.success) {
-      console.error(`Failed to create draft: ${result.error}`);
-      return false;
-    }
-    return result.output.includes("draft created");
   }
   /**
    * Reply to a message.
@@ -87496,12 +87542,9 @@ end tell`;
       set accountList to {}
       repeat with acct in accounts
         set acctName to name of acct
-        set acctEmail to email addresses of acct
         set acctEnabled to enabled of acct
-        set emailStr to ""
-        if (count of acctEmail) > 0 then
-          set emailStr to item 1 of acctEmail
-        end if
+        set AppleScript's text item delimiters to "${ITEM_SEP}"
+        set emailStr to (email addresses of acct) as text
         set end of accountList to acctName & "${FIELD_SEP}" & emailStr & "${FIELD_SEP}" & acctEnabled
       end repeat
       set AppleScript's text item delimiters to "${RECORD_SEP}"
@@ -87522,9 +87565,11 @@ end tell`;
     for (const item of items) {
       const parts = item.split(FIELD_SEP);
       if (parts.length < 3) continue;
+      const addresses = parts[1].split(ITEM_SEP).filter(Boolean);
       accounts.push({
         name: parts[0],
-        email: parts[1],
+        email: addresses[0] ?? "",
+        addresses,
         enabled: parts[2] === "true"
       });
     }
@@ -87772,7 +87817,7 @@ ${actionStmts.join("\n")}
     const subject = overrides?.subject ?? template.subject;
     const body = overrides?.body ?? template.body;
     if (to.length === 0) return false;
-    return this.createDraft(to, subject, body, cc);
+    return this.createDraft(to, subject, body, cc).success;
   }
   // ===========================================================================
   // Diagnostics
@@ -90175,6 +90220,9 @@ var SENT_COPY_SCHEMA = external_exports.boolean().optional().describe(
   "SMTP only: whether a best-effort copy was filed to the account's Sent mailbox over IMAP (issue #220). Absent when no configured IMAP account matches the SMTP identity \u2014 not a failure, the feature simply wasn't engaged."
 );
 var SENT_COPY_ERROR_SCHEMA = external_exports.string().optional().describe("Present only when sentCopy is false: why the Sent-folder copy failed.");
+var SEND_ACCOUNT_SCHEMA = external_exports.string().optional().describe(
+  "Account to send from. AppleScript transport: a Mail account name or an exact sender address, resolved to one address and verified before sending; if it matches no enabled account, or Mail would use a different sender, nothing is sent and an error is returned. Omitted \u2192 Mail's default sender (reported back in `from`). SMTP transport: an email-form From override (see README)."
+);
 registerTool(
   "send-email",
   {
@@ -90185,7 +90233,7 @@ registerTool(
       body: external_exports.string().min(1, "Body is required"),
       cc: external_exports.array(external_exports.string()).optional().describe("CC recipients"),
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
-      account: external_exports.string().optional().describe("Account to send from"),
+      account: SEND_ACCOUNT_SCHEMA,
       attachments: ATTACHMENTS_SCHEMA,
       inReplyTo: IN_REPLY_TO_SCHEMA,
       references: REFERENCES_SCHEMA,
@@ -90201,6 +90249,7 @@ registerTool(
       recipients: external_exports.array(external_exports.string()).optional(),
       attachmentCount: external_exports.number().optional(),
       transport: external_exports.string().optional(),
+      from: external_exports.string().optional().describe("AppleScript transport: the sender Mail.app used"),
       messageId: external_exports.string().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA
@@ -90252,16 +90301,20 @@ registerTool(
           ...result.sentCopyError !== void 0 ? { sentCopyError: result.sentCopyError } : {}
         });
       }
-      const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
-      if (!success) {
-        return errorResponse("Failed to send email. Check Mail.app configuration.");
+      const sent = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
+      if (!sent.success) {
+        return errorResponse(sent.error ?? "Failed to send email. Check Mail.app configuration.");
       }
-      return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
-        ok: true,
-        recipients: to,
-        attachmentCount,
-        transport: "applescript"
-      });
+      return successResponse(
+        `Email sent to ${to.join(", ")}${attachInfo}${sent.from ? ` from ${sent.from}` : ""}`,
+        {
+          ok: true,
+          recipients: to,
+          attachmentCount,
+          transport: "applescript",
+          from: sent.from
+        }
+      );
     },
     "Error sending email"
   )
@@ -90279,7 +90332,7 @@ registerTool(
       ).min(1, "At least one recipient is required").max(100, "Cannot send to more than 100 recipients in a single batch").describe("List of recipients with personalization variables (max 100)"),
       subject: external_exports.string().min(1, "Subject is required").describe("Subject line \u2014 use {{Key}} for placeholders"),
       body: external_exports.string().min(1, "Body is required").describe("Email body \u2014 use {{Key}} for placeholders"),
-      account: external_exports.string().optional().describe("Account to send from"),
+      account: SEND_ACCOUNT_SCHEMA,
       delayMs: external_exports.number().min(0).max(1e4).optional().describe("Delay between sends in ms (default: 500, max: 10000)")
     },
     outputSchema: {
@@ -90333,7 +90386,7 @@ registerTool(
       cc: external_exports.array(external_exports.string()).optional().describe("CC recipients"),
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
       account: external_exports.string().optional().describe(
-        "Account to create draft in. With inReplyTo/references this must name a configured IMAP account (label or login); when omitted, the IMAP account matching the SMTP identity, else the only IMAP account, is used."
+        "Account to create draft in: a Mail account name or an exact sender address, resolved and verified before the draft is saved (no match or a different sender \u2192 error, no draft). With inReplyTo/references this must name a configured IMAP account (label or login); when omitted, the IMAP account matching the SMTP identity, else the only IMAP account, is used."
       ),
       attachments: ATTACHMENTS_SCHEMA,
       inReplyTo: IN_REPLY_TO_SCHEMA,
@@ -90344,6 +90397,7 @@ registerTool(
       recipients: external_exports.array(external_exports.string()).optional(),
       attachmentCount: external_exports.number().optional(),
       transport: external_exports.enum(["applescript", "imap"]).optional(),
+      from: external_exports.string().optional().describe("AppleScript draft: the sender Mail.app used"),
       account: external_exports.string().optional().describe("Threaded draft only: IMAP account it was filed in"),
       mailbox: external_exports.string().optional().describe("Threaded draft only: Drafts mailbox path"),
       messageId: external_exports.string().optional().describe("Threaded draft only: the draft's Message-ID"),
@@ -90366,18 +90420,24 @@ registerTool(
           references
         });
       }
-      const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
-      if (!success) {
-        return errorResponse("Failed to create draft. Check Mail.app configuration.");
+      const drafted = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
+      if (!drafted.success) {
+        return errorResponse(
+          drafted.error ?? "Failed to create draft. Check Mail.app configuration."
+        );
       }
       const attachmentCount = attachments?.length ?? 0;
       const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-      return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
-        ok: true,
-        recipients: to,
-        attachmentCount,
-        transport: "applescript"
-      });
+      return successResponse(
+        `Draft created for ${to.join(", ")}${attachInfo}${drafted.from ? ` from ${drafted.from}` : ""}`,
+        {
+          ok: true,
+          recipients: to,
+          attachmentCount,
+          transport: "applescript",
+          from: drafted.from
+        }
+      );
     },
     "Error creating draft"
   )

@@ -1445,6 +1445,17 @@ const SENT_COPY_ERROR_SCHEMA = z
 
 // --- send-email ---
 
+const SEND_ACCOUNT_SCHEMA = z
+  .string()
+  .optional()
+  .describe(
+    "Account to send from. AppleScript transport: a Mail account name or an exact sender " +
+      "address, resolved to one address and verified before sending; if it matches no enabled " +
+      "account, or Mail would use a different sender, nothing is sent and an error is returned. " +
+      "Omitted → Mail's default sender (reported back in `from`). SMTP transport: an " +
+      "email-form From override (see README)."
+  );
+
 registerTool(
   "send-email",
   {
@@ -1456,7 +1467,7 @@ registerTool(
       body: z.string().min(1, "Body is required"),
       cc: z.array(z.string()).optional().describe("CC recipients"),
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
-      account: z.string().optional().describe("Account to send from"),
+      account: SEND_ACCOUNT_SCHEMA,
       attachments: ATTACHMENTS_SCHEMA,
       inReplyTo: IN_REPLY_TO_SCHEMA,
       references: REFERENCES_SCHEMA,
@@ -1485,6 +1496,7 @@ registerTool(
       recipients: z.array(z.string()).optional(),
       attachmentCount: z.number().optional(),
       transport: z.string().optional(),
+      from: z.string().optional().describe("AppleScript transport: the sender Mail.app used"),
       messageId: z.string().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
@@ -1554,18 +1566,22 @@ registerTool(
         });
       }
 
-      const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
+      const sent = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
 
-      if (!success) {
-        return errorResponse("Failed to send email. Check Mail.app configuration.");
+      if (!sent.success) {
+        return errorResponse(sent.error ?? "Failed to send email. Check Mail.app configuration.");
       }
 
-      return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
-        ok: true,
-        recipients: to,
-        attachmentCount,
-        transport: "applescript",
-      });
+      return successResponse(
+        `Email sent to ${to.join(", ")}${attachInfo}${sent.from ? ` from ${sent.from}` : ""}`,
+        {
+          ok: true,
+          recipients: to,
+          attachmentCount,
+          transport: "applescript",
+          from: sent.from,
+        }
+      );
     },
     "Error sending email"
   )
@@ -1599,7 +1615,7 @@ registerTool(
         .string()
         .min(1, "Body is required")
         .describe("Email body — use {{Key}} for placeholders"),
-      account: z.string().optional().describe("Account to send from"),
+      account: SEND_ACCOUNT_SCHEMA,
       delayMs: z
         .number()
         .min(0)
@@ -1675,9 +1691,11 @@ registerTool(
         .string()
         .optional()
         .describe(
-          "Account to create draft in. With inReplyTo/references this must name a configured " +
-            "IMAP account (label or login); when omitted, the IMAP account matching the SMTP " +
-            "identity, else the only IMAP account, is used."
+          "Account to create draft in: a Mail account name or an exact sender address, resolved " +
+            "and verified before the draft is saved (no match or a different sender → error, " +
+            "no draft). With inReplyTo/references this must name a configured IMAP account " +
+            "(label or login); when omitted, the IMAP account matching the SMTP identity, else " +
+            "the only IMAP account, is used."
         ),
       attachments: ATTACHMENTS_SCHEMA,
       inReplyTo: IN_REPLY_TO_SCHEMA,
@@ -1688,6 +1706,7 @@ registerTool(
       recipients: z.array(z.string()).optional(),
       attachmentCount: z.number().optional(),
       transport: z.enum(["applescript", "imap"]).optional(),
+      from: z.string().optional().describe("AppleScript draft: the sender Mail.app used"),
       account: z.string().optional().describe("Threaded draft only: IMAP account it was filed in"),
       mailbox: z.string().optional().describe("Threaded draft only: Drafts mailbox path"),
       messageId: z.string().optional().describe("Threaded draft only: the draft's Message-ID"),
@@ -1710,20 +1729,26 @@ registerTool(
           references,
         });
       }
-      const success = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
+      const drafted = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
 
-      if (!success) {
-        return errorResponse("Failed to create draft. Check Mail.app configuration.");
+      if (!drafted.success) {
+        return errorResponse(
+          drafted.error ?? "Failed to create draft. Check Mail.app configuration."
+        );
       }
 
       const attachmentCount = attachments?.length ?? 0;
       const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-      return successResponse(`Draft created for ${to.join(", ")}${attachInfo}`, {
-        ok: true,
-        recipients: to,
-        attachmentCount,
-        transport: "applescript",
-      });
+      return successResponse(
+        `Draft created for ${to.join(", ")}${attachInfo}${drafted.from ? ` from ${drafted.from}` : ""}`,
+        {
+          ok: true,
+          recipients: to,
+          attachmentCount,
+          transport: "applescript",
+          from: drafted.from,
+        }
+      );
     },
     "Error creating draft"
   )

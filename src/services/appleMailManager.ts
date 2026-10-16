@@ -45,6 +45,7 @@ import {
   STALLED_MAILBOX_TTL_MS,
 } from "@/services/stalledMailboxStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
+import { pickSenderAddress, senderGuardScript } from "@/utils/senderAccount.js";
 import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
 import { searchContactsDb } from "@/utils/contactsDb.js";
 import {
@@ -62,6 +63,7 @@ import {
   type DestructiveOpReport,
 } from "@/services/auditLog.js";
 import type {
+  ComposeResult,
   Message,
   MessageContent,
   Mailbox,
@@ -373,6 +375,9 @@ export function extractFreshlyStalledMailboxes(raw: string): string[] {
 const GROUP_SEP = "\x1d"; // GS — opens/closes the tag markers built below
 const FIELD_SEP = "\x1f"; // US — between fields within a record
 const RECORD_SEP = "\x1e"; // RS — between records
+const ITEM_SEP = "\x1c"; // FS — between items of a list field (an account's addresses)
+const SENT_PREFIX = "sent:"; // compose script success, followed by the sender Mail used
+const DRAFT_PREFIX = "draft created:"; // same, for create-draft
 const DIAG_MARKER = "\x1dDIAG\x1d"; // GS-wrapped — payload/diagnostics boundary
 const DIAG_FIELD_SEP = "\x1dF\x1d"; // between diagnostics fields
 const DIAG_ITEM_SEP = "\x1dM\x1d"; // between diagnostics list items
@@ -1264,6 +1269,18 @@ function looksLikeMailNotRunning(error: string | undefined): boolean {
   return /application isn't running|\(-600\)|Mail\.app is not responding\. Try opening Mail\.app/i.test(
     error
   );
+}
+
+/**
+ * Read the output of a compose script: `<prefix><actual sender>` on success,
+ * `error:<reason>` when the sender guard refused (nothing sent or saved).
+ */
+function parseComposeOutput(output: string, prefix: string): ComposeResult {
+  const out = output.trim();
+  if (out.startsWith(prefix)) return { success: true, from: out.slice(prefix.length) };
+  if (out.startsWith("error:")) return { success: false, error: out.slice("error:".length) };
+  console.error(`Unexpected compose output: ${out.slice(0, 200)}`);
+  return { success: false };
 }
 
 /**
@@ -3931,8 +3948,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param body - Email body (plain text)
    * @param cc - CC recipients
    * @param bcc - BCC recipients
-   * @param account - Account to send from
-   * @returns true if sent successfully
+   * @param account - Account name or exact address to send from; resolved to one
+   *   address and verified before sending (see `utils/senderAccount.ts`)
+   * @returns `from` is the sender Mail.app actually used
    */
   // ───────────────────────────────────────────────────────────────────
   // KNOWN BUG: outgoing emails sent via AppleScript on macOS 15+ get wrapped
@@ -3964,7 +3982,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     bcc?: string[],
     account?: string,
     attachments?: AttachmentInput[]
-  ): boolean {
+  ): ComposeResult {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
 
@@ -3989,7 +4007,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     // against the attachment read policy first.
     const mat = materializeAttachments(attachments);
     try {
-      return this.sendEmailWithPaths(
+      return this.composeWithCommands(
+        "send",
         recipientCommands,
         safeSubject,
         safeBody,
@@ -4001,51 +4020,75 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
   }
 
-  private sendEmailWithPaths(
+  /**
+   * Build and run the AppleScript compose for send-email (`send`) and
+   * create-draft (`draft`): pin the sender when `account` is given, verify it
+   * before the message leaves, and report the sender Mail actually used.
+   */
+  private composeWithCommands(
+    mode: "send" | "draft",
     recipientCommands: string,
     safeSubject: string,
     safeBody: string,
     account: string | undefined,
     attachmentCommands: string
-  ): boolean {
-    let sendCommand: string;
-    if (account) {
-      const safeAccount = escapeForAppleScript(account);
-      sendCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:true}
-        tell newMessage
-          ${recipientCommands}
-          set sender to "${safeAccount}"
-          ${attachmentCommands}
-        end tell
-        send newMessage
-        return "sent"
-      `;
-    } else {
-      sendCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:true}
-        tell newMessage
-          ${recipientCommands}
-          ${attachmentCommands}
-        end tell
-        send newMessage
-        return "sent"
-      `;
-    }
+  ): ComposeResult {
+    const sender = this.resolveSender(account);
+    if ("error" in sender) return { success: false, error: sender.error };
 
-    const script = buildAppLevelScript(sendCommand);
+    const prefix = mode === "send" ? SENT_PREFIX : DRAFT_PREFIX;
+    const script = buildAppLevelScript(`
+        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:${mode === "send"}}
+        tell newMessage
+          ${recipientCommands}
+          ${sender.setSender}
+          ${attachmentCommands}
+        end tell
+        ${sender.guard}
+        ${mode === "send" ? "send newMessage" : ""}
+        return "${prefix}" & actualSender
+      `);
     // Exactly one attempt. `executeAppleScript` retries on a timeout, and a
     // `send` that timed out may already have been accepted by Mail — a retry
-    // would compose and submit a second copy. A send is not idempotent, so the
-    // caller gets the failure and inspects Sent/Outbox instead.
+    // would compose and submit a second copy (or leave a duplicate draft). A
+    // compose is not idempotent, so the caller gets the failure and inspects
+    // Sent/Outbox/Drafts instead.
     const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 1 });
 
     if (!result.success) {
-      console.error(`Failed to send email: ${result.error}`);
-      return false;
+      console.error(
+        `Failed to ${mode === "send" ? "send email" : "create draft"}: ${result.error}`
+      );
+      return { success: false };
     }
 
-    return result.output.includes("sent");
+    return parseComposeOutput(result.output, prefix);
+  }
+
+  /**
+   * Turn the caller's `account` into the AppleScript pieces that pin the
+   * sender and verify it. No `account` → no pin, but the script still reports
+   * the sender Mail picked. Uses the cached account list: a stale list can only
+   * turn a valid account into a refusal, and the in-script guard re-checks the
+   * real sender before anything leaves.
+   */
+  private resolveSender(
+    account: string | undefined
+  ): { setSender: string; guard: string } | { error: string } {
+    if (!account) return { setSender: "", guard: senderGuardScript(undefined) };
+
+    const { accounts, failed } = this.listAccountsChecked({ timeoutMs: 30000 });
+    if (failed) {
+      return { error: "Could not read Mail accounts to resolve the sender; nothing was sent." };
+    }
+    const picked = pickSenderAddress(account, accounts);
+    if ("error" in picked) return { error: picked.error };
+
+    const safeAddress = escapeForAppleScript(picked.address);
+    return {
+      setSender: `set sender to "${safeAddress}"`,
+      guard: senderGuardScript(safeAddress),
+    };
   }
 
   /**
@@ -4071,6 +4114,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const effectiveDelay = Math.min(Math.max(delayMs, 0), 10000);
     const results: SerialEmailResult[] = [];
 
+    // An account that cannot be resolved fails the whole batch up front rather
+    // than once (and one delay) per recipient.
+    const sender = this.resolveSender(account);
+    if ("error" in sender) {
+      return recipients.map((r) => ({ email: r.email, success: false, error: sender.error }));
+    }
+
     for (let i = 0; i < recipients.length; i++) {
       const recipient = recipients[i];
       try {
@@ -4084,7 +4134,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           personalizedBody = personalizedBody.replace(placeholder, value);
         }
 
-        const success = this.sendEmail(
+        const sent = this.sendEmail(
           [recipient.email],
           personalizedSubject,
           personalizedBody,
@@ -4095,8 +4145,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
         results.push({
           email: recipient.email,
-          success,
-          error: success ? undefined : "Failed to send email",
+          success: sent.success,
+          error: sent.success ? undefined : (sent.error ?? "Failed to send email"),
         });
       } catch (error) {
         results.push({
@@ -4124,7 +4174,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param cc - CC recipients
    * @param bcc - BCC recipients
    * @param account - Account to create draft in
-   * @returns true if draft created successfully
+   * @returns `from` is the sender Mail.app actually used
    */
   createDraft(
     to: string[],
@@ -4134,7 +4184,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     bcc?: string[],
     account?: string,
     attachments?: AttachmentInput[]
-  ): boolean {
+  ): ComposeResult {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
 
@@ -4158,7 +4208,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const mat = materializeAttachments(attachments);
     const attachmentCommands = buildAttachmentCommands(mat.paths);
     try {
-      return this.createDraftWithCommands(
+      return this.composeWithCommands(
+        "draft",
         recipientCommands,
         safeSubject,
         safeBody,
@@ -4168,50 +4219,6 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     } finally {
       mat.cleanup();
     }
-  }
-
-  private createDraftWithCommands(
-    recipientCommands: string,
-    safeSubject: string,
-    safeBody: string,
-    account: string | undefined,
-    attachmentCommands: string
-  ): boolean {
-    let draftCommand: string;
-    if (account) {
-      const safeAccount = escapeForAppleScript(account);
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          set sender to "${safeAccount}"
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    } else {
-      draftCommand = `
-        set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
-        tell newMessage
-          ${recipientCommands}
-          ${attachmentCommands}
-        end tell
-        return "draft created"
-      `;
-    }
-
-    const script = buildAppLevelScript(draftCommand);
-    // Exactly one attempt, for the same reason as sendEmailWithPaths: a
-    // compose that timed out may already have produced the draft, and a retry
-    // would leave a duplicate in Drafts.
-    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 1 });
-
-    if (!result.success) {
-      console.error(`Failed to create draft: ${result.error}`);
-      return false;
-    }
-
-    return result.output.includes("draft created");
   }
 
   /**
@@ -6502,12 +6509,9 @@ end tell`;
       set accountList to {}
       repeat with acct in accounts
         set acctName to name of acct
-        set acctEmail to email addresses of acct
         set acctEnabled to enabled of acct
-        set emailStr to ""
-        if (count of acctEmail) > 0 then
-          set emailStr to item 1 of acctEmail
-        end if
+        set AppleScript's text item delimiters to "${ITEM_SEP}"
+        set emailStr to (email addresses of acct) as text
         set end of accountList to acctName & "${FIELD_SEP}" & emailStr & "${FIELD_SEP}" & acctEnabled
       end repeat
       set AppleScript's text item delimiters to "${RECORD_SEP}"
@@ -6538,9 +6542,11 @@ end tell`;
       const parts = item.split(FIELD_SEP);
       if (parts.length < 3) continue;
 
+      const addresses = parts[1].split(ITEM_SEP).filter(Boolean);
       accounts.push({
         name: parts[0],
-        email: parts[1],
+        email: addresses[0] ?? "",
+        addresses,
         enabled: parts[2] === "true",
       });
     }
@@ -6858,7 +6864,7 @@ ${actionStmts.join("\n")}
 
     if (to.length === 0) return false;
 
-    return this.createDraft(to, subject, body, cc);
+    return this.createDraft(to, subject, body, cc).success;
   }
 
   // ===========================================================================

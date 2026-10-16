@@ -186,6 +186,9 @@ export interface Account {
   /** Primary email address for the account */
   email: string;
 
+  /** Every address of the account, in Mail's order (`email` is the first) */
+  addresses: string[];
+
   /** Account type (e.g., "iCloud", "Gmail", "Exchange") */
   accountType?: string;
 
@@ -381,6 +384,19 @@ export interface SerialEmailRecipient {
 
   /** Variable values for placeholder replacement (e.g., { Name: "Alice", Company: "Acme" }) */
   variables: Record<string, string>;
+}
+
+/**
+ * Outcome of an AppleScript send-email / create-draft.
+ */
+export interface ComposeResult {
+  success: boolean;
+
+  /** Why nothing was sent / saved */
+  error?: string;
+
+  /** The sender Mail.app actually used (`Name <address>` or a bare address) */
+  from?: string;
 }
 
 /**

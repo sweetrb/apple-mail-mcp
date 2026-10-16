@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [2.20.13] - 2026-10-16
+
+### Fixed
+
+- **`send-email` / `send-serial-email` / `create-draft` (AppleScript path) could
+  send from the wrong account while reporting success.** `account` was passed
+  straight to `set sender to`, which Mail.app silently ignores for anything that
+  is not a configured address — an account *name* like `me@gmail`, a typo — so
+  the message went out from Mail's default account. `account` is now resolved to
+  one address of an enabled account (name or exact address), the compose script
+  reads `sender` back before sending, and a mismatch deletes the message and
+  returns an error instead of sending. The sender actually used is returned as
+  `from`, with or without `account`. `list-accounts` structured output now also
+  carries every address of each account (`addresses`). Two enabled accounts that
+  share one address are not distinguished: the guard checks the address Mail
+  will put in `From:`, not which account's server sends it.
+
 ## [2.20.12] - 2026-10-14
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)

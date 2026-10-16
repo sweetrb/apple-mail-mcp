@@ -35,7 +35,7 @@ afterEach(() => {
 describe("compose mutations are single-attempt", () => {
   it("sendEmail runs the AppleScript send with maxRetries: 1", () => {
     const mgr = new AppleMailManager();
-    expect(mgr.sendEmail(["to@example.com"], "subject", "body")).toBe(false);
+    expect(mgr.sendEmail(["to@example.com"], "subject", "body")).toEqual({ success: false });
     expect(h.calls).toHaveLength(1);
     expect(h.calls[0].script).toContain("send newMessage");
     expect(h.calls[0].options).toMatchObject({ maxRetries: 1 });
@@ -43,7 +43,7 @@ describe("compose mutations are single-attempt", () => {
 
   it("createDraft runs the AppleScript compose with maxRetries: 1", () => {
     const mgr = new AppleMailManager();
-    expect(mgr.createDraft(["to@example.com"], "subject", "body")).toBe(false);
+    expect(mgr.createDraft(["to@example.com"], "subject", "body")).toEqual({ success: false });
     expect(h.calls).toHaveLength(1);
     expect(h.calls[0].script).toContain("make new outgoing message");
     expect(h.calls[0].options).toMatchObject({ maxRetries: 1 });
