@@ -83374,10 +83374,30 @@ function buildAttachmentCommands(attachments) {
   }
   return commands;
 }
+var ATTACHMENT_SETTLE_TIMEOUT_S = 15;
+var ATTACHMENT_SETTLE_GRACE_S = 1;
+function attachmentSettleBlock(msgVar, expected) {
+  if (expected <= 0) return "";
+  return `
+        set attachDeadline to (current date) + ${ATTACHMENT_SETTLE_TIMEOUT_S}
+        repeat
+          set attachCount to 0
+          try
+            set attachCount to count of attachments of content of ${msgVar}
+          end try
+          if attachCount >= ${expected} then exit repeat
+          if (current date) > attachDeadline then exit repeat
+          delay 0.25
+        end repeat
+        delay ${ATTACHMENT_SETTLE_GRACE_S}`;
+}
+function countAttachmentCommands(commands) {
+  return (commands.match(/make new attachment/g) || []).length;
+}
 function composeAttachmentBlock(msgVar, paths) {
   const commands = buildAttachmentCommands(paths);
   return commands ? `tell ${msgVar}
-${commands}end tell` : "";
+${commands}end tell${attachmentSettleBlock(msgVar, paths.length)}` : "";
 }
 function asDateToString(varName) {
   return `((year of ${varName}) as string) & "-" & ((month of ${varName} as integer) as string) & "-" & ((day of ${varName}) as string) & "-" & ((hours of ${varName}) as string) & "-" & ((minutes of ${varName}) as string) & "-" & ((seconds of ${varName}) as string)`;
@@ -85730,12 +85750,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   }
   /**
    * Build and run the AppleScript compose for send-email (`send`) and
-   * create-draft (`draft`): pin the sender when `account` is given, verify it
-   * before the message leaves, and report the sender Mail actually used.
+   * create-draft (`draft`): pin the sender when `account` is given, wait for
+   * any attachments to load (attachmentSettleBlock), verify the sender before
+   * the message leaves, and report the sender Mail actually used. A draft is
+   * saved and closed explicitly rather than left to Mail's autosave (#293).
    */
   composeWithCommands(mode, recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
     const sender = this.resolveSender(account);
     if ("error" in sender) return { success: false, error: sender.error };
+    const settle2 = attachmentSettleBlock("newMessage", countAttachmentCommands(attachmentCommands));
     const prefix = mode === "send" ? SENT_PREFIX : DRAFT_PREFIX;
     const script = buildAppLevelScript(`
         set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:${mode === "send"}}
@@ -85743,9 +85766,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           ${recipientCommands}
           ${sender.setSender}
           ${attachmentCommands}
-        end tell
+        end tell${settle2}
         ${sender.guard}
-        ${mode === "send" ? "send newMessage" : ""}
+        ${mode === "send" ? "send newMessage" : "save newMessage\n        close newMessage saving yes"}
         return "${prefix}" & actualSender
       `);
     const result = executeAppleScript(script, { timeoutMs: 6e4, maxRetries: 1 });
