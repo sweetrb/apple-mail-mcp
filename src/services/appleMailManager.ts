@@ -458,6 +458,33 @@ const AMBIGUOUS_ID_PREFIX = "Message id ";
 const AMBIGUOUS_ID_BATCH = "This message id is present in more than one mailbox ";
 
 /**
+ * Fixes the sender of `compose` (the reply or forward just created) to the
+ * address the original message was sent to: the address of its recipients
+ * (to/cc) that belongs to the account the message sits in, else that account's
+ * first address. Without it Mail answers from its default sending account, so
+ * a mail received in one account was answered from another. Runs inside
+ * `findMessageScript`, where `msg` is the original. It fails loudly (the
+ * script's own `error:` path) instead of falling back to Mail's default.
+ */
+const senderFragment = (compose: "theReply" | "theForward", verb: "reply" | "forward"): string =>
+  `set _rsAddrs to email addresses of (account of (mailbox of msg))
+          if (count of _rsAddrs) is 0 then error "The account this message arrived in has no email address to ${verb} from."
+          set _rsFrom to (item 1 of _rsAddrs) as text
+          set _rsDone to false
+          repeat with _rsR in ((to recipients of msg) & (cc recipients of msg))
+            if not _rsDone then
+              repeat with _rsA in _rsAddrs
+                if (address of _rsR) is (_rsA as text) then
+                  set _rsFrom to (_rsA as text)
+                  set _rsDone to true
+                  exit repeat
+                end if
+              end repeat
+            end if
+          end repeat
+          set sender of ${compose} to _rsFrom`;
+
+/**
  * Normalize an RFC 5322 Message-ID for backend-independent matching: trim and
  * drop any surrounding angle brackets. Mail.app's AppleScript `message id`
  * property returns the value bracketless already, but normalize defensively so
@@ -4255,6 +4282,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         id,
         `
           set theReply to reply msg without opening window${replyAllClause}
+          ${senderFragment("theReply", "reply")}
           set content of theReply to "${safeBody}"
           ${composeAttachmentBlock("theReply", mat.paths)}
           ${finalAction}`
@@ -4300,6 +4328,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         id,
         `
           set theForward to forward msg without opening window
+          ${senderFragment("theForward", "forward")}
           ${recipientCommands}
           ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
           ${composeAttachmentBlock("theForward", mat.paths)}

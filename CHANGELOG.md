@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [2.20.15] - 2026-10-17
+
+### Fixed
+
+- **`reply-to-message` / `forward-message` (AppleScript path) answered from Mail's
+  default sending account** (#294, @JaumeAP), not from the account the message
+  arrived in: neither `reply … without opening window` nor `forward … without
+  opening window` sets a sender. The sender is now the address of the original's
+  to/cc recipients that belongs to the account the message sits in — or, for a
+  message you sent, its own From address — else that account's first address. It
+  is read back before the reply or forward is saved or sent, and a mismatch deletes
+  it and returns an error, as for `send-email` (2.20.13). An account with no
+  address is an error instead of a silent fallback to Mail's default. A message in
+  an "On My Mac" mailbox has no account: its recipients are matched against every
+  enabled account, and with no match the sender is left to Mail, as Mail's own
+  Reply does.
+
 ## [2.20.14] - 2026-10-17
 
 ### Fixed
