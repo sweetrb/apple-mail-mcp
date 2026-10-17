@@ -83259,10 +83259,30 @@ function buildAttachmentCommands(attachments) {
   }
   return commands;
 }
+var ATTACHMENT_SETTLE_TIMEOUT_S = 15;
+var ATTACHMENT_SETTLE_GRACE_S = 1;
+function attachmentSettleBlock(msgVar, expected) {
+  if (expected <= 0) return "";
+  return `
+        set attachDeadline to (current date) + ${ATTACHMENT_SETTLE_TIMEOUT_S}
+        repeat
+          set attachCount to 0
+          try
+            set attachCount to count of attachments of content of ${msgVar}
+          end try
+          if attachCount >= ${expected} then exit repeat
+          if (current date) > attachDeadline then exit repeat
+          delay 0.25
+        end repeat
+        delay ${ATTACHMENT_SETTLE_GRACE_S}`;
+}
+function countAttachmentCommands(commands) {
+  return (commands.match(/make new attachment/g) || []).length;
+}
 function composeAttachmentBlock(msgVar, paths) {
   const commands = buildAttachmentCommands(paths);
   return commands ? `tell ${msgVar}
-${commands}end tell` : "";
+${commands}end tell${attachmentSettleBlock(msgVar, paths.length)}` : "";
 }
 function asDateToString(varName) {
   return `((year of ${varName}) as string) & "-" & ((month of ${varName} as integer) as string) & "-" & ((day of ${varName}) as string) & "-" & ((hours of ${varName}) as string) & "-" & ((minutes of ${varName}) as string) & "-" & ((seconds of ${varName}) as string)`;
@@ -85605,6 +85625,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
   }
   sendEmailWithPaths(recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
+    const settle2 = attachmentSettleBlock("newMessage", countAttachmentCommands(attachmentCommands));
     let sendCommand;
     if (account) {
       const safeAccount = escapeForAppleScript(account);
@@ -85614,7 +85635,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           ${recipientCommands}
           set sender to "${safeAccount}"
           ${attachmentCommands}
-        end tell
+        end tell${settle2}
         send newMessage
         return "sent"
       `;
@@ -85624,7 +85645,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         tell newMessage
           ${recipientCommands}
           ${attachmentCommands}
-        end tell
+        end tell${settle2}
         send newMessage
         return "sent"
       `;
@@ -85736,6 +85757,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
   }
   createDraftWithCommands(recipientCommands, safeSubject, safeBody, account, attachmentCommands) {
+    const settle2 = attachmentSettleBlock("newMessage", countAttachmentCommands(attachmentCommands));
     let draftCommand;
     if (account) {
       const safeAccount = escapeForAppleScript(account);
@@ -85745,7 +85767,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           ${recipientCommands}
           set sender to "${safeAccount}"
           ${attachmentCommands}
-        end tell
+        end tell${settle2}
+        save newMessage
+        close newMessage saving yes
         return "draft created"
       `;
     } else {
@@ -85754,7 +85778,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         tell newMessage
           ${recipientCommands}
           ${attachmentCommands}
-        end tell
+        end tell${settle2}
+        save newMessage
+        close newMessage saving yes
         return "draft created"
       `;
     }

@@ -727,14 +727,57 @@ function buildAttachmentCommands(attachments?: string[]): string {
   return commands;
 }
 
+/** Upper bound on how long a compose script waits for attachments to load. */
+const ATTACHMENT_SETTLE_TIMEOUT_S = 15;
+/** Extra pause after the attachments are counted, while Mail reads their data. */
+const ATTACHMENT_SETTLE_GRACE_S = 1;
+
+/**
+ * AppleScript that waits for Mail.app to finish adding attachments to the
+ * compose object `msgVar` before it is saved or sent.
+ *
+ * `make new attachment` returns before Mail has loaded the file into the
+ * compose. A `save`/`send` issued straight after it races that load, and the
+ * draft (or sent message) silently loses some or all of its attachments while
+ * the tool reports success: observed on macOS against an Exchange account,
+ * where three requested files came out as two, then none, on identical calls.
+ * This polls the compose's attachment count until it reaches `expected` (or
+ * the timeout passes), then pauses briefly so the data itself can land.
+ * Empty string when there are no attachments, so attachment-free compose
+ * scripts are unchanged.
+ */
+function attachmentSettleBlock(msgVar: string, expected: number): string {
+  if (expected <= 0) return "";
+  return `
+        set attachDeadline to (current date) + ${ATTACHMENT_SETTLE_TIMEOUT_S}
+        repeat
+          set attachCount to 0
+          try
+            set attachCount to count of attachments of content of ${msgVar}
+          end try
+          if attachCount >= ${expected} then exit repeat
+          if (current date) > attachDeadline then exit repeat
+          delay 0.25
+        end repeat
+        delay ${ATTACHMENT_SETTLE_GRACE_S}`;
+}
+
+/** Number of files a `buildAttachmentCommands` string attaches. */
+function countAttachmentCommands(commands: string): number {
+  return (commands.match(/make new attachment/g) || []).length;
+}
+
 /**
  * `tell <msgVar> … end tell` block attaching each file to a reply/forward
  * compose object (#267). Must run after `set content of <msgVar>`, which would
- * otherwise discard the attachment paragraphs. Empty string when no files.
+ * otherwise discard the attachment paragraphs. Followed by a wait for the
+ * attachments to load (see attachmentSettleBlock). Empty string when no files.
  */
 function composeAttachmentBlock(msgVar: string, paths: string[]): string {
   const commands = buildAttachmentCommands(paths);
-  return commands ? `tell ${msgVar}\n${commands}end tell` : "";
+  return commands
+    ? `tell ${msgVar}\n${commands}end tell${attachmentSettleBlock(msgVar, paths.length)}`
+    : "";
 }
 
 /**
@@ -4008,6 +4051,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     account: string | undefined,
     attachmentCommands: string
   ): boolean {
+    const settle = attachmentSettleBlock("newMessage", countAttachmentCommands(attachmentCommands));
     let sendCommand: string;
     if (account) {
       const safeAccount = escapeForAppleScript(account);
@@ -4017,7 +4061,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           ${recipientCommands}
           set sender to "${safeAccount}"
           ${attachmentCommands}
-        end tell
+        end tell${settle}
         send newMessage
         return "sent"
       `;
@@ -4027,7 +4071,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         tell newMessage
           ${recipientCommands}
           ${attachmentCommands}
-        end tell
+        end tell${settle}
         send newMessage
         return "sent"
       `;
@@ -4177,6 +4221,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     account: string | undefined,
     attachmentCommands: string
   ): boolean {
+    // Wait for attachments, then save explicitly: without a `save` the draft
+    // was left to Mail's autosave, which could run before the files loaded.
+    const settle = attachmentSettleBlock("newMessage", countAttachmentCommands(attachmentCommands));
     let draftCommand: string;
     if (account) {
       const safeAccount = escapeForAppleScript(account);
@@ -4186,7 +4233,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           ${recipientCommands}
           set sender to "${safeAccount}"
           ${attachmentCommands}
-        end tell
+        end tell${settle}
+        save newMessage
+        close newMessage saving yes
         return "draft created"
       `;
     } else {
@@ -4195,7 +4244,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         tell newMessage
           ${recipientCommands}
           ${attachmentCommands}
-        end tell
+        end tell${settle}
+        save newMessage
+        close newMessage saving yes
         return "draft created"
       `;
     }
