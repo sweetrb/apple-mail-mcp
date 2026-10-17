@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+### Fixed
+
+- **`reply-to-message` / `forward-message` (AppleScript path) answered from Mail's
+  default sending account**, not from the account the message arrived in: neither
+  `reply … without opening window` nor `forward … without opening window` sets a
+  sender. The sender is now the address of the original's to/cc recipients that
+  belongs to the account the message sits in, else that account's first address;
+  an account with no address is an error instead of a silent fallback to Mail's
+  default. (2.20.13 fixed the same defect for `send-email`, `send-serial-email`
+  and `create-draft`.)
+
 ## [2.20.13] - 2026-10-16
 
 ### Fixed

@@ -83191,6 +83191,22 @@ function stripStreamDelimiters(value) {
 }
 var AMBIGUOUS_ID_PREFIX = "Message id ";
 var AMBIGUOUS_ID_BATCH = "This message id is present in more than one mailbox ";
+var senderFragment = (compose, verb) => `set _rsAddrs to email addresses of (account of (mailbox of msg))
+          if (count of _rsAddrs) is 0 then error "The account this message arrived in has no email address to ${verb} from."
+          set _rsFrom to (item 1 of _rsAddrs) as text
+          set _rsDone to false
+          repeat with _rsR in ((to recipients of msg) & (cc recipients of msg))
+            if not _rsDone then
+              repeat with _rsA in _rsAddrs
+                if (address of _rsR) is (_rsA as text) then
+                  set _rsFrom to (_rsA as text)
+                  set _rsDone to true
+                  exit repeat
+                end if
+              end repeat
+            end if
+          end repeat
+          set sender of ${compose} to _rsFrom`;
 function normalizeRfcMessageId(mid) {
   return (mid || "").trim().replace(/^<+/, "").replace(/>+$/, "").trim();
 }
@@ -85833,6 +85849,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         id,
         `
           set theReply to reply msg without opening window${replyAllClause}
+          ${senderFragment("theReply", "reply")}
           set content of theReply to "${safeBody}"
           ${composeAttachmentBlock("theReply", mat.paths)}
           ${finalAction}`
@@ -85866,6 +85883,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         id,
         `
           set theForward to forward msg without opening window
+          ${senderFragment("theForward", "forward")}
           ${recipientCommands}
           ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
           ${composeAttachmentBlock("theForward", mat.paths)}
