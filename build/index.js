@@ -83216,14 +83216,35 @@ function stripStreamDelimiters(value) {
 }
 var AMBIGUOUS_ID_PREFIX = "Message id ";
 var AMBIGUOUS_ID_BATCH = "This message id is present in more than one mailbox ";
-var senderFragment = (compose, verb) => `set _rsAddrs to email addresses of (account of (mailbox of msg))
-          if (count of _rsAddrs) is 0 then error "The account this message arrived in has no email address to ${verb} from."
-          set _rsFrom to (item 1 of _rsAddrs) as text
-          set _rsDone to false
+var senderFragment = (compose, verb) => `set _rsAddrs to {}
+          set _rsOwn to true
+          try
+            set _rsAddrs to email addresses of (account of (mailbox of msg))
+            set _rsN to count of _rsAddrs
+          on error
+            set _rsOwn to false
+            set _rsAddrs to {}
+            repeat with _rsAc in (every account whose enabled is true)
+              try
+                set _rsAddrs to _rsAddrs & (email addresses of _rsAc)
+              end try
+            end repeat
+          end try
+          if _rsOwn and (count of _rsAddrs) is 0 then error "The account this message arrived in has no email address to ${verb} from."
+          set _rsFrom to ""
+          if _rsOwn then set _rsFrom to (item 1 of _rsAddrs) as text
+          set _rsCands to {}
           repeat with _rsR in ((to recipients of msg) & (cc recipients of msg))
+            set end of _rsCands to (address of _rsR) as text
+          end repeat
+          try
+            set end of _rsCands to (extract address from (sender of msg)) as text
+          end try
+          set _rsDone to false
+          repeat with _rsC in _rsCands
             if not _rsDone then
               repeat with _rsA in _rsAddrs
-                if (address of _rsR) is (_rsA as text) then
+                if (_rsC as text) is (_rsA as text) then
                   set _rsFrom to (_rsA as text)
                   set _rsDone to true
                   exit repeat
@@ -83231,7 +83252,14 @@ var senderFragment = (compose, verb) => `set _rsAddrs to email addresses of (acc
               end repeat
             end if
           end repeat
-          set sender of ${compose} to _rsFrom`;
+          if _rsFrom is not "" then
+            set sender of ${compose} to _rsFrom
+            set _rsGot to sender of ${compose} as text
+            if not (_rsGot is _rsFrom or _rsGot ends with "<" & _rsFrom & ">") then
+              delete ${compose}
+              error "Mail.app would ${verb} as " & _rsGot & " instead of " & _rsFrom & ", so nothing was sent or saved."
+            end if
+          end if`;
 function normalizeRfcMessageId(mid) {
   return (mid || "").trim().replace(/^<+/, "").replace(/>+$/, "").trim();
 }

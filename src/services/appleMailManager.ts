@@ -460,21 +460,49 @@ const AMBIGUOUS_ID_BATCH = "This message id is present in more than one mailbox 
 /**
  * Fixes the sender of `compose` (the reply or forward just created) to the
  * address the original message was sent to: the address of its recipients
- * (to/cc) that belongs to the account the message sits in, else that account's
- * first address. Without it Mail answers from its default sending account, so
+ * (to/cc) that belongs to the account the message sits in — or, for a message
+ * the user sent, its own From address — else that account's first address. Without it Mail answers from its default sending account, so
  * a mail received in one account was answered from another. Runs inside
  * `findMessageScript`, where `msg` is the original. It fails loudly (the
- * script's own `error:` path) instead of falling back to Mail's default.
+ * script's own `error:` path) instead of falling back to Mail's default, and
+ * reads `sender` back, as the send-email guard does (2.20.13): Mail silently
+ * ignores a `set sender` it does not accept.
+ *
+ * A message in an "On My Mac" mailbox has no account (`account of` its mailbox
+ * raises). There the recipients are matched against every enabled account's
+ * addresses instead, and with no match the sender is left to Mail, as Mail's own
+ * Reply does: there is no receiving account to honour.
  */
 const senderFragment = (compose: "theReply" | "theForward", verb: "reply" | "forward"): string =>
-  `set _rsAddrs to email addresses of (account of (mailbox of msg))
-          if (count of _rsAddrs) is 0 then error "The account this message arrived in has no email address to ${verb} from."
-          set _rsFrom to (item 1 of _rsAddrs) as text
-          set _rsDone to false
+  `set _rsAddrs to {}
+          set _rsOwn to true
+          try
+            set _rsAddrs to email addresses of (account of (mailbox of msg))
+            set _rsN to count of _rsAddrs
+          on error
+            set _rsOwn to false
+            set _rsAddrs to {}
+            repeat with _rsAc in (every account whose enabled is true)
+              try
+                set _rsAddrs to _rsAddrs & (email addresses of _rsAc)
+              end try
+            end repeat
+          end try
+          if _rsOwn and (count of _rsAddrs) is 0 then error "The account this message arrived in has no email address to ${verb} from."
+          set _rsFrom to ""
+          if _rsOwn then set _rsFrom to (item 1 of _rsAddrs) as text
+          set _rsCands to {}
           repeat with _rsR in ((to recipients of msg) & (cc recipients of msg))
+            set end of _rsCands to (address of _rsR) as text
+          end repeat
+          try
+            set end of _rsCands to (extract address from (sender of msg)) as text
+          end try
+          set _rsDone to false
+          repeat with _rsC in _rsCands
             if not _rsDone then
               repeat with _rsA in _rsAddrs
-                if (address of _rsR) is (_rsA as text) then
+                if (_rsC as text) is (_rsA as text) then
                   set _rsFrom to (_rsA as text)
                   set _rsDone to true
                   exit repeat
@@ -482,7 +510,14 @@ const senderFragment = (compose: "theReply" | "theForward", verb: "reply" | "for
               end repeat
             end if
           end repeat
-          set sender of ${compose} to _rsFrom`;
+          if _rsFrom is not "" then
+            set sender of ${compose} to _rsFrom
+            set _rsGot to sender of ${compose} as text
+            if not (_rsGot is _rsFrom or _rsGot ends with "<" & _rsFrom & ">") then
+              delete ${compose}
+              error "Mail.app would ${verb} as " & _rsGot & " instead of " & _rsFrom & ", so nothing was sent or saved."
+            end if
+          end if`;
 
 /**
  * Normalize an RFC 5322 Message-ID for backend-independent matching: trim and

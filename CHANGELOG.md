@@ -7,7 +7,7 @@
 - **`reply-to-message` / `forward-message` (AppleScript path) answered from Mail's
   default sending account** (#294, @JaumeAP), not from the account the message
   arrived in: neither `reply … without opening window` nor `forward … without
-  opening window` sets a sender. The sender is now the address of the original's
+opening window` sets a sender. The sender is now the address of the original's
   to/cc recipients that belongs to the account the message sits in — or, for a
   message you sent, its own From address — else that account's first address. It
   is read back before the reply or forward is saved or sent, and a mismatch deletes

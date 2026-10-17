@@ -51,12 +51,45 @@ describe("reply sender", () => {
     mgr.replyToMessage("42", "Reply body", true, false);
     const script = lastScript();
     expect(script).toContain("(to recipients of msg) & (cc recipients of msg)");
-    expect(script).toContain("if (address of _rsR) is (_rsA as text)");
+    expect(script).toContain("if (_rsC as text) is (_rsA as text)");
+  });
+
+  it("a reply to the user's own sent message keeps its From address", () => {
+    mgr.replyToMessage("42", "Reply body", false, false);
+    const script = lastScript();
+    // Recipients first (received mail), then the original's sender (sent mail).
+    const rcpt = script.indexOf("(to recipients of msg) & (cc recipients of msg)");
+    const from = script.indexOf("extract address from (sender of msg)");
+    expect(rcpt).toBeGreaterThanOrEqual(0);
+    expect(from).toBeGreaterThan(rcpt);
   });
 
   it("fails inside the script when the account has no address, not by falling back", () => {
     mgr.replyToMessage("42", "Reply body", false, true);
-    expect(lastScript()).toContain("if (count of _rsAddrs) is 0 then error");
+    expect(lastScript()).toContain("if _rsOwn and (count of _rsAddrs) is 0 then error");
+  });
+
+  it("an On My Mac message (no account) matches recipients across enabled accounts", () => {
+    mgr.replyToMessage("42", "Reply body", false, false);
+    const script = lastScript();
+    // The account lookup is guarded; its failure path widens to every enabled account
+    // and leaves the sender to Mail when nothing matches, instead of hard-failing.
+    expect(script).toMatch(
+      /try\s+set _rsAddrs to email addresses of \(account of \(mailbox of msg\)\)\s+set _rsN to count of _rsAddrs\s+on error\s+set _rsOwn to false/
+    );
+    expect(script).toContain("every account whose enabled is true");
+    expect(script).toContain('if _rsFrom is not "" then');
+  });
+
+  it("reads the sender back and refuses when Mail did not take it", () => {
+    mgr.replyToMessage("42", "Reply body", false, true);
+    const script = lastScript();
+    const set = script.indexOf("set sender of theReply to _rsFrom");
+    const read = script.indexOf("set _rsGot to sender of theReply as text");
+    expect(set).toBeGreaterThanOrEqual(0);
+    expect(read).toBeGreaterThan(set);
+    expect(script).toContain('_rsGot ends with "<" & _rsFrom & ">"');
+    expect(script.indexOf("delete theReply")).toBeLessThan(script.indexOf("send theReply"));
   });
 
   it("sets the sender of a forward from the account of the original, before the content", () => {
