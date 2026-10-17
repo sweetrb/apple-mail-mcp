@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [2.20.16] - 2026-10-17
+
+### Fixed
+
+- **AppleScript compose could silently drop attachments** (#293, @markitwecode).
+  `create-draft`, `send-email`, `reply-to-message` and `forward-message` issued
+  `save`/`send` straight after `make new attachment`, which returns before Mail.app
+  has loaded the file, so the message could lose some or all of its files while the
+  tool still reported success (seen against an Exchange account: 3 requested files
+  saved as 2, then 0, on identical calls). Compose scripts now poll the attachment
+  count until every file is present (bounded at 15 s), pause 1 s, and only then
+  save or send; scripts without attachments do not wait. `create-draft` now also
+  saves and closes the draft explicitly instead of leaving it to Mail's autosave,
+  so the draft is in Drafts when the tool returns.
+
 ## [2.20.15] - 2026-10-17
 
 ### Fixed
