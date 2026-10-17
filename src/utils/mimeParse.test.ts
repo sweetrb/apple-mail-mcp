@@ -94,11 +94,12 @@ const MIME_WITH_INLINE = `Content-Type: multipart/mixed;
 --_004_INLINE
 Content-Type: text/html; charset="us-ascii"
 
-<html><body>Hi</body></html>
+<html><body>Hi<img src="cid:image001.png@01D9A1B2.C3D4E5F6"></body></html>
 
 --_004_INLINE
 Content-Type: image/png; name="image001.png"
 Content-Disposition: inline; filename="image001.png"
+Content-ID: <image001.png@01D9A1B2.C3D4E5F6>
 Content-Transfer-Encoding: base64
 
 iVBORw0KGgo=
@@ -133,7 +134,7 @@ describe("parseMimeAttachments", () => {
     expect(result[1].name).toBe("doc2.docx");
   });
 
-  it("skips inline dispositions", () => {
+  it("skips an inline part the HTML body embeds with cid:", () => {
     const result = parseMimeAttachments(MIME_WITH_INLINE);
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe("actual-doc.pdf");
@@ -159,6 +160,144 @@ AAAAAAAAAAAAAAAA
     const result = parseMimeAttachments(noSizeMime);
     expect(result).toHaveLength(1);
     expect(result[0].size).toBeGreaterThan(0);
+  });
+});
+
+// Shapes Apple Mail writes (2026-10-14). The files it attaches are
+// `Content-Disposition: inline`, never `attachment`, so skipping inline parts
+// made list-attachments answer "none" for every message Apple Mail composed.
+const PDF_B64 = Buffer.from("%PDF-1.3 fake invoice").toString("base64");
+
+/** A sent copy: multipart/alternative > text/plain + multipart/mixed > html + inline PDF. */
+const APPLE_MAIL_SENT = [
+  'Content-Type: multipart/alternative; boundary="Apple-Mail=_OUTER"',
+  "Mime-Version: 1.0",
+  "",
+  "--Apple-Mail=_OUTER",
+  "Content-Type: text/plain; charset=utf-8",
+  "",
+  "Us adjunto la factura.",
+  "",
+  "--Apple-Mail=_OUTER",
+  'Content-Type: multipart/mixed; boundary="Apple-Mail=_MIXED"',
+  "",
+  "--Apple-Mail=_MIXED",
+  "Content-Type: text/html; charset=utf-8",
+  "",
+  "<html><body>Us adjunto la factura.</body></html>",
+  "",
+  "--Apple-Mail=_MIXED",
+  "Content-Disposition: inline;",
+  '\tfilename="JAP 2026_40_transperfect.pdf"',
+  "Content-Type: application/pdf;",
+  "\tx-unix-mode=0666;",
+  '\tname="JAP 2026_40_transperfect.pdf"',
+  "Content-Transfer-Encoding: base64",
+  "",
+  PDF_B64,
+  "",
+  "--Apple-Mail=_MIXED--",
+  "",
+  "--Apple-Mail=_OUTER--",
+  "",
+].join("\n");
+
+/** A draft: the PDF sits in multipart/related with a Content-Id nothing refers to. */
+const APPLE_MAIL_DRAFT = [
+  'Content-Type: multipart/alternative; boundary="Apple-Mail=_OUTER"',
+  "",
+  "--Apple-Mail=_OUTER",
+  "Content-Type: text/plain; charset=utf-8",
+  "",
+  "Us adjunto la factura.",
+  "",
+  "--Apple-Mail=_OUTER",
+  'Content-Type: multipart/related; boundary="Apple-Mail=_REL"',
+  "",
+  "--Apple-Mail=_REL",
+  "Content-Type: text/html; charset=utf-8",
+  "",
+  "<html><body>Us adjunto la factura.</body></html>",
+  "",
+  "--Apple-Mail=_REL",
+  "Content-Transfer-Encoding: base64",
+  "Content-Disposition: inline;",
+  "\tfilename=JAP_2026_41_transperfect.pdf",
+  "Content-Type: application/pdf;",
+  '\tname="JAP_2026_41_transperfect.pdf"',
+  "Content-Id: <4EB73B0C-C29A-4395-B934-95DA1EE5E105>",
+  "",
+  PDF_B64,
+  "",
+  "--Apple-Mail=_REL--",
+  "",
+  "--Apple-Mail=_OUTER--",
+  "",
+].join("\n");
+
+describe("parseMimeAttachments — Apple Mail inline attachments", () => {
+  it("lists a PDF that Apple Mail attached as inline, in nested alternative/mixed", () => {
+    const result = parseMimeAttachments(APPLE_MAIL_SENT);
+    expect(result.map((a) => a.name)).toEqual(["JAP 2026_40_transperfect.pdf"]);
+    expect(result[0].mimeType).toBe("application/pdf");
+    expect(result[0].size).toBe(Buffer.from("%PDF-1.3 fake invoice").length);
+  });
+
+  it("lists a draft's PDF even though it carries a Content-Id", () => {
+    const result = parseMimeAttachments(APPLE_MAIL_DRAFT);
+    expect(result.map((a) => a.name)).toEqual(["JAP_2026_41_transperfect.pdf"]);
+  });
+
+  it("keeps the by-name extraction working for the same messages", () => {
+    expect(
+      extractMimeAttachment(APPLE_MAIL_SENT, "JAP 2026_40_transperfect.pdf")?.data.toString()
+    ).toBe("%PDF-1.3 fake invoice");
+    expect(
+      extractMimeAttachment(APPLE_MAIL_DRAFT, "JAP_2026_41_transperfect.pdf")?.data.toString()
+    ).toBe("%PDF-1.3 fake invoice");
+  });
+
+  it("still skips an inline picture the HTML embeds, next to an inline PDF", () => {
+    const src = APPLE_MAIL_SENT.replace(
+      "<html><body>Us adjunto la factura.</body></html>",
+      '<html><body>Us adjunto la factura.<img src="cid:logo@sig"></body></html>'
+    ).replace(
+      "--Apple-Mail=_MIXED--",
+      [
+        "--Apple-Mail=_MIXED",
+        "Content-Disposition: inline;",
+        '\tfilename="logo.png"',
+        'Content-Type: image/png; name="logo.png"',
+        "Content-Id: <logo@sig>",
+        "Content-Transfer-Encoding: base64",
+        "",
+        "iVBORw0KGgo=",
+        "",
+        "--Apple-Mail=_MIXED--",
+      ].join("\n")
+    );
+    expect(parseMimeAttachments(src).map((a) => a.name)).toEqual(["JAP 2026_40_transperfect.pdf"]);
+  });
+
+  it("lists an inline photo that no HTML refers to (a picture the user attached)", () => {
+    const src = APPLE_MAIL_SENT.replace(
+      "--Apple-Mail=_MIXED--",
+      [
+        "--Apple-Mail=_MIXED",
+        "Content-Disposition: inline;",
+        '\tfilename="IMG_0001.jpg"',
+        'Content-Type: image/jpeg; name="IMG_0001.jpg"',
+        "Content-Transfer-Encoding: base64",
+        "",
+        "/9j/4AAQSkZJRg==",
+        "",
+        "--Apple-Mail=_MIXED--",
+      ].join("\n")
+    );
+    expect(parseMimeAttachments(src).map((a) => a.name)).toEqual([
+      "JAP 2026_40_transperfect.pdf",
+      "IMG_0001.jpg",
+    ]);
   });
 });
 

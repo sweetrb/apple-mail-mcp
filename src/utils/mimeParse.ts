@@ -68,12 +68,51 @@ function extractFilename(headers: string): string | null {
 }
 
 /**
- * Check if a MIME part has inline disposition (not a real attachment).
+ * Check if a MIME part has inline disposition.
  */
 function isInlineDisposition(headers: string): boolean {
   const dispHeader = getHeader(headers, "Content-Disposition");
   if (!dispHeader) return false;
   return dispHeader.toLowerCase().startsWith("inline");
+}
+
+/** The part's Content-ID without angle brackets, lower-cased, or null. */
+function extractContentId(headers: string): string | null {
+  const raw = getHeader(headers, "Content-ID");
+  if (!raw) return null;
+  const id = raw.replace(/^<+/, "").replace(/>+$/, "").trim().toLowerCase();
+  return id || null;
+}
+
+/**
+ * Whether an inline part is a resource embedded in the HTML body (a signature
+ * logo, a pasted picture) rather than a file the sender attached.
+ *
+ * Apple Mail writes the files it attaches as `Content-Disposition: inline`
+ * with a `filename`, and in a draft or a related-multipart it adds a
+ * `Content-ID` too, so neither the disposition nor the Content-ID tells an
+ * attachment from an embedded image. What does: the HTML body points at the
+ * embedded one with `cid:<id>`. An inline part nothing refers to is a file.
+ */
+function isEmbeddedResource(headers: string, htmlBodies: string[]): boolean {
+  if (!isInlineDisposition(headers)) return false;
+  const cid = extractContentId(headers);
+  if (!cid) return false;
+  const needle = `cid:${cid}`;
+  return htmlBodies.some((html) => html.includes(needle));
+}
+
+/** Decoded, lower-cased text of every text/html leaf part. */
+function collectHtmlBodies(parts: MimePart[]): string[] {
+  const bodies: string[] = [];
+  for (const part of parts) {
+    if (extractMimeType(part.headers) !== "text/html") continue;
+    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+    bodies.push(
+      decodePartText(decodeBody(part.body, encoding), extractCharset(part.headers)).toLowerCase()
+    );
+  }
+  return bodies;
 }
 
 /**
@@ -258,8 +297,10 @@ function estimateSize(body: string, encoding: string | null): number {
 
 /**
  * Parse MIME source and return metadata for all file attachments.
- * Skips inline dispositions (signature images, etc.). Descends into
- * nested multipart/* containers.
+ * Skips resources embedded in the HTML body (an inline part the HTML refers to
+ * with `cid:`), but NOT inline parts in general: Apple Mail writes the files it
+ * attaches as `Content-Disposition: inline`. Descends into nested multipart/*
+ * containers.
  *
  * @param source - Raw MIME source of the email
  * @returns Array of attachment metadata (name, mimeType, size)
@@ -271,13 +312,14 @@ export function parseMimeAttachments(source: string): MimeAttachmentInfo[] {
   if (!boundary) return [];
 
   const parts = walkLeafParts(source, boundary);
+  const htmlBodies = collectHtmlBodies(parts);
   const attachments: MimeAttachmentInfo[] = [];
 
   for (const part of parts) {
     const filename = extractFilename(part.headers);
     if (!filename) continue;
 
-    if (isInlineDisposition(part.headers)) continue;
+    if (isEmbeddedResource(part.headers, htmlBodies)) continue;
 
     const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
 
