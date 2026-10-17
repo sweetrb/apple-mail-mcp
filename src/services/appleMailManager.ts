@@ -3008,7 +3008,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       ? `if hasAtt is "false" then
                   try
                     set rawSrc to source of msg
+                    -- Apple Mail writes the files it attaches as "inline" with a filename.
                     if rawSrc contains "Content-Disposition: attachment" then set hasAtt to "true"
+                    if hasAtt is "false" then
+                      if rawSrc contains "Content-Disposition: inline" and rawSrc contains "filename" then set hasAtt to "true"
+                    end if
                   end try
                 end if`
       : "";
@@ -5386,13 +5390,29 @@ ${this.errorEmit("              ")}
                 set msg to item 1 of matchingMsgs
                 set outputText to ""
                 set attCount to 0
+                -- Each property is read inside its own try: \`MIME type of att\` throws
+                -- "AppleEvent handler failed" for attachments Apple Mail itself composed,
+                -- and one unguarded throw discards the whole list, so the MIME fallback
+                -- answers "no attachments". An unreadable type or size degrades to a
+                -- default; only a missing name drops the entry (it cannot be addressed).
                 repeat with att in mail attachments of msg
-                  set attName to name of att
-                  set attType to MIME type of att
-                  set attSize to file size of att as string
-                  if attCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-                  set outputText to outputText & attName & "${FIELD_SEP}" & attType & "${FIELD_SEP}" & attSize
-                  set attCount to attCount + 1
+                  set attName to ""
+                  set attType to "application/octet-stream"
+                  set attSize to "0"
+                  try
+                    set attName to name of att
+                  end try
+                  try
+                    set attType to MIME type of att
+                  end try
+                  try
+                    set attSize to file size of att as string
+                  end try
+                  if attName is not "" then
+                    if attCount > 0 then set outputText to outputText & "${RECORD_SEP}"
+                    set outputText to outputText & attName & "${FIELD_SEP}" & attType & "${FIELD_SEP}" & attSize
+                    set attCount to attCount + 1
+                  end if
                 end repeat
                 return outputText
               end if

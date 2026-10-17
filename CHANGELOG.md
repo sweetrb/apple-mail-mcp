@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+### Fixed
+
+- **`list-attachments` returned nothing for a message Apple Mail composed itself**,
+  although the message carried its file and `save-attachment` by name worked. Two
+  defects stacked. (1) The AppleScript attempt read `name`, `MIME type` and
+  `file size` with no guard; `MIME type of att` throws "AppleEvent handler failed"
+  for those attachments and the one throw discarded the whole list. Each property
+  is now read in its own `try`; an unreadable type or size degrades to
+  `application/octet-stream` / `0`, and only a missing name drops the entry.
+  (2) The MIME fallback skipped every `Content-Disposition: inline` part, but Apple
+  Mail writes the files it attaches as `inline` (with a `filename`). A part is now
+  left out only when the HTML body embeds it with `cid:<its Content-Id>`; a logo the
+  HTML points at is still skipped, an attached PDF or photo is listed. The deep
+  attachment check of `get-message` also counts an `inline` part that has a
+  `filename`.
+
 ## [2.20.13] - 2026-10-16
 
 ### Fixed
