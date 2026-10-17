@@ -954,7 +954,10 @@ nodemailer path `send-email` uses, so the Sent-folder copy (`sentCopy`) carries 
 On the AppleScript transport they are added with `make new attachment` **after** the
 reply content is set and before `save`/`send` (inline items are written to `0600` temp
 files and removed afterwards), so a `send: false` draft contains both the attachments and
-the quoted original. Results report `attachmentCount`.
+the quoted original. `make new attachment` returns before Mail has loaded the file, so the
+script waits until Mail counts every file (bounded at 15 s) before saving or sending
+(2.20.16, #293; the same wait applies to `send-email` and `create-draft`). Results report
+`attachmentCount`.
 
 **Delivery:** `imap:` IDs are read directly from their encoded account, mailbox, and UID. Numeric IDs are read through Mail.app. With SMTP configured, replies use clean MIME with the original `Message-ID` in `In-Reply-To` and the full `References` chain. Only the original plain-text body is quoted; the new text is not. Pass `transport: "smtp"` to require this path, or `transport: "applescript"` to use Mail.app explicitly.
 
