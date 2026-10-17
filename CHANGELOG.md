@@ -1,8 +1,11 @@
 ## [Unreleased]
 
+## [2.20.14] - 2026-10-17
+
 ### Fixed
 
-- **`list-attachments` returned nothing for a message Apple Mail composed itself**,
+- **`list-attachments` returned nothing for a message Apple Mail composed itself**
+  (#295, @JaumeAP),
   although the message carried its file and `save-attachment` by name worked. Two
   defects stacked. (1) The AppleScript attempt read `name`, `MIME type` and
   `file size` with no guard; `MIME type of att` throws "AppleEvent handler failed"
@@ -12,9 +15,7 @@
   (2) The MIME fallback skipped every `Content-Disposition: inline` part, but Apple
   Mail writes the files it attaches as `inline` (with a `filename`). A part is now
   left out only when the HTML body embeds it with `cid:<its Content-Id>`; a logo the
-  HTML points at is still skipped, an attached PDF or photo is listed. The deep
-  attachment check of `get-message` also counts an `inline` part that has a
-  `filename`.
+  HTML points at is still skipped, an attached PDF or photo is listed.
 
 ## [2.20.13] - 2026-10-16
 
@@ -23,7 +24,7 @@
 - **`send-email` / `send-serial-email` / `create-draft` (AppleScript path) could
   send from the wrong account while reporting success.** `account` was passed
   straight to `set sender to`, which Mail.app silently ignores for anything that
-  is not a configured address — an account *name* like `me@gmail`, a typo — so
+  is not a configured address — an account _name_ like `me@gmail`, a typo — so
   the message went out from Mail's default account. `account` is now resolved to
   one address of an enabled account (name or exact address), the compose script
   reads `sender` back before sending, and a mismatch deletes the message and
@@ -34,7 +35,9 @@
   will put in `From:`, not which account's server sends it.
 
 ## [2.20.12] - 2026-10-14
+
 ### Changed
+
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
 
 ## [2.20.11] - 2026-10-14
@@ -100,7 +103,7 @@
   check itself can't run.** @j5pu retested 2.20.8's guard and found Mail
   closed still produced the plain `Message with ID "N" not found` — on
   macOS 27.2, `tell application "Mail" to get name of every account` fails
-  to *compile* (not merely execute) with `-2741` ("Expected class name but
+  to _compile_ (not merely execute) with `-2741` ("Expected class name but
   found identifier") when Mail.app isn't already running, because osascript
   can't resolve Mail's own classes until its dictionary is loaded. The
   `if application "Mail" is running then … end if` guard added in 2.20.8

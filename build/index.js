@@ -84868,11 +84868,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const deepScan = deepAttachmentCheck ? `if hasAtt is "false" then
                   try
                     set rawSrc to source of msg
-                    -- Apple Mail writes the files it attaches as "inline" with a filename.
                     if rawSrc contains "Content-Disposition: attachment" then set hasAtt to "true"
-                    if hasAtt is "false" then
-                      if rawSrc contains "Content-Disposition: inline" and rawSrc contains "filename" then set hasAtt to "true"
-                    end if
                   end try
                 end if` : "";
     const innerFetch = `
