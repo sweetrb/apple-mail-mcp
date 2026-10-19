@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [2.20.19] - 2026-10-19
+
+### Fixed
+
+- **A by-id lookup given an `account` but no `mailbox` still scanned every
+  account** (#308, @JaumeAP), plus the local "On My Mac" mailboxes, instead of
+  honouring the account the caller named. The unscoped AppleScript walk now
+  takes that account and skips the others — and skips the local store, which
+  belongs to no account — so `get-message` / `get-message-headers` with only an
+  `account` do a fraction of the work. An `account` that matches nothing now
+  fails with `Account "<name>" not found — check the name with list-accounts.`
+  instead of the misleading "message not found" that an exhaustive miss
+  produced. A lookup with no account, or with both an account and a mailbox, is
+  unchanged.
+
 ## [2.20.18] - 2026-10-19
 
 ### Fixed
