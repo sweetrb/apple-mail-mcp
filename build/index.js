@@ -85104,9 +85104,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       if (scoped.kind === "hit") return scoped.output;
       if (scoped.kind === "done") return null;
     }
-    const result = executeAppleScript(this.unscopedByIdScript(id, innerAction, opts), {
-      timeoutMs: READ_ONLY_BYID_TIMEOUT_MS
-    });
+    const account = hint?.account && !hint?.mailbox ? hint.account : void 0;
+    const result = executeAppleScript(
+      this.unscopedByIdScript(id, innerAction, { ...opts, account }),
+      {
+        timeoutMs: READ_ONLY_BYID_TIMEOUT_MS
+      }
+    );
     if (!result.success || !result.output.trim()) {
       if (!result.success) {
         if (result.timedOut) this.lastMessageLookupError = timedOutScanningForId(id);
@@ -85223,6 +85227,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   unscopedByIdScript(id, innerAction, opts = {}) {
     const threshold = getByIdScanThreshold();
+    const scopeAcct = escapeForAppleScript(opts.account ?? "");
     const stalledKeys = threshold > 0 ? this.stalledMailboxes.keys() : [];
     const stalledList = `{${stalledKeys.map((key) => {
       const i = key.indexOf(STALLED_KEY_SEP);
@@ -85282,6 +85287,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         set _probeStalled to false
         set _stopAt to 0
         set _stalledKeys to ${stalledList}
+        set _scopeAcct to "${scopeAcct}"
+        set _acctSeen to false
         set _startedAt to current date
         set _acctNames to {}
         try
@@ -85298,10 +85305,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           set _acctName to ""
           if _ai <= (length of _acctNames) then set _acctName to item _ai of _acctNames
           if _acctName is "" then set _acctName to (name of acct)
-          if _budgetHit or _probeStalled then
+          if _scopeAcct is not "" and _acctName is not _scopeAcct then
+            -- Scoped to one account: leave the others alone.
+            set _ai to _ai + 0
+          else if _budgetHit or _probeStalled then
             -- Stopped early: name what is left without asking Mail.app.
             set _unreached to _unreached & _acctName & " (every mailbox)${DIAG_ITEM_SEP}"
           else
+            set _acctSeen to true
             set _mbNames to {}
             try
               set _mbNames to name of mailboxes of acct
@@ -85347,7 +85358,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         -- reach them. Collect into the SAME _hits/_names, which means an id
         -- present both in an account and locally is now correctly reported as
         -- ambiguous rather than silently resolving to the account copy.
-        if _budgetHit or _probeStalled then
+        if _scopeAcct is not "" and not _acctSeen then return "${LOOKUP_ERROR_MARKER}Account \\"" & _scopeAcct & "\\" not found \u2014 check the name with list-accounts."
+        if _scopeAcct is not "" then
+          -- Local mailboxes belong to no account.
+          set _ai to _ai + 0
+        else if _budgetHit or _probeStalled then
           set _unreached to _unreached & "${LOCAL_STORE_LABEL} (any local mailboxes)${DIAG_ITEM_SEP}"
         else if not (${hitFound}) then${localMailboxBindingFragment()}
           set _mi to 0
