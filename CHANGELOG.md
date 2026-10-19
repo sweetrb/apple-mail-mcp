@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [2.20.20] - 2026-10-19
+
+### Fixed
+
+- **Two robustness fixes for the flag colour (#286, #289).** In the AppleScript row
+  loop, `flag index of _msgs` sat in the same `try` as the other bulk reads, so a
+  getter that fails on one account type sent every property down the slow
+  per-message path; it now has its own `try`, falling back to a per-message read and
+  then to `-1`. On IMAP, `filterUidsByColor` fetched the flags of every candidate UID
+  in one command, and a few thousand UIDs pass a server's command-line limit (8 KiB
+  is the floor on Dovecot-style servers); the FETCH now goes in slices of 500 UIDs
+  and the result keeps the caller's order.
+
 ## [2.20.16] - 2026-10-17
 
 ### Fixed
