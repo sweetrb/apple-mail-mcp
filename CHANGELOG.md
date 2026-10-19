@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [2.20.17] - 2026-10-19
+
+### Fixed
+
+- **`hasAttachments` was `false` on every row of `list-messages` and `search-messages`
+  on the AppleScript route.** `list-messages` read `mail attachments` as one bulk
+  property of the message list, which returns an empty list on current macOS (measured
+  on 6 messages: 1, 4, 2, 2, 0, 2 attachments one by one, 0 in bulk), and the failed
+  read was swallowed. `search-messages` never read attachments at all. Both now count
+  `mail attachments` per message, for the rows they return only (one Apple event per
+  row).
+
 ## [2.20.16] - 2026-10-17
 
 ### Fixed
