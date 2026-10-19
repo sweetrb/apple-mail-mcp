@@ -927,7 +927,7 @@ function buildMessageRowLoop(opts: {
   trailing?: string;
   /** Honor an `offset` by skipping the first N matched (uses a `skipped` var). */
   offset?: number;
-  /** Append a hasAttachments field (bulk-reads `mail attachments`). */
+  /** Append a hasAttachments field (counts `mail attachments` per message). */
   withAttachments?: boolean;
 }): string {
   const { collection, limit, dedup, dateFilter, trailing = "", offset, withAttachments } = opts;
@@ -944,16 +944,15 @@ function buildMessageRowLoop(opts: {
     ? `set msgDate to d\n            if not (${dateFilter}) then\n              -- outside date range; skip\n            else`
     : "";
   const dateClose = dateFilter ? `end if` : "";
-  const attBulk = withAttachments ? `\n        set _atts to mail attachments of _msgs` : "";
+  // Read per message, never as `mail attachments of _msgs`: on a list of messages that
+  // returns an empty list on current macOS (counts were 1,4,2,2,0,2 one by one and 0 in
+  // bulk), which turned every row into hasAttachments:false. Only rows that are kept
+  // reach this line, so the cost is one Apple event per returned row.
   const attRow = withAttachments
     ? `
           set msgHasAtt to "false"
           try
-            if _bulkOK then
-              if (count of (item _i of _atts)) > 0 then set msgHasAtt to "true"
-            else
-              if (count of mail attachments of (item _i of _msgs)) > 0 then set msgHasAtt to "true"
-            end if
+            if (count of mail attachments of (item _i of _msgs)) > 0 then set msgHasAtt to "true"
           end try`
     : "";
   const attField = withAttachments ? ` & "${FIELD_SEP}" & msgHasAtt` : "";
@@ -967,7 +966,7 @@ function buildMessageRowLoop(opts: {
         set _dates to date received of _msgs
         set _reads to read status of _msgs
         set _flags to flagged status of _msgs
-        set _flagColors to flag index of _msgs${attBulk}
+        set _flagColors to flag index of _msgs
       on error
         set _bulkOK to false
       end try
@@ -2974,7 +2973,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         ignoring case
           if _wantNames contains (name of mb) then
             try
-              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, trailing: ` & "${FIELD_SEP}" & mbName` })}
+              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
@@ -2996,7 +2995,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         set _notSearched to "${escapeForAppleScript(targetMailbox)}${DIAG_ITEM_SEP}"
       else
         try
-          ${buildMessageRowLoop({ collection: `messages of theMailbox ${searchCondition}`, limit, dateFilter })}
+          ${buildMessageRowLoop({ collection: `messages of theMailbox ${searchCondition}`, limit, dateFilter, withAttachments: true })}
         on error _errMsg number _errNum
           set _timedOut to true
           set _notSearched to "${escapeForAppleScript(targetMailbox)}${DIAG_ITEM_SEP}"
@@ -3038,7 +3037,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")${DIAG_ITEM_SEP}"
           else
             try
-              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, trailing: ` & "${FIELD_SEP}" & mbName` })}
+              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
