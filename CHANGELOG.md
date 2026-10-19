@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [2.20.22] - 2026-10-19
+
+### Fixed
+
+- **`list-messages`, `search-messages` and `get-unread-count` on the AppleScript route
+  spent ~12 s per call finding the mailbox.** Working out a mailbox's path walks its
+  containers (several Apple events each), and the scripts did that for every mailbox of
+  the account on each call, even though the path list was cached. They now check the
+  one mailbox at its cached position first, by path, and walk the rest only when it
+  does not match. Measured on an iCloud account with 119 mailboxes: a 10-row list went
+  from 12.9 s to 1.7 s on the second call, 50 rows from 19 s to 7.7 s. The first call of
+  a process (or after the 60 s cache expires) still lists the mailbox paths once.
+
 ## [2.20.16] - 2026-10-17
 
 ### Fixed
