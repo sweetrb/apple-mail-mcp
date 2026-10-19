@@ -1,12 +1,12 @@
 /**
  * Tests for AppleScript execution utilities
  *
- * These tests mock the child_process.execSync function to avoid
+ * These tests mock the child_process.execFileSync function to avoid
  * requiring actual AppleScript execution during testing.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import {
   executeAppleScript,
   isPermissionDenied,
@@ -16,11 +16,16 @@ import {
 
 // Mock the child_process module
 vi.mock("child_process", () => ({
-  execSync: vi.fn(),
+  execFileSync: vi.fn(),
   spawnSync: vi.fn(() => ({ error: null })), // Mock sleep to return immediately
 }));
 
-const mockExecSync = vi.mocked(execSync);
+const mockExecFileSync = vi.mocked(execFileSync);
+
+/** The script passed to osascript in call `call`: argv is ["-e", script]. */
+const scriptArg = (call = 0) => (mockExecFileSync.mock.calls[call][1] as string[])[1];
+/** The execFileSync options of call `call`. */
+const optionsArg = (call = 0) => mockExecFileSync.mock.calls[call][2];
 
 describe("executeAppleScript", () => {
   beforeEach(() => {
@@ -30,7 +35,7 @@ describe("executeAppleScript", () => {
   describe("successful execution", () => {
     it("returns success result with trimmed output", () => {
       // Arrange: Mock a successful AppleScript execution
-      mockExecSync.mockReturnValue("  Message Subject  \n");
+      mockExecFileSync.mockReturnValue("  Message Subject  \n");
 
       // Act: Execute a simple script
       const result = executeAppleScript('tell app "Mail" to get subject of message 1');
@@ -42,7 +47,7 @@ describe("executeAppleScript", () => {
     });
 
     it("preserves newlines within the script for AppleScript syntax", () => {
-      mockExecSync.mockReturnValue("success");
+      mockExecFileSync.mockReturnValue("success");
 
       // Multi-line AppleScript with tell blocks
       const script = `
@@ -56,38 +61,40 @@ describe("executeAppleScript", () => {
       executeAppleScript(script);
 
       // Verify the script was passed with newlines preserved
-      const calledCommand = mockExecSync.mock.calls[0][0] as string;
-      expect(calledCommand).toContain("tell application");
-      expect(calledCommand).toContain("end tell");
+      const calledScript = scriptArg();
+      expect(calledScript).toContain("tell application");
+      expect(calledScript).toContain("end tell");
     });
 
-    it("escapes single quotes in the script for shell safety", () => {
-      mockExecSync.mockReturnValue("content");
+    it("passes the script to osascript as one argument, with no shell", () => {
+      mockExecFileSync.mockReturnValue("content");
 
-      // Script containing a single quote (e.g., in a search query)
-      executeAppleScript('search messages for "Rob\'s Messages"');
+      // Quotes and shell metacharacters reach osascript verbatim
+      executeAppleScript('search messages for "Rob\'s $(touch /tmp/x) `id`"');
 
-      // Verify the quote was escaped for shell
-      const calledCommand = mockExecSync.mock.calls[0][0] as string;
-      expect(calledCommand).toContain("Rob'\\''s");
+      expect(mockExecFileSync.mock.calls[0][0]).toBe("osascript");
+      const args = mockExecFileSync.mock.calls[0][1] as string[];
+      expect(args).toHaveLength(2);
+      expect(args[0]).toBe("-e");
+      expect(args[1]).toContain('"Rob\'s $(touch /tmp/x) `id`"');
     });
 
     it("passes a maxBuffer well above Node's 1MB default (#27)", () => {
-      mockExecSync.mockReturnValue("ok");
+      mockExecFileSync.mockReturnValue("ok");
       executeAppleScript('tell app "Mail" to return "ok"');
-      const opts = mockExecSync.mock.calls[0][1] as { maxBuffer?: number };
+      const opts = optionsArg() as { maxBuffer?: number };
       // Default is 64 MB; the only hard requirement is that it exceeds the 1 MB
       // Node default that truncated large message sources (#27).
       expect(opts.maxBuffer).toBeGreaterThan(1024 * 1024);
     });
 
     it("honors the APPLE_MAIL_MCP_MAX_BUFFER override (#27)", () => {
-      mockExecSync.mockReturnValue("ok");
+      mockExecFileSync.mockReturnValue("ok");
       const prev = process.env.APPLE_MAIL_MCP_MAX_BUFFER;
       process.env.APPLE_MAIL_MCP_MAX_BUFFER = "12345";
       try {
         executeAppleScript('tell app "Mail" to return "ok"');
-        const opts = mockExecSync.mock.calls[0][1] as { maxBuffer?: number };
+        const opts = optionsArg() as { maxBuffer?: number };
         expect(opts.maxBuffer).toBe(12345);
       } finally {
         if (prev === undefined) delete process.env.APPLE_MAIL_MCP_MAX_BUFFER;
@@ -99,7 +106,7 @@ describe("executeAppleScript", () => {
   describe("error handling", () => {
     it("returns error result when execution fails", () => {
       // Arrange: Mock an AppleScript execution failure
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("execution error: Can't get message. (-1728)");
       });
 
@@ -113,7 +120,7 @@ describe("executeAppleScript", () => {
     });
 
     it("parses execution error messages cleanly", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("execution error: Message not found (-1728)");
       });
 
@@ -124,7 +131,7 @@ describe("executeAppleScript", () => {
     });
 
     it("handles 'message not found' error patterns with user-friendly message", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("Can't get message.");
       });
 
@@ -134,7 +141,7 @@ describe("executeAppleScript", () => {
     });
 
     it("provides helpful message for permission errors", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("execution error: Not authorized to send Apple events (-1743)");
       });
 
@@ -153,7 +160,7 @@ describe("executeAppleScript", () => {
       // same script can't help — the whole script compiles as one unit
       // before any line runs — so this must be classified from the error
       // text instead.
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("31:68: syntax error: Expected class name but found identifier. (-2741)");
       });
 
@@ -165,7 +172,7 @@ describe("executeAppleScript", () => {
     });
 
     it("provides helpful message for mailbox not found", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error('Can\'t get mailbox "Work".');
       });
 
@@ -177,7 +184,7 @@ describe("executeAppleScript", () => {
     });
 
     it("provides helpful message for account not found", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error('Can\'t get account "Gmail".');
       });
 
@@ -189,7 +196,7 @@ describe("executeAppleScript", () => {
     });
 
     it("handles non-Error exceptions gracefully", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw "string error"; // Some code throws strings
       });
 
@@ -200,7 +207,7 @@ describe("executeAppleScript", () => {
     });
 
     it("handles unknown error types", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw { weird: "object" }; // Unusual but possible
       });
 
@@ -217,7 +224,7 @@ describe("executeAppleScript", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe("Cannot execute empty AppleScript");
-      expect(mockExecSync).not.toHaveBeenCalled();
+      expect(mockExecFileSync).not.toHaveBeenCalled();
     });
 
     it("returns error for whitespace-only script", () => {
@@ -225,56 +232,56 @@ describe("executeAppleScript", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe("Cannot execute empty AppleScript");
-      expect(mockExecSync).not.toHaveBeenCalled();
+      expect(mockExecFileSync).not.toHaveBeenCalled();
     });
   });
 
   describe("execution options", () => {
     it("uses default 30 second timeout", () => {
-      mockExecSync.mockReturnValue("ok");
+      mockExecFileSync.mockReturnValue("ok");
 
       executeAppleScript("test");
 
-      const options = mockExecSync.mock.calls[0][1] as { timeout: number };
+      const options = optionsArg() as { timeout: number };
       expect(options.timeout).toBe(30000); // 30 second default timeout
     });
 
     it("allows custom timeout via options", () => {
-      mockExecSync.mockReturnValue("ok");
+      mockExecFileSync.mockReturnValue("ok");
 
       executeAppleScript("test", { timeoutMs: 60000 });
 
-      const options = mockExecSync.mock.calls[0][1] as { timeout: number };
+      const options = optionsArg() as { timeout: number };
       expect(options.timeout).toBe(60000); // Custom timeout
     });
 
     it("uses UTF-8 encoding for output", () => {
-      mockExecSync.mockReturnValue("日本語テスト");
+      mockExecFileSync.mockReturnValue("日本語テスト");
 
       const result = executeAppleScript("test");
 
       expect(result.output).toBe("日本語テスト");
-      const options = mockExecSync.mock.calls[0][1] as { encoding: string };
+      const options = optionsArg() as { encoding: string };
       expect(options.encoding).toBe("utf8");
     });
 
     it("kills a timed-out osascript with SIGKILL, not SIGTERM (#11)", () => {
-      mockExecSync.mockReturnValue("ok");
+      mockExecFileSync.mockReturnValue("ok");
 
       executeAppleScript("test");
 
-      const options = mockExecSync.mock.calls[0][1] as { killSignal: string };
+      const options = optionsArg() as { killSignal: string };
       expect(options.killSignal).toBe("SIGKILL");
     });
   });
 
   describe("with timeout wrapping (#11)", () => {
     it("wraps the script in `with timeout … end timeout`", () => {
-      mockExecSync.mockReturnValue("ok");
+      mockExecFileSync.mockReturnValue("ok");
 
       executeAppleScript('tell application "Mail" to get name');
 
-      const command = mockExecSync.mock.calls[0][0] as string;
+      const command = scriptArg();
       expect(command).toContain("with timeout of");
       expect(command).toContain("end timeout");
       // Original body is preserved inside the wrapper
@@ -282,23 +289,23 @@ describe("executeAppleScript", () => {
     });
 
     it("sets the script timeout below the process timeout so Mail aborts first", () => {
-      mockExecSync.mockReturnValue("ok");
+      mockExecFileSync.mockReturnValue("ok");
 
       // Default 30s process timeout -> 25s script timeout (5s headroom)
       executeAppleScript("test");
-      expect(mockExecSync.mock.calls[0][0] as string).toContain("with timeout of 25 seconds");
+      expect(scriptArg(0)).toContain("with timeout of 25 seconds");
 
       // 60s process timeout -> 55s script timeout
       executeAppleScript("test", { timeoutMs: 60000 });
-      expect(mockExecSync.mock.calls[1][0] as string).toContain("with timeout of 55 seconds");
+      expect(scriptArg(1)).toContain("with timeout of 55 seconds");
     });
 
     it("never emits a non-positive timeout for very short process timeouts", () => {
-      mockExecSync.mockReturnValue("ok");
+      mockExecFileSync.mockReturnValue("ok");
 
       executeAppleScript("test", { timeoutMs: 1000 });
 
-      const command = mockExecSync.mock.calls[0][0] as string;
+      const command = scriptArg();
       expect(command).toContain("with timeout of 1 seconds");
     });
   });
@@ -313,7 +320,7 @@ describe("executeAppleScript", () => {
       timeoutError.killed = true;
       timeoutError.signal = "SIGTERM";
 
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw timeoutError;
       });
 
@@ -332,7 +339,7 @@ describe("executeAppleScript", () => {
       timeoutError.killed = true;
       timeoutError.signal = "SIGTERM";
 
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw timeoutError;
       });
 
@@ -342,7 +349,7 @@ describe("executeAppleScript", () => {
     });
 
     it("does not set timedOut on an ordinary (non-timeout) AppleScript error", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("execution error: Can't get message 42. (-1728)");
       });
 
@@ -360,7 +367,7 @@ describe("executeAppleScript", () => {
       timeoutError.killed = true;
       timeoutError.signal = "SIGTERM";
 
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw timeoutError;
       });
 
@@ -375,7 +382,7 @@ describe("executeAppleScript", () => {
         signal?: string;
       };
       err.signal = "SIGKILL"; // externally/OOM-killed osascript
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw err;
       });
 
@@ -391,7 +398,7 @@ describe("executeAppleScript", () => {
       const err = new Error(
         "Command failed: osascript -e 'tell application \"Mail\" to get every mailbox'"
       );
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw err;
       });
 
@@ -405,19 +412,19 @@ describe("executeAppleScript", () => {
 
   describe("retry logic", () => {
     it("does not retry by default (maxRetries=1)", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("Mail.app is not responding");
       });
 
       executeAppleScript("test");
 
       // Only one attempt with default settings
-      expect(mockExecSync).toHaveBeenCalledTimes(1);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1);
     });
 
     it("retries on transient errors when maxRetries > 1", () => {
       let callCount = 0;
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         callCount++;
         if (callCount < 3) {
           throw new Error("Mail.app is not responding");
@@ -429,23 +436,23 @@ describe("executeAppleScript", () => {
 
       expect(result.success).toBe(true);
       expect(result.output).toBe("success");
-      expect(mockExecSync).toHaveBeenCalledTimes(3);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(3);
     });
 
     it("does not retry on non-transient errors", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("syntax error");
       });
 
       executeAppleScript("test", { maxRetries: 3, retryDelayMs: 1 });
 
       // Should not retry for syntax errors
-      expect(mockExecSync).toHaveBeenCalledTimes(1);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1);
     });
 
     it("retries on timeout errors", () => {
       let callCount = 0;
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         callCount++;
         if (callCount < 2) {
           const timeoutError = new Error("SIGTERM") as Error & {
@@ -463,12 +470,12 @@ describe("executeAppleScript", () => {
 
       expect(result.success).toBe(true);
       expect(result.output).toBe("success after retry");
-      expect(mockExecSync).toHaveBeenCalledTimes(2);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     });
 
     it("retries on 'connection invalid' errors", () => {
       let callCount = 0;
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         callCount++;
         if (callCount < 2) {
           throw new Error("connection is invalid");
@@ -479,11 +486,11 @@ describe("executeAppleScript", () => {
       const result = executeAppleScript("test", { maxRetries: 3, retryDelayMs: 1 });
 
       expect(result.success).toBe(true);
-      expect(mockExecSync).toHaveBeenCalledTimes(2);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     });
 
     it("returns last error after all retries exhausted", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("Mail.app is not responding");
       });
 
@@ -491,12 +498,12 @@ describe("executeAppleScript", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("not responding");
-      expect(mockExecSync).toHaveBeenCalledTimes(3);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(3);
     });
 
     it("retries on 'timed out' errors", () => {
       let callCount = 0;
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         callCount++;
         if (callCount < 2) {
           throw new Error("operation timed out");
@@ -507,12 +514,12 @@ describe("executeAppleScript", () => {
       const result = executeAppleScript("test", { maxRetries: 3, retryDelayMs: 1 });
 
       expect(result.success).toBe(true);
-      expect(mockExecSync).toHaveBeenCalledTimes(2);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     });
 
     it("retries on 'lost connection' errors", () => {
       let callCount = 0;
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         callCount++;
         if (callCount < 2) {
           throw new Error("lost connection to Mail.app");
@@ -523,12 +530,12 @@ describe("executeAppleScript", () => {
       const result = executeAppleScript("test", { maxRetries: 3, retryDelayMs: 1 });
 
       expect(result.success).toBe(true);
-      expect(mockExecSync).toHaveBeenCalledTimes(2);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     });
 
     it("retries on 'busy' errors", () => {
       let callCount = 0;
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         callCount++;
         if (callCount < 2) {
           throw new Error("Mail.app is busy");
@@ -539,14 +546,14 @@ describe("executeAppleScript", () => {
       const result = executeAppleScript("test", { maxRetries: 3, retryDelayMs: 1 });
 
       expect(result.success).toBe(true);
-      expect(mockExecSync).toHaveBeenCalledTimes(2);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     });
 
     it("uses exponential backoff between retries", () => {
       let execCallCount = 0;
 
       // Fails first 3 times, succeeds on 4th attempt
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         execCallCount++;
         if (execCallCount <= 3) {
           throw new Error("Mail.app is not responding");
@@ -558,7 +565,7 @@ describe("executeAppleScript", () => {
       const result = executeAppleScript("test", { maxRetries: 4, retryDelayMs: 100 });
 
       expect(result.success).toBe(true);
-      expect(mockExecSync).toHaveBeenCalledTimes(4);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(4);
     });
   });
 });
@@ -648,14 +655,14 @@ describe("permission-denied normalisation across locales", () => {
    * text and no remediation.
    */
   const expectNormalised = (rawStderr: string) => {
-    mockExecSync.mockImplementation(() => {
+    mockExecFileSync.mockImplementation(() => {
       throw new Error(rawStderr);
     });
     const result = executeAppleScript('tell application "Mail" to get name of account 1');
     expect(result.success).toBe(false);
     expect(result.error).toBe(PERMISSION_DENIED_MESSAGE);
     // A denial is not transient: it must not burn the retry budget.
-    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   };
 
   it("normalises the en-GB refusal to the remediation message", () => {
@@ -681,7 +688,7 @@ describe("permission-denied normalisation across locales", () => {
   });
 
   it("leaves unrelated AppleScript errors alone", () => {
-    mockExecSync.mockImplementation(() => {
+    mockExecFileSync.mockImplementation(() => {
       throw new Error('27:44: execution error: Can\'t get mailbox "Nope". (-1728)');
     });
     const result = executeAppleScript('tell application "Mail" to get mailbox "Nope"');

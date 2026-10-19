@@ -64924,7 +64924,7 @@ var init_docsUrls = __esm({
 });
 
 // src/services/smtpMailer.ts
-import { execFileSync } from "child_process";
+import { execFileSync as execFileSync2 } from "child_process";
 function errText(e) {
   return e instanceof Error ? e.message : String(e);
 }
@@ -64950,7 +64950,7 @@ function shouldUseSmtp(transport2, account, configured = isSmtpConfigured()) {
 function readKeychainPassword(service, account) {
   for (const kind of ["find-internet-password", "find-generic-password"]) {
     try {
-      const out = execFileSync("security", [kind, "-s", service, "-a", account, "-w"], {
+      const out = execFileSync2("security", [kind, "-s", service, "-a", account, "-w"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"]
       });
@@ -82450,7 +82450,7 @@ import { homedir as homedir5 } from "os";
 import { randomUUID } from "crypto";
 
 // src/utils/applescript.ts
-import { execSync, spawnSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 var DEFAULT_TIMEOUT_MS = 3e4;
 var DEFAULT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 function getMaxBuffer() {
@@ -82476,9 +82476,6 @@ function debugLog(message, data) {
   } else {
     console.error(`[DEBUG ${timestamp}] ${message}`);
   }
-}
-function escapeForShell(script) {
-  return script.replace(/'/g, "'\\''");
 }
 var SCRIPT_TIMEOUT_HEADROOM_MS = 5e3;
 function wrapWithTimeout(script, processTimeoutMs) {
@@ -82613,8 +82610,7 @@ function executeAppleScript(script, options = {}) {
       error: "Cannot execute empty AppleScript"
     };
   }
-  const preparedScript = escapeForShell(wrapWithTimeout(script.trim(), timeoutMs));
-  const command = `osascript -e '${preparedScript}'`;
+  const preparedScript = wrapWithTimeout(script.trim(), timeoutMs);
   debugLog("Executing AppleScript", {
     scriptPreview: script.trim().substring(0, 200) + (script.length > 200 ? "..." : ""),
     timeout: timeoutMs,
@@ -82625,7 +82621,7 @@ function executeAppleScript(script, options = {}) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const attemptStart = Date.now();
     try {
-      const output = execSync(command, {
+      const output = execFileSync("osascript", ["-e", preparedScript], {
         encoding: "utf8",
         timeout: timeoutMs,
         // SIGKILL (not the default SIGTERM): a wedged osascript blocked on an
