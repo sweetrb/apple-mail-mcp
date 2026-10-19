@@ -1075,6 +1075,12 @@ List attachments on a message.
 **Returns:** List of attachments with name, MIME type, and `size` — the **decoded** byte count,
 i.e. what `fetch-attachment` returns.
 
+**A numeric `id` resolves the same way the read tools resolve one** (2.20.21): the mailbox the id
+was listed from when that is known, else a bounded cross-mailbox scan that skips very large
+mailboxes and stops at its time budget. An id that several mailboxes hold is **refused**, with the
+candidates named, rather than answered for whichever copy came first — so list or search the
+mailbox you mean immediately before calling this. `imap:…` ids are never ambiguous.
+
 **Sizes over IMAP.** `BODYSTRUCTURE` reports a part's size in its transfer encoding, so a
 base64 attachment's raw figure is ~4/3 of the file. `list-attachments` converts it: a
 `Content-Disposition` `size=` parameter wins when present; 7bit/8bit/binary parts are exact
@@ -1095,6 +1101,11 @@ The destination must not already exist: `save-attachment` fails closed instead
 of overwriting an existing file. AppleScript and MIME fallback paths stage the
 bytes privately, commit with an exclusive create, and leave the saved file
 owner-readable/writable (`0600`).
+
+**A numeric `id` resolves the same way the read tools resolve one** (2.20.21): the mailbox the id
+was listed from when that is known, else the bounded cross-mailbox scan. An id that several
+mailboxes hold **saves nothing** rather than writing some other message's attachment under the
+name you asked for.
 
 | Parameter        | Type   | Required | Description                |
 | ---------------- | ------ | -------- | -------------------------- |
