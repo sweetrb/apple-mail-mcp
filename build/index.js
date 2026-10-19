@@ -83203,6 +83203,7 @@ var DATES_MARKER = "DATES";
 var HTML_MARKER = "HTML";
 var LOOKUP_ERROR_MARKER = "ERR";
 var BATCH_FATAL = "FATAL";
+var ATTACHMENTS_MARKER = "ATT";
 var RECON_TAG = "RECON";
 var SNAP_TAG = "SNAP";
 var SNAP_PAIR = "P";
@@ -86770,14 +86771,7 @@ ${this.errorEmit("              ")}
    * when AppleScript returns empty (known issue across all account types).
    */
   listAttachments(id) {
-    const script = buildAppLevelScript(`
-      try
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${Number(id)})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
+    const attachmentLoop = `
                 set outputText to ""
                 set attCount to 0
                 -- Each property is read inside its own try: \`MIME type of att\` throws
@@ -86803,20 +86797,20 @@ ${this.errorEmit("              ")}
                     set outputText to outputText & attName & "${FIELD_SEP}" & attType & "${FIELD_SEP}" & attSize
                     set attCount to attCount + 1
                   end if
-                end repeat
-                return outputText
-              end if
-            end try
-          end repeat
-        end repeat
-        return ""
-      on error errMsg
-        return ""
-      end try
-    `);
-    const result = executeAppleScript(script, { timeoutMs: 6e4 });
-    if (result.success && result.output.trim()) {
-      const items = result.output.split(RECORD_SEP);
+                end repeat`;
+    this.lastMessageLookupError = void 0;
+    const output = this.resolveById(
+      id,
+      `${attachmentLoop}
+                return "${ATTACHMENTS_MARKER}" & outputText`,
+      void 0
+    );
+    if (output === null) {
+      const refusal = this.consumeLastMessageLookupError();
+      if (refusal) throw new Error(refusal);
+    }
+    if (output?.startsWith(ATTACHMENTS_MARKER) && output.length > ATTACHMENTS_MARKER.length) {
+      const items = output.slice(ATTACHMENTS_MARKER.length).split(RECORD_SEP);
       const attachments = [];
       for (const item of items) {
         const parts = item.split(FIELD_SEP);
