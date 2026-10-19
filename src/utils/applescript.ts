@@ -7,7 +7,7 @@
  * @module utils/applescript
  */
 
-import { execSync, spawnSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import type { AppleScriptResult, AppleScriptOptions } from "@/types.js";
 
 /**
@@ -20,7 +20,7 @@ const DEFAULT_TIMEOUT_MS = 30000;
 /**
  * Maximum stdout/stderr buffer (bytes) for an osascript invocation.
  *
- * Node's `execSync` defaults to a 1 MB `maxBuffer`; exceeding it throws
+ * Node's `execFileSync` defaults to a 1 MB `maxBuffer`; exceeding it throws
  * `ENOBUFS`, which we surface as a failure and callers convert to `null`. Mail
  * operations routinely exceed 1 MB — `getRawSource` reads the entire raw MIME
  * (a 20 MB attachment is explicitly anticipated), `getMessageContent` returns
@@ -80,26 +80,6 @@ function debugLog(message: string, data?: unknown): void {
 }
 
 /**
- * Escapes a string for safe inclusion in a shell command.
- *
- * When passing AppleScript to osascript via shell, we need to handle
- * the interaction between shell quoting and AppleScript string literals.
- * This function escapes single quotes since we wrap the script in single quotes.
- *
- * @param script - The raw AppleScript code
- * @returns Shell-safe version of the script
- *
- * @example
- * // Input: tell app "Notes" to get note "Rob's Note"
- * // Output: tell app "Notes" to get note "Rob'\''s Note"
- */
-function escapeForShell(script: string): string {
-  // Replace single quotes with: end quote, escaped quote, start quote
-  // This is the standard shell escaping pattern for single-quoted strings
-  return script.replace(/'/g, "'\\''");
-}
-
-/**
  * Headroom (ms) between the in-AppleScript `with timeout` and the outer
  * osascript process timeout. The script-level timeout must fire *first* so
  * Mail.app aborts the operation from inside its own AppleScript dispatch —
@@ -128,7 +108,7 @@ function wrapWithTimeout(script: string, processTimeoutMs: number): string {
 }
 
 /**
- * Checks if an error is a timeout error from execSync.
+ * Checks if an error is a timeout error from execFileSync.
  *
  * Node.js throws errors with specific properties when a child process
  * is killed due to timeout.
@@ -139,7 +119,7 @@ function wrapWithTimeout(script: string, processTimeoutMs: number): string {
 function isTimeoutError(error: unknown): boolean {
   if (error instanceof Error) {
     const execError = error as Error & { killed?: boolean; signal?: string };
-    // executeAppleScript kills a timed-out osascript with SIGKILL; execSync also
+    // executeAppleScript kills a timed-out osascript with SIGKILL; execFileSync also
     // sets killed=true on its own timeout. Treat any killed osascript
     // (SIGTERM/SIGKILL) as a timeout/abnormal exit rather than leaking the raw
     // "Command failed" string downstream.
@@ -179,8 +159,8 @@ function isRetryableError(errorMessage: string): boolean {
  * This is more efficient than a busy-wait loop as it doesn't
  * consume CPU cycles during the delay.
  *
- * Uses spawnSync instead of execSync to avoid interference with
- * execSync mocks in tests.
+ * Uses spawnSync instead of execFileSync to avoid interference with
+ * execFileSync mocks in tests.
  *
  * @param ms - Milliseconds to sleep
  */
@@ -308,7 +288,7 @@ const ERROR_MAPPINGS: Array<{ pattern: RegExp; message: string }> = [
  * This function attempts to extract the human-readable portion and map it
  * to a user-friendly message with helpful suggestions.
  *
- * @param errorOutput - Raw error string from execSync
+ * @param errorOutput - Raw error string from execFileSync
  * @returns User-friendly error message with suggested action
  */
 function parseErrorMessage(errorOutput: string): string {
@@ -388,7 +368,7 @@ function parseErrorMessage(errorOutput: string): string {
  * Executes an AppleScript command and returns a structured result.
  *
  * This function serves as the bridge between TypeScript and macOS AppleScript.
- * It handles the complexity of shell escaping, execution, and error handling
+ * It handles execution and error handling
  * so that calling code can work with clean TypeScript interfaces.
  *
  * The script is executed synchronously via the `osascript` command-line tool.
@@ -440,13 +420,9 @@ export function executeAppleScript(
   // 2. Preserve internal newlines (required for AppleScript syntax)
   // 3. Wrap in `with timeout` so a stuck Mail.app operation aborts from
   //    inside its own dispatch before the process timeout kills osascript (#11)
-  // 4. Escape for shell execution
-  const preparedScript = escapeForShell(wrapWithTimeout(script.trim(), timeoutMs));
-
-  // Build the osascript command
-  // We use single quotes to wrap the script, which is why we escape
-  // single quotes within the script itself
-  const command = `osascript -e '${preparedScript}'`;
+  // The script goes to osascript as a single argv entry, with no shell in
+  // between, so nothing in it (quotes, $(), backticks) is ever interpreted.
+  const preparedScript = wrapWithTimeout(script.trim(), timeoutMs);
 
   // Debug: Log the script being executed
   debugLog("Executing AppleScript", {
@@ -463,7 +439,7 @@ export function executeAppleScript(
     try {
       // Execute synchronously - MCP tools are inherently synchronous
       // and Apple Notes operations are fast enough that async isn't needed
-      const output = execSync(command, {
+      const output = execFileSync("osascript", ["-e", preparedScript], {
         encoding: "utf8",
         timeout: timeoutMs,
         // SIGKILL (not the default SIGTERM): a wedged osascript blocked on an
@@ -492,7 +468,7 @@ export function executeAppleScript(
         output: output.trim(),
       };
     } catch (error: unknown) {
-      // execSync throws on non-zero exit codes
+      // execFileSync throws on non-zero exit codes
       // The error object contains stderr output with AppleScript error details
       const attemptDuration = Date.now() - attemptStart;
 
