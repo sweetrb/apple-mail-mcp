@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [2.20.21] - 2026-10-19
+
+### Fixed
+
+- **`list-attachments` and `save-attachment` used the first message with the numeric
+  id.** Both walked every mailbox of every account and stopped at the first match.
+  Mail numbers messages per mailbox and a label store (Gmail, iCloud) repeats one id
+  in INBOX, Important and All Mail, so the first match could be another message:
+  `list-attachments` could answer for the wrong one, and `save-attachment` could write
+  a different message's attachment. Both now resolve the message the way the reads
+  do: the mailbox the id was listed from, else the bounded by-id scan, and an id that
+  several mailboxes hold is refused. A message with no attachments is no longer read
+  as a miss.
+
 ## [2.20.16] - 2026-10-17
 
 ### Fixed
