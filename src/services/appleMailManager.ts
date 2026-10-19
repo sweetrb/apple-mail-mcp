@@ -5607,15 +5607,32 @@ ${this.errorEmit("              ")}
     };
     const numericId = Number(id);
 
-    // Attempt 1: AppleScript save
-    const script = buildAppLevelScript(`
-      try
-        repeat with acct in accounts
-          repeat with mb in mailboxes of acct
-            try
-              set matchingMsgs to (messages of mb whose id is ${numericId})
-              if (count of matchingMsgs) > 0 then
-                set msg to item 1 of matchingMsgs
+    // Which message the id names, by the same guarded resolution as the reads: the
+    // mailbox it was listed from, else the bounded scan, refused when several
+    // mailboxes hold the id instead of saving from whichever came first.
+    this.lastMessageLookupError = undefined;
+    const located = this.resolveById(
+      id,
+      `set _where to ""
+                try
+                  ${mailboxPathFragment("_hitMb", "_where")}
+                end try
+                return _hitAcct & "${FIELD_SEP}" & _where`,
+      undefined
+    );
+    if (located === null) {
+      const why = this.consumeLastMessageLookupError();
+      if (why) {
+        cleanupTemporaryDirectory();
+        console.error(`Failed to save attachment: ${why}`);
+        return false;
+      }
+    }
+    const [holderAccount, holderMailbox] = (located ?? "").split(FIELD_SEP);
+    if (holderAccount && holderMailbox)
+      this.rememberLocation(String(id), holderAccount, holderMailbox);
+
+    const saveAction = `
                 repeat with att in mail attachments of msg
                   if name of att is "${safeName}" then
                     set savePath to POSIX file "${safeTemporaryPath}"
@@ -5623,7 +5640,21 @@ ${this.errorEmit("              ")}
                     return "ok"
                   end if
                 end repeat
-                return "error:Attachment not found"
+                return "error:Attachment not found"`;
+
+    // Attempt 1: AppleScript save, in the mailbox just resolved when it is known.
+    const script =
+      holderAccount && holderMailbox
+        ? this.scopedByIdScript(holderAccount, holderMailbox, id, saveAction)
+        : buildAppLevelScript(`
+      try
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${numericId})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                ${saveAction}
               end if
             end try
           end repeat

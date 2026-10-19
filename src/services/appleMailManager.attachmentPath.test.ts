@@ -11,6 +11,9 @@ vi.mock("@/utils/applescript.js", async (importOriginal) => {
     ...actual,
     executeAppleScript: (script: string) => {
       h.calls += 1;
+      // The by-id lookup that precedes the save finds nothing here, so the save
+      // runs as the unlocated, whole-account script.
+      if (!script.includes("set savePath to POSIX file")) return { success: true, output: "" };
       if (h.success && h.output === "ok") {
         const match = script.match(/set savePath to POSIX file "([^"]+)"/);
         if (!match) throw new Error("test AppleScript did not contain a staging path");
