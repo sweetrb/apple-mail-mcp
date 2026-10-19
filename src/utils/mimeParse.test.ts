@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  cidReferences,
   parseMimeAttachments,
   extractMimeAttachment,
   extractHtmlBody,
@@ -279,6 +280,38 @@ describe("parseMimeAttachments — Apple Mail inline attachments", () => {
     expect(parseMimeAttachments(src).map((a) => a.name)).toEqual(["JAP 2026_40_transperfect.pdf"]);
   });
 
+  it("matches a cid reference whole: a longer id does not hide a shorter one", () => {
+    const withLogo = (htmlRef: string): string =>
+      APPLE_MAIL_SENT.replace(
+        "<html><body>Us adjunto la factura.</body></html>",
+        `<html><body>Us adjunto la factura.<img src="${htmlRef}"></body></html>`
+      ).replace(
+        "--Apple-Mail=_MIXED--",
+        [
+          "--Apple-Mail=_MIXED",
+          "Content-Disposition: inline;",
+          '\tfilename="logo.png"',
+          'Content-Type: image/png; name="logo.png"',
+          "Content-Id: <logo@sig>",
+          "Content-Transfer-Encoding: base64",
+          "",
+          "iVBORw0KGgo=",
+          "",
+          "--Apple-Mail=_MIXED--",
+        ].join("\n")
+      );
+    const names = (src: string): string[] => parseMimeAttachments(src).map((a) => a.name);
+    expect(names(withLogo("cid:logo@sig2"))).toContain("logo.png");
+    expect(names(withLogo("cid:logo@sig"))).not.toContain("logo.png");
+    expect(names(withLogo("cid:logo%40sig"))).not.toContain("logo.png");
+  });
+
+  it("reads the cid references of an HTML body, percent-decoded and lower-cased", () => {
+    expect([
+      ...cidReferences(`<img src="cid:Logo%40Sig"><img src='cid:b@x'> url(cid:c@x)`),
+    ]).toEqual(["logo@sig", "b@x", "c@x"]);
+  });
+
   it("lists an inline photo that no HTML refers to (a picture the user attached)", () => {
     const src = APPLE_MAIL_SENT.replace(
       "--Apple-Mail=_MIXED--",
@@ -298,6 +331,67 @@ describe("parseMimeAttachments — Apple Mail inline attachments", () => {
       "JAP 2026_40_transperfect.pdf",
       "IMG_0001.jpg",
     ]);
+  });
+});
+
+describe("parseMimeAttachments — encoded filenames (RFC 2231 and RFC 2047)", () => {
+  const withDisposition = (disposition: string, contentType = "application/pdf") =>
+    [
+      "Content-Type: multipart/mixed; boundary=B",
+      "",
+      "--B",
+      "Content-Type: text/plain",
+      "",
+      "hi",
+      "--B",
+      `Content-Disposition: ${disposition}`,
+      `Content-Type: ${contentType}`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      "JVBERg==",
+      "--B--",
+    ].join("\n");
+  const names = (disposition: string, contentType?: string) =>
+    parseMimeAttachments(withDisposition(disposition, contentType)).map((a) => a.name);
+
+  it("decodes an RFC 2231 extended filename", () => {
+    expect(names("attachment; filename*=UTF-8''caf%C3%A9%20men%C3%BA.pdf")).toEqual([
+      "café menú.pdf",
+    ]);
+  });
+
+  it("joins RFC 2231 continuations, encoded and plain", () => {
+    expect(
+      names("attachment; filename*0*=UTF-8''caf%C3%A9; filename*1*=%20; filename*2=menu.pdf")
+    ).toEqual(["café menu.pdf"]);
+  });
+
+  it("decodes RFC 2047 words in a quoted filename (base64 and quoted-printable)", () => {
+    expect(names('attachment; filename="=?UTF-8?B?Y2Fmw6kucGRm?="')).toEqual(["café.pdf"]);
+    expect(names('attachment; filename="=?ISO-8859-1?Q?caf=E9_men=FA.pdf?="')).toEqual([
+      "café menú.pdf",
+    ]);
+  });
+
+  it("joins adjacent RFC 2047 words", () => {
+    expect(names('attachment; filename="=?UTF-8?Q?caf=C3=A9?= =?UTF-8?Q?.pdf?="')).toEqual([
+      "café.pdf",
+    ]);
+  });
+
+  it("falls back to the Content-Type name, decoded the same way", () => {
+    expect(names("attachment", "application/pdf; name*=UTF-8''caf%C3%A9.pdf")).toEqual([
+      "café.pdf",
+    ]);
+  });
+
+  it("keeps a plain filename with a semicolon inside quotes", () => {
+    expect(names('attachment; filename="a;b.pdf"')).toEqual(["a;b.pdf"]);
+  });
+
+  it("finds the attachment by its decoded name", () => {
+    const src = withDisposition("attachment; filename*=UTF-8''caf%C3%A9.pdf");
+    expect(extractMimeAttachment(src, "café.pdf")?.data.toString()).toBe("%PDF");
   });
 });
 
