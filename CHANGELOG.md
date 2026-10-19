@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [2.20.17] - 2026-10-19
+
+### Fixed
+
+- **`hasAttachments` was `false` on every AppleScript row** of `search-messages`
+  and `list-messages` (#305, @JaumeAP), even for messages `list-attachments`
+  happily listed. Two causes: `buildMessageRowLoop` read `mail attachments` as a
+  bulk property of the message list (`mail attachments of _msgs`), which returns
+  an empty list on current macOS — measured against a real Mail.app, six messages
+  whose per-message counts were 1, 4, 2, 2, 0, 2 gave a bulk list of count 0 — so
+  the row loop errored inside its own swallowing `try` and left `false`; and
+  `search-messages` never passed `withAttachments` to any of its three row loops,
+  so it never read attachments at all. Both paths now count `mail attachments`
+  per message, and only for the rows actually returned (after the limit, offset,
+  date-range and dedup checks), so the cost is one Apple event per emitted row.
+  The IMAP route is unaffected — it reads BODYSTRUCTURE.
+
 ## [2.20.16] - 2026-10-17
 
 ### Fixed
