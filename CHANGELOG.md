@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+## [2.20.20] - 2026-10-19
+
+### Fixed
+
+- **A failing `flag index` getter dragged every other row property down the slow
+  per-message path** (#309, @JaumeAP). The flag colour added in #286/#289 was
+  bulk-read inside the same `try` as id/subject/sender/date/read/flagged, so on
+  an account type where `flag index of _msgs` throws, the whole bulk read was
+  abandoned and all six properties fell back to one Apple event each, per row.
+  `flag index` now gets its own `try` and `_flagBulkOK` flag — the same
+  individually-guarded pattern already used for `date sent` — and the colour
+  degrades on its own: bulk, then a per-message read, then `-1`.
+- **The IMAP colour filter could exceed the server's command-line limit**
+  (#309, @JaumeAP). `filterUidsByColor` put every FLAGGED-search candidate UID
+  into a single flags-only `FETCH`, and a few thousand UIDs pass the 8 KiB line
+  limit that Dovecot-style servers keep as a floor. The FETCH now goes in slices
+  of 500 UIDs; the caller's search-result ordering is still preserved.
+
 ## [2.20.19] - 2026-10-19
 
 ### Fixed
