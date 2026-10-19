@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+## [2.20.18] - 2026-10-19
+
+### Fixed
+
+- **Encoded attachment filenames were returned as raw encoded text** on the MIME
+  fallback path (#307, @JaumeAP). `extractFilename` matched `filename=` /
+  `name=` with a regex that could not see RFC 2231 parameters (`filename*=`,
+  `filename*0*=` continuations, `charset'lang'%XX`) or RFC 2047 encoded words
+  (`=?UTF-8?B?...?=`, `=?ISO-8859-1?Q?...?=`), so a name like
+  `filename*=UTF-8''caf%C3%A9.pdf` surfaced verbatim instead of `café.pdf`.
+  Header parameters are now parsed quote-aware (a quoted `;` no longer splits a
+  value) and both encodings are decoded, with the charset honoured and a UTF-8
+  fallback for an unknown label.
+- **A `cid:` reference matched as a substring**, so an inline part was
+  misclassified as embedded rather than as a real attachment (#307, @JaumeAP).
+  The HTML was searched for the literal text `cid:<id>`, which meant `cid:logo`
+  matched inside `cid:logo2`, and a percent-encoded reference (`cid:logo%40x`
+  for Content-ID `logo@x`) was missed entirely. References are now parsed as
+  whole tokens — ending at a quote, whitespace, bracket or parenthesis — then
+  lower-cased and percent-decoded before being compared against the part's
+  Content-ID. An inline part nothing refers to is still treated as a file. The
+  HTML bodies are now also decoded lazily, only when a named inline part with a
+  Content-ID actually requires the reference set.
+
 ## [2.20.17] - 2026-10-19
 
 ### Fixed
