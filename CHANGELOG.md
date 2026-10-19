@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [2.20.18] - 2026-10-19
+
+### Fixed
+
+- **Attachment filenames on the MIME fallback path were returned as raw encoded text,
+  and `cid:` references were matched as substrings.** RFC 2231 (`name*=`,
+  `name*0*=` continuations, `charset'lang'%XX`) and RFC 2047 (`=?UTF-8?B?...?=`,
+  `=?ISO-8859-1?Q?...?=`) names are now decoded. The embedded-image check searched
+  the HTML for the substring `cid:<id>`, so `cid:logo` matched inside `cid:logo2` and
+  a percent-encoded reference (`cid:logo%40x` for `logo@x`) was missed. References
+  are now parsed whole (ending at a quote, whitespace, bracket or parenthesis),
+  lower-cased and percent-decoded; an inline part nothing refers to is still a file.
+
 ## [2.20.16] - 2026-10-17
 
 ### Fixed
