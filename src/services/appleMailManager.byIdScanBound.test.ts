@@ -653,3 +653,22 @@ describe("#270 follow-up (@j5pu) — (4) Mail.app not running: say so, never lau
     expect(nameFetches2).toHaveLength(1);
   });
 });
+
+describe("an account hint without a mailbox narrows the unscoped scan to that account", () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+  });
+
+  it("filters the walk on the account and leaves the local store out", () => {
+    h.router.fn = () => ({ success: true, output: CONTENT_OK });
+    new AppleMailManager().getMessageContent("7", false, { account: 'Wo"rk' });
+    expect(kinds()).toEqual(["unscoped"]);
+    expect(byId()[0].script).toContain('set _scopeAcct to "Wo\\"rk"');
+  });
+
+  it("without a hint the walk is not filtered", () => {
+    h.router.fn = () => ({ success: true, output: CONTENT_OK });
+    new AppleMailManager().getMessageContent("8", false);
+    expect(byId()[0].script).toContain('set _scopeAcct to ""');
+  });
+});
