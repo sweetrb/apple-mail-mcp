@@ -1110,6 +1110,9 @@ async function searchUids(
   );
 }
 
+/** UIDs per flags-only FETCH in {@link filterUidsByColor}. */
+const COLOR_FETCH_CHUNK = 500;
+
 /**
  * Narrows a FLAGGED-search candidate list to one exact color (#286 follow-up,
  * @j5pu), with a flags-only FETCH rather than the full {@link ROW_QUERY} —
@@ -1130,10 +1133,15 @@ async function filterUidsByColor(
 ): Promise<number[]> {
   if (uids.length === 0) return uids;
   const keep = new Set<number>();
-  for await (const msg of client.fetch(uids.join(","), { uid: true, flags: true }, { uid: true })) {
-    if (typeof msg?.uid !== "number") continue;
-    const idx = mailFlagColorIndex(msg.flags);
-    if (colorIndex === 0 ? idx === undefined : idx === colorIndex) keep.add(msg.uid);
+  // A few thousand UIDs in one command line pass a server's line limit (8 KiB is the
+  // floor Dovecot-style servers keep), so the FETCH goes in slices.
+  for (let i = 0; i < uids.length; i += COLOR_FETCH_CHUNK) {
+    const slice = uids.slice(i, i + COLOR_FETCH_CHUNK).join(",");
+    for await (const msg of client.fetch(slice, { uid: true, flags: true }, { uid: true })) {
+      if (typeof msg?.uid !== "number") continue;
+      const idx = mailFlagColorIndex(msg.flags);
+      if (colorIndex === 0 ? idx === undefined : idx === colorIndex) keep.add(msg.uid);
+    }
   }
   // Preserve the caller's (search-result) ordering, not FETCH response order.
   return uids.filter((uid) => keep.has(uid));

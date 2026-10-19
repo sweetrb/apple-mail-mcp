@@ -66334,10 +66334,13 @@ async function searchUids(client, path3, criteria, size) {
 async function filterUidsByColor(client, uids, colorIndex) {
   if (uids.length === 0) return uids;
   const keep = /* @__PURE__ */ new Set();
-  for await (const msg of client.fetch(uids.join(","), { uid: true, flags: true }, { uid: true })) {
-    if (typeof msg?.uid !== "number") continue;
-    const idx = mailFlagColorIndex(msg.flags);
-    if (colorIndex === 0 ? idx === void 0 : idx === colorIndex) keep.add(msg.uid);
+  for (let i = 0; i < uids.length; i += COLOR_FETCH_CHUNK) {
+    const slice = uids.slice(i, i + COLOR_FETCH_CHUNK).join(",");
+    for await (const msg of client.fetch(slice, { uid: true, flags: true }, { uid: true })) {
+      if (typeof msg?.uid !== "number") continue;
+      const idx = mailFlagColorIndex(msg.flags);
+      if (colorIndex === 0 ? idx === void 0 : idx === colorIndex) keep.add(msg.uid);
+    }
   }
   return uids.filter((uid) => keep.has(uid));
 }
@@ -67828,7 +67831,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, COLOR_FETCH_CHUNK, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -67904,6 +67907,7 @@ var init_imapClient = __esm({
     FIRST_SEARCH_WINDOW = 5e3;
     MAX_WINDOW = 5e4;
     MAX_UNSCOPED_SEARCH_DEPTH = 5e3;
+    COLOR_FETCH_CHUNK = 500;
     ROW_QUERY = {
       envelope: true,
       flags: true,
@@ -83560,9 +83564,16 @@ function buildMessageRowLoop(opts) {
         set _dates to date received of _msgs
         set _reads to read status of _msgs
         set _flags to flagged status of _msgs
-        set _flagColors to flag index of _msgs
       on error
         set _bulkOK to false
+      end try
+      -- Its own try, like the sent dates: a getter that fails on one account type must
+      -- not send every other property down the slow per-message path.
+      set _flagBulkOK to true
+      try
+        set _flagColors to flag index of _msgs
+      on error
+        set _flagBulkOK to false
       end try
       set _sentBulkOK to true
       try
@@ -83591,15 +83602,21 @@ function buildMessageRowLoop(opts) {
             set msgSender to item _i of _sndrs
             set msgRead to (item _i of _reads) as string
             set msgFlagged to (item _i of _flags) as string
-            set msgFlagColorRaw to (item _i of _flagColors) as string
           else
             set _m to item _i of _msgs
             set msgSubject to subject of _m
             set msgSender to sender of _m
             set msgRead to read status of _m as string
             set msgFlagged to flagged status of _m as string
-            set msgFlagColorRaw to flag index of _m as string
-          end if${attRow}
+          end if
+          set msgFlagColorRaw to "-1"
+          try
+            if _bulkOK and _flagBulkOK then
+              set msgFlagColorRaw to (item _i of _flagColors) as string
+            else
+              set msgFlagColorRaw to (flag index of (item _i of _msgs)) as string
+            end if
+          end try${attRow}
           set msgDateStr to ${AS_DATE_TO_STRING}
           set msgDateSentStr to ""
           try

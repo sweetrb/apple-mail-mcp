@@ -966,9 +966,16 @@ function buildMessageRowLoop(opts: {
         set _dates to date received of _msgs
         set _reads to read status of _msgs
         set _flags to flagged status of _msgs
-        set _flagColors to flag index of _msgs
       on error
         set _bulkOK to false
+      end try
+      -- Its own try, like the sent dates: a getter that fails on one account type must
+      -- not send every other property down the slow per-message path.
+      set _flagBulkOK to true
+      try
+        set _flagColors to flag index of _msgs
+      on error
+        set _flagBulkOK to false
       end try
       set _sentBulkOK to true
       try
@@ -997,15 +1004,21 @@ function buildMessageRowLoop(opts: {
             set msgSender to item _i of _sndrs
             set msgRead to (item _i of _reads) as string
             set msgFlagged to (item _i of _flags) as string
-            set msgFlagColorRaw to (item _i of _flagColors) as string
           else
             set _m to item _i of _msgs
             set msgSubject to subject of _m
             set msgSender to sender of _m
             set msgRead to read status of _m as string
             set msgFlagged to flagged status of _m as string
-            set msgFlagColorRaw to flag index of _m as string
-          end if${attRow}
+          end if
+          set msgFlagColorRaw to "-1"
+          try
+            if _bulkOK and _flagBulkOK then
+              set msgFlagColorRaw to (item _i of _flagColors) as string
+            else
+              set msgFlagColorRaw to (flag index of (item _i of _msgs)) as string
+            end if
+          end try${attRow}
           set msgDateStr to ${AS_DATE_TO_STRING}
           set msgDateSentStr to ""
           try
