@@ -187,6 +187,33 @@ describe("flagColor filtering is client-side on the FLAGGED candidate set (#286 
   });
 });
 
+describe("flagColor narrowing keeps each FETCH command short", () => {
+  it("fetches the flags of many candidates in slices, not one command line", async () => {
+    const uids = Array.from({ length: 1200 }, (_, i) => i + 1);
+    const base = makeClient(uids, {});
+    const ranges: string[] = [];
+    const client: ImapClientLike = {
+      ...base,
+      fetch: ((range: string, query: Record<string, unknown>, opts: unknown) => {
+        if (!("envelope" in query)) ranges.push(range);
+        return (base.fetch as (r: string, q: unknown, o: unknown) => AsyncIterable<unknown>)(
+          range,
+          query,
+          opts
+        );
+      }) as ImapClientLike["fetch"],
+    };
+    const res = await imapSearchMessages(
+      { account: "rob@example.com", mailbox: "INBOX", flagColorIndex: 0, limit: 5 },
+      { config: cfg, connect: async () => client }
+    );
+    expect(ranges.length).toBeGreaterThan(1);
+    expect(ranges.every((r) => r.split(",").length <= 500)).toBe(true);
+    expect(ranges.join(",").split(",")).toHaveLength(1200);
+    expect(res.messages.length).toBeGreaterThan(0);
+  });
+});
+
 describe("structuredRow flagColor (read-back)", () => {
   it("surfaces the palette name alongside the legacy flagColorIndex", async () => {
     const rec: Rec = {};

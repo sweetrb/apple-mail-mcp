@@ -73,6 +73,18 @@ describe("buildSearchCondition flagColorIndex", () => {
   });
 });
 
+describe("row script flag index read", () => {
+  it("reads `flag index` in its own try, so a failing getter keeps the other bulk reads", () => {
+    h.router.fn = makeRouter({ mailboxNames: MAILBOXES });
+    new AppleMailManager().searchMessages(undefined, "INBOX", "rob@superiortech.io", 50);
+    const script = h.calls.find((s) => s.includes("set outputText to")) ?? "";
+    const bulk = script.slice(0, script.indexOf("on error"));
+    expect(bulk).not.toContain("flag index");
+    expect(script).toContain("set _flagBulkOK to true");
+    expect(script).toContain("set _flagColors to flag index of _msgs");
+  });
+});
+
 describe("parseMessageList flagColor (single-mailbox row shape)", () => {
   it("decodes a colored `flag index` into the palette name", () => {
     // 8-field single-mailbox row: id|subject|sender|dateReceived|dateSent|read|flagged|flagColorRaw
