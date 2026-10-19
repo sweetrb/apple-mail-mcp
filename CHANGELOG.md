@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [2.20.19] - 2026-10-19
+
+### Fixed
+
+- **A by-id lookup given an `account` but no `mailbox` scanned every account.** The
+  unscoped AppleScript walk now takes the account and skips the others (and the local
+  mailboxes, which belong to no account). An account name that matches nothing fails
+  with `Account "<name>" not found — check the name with list-accounts.` instead of a
+  misleading "message not found". A lookup with no account, or with both, is
+  unchanged.
+
 ## [2.20.16] - 2026-10-17
 
 ### Fixed
