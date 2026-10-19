@@ -83781,19 +83781,32 @@ function mailboxPathFragment(mailboxVar, outputVar) {
           set _pathParent to _pathNext
         end repeat`;
 }
-function mailboxLookupFragment(collExpr, path3, outputVar) {
-  return `
-        set ${outputVar} to missing value
+function mailboxLookupFragment(collExpr, path3, outputVar, hintIndex) {
+  const safePath = escapeForAppleScript(path3);
+  const hint = hintIndex === void 0 ? "" : `
+        try
+          set _mbc to item ${hintIndex} of (${collExpr})
+          set _mbcPath to ""
+          ${mailboxPathFragment("_mbc", "_mbcPath")}
+          ignoring case
+            if _mbcPath is "${safePath}" then set ${outputVar} to _mbc
+          end ignoring
+        end try`;
+  const walk = `
         repeat with _mbc in (${collExpr})
           set _mbcPath to ""
           ${mailboxPathFragment("_mbc", "_mbcPath")}
           ignoring case
-            if _mbcPath is "${escapeForAppleScript(path3)}" then
+            if _mbcPath is "${safePath}" then
               set ${outputVar} to _mbc
               exit repeat
             end if
           end ignoring
         end repeat`;
+  return `
+        set ${outputVar} to missing value${hint}${hintIndex === void 0 ? walk : `
+        if ${outputVar} is missing value then${walk}
+        end if`}`;
 }
 var MAILBOX_ALIASES = {
   inbox: ["INBOX", "Inbox", "inbox"],
@@ -84790,6 +84803,17 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     return resolveAppleMailboxPath(mailbox, this.getCachedMailboxNames(account));
   }
   /**
+   * The 1-based position of `path` in the account's cached mailbox list, which is
+   * built by walking the account's `mailboxes` in order. `mailboxLookupFragment`
+   * checks that one mailbox first instead of working out the path of every one.
+   * Undefined when the path is not in the list; a stale position is harmless, the
+   * fragment verifies the path and falls back to the full walk.
+   */
+  mailboxIndexHint(account, path3) {
+    const index = this.getCachedMailboxNames(account).indexOf(path3);
+    return index >= 0 ? index + 1 : void 0;
+  }
+  /**
    * Non-throwing `resolveMailbox`, for callers comparing mailbox names AFTER
    * a destructive op already ran (the forensics `sameMailbox` closures). An
    * ambiguous leaf there must not raise — the op already happened, and a
@@ -84955,7 +84979,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       ${dateSetup}set outputText to ""
       set _timedOut to false
       set _notSearched to ""
-      ${mailboxLookupFragment(mbIter, targetMailbox, "theMailbox")}
+      ${mailboxLookupFragment(mbIter, targetMailbox, "theMailbox", this.mailboxIndexHint(targetAccount, targetMailbox))}
       set msgCount to 0
       if theMailbox is missing value then
         set _timedOut to true
@@ -85687,7 +85711,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       set outputText to ""
       set _timedOut to false
       set _notSearched to ""
-      ${mailboxLookupFragment(mbIter, targetMailbox, "theMailbox")}
+      ${mailboxLookupFragment(mbIter, targetMailbox, "theMailbox", this.mailboxIndexHint(targetAccount, targetMailbox))}
       set msgCount to 0
       set skipped to 0
       if theMailbox is missing value then
@@ -87183,7 +87207,7 @@ ${this.errorEmit("              ")}
     const targetAccount = this.resolveAccount(account);
     const targetMailbox = this.resolveMailbox(mailbox || "INBOX", targetAccount);
     const command = `
-      ${mailboxLookupFragment("mailboxes", targetMailbox, "theMailbox")}
+      ${mailboxLookupFragment("mailboxes", targetMailbox, "theMailbox", this.mailboxIndexHint(targetAccount, targetMailbox))}
       if theMailbox is missing value then error "Mailbox \\"${escapeForAppleScript(targetMailbox)}\\" not found"
       return unread count of theMailbox`;
     const script = buildAccountScopedScript(targetAccount, command);
