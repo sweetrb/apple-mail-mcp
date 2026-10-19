@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+## [2.20.22] - 2026-10-19
+
+### Performance
+
+- **`list-messages`, `search-messages` and `get-unread-count` recomputed every
+  mailbox's path on every call** (#311, @JaumeAP), even though the mailbox list
+  itself is already cached for 60 s. Working out one mailbox's path walks
+  `container of` up the tree — several Apple events each — and
+  `mailboxLookupFragment` did that for every mailbox until one matched, so an
+  iCloud account with 119 mailboxes spent ~12 s per call just finding the
+  mailbox it had been asked for. `mailboxLookupFragment` now takes an optional
+  `hintIndex`: the position the target holds in the cached path list, which is
+  built by walking the account's `mailboxes` in order and so corresponds
+  directly to a position in that collection. The mailbox at that position is
+  checked first, by path, and the full walk runs only if the path does not match
+  — i.e. only when the list changed since it was cached. A stale or
+  out-of-range hint is harmless: the path check rejects it and the walk runs as
+  before, just no faster.
+
+  Measured on a read-only iCloud account with 119 mailboxes: `list` 10 rows
+  (2nd call) 12.9 s → 1.7 s; `list` 50 rows 19 s → 7.7 s; `list` 200 rows 42 s
+  → 30 s; first call of a process 24.7 s → 13.5 s. The remaining ~150 ms per row
+  is the row loop, not touched here. An account with few mailboxes gains little,
+  and the first call after the cache expires still pays the path listing.
+
 ## [2.20.21] - 2026-10-19
 
 ### Fixed
