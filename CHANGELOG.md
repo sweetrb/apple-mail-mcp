@@ -1,5 +1,34 @@
 ## [Unreleased]
 
+## [2.20.21] - 2026-10-19
+
+### Fixed
+
+- **`save-attachment` could write a different message's attachment** under the
+  name the caller asked for, and **`list-attachments` could answer for the wrong
+  message** — including reporting "no attachments" for a message that has them
+  (#310, @JaumeAP). Both walked every mailbox of every account and took the
+  **first** message whose numeric id matched. Mail.app numbers messages per
+  mailbox, and a label store (Gmail, iCloud) repeats one id across `INBOX`,
+  `Important` and `All Mail`, so the first hit could be a different message than
+  the one the caller listed. Both tools now resolve the message through the same
+  guarded `resolveById` path the read tools already use — the mailbox the id was
+  listed from when known, else the bounded scan that skips very large mailboxes
+  and stops at its time budget — and **refuse** an id that several mailboxes
+  hold instead of acting on an arbitrary copy. `save-attachment` then saves from
+  the resolved mailbox via `scopedByIdScript` and remembers the location; an
+  ambiguous id saves nothing. `list-attachments` leads a found message's list
+  with a marker, so a message with genuinely no attachments is not mistaken for
+  a lookup miss and still reaches the MIME fallback. An id the lookup cannot
+  locate, with no reason to report, still falls back to the previous
+  whole-account script, so behaviour for an unlocated id is unchanged.
+
+### Documentation
+
+- README: `list-attachments` and `save-attachment` now document the guarded
+  by-id resolution and the ambiguous-id refusal, which previously applied only
+  to the read tools.
+
 ## [2.20.20] - 2026-10-19
 
 ### Fixed
