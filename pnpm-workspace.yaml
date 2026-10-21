@@ -120,3 +120,19 @@ overrides:
   # @vitest/coverage-v8 -> magicast), not in the shipped bundle. Two-sided range
   # per the fast-uri precedent above — never an exact pin.
   source-map-js: ">=1.2.2 <2"
+  # NOTE on vite (alerts #36 GHSA-r825-w8mm-5pxw medium, #35 GHSA-587h-7wmj-h5pm
+  # high, #34 GHSA-698v-4r3x-3vcv medium, all fixed in 8.2.4): vite is reached
+  # ONLY as a peerDependency of vitest/@vitest/coverage-v8/@vitest/mocker, with
+  # no real "dependencies" edge anywhere in the graph — unlike every floor
+  # above. Confirmed empirically (pnpm 11.9.0): a range override here
+  # (">=8.2.4 <9", "^8.2.4") and even rewriting the peer range itself via
+  # packageExtensions do NOT make pnpm re-resolve the already-chosen peer —
+  # it keeps the stale 8.2.1 silently. Only an exact-version override forces
+  # it, which we reject as a ceiling risk (the fast-uri precedent above).
+  # Fix: vite is pinned as a real devDependency range in package.json instead
+  # (">=8.2.4 <9") — a genuine dependency edge, which pnpm resolves against
+  # the range correctly (landed on 8.2.4 at the time; 8.3.5 existed but was
+  # inside the minimumReleaseAge soak above). Dev scope only; not in the
+  # shipped bundle (the only "vite" hit in build/index.js and build/cli.js is
+  # the unrelated substring in "invite.ics").
+
