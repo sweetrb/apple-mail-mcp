@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [2.20.25] - 2026-10-21
+### Security
+- Raised the `vite` floor to `>=8.2.4 <9` (dev-only, via vitest/@vitest/coverage-v8;
+  not in the shipped bundle), closing GHSA-r825-w8mm-5pxw (medium, alert #36),
+  GHSA-587h-7wmj-h5pm (high, alert #35), and GHSA-698v-4r3x-3vcv (medium, alert #34).
+  vite is reached only as a peerDependency with no real dependency edge, so a
+  `pnpm-workspace.yaml` overrides range doesn't force pnpm to re-resolve it off the
+  stale 8.2.1 — it is pinned as an explicit devDependency range instead, which
+  resolves correctly (landed on 8.3.4).
+
 ## [2.20.24] - 2026-10-21
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
