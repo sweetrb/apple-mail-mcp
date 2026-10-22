@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [2.20.26] - 2026-10-22
+### Fixed
+- **SMTP sends no longer leave two copies in a Gmail Sent mailbox.** The best-effort
+  Sent-folder copy (#220) was APPENDed unconditionally, but `smtp.gmail.com` already
+  files every submitted message into `[Gmail]/Sent Mail`, so each `send-email`,
+  `reply-to-message` and `forward-message` over SMTP produced a duplicate with the same
+  Message-ID. Before appending, the Sent mailbox is now searched for the message's
+  Message-ID; when it is already there nothing is appended, and the result reports
+  `sentCopy: true` plus the new optional `sentCopyAlreadyFiled: true`. Gmail files its
+  copy asynchronously, so on a Gmail IMAP/SMTP host the search is retried for up to ~3 s
+  before falling back to appending; other hosts get one check. A message with no
+  Message-ID, or a failed search, still appends (a duplicate beats a missing copy).
+- The Sent-folder copy now carries the same `Date:` header as the delivered message;
+  it was composed after the send and so was stamped seconds later.
+
 ## [2.20.25] - 2026-10-21
 ### Security
 - Raised the `vite` floor to `>=8.2.4 <9` (dev-only, via vitest/@vitest/coverage-v8;
