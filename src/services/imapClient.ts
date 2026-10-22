@@ -2490,6 +2490,43 @@ export interface SentCopyResult {
   success?: boolean;
   error?: string;
   mailbox?: string;
+  /** True when the Sent mailbox already held a message with this Message-ID
+   *  (e.g. Gmail's SMTP files its own copy), so no APPEND was made. `success`
+   *  is still true: the Sent copy exists. */
+  alreadyFiled?: boolean;
+}
+
+/** Tuning/test seams for {@link imapAppendSentCopy}'s pre-APPEND dedupe check. */
+export interface SentCopyOptions {
+  /** SMTP host the message was submitted to; a Gmail host enables polling. */
+  smtpHost?: string;
+  /** Wall-clock budget (from the first search) to wait for a Gmail-filed copy
+   *  before appending our own. Each Gmail SEARCH is a ~200 ms round trip. */
+  gmailPollMs?: number;
+  /** Interval between Gmail polls. */
+  gmailPollIntervalMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/** Gmail's SMTP auto-files every submitted message into [Gmail]/Sent Mail. */
+export const SENT_COPY_GMAIL_POLL_MS = 3000;
+export const SENT_COPY_GMAIL_POLL_INTERVAL_MS = 500;
+
+const GMAIL_HOST = /(^|\.)(gmail|googlemail)\.com$/i;
+
+/** Whether `host` is a Gmail/Google Mail IMAP or SMTP endpoint. */
+export function isGmailHost(host: string | undefined): boolean {
+  return Boolean(host && GMAIL_HOST.test(host.trim()));
+}
+
+/** The `<id@host>` Message-ID from `raw`'s header block, or null if absent. */
+export function extractRawMessageId(raw: string | Buffer): string | null {
+  const text = typeof raw === "string" ? raw : raw.toString("latin1");
+  const end = text.search(/\r?\n\r?\n/);
+  const header = (end === -1 ? text : text.slice(0, end)).replace(/\r?\n[ \t]+/g, " ");
+  const m = /^message-id:[ \t]*(<[^<>\s]+>)/im.exec(header);
+  return m ? m[1] : null;
 }
 
 /**
@@ -2498,22 +2535,77 @@ export interface SentCopyResult {
  * every failure mode (no matching account, connection failure, server
  * rejection) resolves to a `SentCopyResult`, so callers can report it without
  * risking the send that already succeeded.
+ *
+ * Before appending, the Sent mailbox is searched for `raw`'s Message-ID: some
+ * submission servers file their own copy (Gmail always does, asynchronously),
+ * and appending a second one duplicated every SMTP send there. On a Gmail host
+ * the search is retried briefly so its copy has time to land; elsewhere one
+ * check suffices. A raw message with no Message-ID, or a failed search, falls
+ * back to appending.
  */
 export async function imapAppendSentCopy(
   smtpUser: string,
   raw: string | Buffer,
-  deps: ImapDeps = {}
+  deps: ImapDeps = {},
+  opts: SentCopyOptions = {}
 ): Promise<SentCopyResult> {
   if (!deps.config && !isImapAccount(smtpUser)) return { attempted: false };
+  const messageId = extractRawMessageId(raw);
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
   try {
-    return await withClient({ ...deps, account: deps.account ?? smtpUser }, async (client) => {
+    return await withClient({ ...deps, account: deps.account ?? smtpUser }, async (client, cfg) => {
       const path = await resolveMailboxPath(client, "sent", "list");
+      if (messageId) {
+        const gmail = isGmailHost(cfg.host) || isGmailHost(opts.smtpHost);
+        const budget = gmail ? (opts.gmailPollMs ?? SENT_COPY_GMAIL_POLL_MS) : 0;
+        const interval = Math.max(1, opts.gmailPollIntervalMs ?? SENT_COPY_GMAIL_POLL_INTERVAL_MS);
+        if (await sentCopyPresent(client, path, messageId, budget, interval, sleep, now)) {
+          return { attempted: true, success: true, mailbox: path, alreadyFiled: true };
+        }
+      }
       const res = await client.append(path, raw, ["\\Seen"]);
       if (!res) throw new Error("server rejected the APPEND (IMAP NO/BAD)");
       return { attempted: true, success: true, mailbox: path };
     });
   } catch (e) {
     return { attempted: true, success: false, error: errText(e) };
+  }
+}
+
+/** Search `path` for `messageId`, re-checking every `interval` ms until
+ *  `budget` ms of wall clock have passed. Any search failure answers "not
+ *  present" so the caller appends — a duplicate beats a missing Sent copy. */
+async function sentCopyPresent(
+  client: ImapClientLike,
+  path: string,
+  messageId: string,
+  budget: number,
+  interval: number,
+  sleep: (ms: number) => Promise<void>,
+  now: () => number
+): Promise<boolean> {
+  const deadline = now() + budget;
+  for (;;) {
+    try {
+      const lock = await client.getMailboxLock(path, { readOnly: true });
+      try {
+        const found = await client.search(
+          { header: { "message-id": messageId }, ...NOT_DELETED },
+          { uid: true }
+        );
+        if (Array.isArray(found) && found.length > 0) return true;
+      } finally {
+        lock.release();
+      }
+    } catch {
+      return false;
+    }
+    // Re-issuing SEARCH is enough: the server evaluates it against the
+    // mailbox's current contents, so no NOOP round trip is needed.
+    const left = deadline - now();
+    if (left <= 0) return false;
+    await sleep(Math.min(interval, left));
   }
 }
 

@@ -501,6 +501,10 @@ Two differences to know when SMTP is auto-preferred:
   or `sentCopy: false` with `sentCopyError`; the field is **absent** when no
   configured IMAP account matches the SMTP identity, which is a skip, not a
   failure. A copy that fails never fails the send — the mail has already gone.
+  Before appending, the Sent mailbox is searched for that `Message-ID`; if the
+  submission server already filed it (Gmail's SMTP always does — the server
+  waits up to ~3 s for it there), nothing is appended and the result adds
+  `sentCopyAlreadyFiled: true` alongside `sentCopy: true`.
   Use `transport: "applescript"` if you want Mail.app itself to file the copy.
 - **`account` is a From override, not account selection.** Over SMTP, `account`
   is used as the From address only when it is an email address; a Mail.app

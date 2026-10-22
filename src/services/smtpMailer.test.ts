@@ -471,6 +471,28 @@ describe("sendViaSmtp Sent-folder copy (2.18.0, issue #220)", () => {
     expect(raw.match(/^Message-ID:/gim)?.length).toBe(1);
   });
 
+  it("passes the SMTP host to the hook, pins Date to the delivered one, and reports alreadyFiled", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<d@example.com>" });
+    const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;
+    const appendSentCopy = vi
+      .fn()
+      .mockResolvedValue({ sentCopy: true, sentCopyAlreadyFiled: true });
+
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport,
+      appendSentCopy
+    );
+
+    expect(result).toMatchObject({ success: true, sentCopy: true, sentCopyAlreadyFiled: true });
+    expect(appendSentCopy.mock.calls[0][2]).toBe(testConfig.host);
+    const wireDate = sendMail.mock.calls[0][0].date as Date;
+    expect(wireDate).toBeInstanceOf(Date);
+    const raw = appendSentCopy.mock.calls[0][1].toString();
+    expect(raw).toContain(`Date: ${wireDate.toUTCString().replace(/GMT/, "+0000")}`);
+  });
+
   it("does not attempt a Sent-copy when none was configured (attempted:false)", async () => {
     const sendMail = vi.fn().mockResolvedValue({ messageId: "<x>" });
     const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() })) as never;

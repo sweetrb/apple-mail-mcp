@@ -215,6 +215,7 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
           // send-email, since it's the same sendViaSmtp underneath.
           ...(result.sentCopy !== undefined ? { sentCopy: result.sentCopy } : {}),
           ...(result.sentCopyError !== undefined ? { sentCopyError: result.sentCopyError } : {}),
+          ...(result.sentCopyAlreadyFiled ? { sentCopyAlreadyFiled: true } : {}),
         }
       );
     } catch (error) {

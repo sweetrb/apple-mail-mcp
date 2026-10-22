@@ -58670,6 +58670,8 @@ __export(imapClient_exports, {
   MAX_RFC822_FILE_BYTES: () => MAX_RFC822_FILE_BYTES,
   MAX_RFC822_INLINE_BYTES: () => MAX_RFC822_INLINE_BYTES,
   MAX_UNSCOPED_SEARCH_DEPTH: () => MAX_UNSCOPED_SEARCH_DEPTH,
+  SENT_COPY_GMAIL_POLL_INTERVAL_MS: () => SENT_COPY_GMAIL_POLL_INTERVAL_MS,
+  SENT_COPY_GMAIL_POLL_MS: () => SENT_COPY_GMAIL_POLL_MS,
   __resetPool: () => __resetPool,
   __setPoolConnect: () => __setPoolConnect,
   base64DecodedLength: () => base64DecodedLength,
@@ -58680,6 +58682,7 @@ __export(imapClient_exports, {
   decodedSizeWithoutBody: () => decodedSizeWithoutBody,
   dropAllPools: () => dropAllPools,
   encodeImapId: () => encodeImapId,
+  extractRawMessageId: () => extractRawMessageId,
   flagColorName: () => flagColorName,
   imapAppendDraft: () => imapAppendDraft,
   imapAppendSentCopy: () => imapAppendSentCopy,
@@ -58712,6 +58715,7 @@ __export(imapClient_exports, {
   imapThread: () => imapThread,
   imapUnflagMessage: () => imapUnflagMessage,
   imapUnreadCount: () => imapUnreadCount,
+  isGmailHost: () => isGmailHost,
   isImapAccount: () => isImapAccount,
   listImapAccountLabels: () => listImapAccountLabels,
   mailFlagBitsFor: () => mailFlagBitsFor,
@@ -59840,17 +59844,60 @@ function imapRenameMailbox(oldName, newName, deps = {}) {
     }
   });
 }
-async function imapAppendSentCopy(smtpUser, raw, deps = {}) {
+function isGmailHost(host) {
+  return Boolean(host && GMAIL_HOST.test(host.trim()));
+}
+function extractRawMessageId(raw) {
+  const text = typeof raw === "string" ? raw : raw.toString("latin1");
+  const end = text.search(/\r?\n\r?\n/);
+  const header = (end === -1 ? text : text.slice(0, end)).replace(/\r?\n[ \t]+/g, " ");
+  const m = /^message-id:[ \t]*(<[^<>\s]+>)/im.exec(header);
+  return m ? m[1] : null;
+}
+async function imapAppendSentCopy(smtpUser, raw, deps = {}, opts = {}) {
   if (!deps.config && !isImapAccount(smtpUser)) return { attempted: false };
+  const messageId = extractRawMessageId(raw);
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
   try {
-    return await withClient({ ...deps, account: deps.account ?? smtpUser }, async (client) => {
+    return await withClient({ ...deps, account: deps.account ?? smtpUser }, async (client, cfg) => {
       const path3 = await resolveMailboxPath(client, "sent", "list");
+      if (messageId) {
+        const gmail = isGmailHost(cfg.host) || isGmailHost(opts.smtpHost);
+        const budget = gmail ? opts.gmailPollMs ?? SENT_COPY_GMAIL_POLL_MS : 0;
+        const interval = Math.max(1, opts.gmailPollIntervalMs ?? SENT_COPY_GMAIL_POLL_INTERVAL_MS);
+        if (await sentCopyPresent(client, path3, messageId, budget, interval, sleep, now)) {
+          return { attempted: true, success: true, mailbox: path3, alreadyFiled: true };
+        }
+      }
       const res = await client.append(path3, raw, ["\\Seen"]);
       if (!res) throw new Error("server rejected the APPEND (IMAP NO/BAD)");
       return { attempted: true, success: true, mailbox: path3 };
     });
   } catch (e) {
     return { attempted: true, success: false, error: errText(e) };
+  }
+}
+async function sentCopyPresent(client, path3, messageId, budget, interval, sleep, now) {
+  const deadline = now() + budget;
+  for (; ; ) {
+    try {
+      const lock = await client.getMailboxLock(path3, { readOnly: true });
+      try {
+        const found = await client.search(
+          { header: { "message-id": messageId }, ...NOT_DELETED },
+          { uid: true }
+        );
+        if (Array.isArray(found) && found.length > 0) return true;
+      } finally {
+        lock.release();
+      }
+    } catch {
+      return false;
+    }
+    const left = deadline - now();
+    if (left <= 0) return false;
+    await sleep(Math.min(interval, left));
   }
 }
 function resolveDraftImapAccount(account, smtpUser, env = process.env) {
@@ -60620,7 +60667,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, COLOR_FETCH_CHUNK, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, COLOR_FETCH_CHUNK, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, SENT_COPY_GMAIL_POLL_MS, SENT_COPY_GMAIL_POLL_INTERVAL_MS, GMAIL_HOST, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -60719,6 +60766,9 @@ var init_imapClient = __esm({
     poolConnect = defaultConnect;
     pools = /* @__PURE__ */ new Map();
     connecting = /* @__PURE__ */ new Map();
+    SENT_COPY_GMAIL_POLL_MS = 3e3;
+    SENT_COPY_GMAIL_POLL_INTERVAL_MS = 500;
+    GMAIL_HOST = /(^|\.)(gmail|googlemail)\.com$/i;
     MAX_COMPOSE_SOURCE_BYTES = 25 * 1024 * 1024;
     MAX_RFC822_INLINE_BYTES = 6 * 1024 * 1024;
     MAX_RFC822_FILE_BYTES = MAX_COMPOSE_SOURCE_BYTES;
@@ -60787,11 +60837,12 @@ import { execFileSync } from "child_process";
 function errText2(e) {
   return e instanceof Error ? e.message : String(e);
 }
-async function defaultAppendSentCopy(smtpUser, raw) {
+async function defaultAppendSentCopy(smtpUser, raw, smtpHost) {
   const { imapAppendSentCopy: imapAppendSentCopy2 } = await Promise.resolve().then(() => (init_imapClient(), imapClient_exports));
-  const result = await imapAppendSentCopy2(smtpUser, raw);
+  const result = await imapAppendSentCopy2(smtpUser, raw, {}, { smtpHost });
   if (!result.attempted) return {};
-  return result.success ? { sentCopy: true } : { sentCopy: false, sentCopyError: result.error };
+  if (!result.success) return { sentCopy: false, sentCopyError: result.error };
+  return result.alreadyFiled ? { sentCopy: true, sentCopyAlreadyFiled: true } : { sentCopy: true };
 }
 function buildRawMime(mail) {
   return new mail_composer_default(mail).compile().build();
@@ -60922,7 +60973,10 @@ async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.c
     requireTLS,
     auth: { user: cfg.user, pass: cfg.pass }
   });
-  const mailOptions = buildMailOptions(opts, requestedFrom || cfg.from, attachments);
+  const mailOptions = {
+    ...buildMailOptions(opts, requestedFrom || cfg.from, attachments),
+    date: /* @__PURE__ */ new Date()
+  };
   try {
     const info = await transporter.sendMail(mailOptions);
     let copyFields = {};
@@ -60932,7 +60986,7 @@ async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.c
         keepBcc: true,
         messageId: info.messageId
       });
-      copyFields = await appendSentCopy(cfg.user, raw);
+      copyFields = await appendSentCopy(cfg.user, raw, cfg.host);
     } catch (copyError) {
       copyFields = { sentCopy: false, sentCopyError: errText2(copyError) };
     }

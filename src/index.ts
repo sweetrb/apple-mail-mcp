@@ -1442,6 +1442,13 @@ const SENT_COPY_ERROR_SCHEMA = z
   .string()
   .optional()
   .describe("Present only when sentCopy is false: why the Sent-folder copy failed.");
+const SENT_COPY_ALREADY_FILED_SCHEMA = z
+  .boolean()
+  .optional()
+  .describe(
+    "Present (true) only when sentCopy is true because the Sent mailbox already " +
+      "held this Message-ID (e.g. Gmail's SMTP files its own copy), so none was appended."
+  );
 
 // --- send-email ---
 
@@ -1500,6 +1507,7 @@ registerTool(
       messageId: z.string().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
+      sentCopyAlreadyFiled: SENT_COPY_ALREADY_FILED_SCHEMA,
     },
   },
   withErrorHandling(
@@ -1551,7 +1559,9 @@ registerTool(
         }
         const copyNote =
           result.sentCopy === true
-            ? " (Sent-folder copy filed)"
+            ? result.sentCopyAlreadyFiled
+              ? " (Sent-folder copy already filed by the server)"
+              : " (Sent-folder copy filed)"
             : result.sentCopy === false
               ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})`
               : "";
@@ -1563,6 +1573,7 @@ registerTool(
           ...(result.messageId ? { messageId: result.messageId } : {}),
           ...(result.sentCopy !== undefined ? { sentCopy: result.sentCopy } : {}),
           ...(result.sentCopyError !== undefined ? { sentCopyError: result.sentCopyError } : {}),
+          ...(result.sentCopyAlreadyFiled ? { sentCopyAlreadyFiled: true } : {}),
         });
       }
 
@@ -1858,6 +1869,7 @@ registerTool(
       attachmentCount: z.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
+      sentCopyAlreadyFiled: SENT_COPY_ALREADY_FILED_SCHEMA,
     },
   },
   withErrorHandling((args) => runReply(composeDeps, args), "Error replying to message")
@@ -1892,6 +1904,7 @@ registerTool(
       attachmentCount: z.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
+      sentCopyAlreadyFiled: SENT_COPY_ALREADY_FILED_SCHEMA,
     },
   },
   withErrorHandling((args) => runForward(composeDeps, args), "Error forwarding message")

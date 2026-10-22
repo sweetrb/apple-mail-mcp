@@ -11,6 +11,8 @@ import {
   imapDeleteMailbox,
   imapRenameMailbox,
   imapAppendSentCopy,
+  extractRawMessageId,
+  isGmailHost,
   encodeImapId,
   decodeImapId,
   imapFetchMessageId,
@@ -1091,6 +1093,151 @@ describe("imapAppendSentCopy (#220 SMTP Sent-folder copy)", () => {
     expect(r.attempted).toBe(true);
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/rejected the APPEND/);
+  });
+
+  describe("dedupe against a server-filed copy (Gmail double Sent copy)", () => {
+    const MID = "<cbb23fd3-test@example.com>";
+    const rawWithId = `From: rob@example.com\r\nMessage-ID: ${MID}\r\nSubject: hi\r\n\r\nbody Message-ID: <decoy@x>\r\n`;
+    const nonGmail: ImapConfig = { ...cfg, host: "imap.mail.me.com" };
+
+    /** A fake clock that only advances when the code under test sleeps. */
+    function fakeClock() {
+      let t = 0;
+      const sleeps: number[] = [];
+      return {
+        sleeps,
+        now: () => t,
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+          t += ms;
+        },
+      };
+    }
+
+    function dedupeClient(foundOnSearch: (n: number) => number[] | false) {
+      const calls = { searches: 0, appended: 0, criteria: [] as unknown[] };
+      const client: ImapClientLike = {
+        ...makeClient([], {}),
+        list: async () => [{ path: "[Gmail]/Sent Mail", name: "Sent Mail", specialUse: "\\Sent" }],
+        search: async (q: Record<string, unknown>) => {
+          calls.criteria.push(q);
+          return foundOnSearch(++calls.searches);
+        },
+        append: async (path: string) => {
+          calls.appended++;
+          return { destination: path };
+        },
+      };
+      return { client, calls };
+    }
+
+    it("skips the APPEND when the Sent mailbox already holds the Message-ID", async () => {
+      const { client, calls } = dedupeClient(() => [6645]);
+      const r = await imapAppendSentCopy(
+        "rob@example.com",
+        rawWithId,
+        { config: nonGmail, connect: async () => client },
+        { sleep: async () => undefined }
+      );
+      expect(r).toEqual({
+        attempted: true,
+        success: true,
+        mailbox: "[Gmail]/Sent Mail",
+        alreadyFiled: true,
+      });
+      expect(calls.appended).toBe(0);
+      expect(calls.criteria[0]).toMatchObject({ header: { "message-id": MID } });
+    });
+
+    it("appends after a single check on a non-Gmail host when absent", async () => {
+      const { client, calls } = dedupeClient(() => []);
+      const clock = fakeClock();
+      const sleeps = clock.sleeps;
+      const r = await imapAppendSentCopy(
+        "rob@example.com",
+        Buffer.from(rawWithId),
+        { config: nonGmail, connect: async () => client },
+        { sleep: clock.sleep, now: clock.now }
+      );
+      expect(r).toEqual({ attempted: true, success: true, mailbox: "[Gmail]/Sent Mail" });
+      expect(calls.searches).toBe(1);
+      expect(sleeps).toEqual([]);
+      expect(calls.appended).toBe(1);
+    });
+
+    it("on a Gmail host polls until the server-filed copy appears, then skips the APPEND", async () => {
+      const { client, calls } = dedupeClient((n) => (n >= 3 ? [6645] : []));
+      const clock = fakeClock();
+      const r = await imapAppendSentCopy(
+        "rob@example.com",
+        rawWithId,
+        { config: cfg, connect: async () => client },
+        { sleep: clock.sleep, now: clock.now, gmailPollMs: 3000, gmailPollIntervalMs: 500 }
+      );
+      expect(r.alreadyFiled).toBe(true);
+      expect(calls.searches).toBe(3);
+      expect(clock.sleeps).toEqual([500, 500]);
+      expect(calls.appended).toBe(0);
+    });
+
+    it("on a Gmail host appends once the poll budget is spent without a match", async () => {
+      const { client, calls } = dedupeClient(() => []);
+      const clock = fakeClock();
+      const r = await imapAppendSentCopy(
+        "rob@example.com",
+        rawWithId,
+        { config: nonGmail, connect: async () => client },
+        {
+          smtpHost: "smtp.gmail.com",
+          sleep: clock.sleep,
+          now: clock.now,
+          gmailPollMs: 1200,
+          gmailPollIntervalMs: 500,
+        }
+      );
+      expect(r).toEqual({ attempted: true, success: true, mailbox: "[Gmail]/Sent Mail" });
+      expect(clock.sleeps).toEqual([500, 500, 200]);
+      expect(calls.searches).toBe(4);
+      expect(calls.appended).toBe(1);
+    });
+
+    it("appends without searching when the raw message has no Message-ID", async () => {
+      const { client, calls } = dedupeClient(() => [1]);
+      const r = await imapAppendSentCopy(
+        "rob@example.com",
+        "From: rob@example.com\r\nSubject: x\r\n\r\nMessage-ID: <in-body@x>\r\n",
+        { config: cfg, connect: async () => client },
+        { sleep: async () => undefined }
+      );
+      expect(r.alreadyFiled).toBeUndefined();
+      expect(calls.searches).toBe(0);
+      expect(calls.appended).toBe(1);
+    });
+
+    it("treats a failed SEARCH as absent and still appends", async () => {
+      const { client, calls } = dedupeClient(() => false);
+      const r = await imapAppendSentCopy(
+        "rob@example.com",
+        rawWithId,
+        { config: nonGmail, connect: async () => client },
+        { sleep: async () => undefined }
+      );
+      expect(r.success).toBe(true);
+      expect(calls.appended).toBe(1);
+    });
+  });
+
+  it("extractRawMessageId reads a folded header and ignores the body", () => {
+    expect(extractRawMessageId("Subject: a\r\nMessage-ID:\r\n <x@y>\r\n\r\nbody")).toBe("<x@y>");
+    expect(extractRawMessageId("Subject: a\n\nMessage-ID: <x@y>\n")).toBeNull();
+  });
+
+  it("isGmailHost recognises Gmail/Google Mail hosts only", () => {
+    expect(isGmailHost("imap.gmail.com")).toBe(true);
+    expect(isGmailHost("smtp.googlemail.com")).toBe(true);
+    expect(isGmailHost("imap.mail.me.com")).toBe(false);
+    expect(isGmailHost("gmail.com.evil.example")).toBe(false);
+    expect(isGmailHost(undefined)).toBe(false);
   });
 
   it("reports a connection failure as a non-fatal failure result", async () => {

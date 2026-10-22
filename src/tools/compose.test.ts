@@ -113,11 +113,24 @@ describe("reply and forward transport routing", () => {
     });
   });
 
+  it("passes through sentCopyAlreadyFiled when the server already filed the copy", async () => {
+    const d = fixture();
+    d.smtpSend.mockResolvedValue({
+      success: true,
+      messageId: "<sent@example.com>",
+      sentCopy: true,
+      sentCopyAlreadyFiled: true,
+    });
+    const result = await runReply(d, args);
+    expect(result.structuredContent).toMatchObject({ sentCopy: true, sentCopyAlreadyFiled: true });
+  });
+
   it("omits sentCopy fields entirely when no Sent-copy was attempted", async () => {
     const d = fixture();
     const result = await runReply(d, args);
     expect(result.structuredContent?.sentCopy).toBeUndefined();
     expect(result.structuredContent?.sentCopyError).toBeUndefined();
+    expect(result.structuredContent?.sentCopyAlreadyFiled).toBeUndefined();
   });
 
   it("uses the decoded IMAP subject and excludes configured aliases from reply-all", async () => {

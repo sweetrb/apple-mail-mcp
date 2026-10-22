@@ -99,10 +99,15 @@ export interface SmtpSendResult {
    */
   sentCopy?: boolean;
   sentCopyError?: string;
+  /**
+   * True when `sentCopy` is true because the Sent mailbox already held this
+   * Message-ID (Gmail's SMTP files its own copy), so none was appended.
+   */
+  sentCopyAlreadyFiled?: boolean;
 }
 
 /** Fields {@link sendViaSmtp} merges into its result for the Sent-copy step. */
-type SentCopyFields = Pick<SmtpSendResult, "sentCopy" | "sentCopyError">;
+type SentCopyFields = Pick<SmtpSendResult, "sentCopy" | "sentCopyError" | "sentCopyAlreadyFiled">;
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -116,11 +121,16 @@ function errText(e: unknown): string {
  * their own hook via {@link sendViaSmtp}'s 4th parameter instead of exercising
  * this path.
  */
-async function defaultAppendSentCopy(smtpUser: string, raw: Buffer): Promise<SentCopyFields> {
+async function defaultAppendSentCopy(
+  smtpUser: string,
+  raw: Buffer,
+  smtpHost?: string
+): Promise<SentCopyFields> {
   const { imapAppendSentCopy } = await import("@/services/imapClient.js");
-  const result = await imapAppendSentCopy(smtpUser, raw);
+  const result = await imapAppendSentCopy(smtpUser, raw, {}, { smtpHost });
   if (!result.attempted) return {};
-  return result.success ? { sentCopy: true } : { sentCopy: false, sentCopyError: result.error };
+  if (!result.success) return { sentCopy: false, sentCopyError: result.error };
+  return result.alreadyFiled ? { sentCopy: true, sentCopyAlreadyFiled: true } : { sentCopy: true };
 }
 
 /** Independently composes the RFC822 bytes nodemailer would send for `mail`,
@@ -355,7 +365,11 @@ export async function sendViaSmtp(
   opts: SmtpSendOptions,
   config?: SmtpConfig,
   createTransport: typeof nodemailer.createTransport = nodemailer.createTransport,
-  appendSentCopy: (smtpUser: string, raw: Buffer) => Promise<SentCopyFields> = defaultAppendSentCopy
+  appendSentCopy: (
+    smtpUser: string,
+    raw: Buffer,
+    smtpHost?: string
+  ) => Promise<SentCopyFields> = defaultAppendSentCopy
 ): Promise<SmtpSendResult> {
   let cfg: SmtpConfig;
   try {
@@ -398,7 +412,12 @@ export async function sendViaSmtp(
     auth: { user: cfg.user, pass: cfg.pass },
   });
 
-  const mailOptions = buildMailOptions(opts, requestedFrom || cfg.from, attachments);
+  // Pin Date so the Sent-folder copy composed after the send carries the same
+  // Date header as the delivered message (it was seconds later otherwise).
+  const mailOptions = {
+    ...buildMailOptions(opts, requestedFrom || cfg.from, attachments),
+    date: new Date(),
+  };
 
   try {
     const info = await transporter.sendMail(mailOptions);
@@ -420,7 +439,7 @@ export async function sendViaSmtp(
         keepBcc: true,
         messageId: info.messageId,
       });
-      copyFields = await appendSentCopy(cfg.user, raw);
+      copyFields = await appendSentCopy(cfg.user, raw, cfg.host);
     } catch (copyError) {
       copyFields = { sentCopy: false, sentCopyError: errText(copyError) };
     }
