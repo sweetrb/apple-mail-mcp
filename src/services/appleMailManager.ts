@@ -3249,11 +3249,16 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     opts: { firstHit?: boolean } = {}
   ): string | null {
     const remembered = this.idLocationIndex.get(String(id));
+    // An explicit account-only hint must not be satisfied by a remembered
+    // location in a DIFFERENT account — numeric ids are per-mailbox counters,
+    // so an unrelated message there can answer to the same number (#319).
+    const usable =
+      hint?.account && remembered && remembered.account !== hint.account ? undefined : remembered;
     const loc: ByIdLocation | undefined =
       hint?.account && hint?.mailbox
         ? { account: hint.account, mailbox: hint.mailbox, explicit: true }
-        : remembered
-          ? { ...remembered, explicit: false }
+        : usable
+          ? { ...usable, explicit: false }
           : undefined;
 
     if (loc) {

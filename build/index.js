@@ -85736,7 +85736,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   resolveById(id, innerAction, hint, opts = {}) {
     const remembered = this.idLocationIndex.get(String(id));
-    const loc = hint?.account && hint?.mailbox ? { account: hint.account, mailbox: hint.mailbox, explicit: true } : remembered ? { ...remembered, explicit: false } : void 0;
+    const usable = hint?.account && remembered && remembered.account !== hint.account ? void 0 : remembered;
+    const loc = hint?.account && hint?.mailbox ? { account: hint.account, mailbox: hint.mailbox, explicit: true } : usable ? { ...usable, explicit: false } : void 0;
     if (loc) {
       const scoped = this.resolveScopedById(id, loc, innerAction);
       if (scoped.kind === "hit") return scoped.output;

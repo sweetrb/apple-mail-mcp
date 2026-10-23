@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [2.20.27] - 2026-10-23
+### Fixed
+- **`resolveById` no longer discards an explicit account-only hint in favor of a
+  remembered location in a different account (#319).** `get-message`,
+  `get-message-headers` and the content/source reads accept `account` without
+  `mailbox`; previously that hint was dropped the moment an `idLocationIndex` entry
+  existed for the id, even when the remembered entry pointed at a different account —
+  and since numeric ids are per-mailbox counters, an unrelated message there could
+  answer to the same number and be returned silently. A remembered location is now
+  used only when its account matches an explicitly supplied `account`; otherwise the
+  hint falls through to the already-correct account-scoped scan (the recovery path
+  added by #315), not to a fabricated "explicit" hit.
+
 ## [2.20.26] - 2026-10-22
 ### Fixed
 - **SMTP sends no longer leave two copies in a Gmail Sent mailbox.** The best-effort

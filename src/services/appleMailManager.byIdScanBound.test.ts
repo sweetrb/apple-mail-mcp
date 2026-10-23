@@ -672,3 +672,41 @@ describe("an account hint without a mailbox narrows the unscoped scan to that ac
     expect(byId()[0].script).toContain('set _scopeAcct to ""');
   });
 });
+
+describe("#319 — an account-only hint is not satisfied by a remembered location in a different account", () => {
+  let mgr: AppleMailManager;
+  beforeEach(() => {
+    h.calls.length = 0;
+    mgr = new AppleMailManager();
+  });
+
+  it("ignores a remembered Work/INBOX location when the caller names a different account, and scopes the scan to it instead of scanning unscoped", () => {
+    mgr.noteMessageLocation("42", "Work", "INBOX");
+    h.router.fn = () => ({ success: true, output: CONTENT_OK });
+    mgr.getMessageContent("42", false, { account: "Home" });
+    // Never the scoped Work/INBOX script — the mismatched remembered entry
+    // must not be treated as usable.
+    expect(kinds()).toEqual(["unscoped"]);
+    expect(byId()[0].script).not.toContain('first account whose name is "Work"');
+    expect(byId()[0].script).toContain('set _scopeAcct to "Home"');
+  });
+
+  it("a remembered location in the SAME named account is still used (the fast path keeps working)", () => {
+    mgr.noteMessageLocation("42", "Work", "Archive/2026");
+    h.router.fn = () => ({ success: true, output: CONTENT_OK });
+    mgr.getMessageContent("42", false, { account: "Work" });
+    expect(kinds()).toEqual(["scoped"]);
+    expect(byId()[0].script).toContain('first account whose name is "Work"');
+  });
+
+  it("with no usable remembered entry, an account-only hint falls through to the scoped scan rather than being treated as a full explicit hint", () => {
+    h.router.fn = () => ({
+      success: true,
+      output: `${ERR}Message not found${COV}${F}false`,
+    });
+    expect(mgr.getMessageContent("42", false, { account: "Home" })).toBeNull();
+    expect(kinds()).toEqual(["unscoped"]);
+    // Scoped to the named account, not the unscoped-everywhere walk.
+    expect(byId()[0].script).toContain('set _scopeAcct to "Home"');
+  });
+});
