@@ -1,6 +1,6 @@
 {
   "name": "apple-mail-mcp",
-  "version": "2.20.28",
+  "version": "2.20.29",
   "packageManager": "pnpm@11.9.0",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude and other AI assistants",
   "type": "module",
@@ -67,7 +67,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "imapflow": "^1.4.1",
     "nodemailer": "^10.0.2",
-    "zod": "^3.22.4"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

@@ -29,6 +29,7 @@ import {
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { integerNumber, registerToolWithContracts } from "@/utils/toolRegistration.js";
 import {
   AppleMailManager,
   resolveAttachmentSaveTarget,
@@ -456,25 +457,6 @@ const server = new McpServer(
   { capabilities: { logging: {} } }
 );
 
-/**
- * Register a tool, advertising its `outputSchema` as PERMISSIVE.
- *
- * The MCP **client** validates a result's `structuredContent` against the JSON
- * Schema the server advertised — not against the server's own zod object. A
- * bare zod raw shape renders as `additionalProperties: false`, so a payload
- * carrying any field the schema didn't enumerate is rejected client-side with
- * `-32602 … data must NOT have additional properties`, discarding a result the
- * handler produced correctly (#135: `get-mail-stats`'s IMAP branch emits
- * `perMailbox`). The server never sees it, because zod's own parse silently
- * *strips* unknown keys rather than failing — which is why the v2.3.0 migration
- * believed "all fields optional, no `.strict()`" already meant permissive. It
- * covered optionality; it did not cover undeclared keys.
- *
- * `.passthrough()` advertises `additionalProperties: true`, which is the
- * contract that migration intended: a declared field documents the shape,
- * an undeclared one is carried through instead of nuking the whole result.
- * Enforced for every tool by `test/output-schema.test.ts`.
- */
 function registerTool<
   OutputArgs extends z.ZodRawShape,
   InputArgs extends undefined | z.ZodRawShape = undefined,
@@ -489,12 +471,13 @@ function registerTool<
   },
   cb: ToolCallback<InputArgs>
 ): RegisteredTool {
-  const { outputSchema, ...rest } = config;
-  return server.registerTool(
-    name,
-    outputSchema ? { ...rest, outputSchema: z.object(outputSchema).passthrough() } : rest,
-    cb
-  );
+  // The v3 converter reused the described inReplyTo token for references.items.
+  // Preserve that published annotation while keeping the original token parser.
+  if (name === "send-email" || name === "create-draft") {
+    const token = REFERENCES_SCHEMA.unwrap().element;
+    z.globalRegistry.add(token, { ...token.meta(), description: IN_REPLY_TO_SCHEMA.description });
+  }
+  return registerToolWithContracts(server, name, config, cb);
 }
 
 /**
@@ -577,16 +560,12 @@ registerTool(
       flagColor: FLAG_COLOR_FILTER_SCHEMA,
       dateFrom: DATE_FILTER_SCHEMA.describe("Start date filter (e.g., 'January 1, 2026')"),
       dateTo: DATE_FILTER_SCHEMA.describe("End date filter (e.g., 'March 1, 2026')"),
-      limit: z
-        .number()
-        .int()
+      limit: integerNumber()
         .min(1)
         .max(500)
         .optional()
         .describe("Maximum number of results (default: 50, max: 500)"),
-      offset: z
-        .number()
-        .int()
+      offset: integerNumber()
         .min(0)
         .optional()
         .describe(
@@ -1040,9 +1019,7 @@ registerTool(
         .describe(
           "File name to use with savePath (no path separators or '..'). Default: <account>-<mailbox>-uidv<uidValidity>-uid<uid>.eml"
         ),
-      maxBytes: z
-        .number()
-        .int()
+      maxBytes: integerNumber()
         .min(1)
         .optional()
         .describe(
@@ -1338,16 +1315,12 @@ registerTool(
         .optional()
         .describe("Mailbox to list messages from. Omit to list from all mailboxes."),
       account: z.string().optional().describe("Account to list messages from"),
-      limit: z
-        .number()
-        .int()
+      limit: integerNumber()
         .min(1)
         .max(500)
         .optional()
         .describe("Maximum number of messages (default: 50, max: 500)"),
-      offset: z
-        .number()
-        .int()
+      offset: integerNumber()
         .min(0)
         .optional()
         .describe("Number of messages to skip (for pagination)"),
@@ -1611,7 +1584,7 @@ registerTool(
           z.object({
             email: z.string().min(1, "Recipient email is required"),
             variables: z
-              .record(z.string())
+              .record(z.string(), z.string())
               .describe("Placeholder values, e.g. { Name: 'Alice', Company: 'Acme' }"),
           })
         )
@@ -3012,13 +2985,11 @@ registerTool(
         .boolean()
         .default(true)
         .describe("If true (default), only propose; if false, actually create"),
-      minCount: z
-        .number()
-        .int()
+      minCount: integerNumber()
         .min(1)
         .default(3)
         .describe("Minimum messages from sender in the period"),
-      days: z.number().int().min(1).default(90).describe("Look back this many days in INBOXes"),
+      days: integerNumber().min(1).default(90).describe("Look back this many days in INBOXes"),
     },
     outputSchema: {
       dryRun: z.boolean().optional(),

@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [2.20.29] - 2026-10-24
+### Security
+- **Upgrade Zod to `^4.6.6`** to address GHSA-mrhx-c7xc-m3w5. Preserve the
+  existing tool input/output JSON Schema contracts, integer validation, and
+  string-valued template records across the Zod 4 migration. The dependency
+  retains the repository's seven-day minimum release age.
+
 ## [2.20.28] - 2026-10-23
 ### Security
 - **`ip-address` floor raised to `>=10.7.4 <11`** (Dependabot alert #39, medium). The
