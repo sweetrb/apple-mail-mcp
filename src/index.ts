@@ -45,9 +45,9 @@ import {
   resolveSmtpConfig,
   composeRawMime,
   SMTP_ENV,
-  type SmtpConfig,
 } from "@/services/smtpMailer.js";
 import { runReply, runForward, type ComposeDeps } from "@/tools/compose.js";
+import { createSerialEmailHandler } from "@/tools/serialEmail.js";
 import {
   runThreadedDraft,
   threadingHeaders,
@@ -1467,8 +1467,10 @@ registerTool(
           "Send transport. 'smtp' submits clean MIME directly via SMTP, avoiding " +
             "the macOS 15+ Mail.app <blockquote> wrapping (issue #12); requires " +
             "APPLE_MAIL_MCP_SMTP_* env config. 'applescript' sends through Mail.app. " +
-            "If omitted, SMTP is used automatically when APPLE_MAIL_MCP_SMTP_* is " +
-            "configured, otherwise AppleScript."
+            "If omitted, configured SMTP is used unless account is a Mail.app " +
+            "account label (for example 'Work'), which selects AppleScript. " +
+            "Explicit SMTP uses the configured SMTP identity; it does not resolve " +
+            "Mail.app account labels. Without SMTP configuration, use AppleScript."
         ),
     },
     outputSchema: {
@@ -1600,6 +1602,16 @@ registerTool(
         .min(1, "Body is required")
         .describe("Email body — use {{Key}} for placeholders"),
       account: SEND_ACCOUNT_SCHEMA,
+      transport: z
+        .enum(["applescript", "smtp"])
+        .optional()
+        .describe(
+          "Send transport for the whole batch. 'smtp' sends clean MIME without Mail.app " +
+            "quote wrapping and requires matching SMTP configuration; errors never fall " +
+            "back to AppleScript. SMTP accepts an allowed sender email address in account, " +
+            "not a Mail.app account label. 'applescript' explicitly uses Mail.app. If " +
+            "omitted, configured SMTP is used unless account is a Mail.app account label."
+        ),
       delayMs: z
         .number()
         .min(0)
@@ -1611,6 +1623,10 @@ registerTool(
       ok: z.boolean().optional(),
       sent: z.number().optional(),
       failed: z.number().optional(),
+      transport: z
+        .enum(["smtp", "applescript"])
+        .optional()
+        .describe("Transport used for this batch"),
       results: z
         .array(
           z
@@ -1624,38 +1640,12 @@ registerTool(
         .optional(),
     },
   },
-  withErrorHandling(async ({ recipients, subject, body, account, delayMs }) => {
-    // 2.5.0: prefer direct SMTP for mail-merge when configured (and not targeting
-    // a bare Mail.app account label); Mail.app fallback when not configured.
-    const smtpCfg = shouldUseSmtp(undefined, account) ? resolveSmtpOrFallback() : null;
-    const results = smtpCfg
-      ? await sendSerialViaSmtp(recipients, subject, body, smtpCfg, { delayMs })
-      : mailManager.sendSerialEmail(recipients, subject, body, account, delayMs);
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.length - successCount;
-
-    const details = results
-      .map((r) => `  - ${r.email}: ${r.success ? "sent" : `FAILED (${r.error})`}`)
-      .join("\n");
-
-    const structured = {
-      ok: failCount === 0,
-      sent: successCount,
-      failed: failCount,
-      results: results.map((r) => ({ email: r.email, success: r.success, error: r.error })),
-    };
-
-    if (failCount === 0) {
-      return successResponse(`Successfully sent ${successCount} email(s):\n${details}`, structured);
-    } else if (successCount === 0) {
-      return errorResponse(`Failed to send all ${failCount} email(s):\n${details}`);
-    } else {
-      return successResponse(
-        `Sent ${successCount} of ${results.length} email(s), ${failCount} failed:\n${details}`,
-        structured
-      );
-    }
-  }, "Error sending serial emails")
+  createSerialEmailHandler({
+    smtpConfigured: isSmtpConfigured,
+    smtpConfig: resolveSmtpConfig,
+    smtpSend: sendSerialViaSmtp,
+    appleScriptSend: (...args) => mailManager.sendSerialEmail(...args),
+  })
 );
 
 // --- create-draft ---
@@ -1748,15 +1738,6 @@ const threadedDraftDeps: ThreadedDraftDeps = {
   compose: composeRawMime,
   append: (account, raw) => imapAppendDraft(account, raw),
 };
-
-/** Resolve SMTP config, falling back (host/user set but no password) to Mail.app. */
-function resolveSmtpOrFallback(): SmtpConfig | null {
-  try {
-    return resolveSmtpConfig();
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Reply and forward drive Mail.app's `reply`/`forward` verbs, which take a

@@ -39,6 +39,33 @@ afterEach(() => {
 const compose = () => h.scripts.filter((s) => s.includes("make new outgoing message"));
 
 describe("sender guard on AppleScript compose", () => {
+  it.each(["$&", "$$", "$`", "$'"])(
+    "preserves literal mail-merge value %s before native sending",
+    (value) => {
+      const manager = new AppleMailManager();
+      const send = vi.spyOn(manager, "sendEmail").mockReturnValue({ success: true });
+
+      const result = manager.sendSerialEmail(
+        [{ email: "recipient@example.invalid", variables: { Name: value } }],
+        "Hello {{Name}}",
+        "prefix {{Name}} suffix",
+        undefined,
+        0
+      );
+
+      expect(result[0].success).toBe(true);
+      expect(send).toHaveBeenCalledWith(
+        ["recipient@example.invalid"],
+        `Hello ${value}`,
+        `prefix ${value} suffix`,
+        undefined,
+        undefined,
+        undefined
+      );
+      expect(compose()).toHaveLength(0);
+    }
+  );
+
   it("account name → set sender to the resolved address, guard before send, actual sender reported", () => {
     const r = new AppleMailManager().sendEmail(
       ["to@example.com"],

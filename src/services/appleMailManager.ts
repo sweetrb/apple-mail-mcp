@@ -4316,8 +4316,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         for (const [key, value] of Object.entries(recipient.variables)) {
           const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const placeholder = new RegExp(`\\{\\{${safeKey}\\}\\}`, "g");
-          personalizedSubject = personalizedSubject.replace(placeholder, value);
-          personalizedBody = personalizedBody.replace(placeholder, value);
+          personalizedSubject = personalizedSubject.replace(placeholder, () => value);
+          personalizedBody = personalizedBody.replace(placeholder, () => value);
         }
 
         const sent = this.sendEmail(

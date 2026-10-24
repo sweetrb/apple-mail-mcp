@@ -65482,7 +65482,9 @@ async function defaultAppendSentCopy(smtpUser, raw, smtpHost) {
   return result.alreadyFiled ? { sentCopy: true, sentCopyAlreadyFiled: true } : { sentCopy: true };
 }
 function buildRawMime(mail) {
-  return new mail_composer_default(mail).compile().build();
+  const message = new mail_composer_default(mail).compile();
+  message.keepBcc = mail.keepBcc === true;
+  return message.build();
 }
 function isSmtpConfigured(env = process.env) {
   return Boolean(env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim());
@@ -65589,22 +65591,26 @@ function composeRawMime(opts, from) {
     date: /* @__PURE__ */ new Date()
   });
 }
-async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.createTransport, appendSentCopy = defaultAppendSentCopy) {
-  let cfg;
-  try {
-    cfg = config2 ?? resolveSmtpConfig();
-  } catch (error63) {
-    return { success: false, error: error63 instanceof Error ? error63.message : String(error63) };
-  }
-  const requestedFrom = opts.from?.trim();
+function resolveSmtpFrom(from, config2) {
+  const requestedFrom = from?.trim();
   const allowedFrom = new Set(
-    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((value) => value.trim().toLowerCase())
+    [config2.user, config2.from, ...config2.allowedFrom ?? []].map(
+      (value) => value.trim().toLowerCase()
+    )
   );
   if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
-    return {
-      success: false,
-      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`
-    };
+    throw new Error(`SMTP From "${requestedFrom}" is not a configured sender identity.`);
+  }
+  return requestedFrom || config2.from;
+}
+async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.createTransport, appendSentCopy = defaultAppendSentCopy) {
+  let cfg;
+  let from;
+  try {
+    cfg = config2 ?? resolveSmtpConfig();
+    from = resolveSmtpFrom(opts.from, cfg);
+  } catch (error63) {
+    return { success: false, error: error63 instanceof Error ? error63.message : String(error63) };
   }
   let attachments;
   try {
@@ -65628,7 +65634,7 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
     auth: { user: cfg.user, pass: cfg.pass }
   });
   const mailOptions = {
-    ...buildMailOptions(opts, requestedFrom || cfg.from, attachments),
+    ...buildMailOptions(opts, from, attachments),
     date: /* @__PURE__ */ new Date()
   };
   try {
@@ -65660,11 +65666,12 @@ function applyPlaceholders(template, variables) {
   let out = template;
   for (const [key, value] of Object.entries(variables)) {
     const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), value);
+    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), () => value);
   }
   return out;
 }
 async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) {
+  const from = resolveSmtpFrom(opts.from, config2);
   const send = opts.send ?? sendViaSmtp;
   const sleep2 = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const delay = Math.min(Math.max(opts.delayMs ?? 500, 0), 1e4);
@@ -65677,7 +65684,7 @@ async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) 
           to: [r.email],
           subject: applyPlaceholders(subject, r.variables),
           body: applyPlaceholders(body, r.variables),
-          from: config2.from
+          from
         },
         config2
       );
@@ -101721,8 +101728,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         for (const [key, value] of Object.entries(recipient.variables)) {
           const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const placeholder = new RegExp(`\\{\\{${safeKey}\\}\\}`, "g");
-          personalizedSubject = personalizedSubject.replace(placeholder, value);
-          personalizedBody = personalizedBody.replace(placeholder, value);
+          personalizedSubject = personalizedSubject.replace(placeholder, () => value);
+          personalizedBody = personalizedBody.replace(placeholder, () => value);
         }
         const sent = this.sendEmail(
           [recipient.email],
@@ -104517,6 +104524,59 @@ function runForward(deps, args) {
   return runCompose(deps, { ...args, kind: "forward" });
 }
 
+// src/tools/serialEmail.ts
+init_smtpMailer();
+function createSerialEmailHandler(deps) {
+  return withErrorHandling(
+    async ({ recipients, subject, body, account, transport: transport2, delayMs }) => {
+      const useSmtp = shouldUseSmtp(transport2, account, deps.smtpConfigured());
+      let results;
+      if (useSmtp) {
+        if (account && !account.includes("@")) {
+          throw new Error(
+            "A Mail.app account label cannot select an SMTP identity. Use a configured sender email address, omit account to use the configured SMTP sender, or explicitly select transport=applescript."
+          );
+        }
+        const config2 = deps.smtpConfig();
+        const from = account ? resolveSmtpFrom(account, config2) : void 0;
+        results = await deps.smtpSend(recipients, subject, body, config2, {
+          delayMs,
+          ...from ? { from } : {}
+        });
+      } else {
+        results = deps.appleScriptSend(recipients, subject, body, account, delayMs);
+      }
+      const successCount = results.filter((r) => r.success).length;
+      const failCount = results.length - successCount;
+      const details = results.map((r) => `  - ${r.email}: ${r.success ? "sent" : `FAILED (${r.error})`}`).join("\n");
+      const structured = {
+        ok: failCount === 0,
+        sent: successCount,
+        failed: failCount,
+        transport: useSmtp ? "smtp" : "applescript",
+        results: results.map((r) => ({ email: r.email, success: r.success, error: r.error }))
+      };
+      if (failCount === 0) {
+        return successResponse(
+          `Successfully sent ${successCount} email(s):
+${details}`,
+          structured
+        );
+      } else if (successCount === 0) {
+        return errorResponse(`Failed to send all ${failCount} email(s):
+${details}`, structured);
+      } else {
+        return successResponse(
+          `Sent ${successCount} of ${results.length} email(s), ${failCount} failed:
+${details}`,
+          structured
+        );
+      }
+    },
+    "Error sending serial emails"
+  );
+}
+
 // src/tools/threading.ts
 function threadingHeaders(args) {
   const inReplyTo = args.inReplyTo?.trim() || void 0;
@@ -106262,7 +106322,7 @@ registerTool(
         "SMTP only (issue #220): sets the Reply-To header when replies should go somewhere other than the From/login address, e.g. a domain-alias setup where APPLE_MAIL_MCP_SMTP_FROM differs from APPLE_MAIL_MCP_SMTP_USER. Ignored on the AppleScript transport."
       ),
       transport: external_exports.enum(["applescript", "smtp"]).optional().describe(
-        "Send transport. 'smtp' submits clean MIME directly via SMTP, avoiding the macOS 15+ Mail.app <blockquote> wrapping (issue #12); requires APPLE_MAIL_MCP_SMTP_* env config. 'applescript' sends through Mail.app. If omitted, SMTP is used automatically when APPLE_MAIL_MCP_SMTP_* is configured, otherwise AppleScript."
+        "Send transport. 'smtp' submits clean MIME directly via SMTP, avoiding the macOS 15+ Mail.app <blockquote> wrapping (issue #12); requires APPLE_MAIL_MCP_SMTP_* env config. 'applescript' sends through Mail.app. If omitted, configured SMTP is used unless account is a Mail.app account label (for example 'Work'), which selects AppleScript. Explicit SMTP uses the configured SMTP identity; it does not resolve Mail.app account labels. Without SMTP configuration, use AppleScript."
       )
     },
     outputSchema: {
@@ -106356,12 +106416,16 @@ registerTool(
       subject: external_exports.string().min(1, "Subject is required").describe("Subject line \u2014 use {{Key}} for placeholders"),
       body: external_exports.string().min(1, "Body is required").describe("Email body \u2014 use {{Key}} for placeholders"),
       account: SEND_ACCOUNT_SCHEMA,
+      transport: external_exports.enum(["applescript", "smtp"]).optional().describe(
+        "Send transport for the whole batch. 'smtp' sends clean MIME without Mail.app quote wrapping and requires matching SMTP configuration; errors never fall back to AppleScript. SMTP accepts an allowed sender email address in account, not a Mail.app account label. 'applescript' explicitly uses Mail.app. If omitted, configured SMTP is used unless account is a Mail.app account label."
+      ),
       delayMs: external_exports.number().min(0).max(1e4).optional().describe("Delay between sends in ms (default: 500, max: 10000)")
     },
     outputSchema: {
       ok: external_exports.boolean().optional(),
       sent: external_exports.number().optional(),
       failed: external_exports.number().optional(),
+      transport: external_exports.enum(["smtp", "applescript"]).optional().describe("Transport used for this batch"),
       results: external_exports.array(
         external_exports.object({
           email: external_exports.string().optional(),
@@ -106371,32 +106435,12 @@ registerTool(
       ).optional()
     }
   },
-  withErrorHandling(async ({ recipients, subject, body, account, delayMs }) => {
-    const smtpCfg = shouldUseSmtp(void 0, account) ? resolveSmtpOrFallback() : null;
-    const results = smtpCfg ? await sendSerialViaSmtp(recipients, subject, body, smtpCfg, { delayMs }) : mailManager.sendSerialEmail(recipients, subject, body, account, delayMs);
-    const successCount = results.filter((r) => r.success).length;
-    const failCount = results.length - successCount;
-    const details = results.map((r) => `  - ${r.email}: ${r.success ? "sent" : `FAILED (${r.error})`}`).join("\n");
-    const structured = {
-      ok: failCount === 0,
-      sent: successCount,
-      failed: failCount,
-      results: results.map((r) => ({ email: r.email, success: r.success, error: r.error }))
-    };
-    if (failCount === 0) {
-      return successResponse(`Successfully sent ${successCount} email(s):
-${details}`, structured);
-    } else if (successCount === 0) {
-      return errorResponse(`Failed to send all ${failCount} email(s):
-${details}`);
-    } else {
-      return successResponse(
-        `Sent ${successCount} of ${results.length} email(s), ${failCount} failed:
-${details}`,
-        structured
-      );
-    }
-  }, "Error sending serial emails")
+  createSerialEmailHandler({
+    smtpConfigured: isSmtpConfigured,
+    smtpConfig: resolveSmtpConfig,
+    smtpSend: sendSerialViaSmtp,
+    appleScriptSend: (...args) => mailManager.sendSerialEmail(...args)
+  })
 );
 registerTool(
   "create-draft",
@@ -106475,13 +106519,6 @@ var threadedDraftDeps = {
   compose: composeRawMime,
   append: (account, raw) => imapAppendDraft(account, raw)
 };
-function resolveSmtpOrFallback() {
-  try {
-    return resolveSmtpConfig();
-  } catch {
-    return null;
-  }
-}
 async function toNumericMailId(id) {
   const ref = decodeImapId(id);
   if (!ref) return { numericId: id };

@@ -21,7 +21,7 @@ import nodemailer from "nodemailer";
 // sent through the Promise `sendMail` resolves to, so the only way to obtain
 // them for a Sent-folder copy (#220) is to independently compose the same
 // mail options with the same internal class nodemailer itself composes with.
-// `keepBcc` preserves the Bcc header in this copy on purpose: unlike the wire
+// The compiled node's `keepBcc` preserves the Bcc header in this copy on purpose: unlike the wire
 // copy the recipients see, the sender's own Sent-folder archive is exactly
 // where they need to see who was Bcc'd.
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
@@ -133,14 +133,14 @@ async function defaultAppendSentCopy(
   return result.alreadyFiled ? { sentCopy: true, sentCopyAlreadyFiled: true } : { sentCopy: true };
 }
 
-/** Independently composes the RFC822 bytes nodemailer would send for `mail`,
- *  for filing a Sent-folder copy (`keepBcc` keeps the Bcc header in that copy,
- *  unlike the wire message recipients see). `Record<string, unknown>` (not
- *  nodemailer's own `Mail.Options`) so `keepBcc` — a real nodemailer option the
- *  published types omit — can be passed without an unsafe cast at every call
- *  site. */
+/** Independently composes the RFC822 bytes for a sender-owned archive or draft.
+ *  `keepBcc` is applied to the compiled MimeNode: MailComposer does not forward
+ *  that option from its input. Recipient-bound SMTP MIME uses its own composer
+ *  and must continue to omit Bcc. */
 function buildRawMime(mail: Record<string, unknown>): Promise<Buffer> {
-  return new MailComposer(mail as never).compile().build();
+  const message = new MailComposer(mail as never).compile();
+  message.keepBcc = mail.keepBcc === true;
+  return message.build();
 }
 
 /**
@@ -354,6 +354,20 @@ export function composeRawMime(opts: SmtpSendOptions, from: string): Promise<Buf
   });
 }
 
+/** Resolve a requested sender without changing the configured identity allowlist. */
+export function resolveSmtpFrom(from: string | undefined, config: SmtpConfig): string {
+  const requestedFrom = from?.trim();
+  const allowedFrom = new Set(
+    [config.user, config.from, ...(config.allowedFrom ?? [])].map((value) =>
+      value.trim().toLowerCase()
+    )
+  );
+  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
+    throw new Error(`SMTP From "${requestedFrom}" is not a configured sender identity.`);
+  }
+  return requestedFrom || config.from;
+}
+
 /**
  * Sends an email over SMTP, producing clean MIME with no blockquote wrapping.
  *
@@ -372,21 +386,12 @@ export async function sendViaSmtp(
   ) => Promise<SentCopyFields> = defaultAppendSentCopy
 ): Promise<SmtpSendResult> {
   let cfg: SmtpConfig;
+  let from: string;
   try {
     cfg = config ?? resolveSmtpConfig();
+    from = resolveSmtpFrom(opts.from, cfg);
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
-  }
-
-  const requestedFrom = opts.from?.trim();
-  const allowedFrom = new Set(
-    [cfg.user, cfg.from, ...(cfg.allowedFrom ?? [])].map((value) => value.trim().toLowerCase())
-  );
-  if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
-    return {
-      success: false,
-      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`,
-    };
   }
 
   let attachments;
@@ -415,7 +420,7 @@ export async function sendViaSmtp(
   // Pin Date so the Sent-folder copy composed after the send carries the same
   // Date header as the delivered message (it was seconds later otherwise).
   const mailOptions = {
-    ...buildMailOptions(opts, requestedFrom || cfg.from, attachments),
+    ...buildMailOptions(opts, from, attachments),
     date: new Date(),
   };
 
@@ -482,7 +487,7 @@ export function applyPlaceholders(template: string, variables: Record<string, st
   let out = template;
   for (const [key, value] of Object.entries(variables)) {
     const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), value);
+    out = out.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, "g"), () => value);
   }
   return out;
 }
@@ -503,10 +508,13 @@ export async function sendSerialViaSmtp(
   config: SmtpConfig,
   opts: {
     delayMs?: number;
+    /** A configured sender identity; validated before the batch starts. */
+    from?: string;
     send?: typeof sendViaSmtp;
     sleep?: (ms: number) => Promise<void>;
   } = {}
 ): Promise<SerialSmtpResult[]> {
+  const from = resolveSmtpFrom(opts.from, config);
   const send = opts.send ?? sendViaSmtp;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const delay = Math.min(Math.max(opts.delayMs ?? 500, 0), 10000);
@@ -520,7 +528,7 @@ export async function sendSerialViaSmtp(
           to: [r.email],
           subject: applyPlaceholders(subject, r.variables),
           body: applyPlaceholders(body, r.variables),
-          from: config.from,
+          from,
         },
         config
       );

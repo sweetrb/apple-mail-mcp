@@ -76,6 +76,8 @@ codex plugin add apple-mail@apple-mail-mcp
 
 The Codex package registers the same `apple-mail` MCP server through an exactly pinned runtime — `npx -y apple-mail-mcp@<plugin version>` — and includes the Apple Mail skill guidance. The pin in `codex/.mcp.json` is rewritten to match `package.json` by `scripts/sync-plugin-version.mjs` on every version bump, so the plugin manifest and the server it launches are always the same release; CI fails the PR if they drift.
 
+See [Apple Mail in Codex](docs/CODEX-SETUP.md) for permissions, diagnostics, optional IMAP/SMTP setup, and quoted-body troubleshooting. The [Codex compose and authentication proposal](docs/CODEX-PLUGIN-AUTH-PROPOSAL.md) calls for equivalent Codex/Claude delivery tests and describes optional provider OAuth, which is not currently implemented.
+
 ### Other Hosts (Hermes, Antigravity)
 
 Two more hosts can run the same `apple-mail` MCP server (`npx -y apple-mail-mcp`):

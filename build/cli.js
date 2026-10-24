@@ -60849,7 +60849,9 @@ async function defaultAppendSentCopy(smtpUser, raw, smtpHost) {
   return result.alreadyFiled ? { sentCopy: true, sentCopyAlreadyFiled: true } : { sentCopy: true };
 }
 function buildRawMime(mail) {
-  return new mail_composer_default(mail).compile().build();
+  const message = new mail_composer_default(mail).compile();
+  message.keepBcc = mail.keepBcc === true;
+  return message.build();
 }
 function readKeychainPassword(service, account) {
   for (const kind of ["find-internet-password", "find-generic-password"]) {
@@ -60939,22 +60941,26 @@ function buildMailOptions(opts, from, attachments) {
     replyTo: opts.replyTo?.trim() || void 0
   };
 }
-async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.createTransport, appendSentCopy = defaultAppendSentCopy) {
-  let cfg;
-  try {
-    cfg = config ?? resolveSmtpConfig();
-  } catch (error2) {
-    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
-  }
-  const requestedFrom = opts.from?.trim();
+function resolveSmtpFrom(from, config) {
+  const requestedFrom = from?.trim();
   const allowedFrom = new Set(
-    [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((value) => value.trim().toLowerCase())
+    [config.user, config.from, ...config.allowedFrom ?? []].map(
+      (value) => value.trim().toLowerCase()
+    )
   );
   if (requestedFrom && !allowedFrom.has(requestedFrom.toLowerCase())) {
-    return {
-      success: false,
-      error: `SMTP From "${requestedFrom}" is not a configured sender identity.`
-    };
+    throw new Error(`SMTP From "${requestedFrom}" is not a configured sender identity.`);
+  }
+  return requestedFrom || config.from;
+}
+async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.createTransport, appendSentCopy = defaultAppendSentCopy) {
+  let cfg;
+  let from;
+  try {
+    cfg = config ?? resolveSmtpConfig();
+    from = resolveSmtpFrom(opts.from, cfg);
+  } catch (error2) {
+    return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
   }
   let attachments;
   try {
@@ -60978,7 +60984,7 @@ async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.c
     auth: { user: cfg.user, pass: cfg.pass }
   });
   const mailOptions = {
-    ...buildMailOptions(opts, requestedFrom || cfg.from, attachments),
+    ...buildMailOptions(opts, from, attachments),
     date: /* @__PURE__ */ new Date()
   };
   try {
