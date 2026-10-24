@@ -1,6 +1,6 @@
 {
   "name": "apple-mail-mcp",
-  "version": "2.20.27",
+  "version": "2.20.28",
   "packageManager": "pnpm@11.9.0",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude and other AI assistants",
   "type": "module",
@@ -75,7 +75,7 @@
     "@types/nodemailer": "^8.0.1",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/coverage-v8": "^4.1.12",
     "ajv": "^8.17.1",
     "esbuild": "^0.28.1",
     "eslint": "^9.0.0",
@@ -87,7 +87,7 @@
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.51.0",
     "vite": ">=8.2.4 <9",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.12"
   },
   "volta": {
     "node": "24.17.0"

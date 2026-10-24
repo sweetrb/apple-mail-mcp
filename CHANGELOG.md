@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [2.20.28] - 2026-10-23
+### Security
+- **`ip-address` floor raised to `>=10.7.4 <11`** (Dependabot alert #39, medium). The
+  tree carried 10.7.2/10.7.3 duplicates inside the vulnerable range, and the fix ships in
+  the bundle (reached via `@modelcontextprotocol/sdk` and `imapflow` → `socks`).
+- **`vitest` / `@vitest/coverage-v8` raised to `^4.1.12`**, pulling `@vitest/mocker`
+  4.1.12 (alerts #37/#38, medium). Dev scope only; `@vitest/mocker` is an exact-version
+  dependency of vitest, so it moves with vitest rather than through an override.
+
 ## [2.20.27] - 2026-10-23
 ### Fixed
 - **`resolveById` no longer discards an explicit account-only hint in favor of a

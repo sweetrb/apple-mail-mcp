@@ -68,7 +68,10 @@ overrides:
   # 2026-09-30: GHSA-j6r3-76f7-8jcv + GHSA-h3mg-xc3c-68pw (both medium), fixed
   # in 10.7.1 — 10.5.1 was not actually the patched release. Raised the floor
   # >=10.5.1 <11 -> >=10.7.1 <11. Reachable in the shipped bundle (as before).
-  ip-address: ">=10.7.1 <11"
+  # 2026-10-23: GHSA alert #39 (medium), fixed in 10.7.4 (published 2026-10-11,
+  # past the 7-day soak). Raised >=10.7.1 <11 -> >=10.7.4 <11; the tree had
+  # 10.7.2/10.7.3 duplicates inside the vulnerable range. Reachable in the bundle.
+  ip-address: ">=10.7.4 <11"
   # GHSA-8j4g-w8fx-2239 (moderate): ReDoS in Hono's CORS middleware, fixed in
   # 4.12.34. Deferred earlier the same day because that release was still inside
   # the 24h minimumReleaseAge soak — it missed by 41 minutes. No
@@ -135,4 +138,8 @@ overrides:
   # inside the minimumReleaseAge soak above). Dev scope only; not in the
   # shipped bundle (the only "vite" hit in build/index.js and build/cli.js is
   # the unrelated substring in "invite.ics").
+  # @vitest/mocker (alerts #37/#38 medium, fixed in 4.1.12) is handled the same
+  # way: it is an exact-version dependency of vitest, so the fix is raising vitest
+  # and @vitest/coverage-v8 to ^4.1.12 in package.json rather than an override
+  # that would split mocker from its vitest. Dev scope only.
 
