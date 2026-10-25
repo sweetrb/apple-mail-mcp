@@ -369,13 +369,80 @@ describe("reply and forward transport routing", () => {
     expect(composedBody).toContain("Original ✓ body.");
   });
 
-  it("falls back to the plain body when the AppleScript source can't be read", async () => {
+  it.each([false, true])("refuses an AppleScript reply when IMAP fails (send=%s)", async (send) => {
     const d = fixture();
     d.imapSource.mockRejectedValue(new Error("IMAP connection reset"));
-    const result = await runReply(d, { ...args, send: false });
-    expect(result.structuredContent).toMatchObject({ sent: false, transport: "applescript" });
-    expect(d.mail.replyToMessage).toHaveBeenCalledWith("84", args.body, false, false, undefined);
+    const result = await runReply(d, { ...args, send, transport: "applescript" });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("IMAP connection reset");
+    expect(d.mail.replyToMessage).not.toHaveBeenCalled();
+    expect(d.smtpSend).not.toHaveBeenCalled();
   });
+
+  it("preserves native source lookup diagnostics without composing a reply", async () => {
+    const d = fixture();
+    const mail = { ...d.mail, consumeLastMessageLookupError: () => "bounded scan skipped Archive" };
+    const result = await runReply({ ...d, mail }, { ...args, id: "42", send: false });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("bounded scan skipped Archive");
+    expect(d.mail.replyToMessage).not.toHaveBeenCalled();
+    expect(d.smtpSend).not.toHaveBeenCalled();
+  });
+
+  it("returns native source exceptions as tool errors", async () => {
+    const d = fixture();
+    d.mail.getRawSource.mockImplementation(() => {
+      throw new Error("Mail lookup timed out");
+    });
+    const result = await runReply(d, { ...args, id: "42", send: false });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("Mail lookup timed out");
+    expect(d.mail.replyToMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(["smtp", "applescript"] as const)(
+    "recovers a numeric reply quote from MIME over %s",
+    async (transport) => {
+      const d = fixture();
+      d.mail.getRawSource.mockReturnValue(raw);
+      const result = await runReply(d, { ...args, id: "42", transport });
+      expect(result.isError).not.toBe(true);
+      const body =
+        transport === "smtp"
+          ? d.smtpSend.mock.calls[0][0].body
+          : d.mail.replyToMessage.mock.calls[0][1];
+      expect(body).toContain("> Original ✓ body.");
+    }
+  );
+
+  it.each(["smtp", "applescript"] as const)(
+    "rejects unreadable reply text over %s for both ID types",
+    async (transport) => {
+      for (const sourceId of [id, "42"]) {
+        const d = fixture();
+        const html = raw.replace("text/plain", "text/html");
+        d.imapSource.mockResolvedValue({ raw: html, accountUser: cfg.user });
+        d.mail.getRawSource.mockReturnValue(html);
+        const result = await runReply(d, { ...args, id: sourceId, transport });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result)).toContain("no readable plain-text body");
+        expect(d.smtpSend).not.toHaveBeenCalled();
+        expect(d.mail.replyToMessage).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each(["smtp", "applescript"] as const)(
+    "allows a genuinely empty reply body over %s",
+    async (transport) => {
+      const d = fixture();
+      d.imapSource.mockResolvedValue({
+        raw: raw.replace("Original =E2=9C=93 body.", ""),
+        accountUser: cfg.user,
+      });
+      expect((await runReply(d, { ...args, transport })).isError).not.toBe(true);
+    }
+  );
 
   it("honors explicit AppleScript without resolving SMTP credentials, quoting via IMAP", async () => {
     const d = fixture();

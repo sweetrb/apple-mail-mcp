@@ -104358,13 +104358,11 @@ function withErrorHandling(handler, errorPrefix) {
 }
 
 // src/tools/compose.ts
-async function readOriginal(deps, id, cfg) {
+async function readOriginal(deps, id, cfg, recoverReplyText = false) {
   if (decodeImapId(id)) {
     const source = await deps.imapSource(id);
-    const identities = [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map(
-      (s) => s.trim().toLowerCase()
-    );
-    if (!identities.includes(source.accountUser.trim().toLowerCase())) {
+    const identities = cfg && [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((s) => s.trim().toLowerCase());
+    if (identities && !identities.includes(source.accountUser.trim().toLowerCase())) {
       throw new Error(
         "The source IMAP account does not match the configured SMTP identity. Configure SMTP for that account or explicitly select transport=applescript."
       );
@@ -104381,9 +104379,19 @@ async function readOriginal(deps, id, cfg) {
     );
   }
   const content = deps.mail.getMessageContent(id);
-  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? null };
+  return {
+    original: parseOriginalHeaders(raw),
+    plainText: content?.plainText ?? (recoverReplyText ? extractTextBody(raw) : null)
+  };
 }
-async function readOriginalForQuote(deps, id) {
+function requireReplyText(plainText) {
+  if (plainText === null)
+    throw new Error(
+      "The original message has no readable plain-text body. Reply composition was stopped to avoid omitting its quoted content. Open the original in Mail.app and reply there."
+    );
+  return plainText;
+}
+async function readOriginalForForward(deps, id) {
   if (decodeImapId(id)) {
     try {
       const source = await deps.imapSource(id);
@@ -104400,12 +104408,12 @@ async function readOriginalForQuote(deps, id) {
   return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? "" };
 }
 async function replyComposeBody(deps, id, body) {
-  const source = await readOriginalForQuote(deps, id);
-  return source ? buildReplyBody(body, source.original, source.plainText) : body;
+  const source = await readOriginal(deps, id, void 0, true);
+  return buildReplyBody(body, source.original, requireReplyText(source.plainText));
 }
 async function forwardComposeBody(deps, id, body, hasAttachments = false) {
   if (!body && !hasAttachments) return body;
-  const source = await readOriginalForQuote(deps, id);
+  const source = await readOriginalForForward(deps, id);
   return source ? buildForwardBody(source.original, source.plainText, body) : body;
 }
 async function runCompose(deps, args) {
@@ -104429,12 +104437,13 @@ async function runCompose(deps, args) {
   if (smtp) {
     try {
       const cfg = deps.smtpConfig();
-      const { original, plainText } = await readOriginal(deps, id, cfg);
+      const { original, plainText } = await readOriginal(deps, id, cfg, args.kind === "reply");
       if (args.kind === "forward" && plainText === null)
         throw new Error(
           "The original message has no readable plain-text body. SMTP forwarding would omit its content; explicitly select transport=applescript to forward it with Mail.app."
         );
       if (args.kind === "reply") {
+        requireReplyText(plainText);
         if (!original.messageId)
           throw new Error(
             "The original message has no Message-ID; a threaded SMTP reply cannot be constructed."
@@ -104485,37 +104494,43 @@ async function runCompose(deps, args) {
       );
     }
   }
-  const resolved = await deps.numericId(id);
-  if (!resolved.numericId)
-    return errorResponse(
-      `Failed to ${verb} message "${id}": ${resolved.error ?? "message not found"}`
+  try {
+    const resolved = await deps.numericId(id);
+    if (!resolved.numericId)
+      return errorResponse(
+        `Failed to ${verb} message "${id}": ${resolved.error ?? "message not found"}`
+      );
+    const outcome = args.kind === "reply" ? deps.mail.replyToMessage(
+      resolved.numericId,
+      await replyComposeBody(deps, id, args.body),
+      args.replyAll,
+      send,
+      attachmentCount ? attachments : void 0
+    ) : deps.mail.forwardMessage(
+      resolved.numericId,
+      args.to,
+      await forwardComposeBody(deps, id, args.body, attachmentCount > 0),
+      send,
+      attachmentCount ? attachments : void 0
     );
-  const outcome = args.kind === "reply" ? deps.mail.replyToMessage(
-    resolved.numericId,
-    await replyComposeBody(deps, id, args.body),
-    args.replyAll,
-    send,
-    attachmentCount ? attachments : void 0
-  ) : deps.mail.forwardMessage(
-    resolved.numericId,
-    args.to,
-    await forwardComposeBody(deps, id, args.body, attachmentCount > 0),
-    send,
-    attachmentCount ? attachments : void 0
-  );
-  if (!outcome.success)
+    if (!outcome.success)
+      return errorResponse(
+        `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
+      );
+    const text = (args.kind === "reply" ? send ? "Reply sent via AppleScript" : "Reply saved as draft" : send ? `Message forwarded to ${args.to.join(", ")}` : "Forward saved as draft") + withFiles;
+    return successResponse(text, {
+      ok: true,
+      sent: send,
+      id,
+      transport: "applescript",
+      attachmentCount,
+      ...args.kind === "forward" ? { recipients: args.to } : {}
+    });
+  } catch (error63) {
     return errorResponse(
-      `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
+      `Failed to ${verb} message "${id}": ${error63 instanceof Error ? error63.message : String(error63)}`
     );
-  const text = (args.kind === "reply" ? send ? "Reply sent via AppleScript" : "Reply saved as draft" : send ? `Message forwarded to ${args.to.join(", ")}` : "Forward saved as draft") + withFiles;
-  return successResponse(text, {
-    ok: true,
-    sent: send,
-    id,
-    transport: "applescript",
-    attachmentCount,
-    ...args.kind === "forward" ? { recipients: args.to } : {}
-  });
+  }
 }
 function runReply(deps, args) {
   return runCompose(deps, { ...args, kind: "reply" });

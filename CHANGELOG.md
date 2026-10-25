@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [2.20.31] - 2026-10-25
+
+### Fixed
+
+- Stop reply drafts and sends when the original source or text cannot be read,
+  instead of silently omitting the quoted message. Preserve lookup diagnostics
+  and recover numeric-message reply text from raw MIME when Mail.app's decoded
+  content is unavailable. Genuinely empty original text remains supported.
+
 ## [2.20.30] - 2026-10-24
 
 ### Fixed

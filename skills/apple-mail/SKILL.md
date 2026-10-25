@@ -303,6 +303,12 @@ including its known quote-wrapping limitation. For drafts, use `send: false`
 with transport omitted or `applescript`, not `smtp`. Read the returned
 `transport`; SMTP success may also include the sent `messageId`.
 
+Reply drafts and sends require readable original text on either transport. If
+the source lookup fails or its text is unavailable, the tool stops before
+composing or sending instead of omitting the quote. Numeric replies can recover
+text from raw MIME; genuinely empty original text is allowed. If text remains
+unreadable, open the original in Mail.app and reply there.
+
 SMTP forwards need a readable plain-text original. HTML-only IMAP messages and
 failed Mail.app body reads are rejected before sending, so the original content
 cannot silently disappear. Explicit AppleScript forwarding remains available;
