@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [2.20.31] - 2026-10-25
+
+### Added
+
+- Add explicit Google Desktop sign-in through `apple-mail-auth`, using PKCE,
+  a bounded loopback callback, verified OpenID account binding, and macOS
+  Keychain credential storage. A user-supplied Google client registration is
+  required; no embedded confidential secret or hosted service is provided.
+- Resolve OAuth credentials asynchronously for Google-only TLS IMAP, IDLE, and
+  SMTP connections, with single-flight refresh, rotation, and cancellation.
+  Existing password accounts and the single configured SMTP identity remain
+  supported. CLI lifecycle changes require restarting running MCP instances.
+- Add HTTP authorization/token/JWKS fixture coverage and setup guidance.
+  Fixture validation is not a claim of live Google consent or provider approval.
+
 ## [2.20.30] - 2026-10-24
 
 ### Fixed

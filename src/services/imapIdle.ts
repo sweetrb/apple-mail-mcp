@@ -11,6 +11,8 @@
  * @module services/imapIdle
  */
 import { ImapFlow } from "imapflow";
+import { resolveCredential } from "./credentials.js";
+import { gmailOAuth } from "./gmailOAuth.js";
 import { buildImapConnectionOptions, IMAP_ENV, type ImapConfig } from "@/services/imapClient.js";
 
 /** Minimal event-capable client surface the watcher needs (testable). */
@@ -20,6 +22,7 @@ export interface IdleClient {
   on(event: "exists", handler: (data: { count: number; prevCount: number }) => void): void;
   on(event: "close" | "error", handler: (err?: unknown) => void): void;
   logout(): Promise<void>;
+  close?(): void;
 }
 
 export type IdleConnect = (cfg: ImapConfig) => Promise<IdleClient>;
@@ -31,7 +34,11 @@ export interface NewMailEvent {
 }
 
 const defaultIdleConnect: IdleConnect = async (cfg) => {
-  const client = new ImapFlow(buildImapConnectionOptions(cfg));
+  const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {};
+  const client = new ImapFlow({
+    ...buildImapConnectionOptions(cfg),
+    auth: await resolveCredential(cfg, "imap"),
+  });
   // ImapFlow is an EventEmitter: an 'error' with no listener (e.g. a socket
   // ETIMEOUT during connect, before watch() attaches its handler) is an
   // *uncaught* exception that crashes the whole MCP server. Attach a listener
@@ -40,7 +47,12 @@ const defaultIdleConnect: IdleConnect = async (cfg) => {
   client.on("error", () => {});
   try {
     await client.connect();
+    guard();
   } catch (error) {
+    if (cfg.oauth) {
+      client.close();
+      throw new Error("Google IMAP IDLE authentication failed; reconnect the account.");
+    }
     if (!cfg.secure && !cfg.allowPlaintext) {
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -64,6 +76,7 @@ export class ImapIdleWatcher {
   // Per-account baseline message count; growth past it = new mail.
   private readonly lastCount = new Map<string, number>();
   private stopped = false;
+  private unsubscribe?: () => void;
 
   constructor(
     private readonly opts: {
@@ -85,6 +98,9 @@ export class ImapIdleWatcher {
   /** Begin watching every configured account. Resolves once watches are kicked off. */
   async start(): Promise<void> {
     this.stopped = false;
+    this.unsubscribe = gmailOAuth.onDisconnect(() => {
+      void this.stop(true);
+    });
     await Promise.all(this.opts.configs.map((cfg) => this.watch(cfg)));
   }
 
@@ -107,6 +123,11 @@ export class ImapIdleWatcher {
     const label = cfg.accountLabel;
     try {
       const client = await this.connect(cfg);
+      if (this.stopped) {
+        client.close?.();
+        await client.logout().catch(() => {});
+        return;
+      }
       this.clients.set(label, client);
       // Real-time path: ImapFlow emits `exists` while idling (where the server
       // pushes it). `count` is the new total.
@@ -162,14 +183,17 @@ export class ImapIdleWatcher {
   }
 
   /** Stop all watches and close connections. */
-  async stop(): Promise<void> {
+  async stop(force = false): Promise<void> {
     this.stopped = true;
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
     for (const t of this.timers.values()) clearTimeout(t);
     for (const p of this.polls.values()) clearInterval(p);
     this.timers.clear();
     this.polls.clear();
     const clients = [...this.clients.values()];
     this.clients.clear();
+    if (force) for (const client of clients) client.close?.();
     await Promise.all(clients.map((c) => c.logout().catch(() => undefined)));
   }
 

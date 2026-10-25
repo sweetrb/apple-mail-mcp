@@ -29,6 +29,9 @@ importers:
       nodemailer:
         specifier: ^10.0.2
         version: 10.1.1
+      oauth4webapi:
+        specifier: 3.8.8
+        version: 3.8.8
       zod:
         specifier: ^4.6.6
         version: 4.6.7
@@ -1259,6 +1262,9 @@ packages:
   nodemailer@10.1.1:
     resolution: {integrity: sha512-pbqZRoeYUO+1E8TJ/11WeY4D2EVujj1hsYjz3qff/vUFDtGnmi7p3iqzTFslYOfQ6PnjVcWxx/CIUSHCSrO/QA==}
     engines: {node: '>=20.0.0'}
+
+  oauth4webapi@3.8.8:
+    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
 
   object-assign@4.1.1:
     resolution: {integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==}
@@ -2808,6 +2814,8 @@ snapshots:
       content-type: 2.1.0
 
   nodemailer@10.1.1: {}
+
+  oauth4webapi@3.8.8: {}
 
   object-assign@4.1.1: {}
 

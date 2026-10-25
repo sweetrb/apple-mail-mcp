@@ -1,12 +1,14 @@
 # Proposal: guided Codex setup and optional provider OAuth
 
-Status: design proposal. This document adds no OAuth implementation, hosted
-service, or plugin installation.
+Status: design accepted through PR #330. The initial Google implementation is
+documented in [Google sign-in](GMAIL-OAUTH.md); broader provider and hosted work
+remain proposed. This document does not install a plugin or provide a hosted
+service.
 
 ## Purpose and precedent
 
-Extend the existing local Codex plugin with clearer setup and, in a later
-implementation, optional mail-provider authorization. Preserve the default
+Extend the existing local Codex plugin with clearer setup and optional
+mail-provider authorization. Preserve the default
 Mail.app workflow and existing app-password configuration. Users should be able
 to identify which connection needs attention without confusing plugin
 installation, macOS permissions, and mailbox authentication.
@@ -40,9 +42,10 @@ a local companion; packaging the existing stdio server is insufficient.
 | MCP to Mail.app   | macOS Automation permission; Mail.app manages its accounts          | Guide permission checks and diagnostics                      |
 | MCP to a provider | Optional IMAP/SMTP password authentication, normally using Keychain | Add provider-specific OAuth and credential lifecycle support |
 
-The current IMAP and SMTP connection builders pass `{ user, pass }`. OAuth
-requires a token-aware credential path; neither a marketplace authentication
-policy nor a manifest declaration implements it.
+The original IMAP and SMTP connection builders passed `{ user, pass }`. The
+initial Google implementation adds a shared token-aware credential path while
+retaining password accounts; neither a marketplace authentication policy nor a
+manifest declaration alone implements OAuth.
 [Codex MCP OAuth](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) authenticates
 HTTP MCP connections, not the local server's downstream mailbox connections.
 

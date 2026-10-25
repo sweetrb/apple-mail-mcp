@@ -23,6 +23,22 @@ Use this skill when the user:
 
 ## Available Tools
 
+### Optional Google sign-in
+
+Google IMAP/SMTP OAuth is configured separately from Mail.app and MCP discovery.
+Use `apple-mail-auth connect account@example.com` only when the user explicitly
+requests sign-in and has configured a Google Desktop client ID. The same CLI
+supports `status`, `reconnect`, and `disconnect`. From a built source checkout,
+use `node build/auth-cli.js` in place of `apple-mail-auth`. The user completes
+consent in the external browser; never request tokens, passwords, or client
+secrets in chat. Stop all running MCP instances before lifecycle changes and
+restart them afterward;
+CLI disconnect cannot close another process's existing sessions and does not
+revoke Google's provider grant. Authorization sends no mail and does not grant
+permission for a send. See `docs/GMAIL-OAUTH.md` for non-secret configuration,
+Google's broad mail scope, and the live-validation boundary. Do not edit installed
+plugin manifests or claim Microsoft/iCloud OAuth or a native compose fix.
+
 ### Message Operations
 
 | Tool                  | Purpose                                                                                                                                                                                                                                                                                 |

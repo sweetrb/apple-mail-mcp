@@ -68,7 +68,8 @@ This method also installs a **skill** that teaches Claude when and how to use Ap
 ### Using the Codex Marketplace
 
 See [Apple Mail in Codex](docs/CODEX-SETUP.md) for setup and diagnostics, and the
-[guided setup and OAuth proposal](docs/CODEX-PLUGIN-AUTH-PROPOSAL.md) for proposed
+[Google sign-in guide](docs/GMAIL-OAUTH.md) for the explicit local Gmail OAuth
+flow, or the [guided setup and OAuth proposal](docs/CODEX-PLUGIN-AUTH-PROPOSAL.md) for proposed
 future authorization support.
 
 Install the same public marketplace in Codex:

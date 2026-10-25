@@ -3,7 +3,8 @@
 This guide describes the existing local plugin and the capabilities available in
 `apple-mail-mcp` 2.20.30. The plugin packages the Apple Mail skill, assets, and MCP
 configuration. It launches an exactly pinned npm release through `npx`; it does
-not install Node.js, add mail accounts, or provide mailbox-provider OAuth.
+not install Node.js or add mail accounts. Google sign-in is an explicit optional
+[local setup step](GMAIL-OAUTH.md), separate from plugin installation.
 
 ## Install the plugin
 
@@ -47,8 +48,9 @@ Codex to list accounts and read a small selection from the intended inbox.
 
 The default backend uses AppleScript and accounts already signed into Mail.app;
 it needs no additional mailbox password. IMAP adds direct server-side reads and
-mailbox operations, while SMTP adds direct sending. Both currently use password
+mailbox operations, while SMTP adds direct sending. Both support password
 authentication, with macOS Keychain as the recommended credential source.
+Google accounts can alternatively use [Google Desktop sign-in](GMAIL-OAUTH.md).
 
 Follow the [IMAP / SMTP Setup Guide](IMAP-SETUP.md) for provider settings and
 Keychain commands. For a plugin installation, its configuration-file method
@@ -62,7 +64,7 @@ Keep only non-secret settings there, including account labels, hosts, and
 Keychain references. Enter app-specific passwords locally as described in the
 guide, never in chat or a plugin manifest. This method requires an account that
 permits password authentication; putting an OAuth token in the password field
-does not add OAuth support.
+does not select OAuth. Use the explicit Google authentication settings instead.
 
 Restart the MCP client after configuration changes and rerun `doctor`. Resolve
 authentication failures for the affected account without disabling TLS or

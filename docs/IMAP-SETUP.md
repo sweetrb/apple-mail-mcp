@@ -292,7 +292,8 @@ block — switch to the `config.json` method (Method B) and confirm the file is 
 - **iCloud:** you used your Apple ID as the login instead of the iCloud mailbox
   address; try `you@icloud.com`, the `@me.com` alias, or the bare local part.
 - **Workspace:** your admin disabled app passwords (or requires OAuth) — IMAP via
-  app password isn't available for that account.
+  app password isn't available for that account. [Google sign-in](GMAIL-OAUTH.md)
+  is an alternative when the organization permits the registered Desktop client.
 
 **Storing the Keychain password over SSH / headless fails with `User interaction is not allowed`.**
 `security add-internet-password` — and the server _reading_ the password back —

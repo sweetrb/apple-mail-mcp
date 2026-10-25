@@ -1,13 +1,14 @@
 {
   "name": "apple-mail-mcp",
-  "version": "2.20.30",
+  "version": "2.20.31",
   "packageManager": "pnpm@11.9.0",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude and other AI assistants",
   "type": "module",
   "main": "build/index.js",
   "bin": {
     "apple-mail-mcp": "build/index.js",
-    "apple-mail-send": "build/cli.js"
+    "apple-mail-send": "build/cli.js",
+    "apple-mail-auth": "build/auth-cli.js"
   },
   "files": [
     "build",
@@ -17,7 +18,7 @@
   ],
   "scripts": {
     "preinstall": "node -e \"const fs=require('fs');const ua=process.env.npm_config_user_agent||'';if(fs.existsSync('.git')&&!ua.startsWith('pnpm')){console.error('\\nThis repo uses pnpm. npm/yarn resolve dependencies off-lockfile and the committed bundle will mismatch CI.\\n\\n  corepack enable && pnpm install --frozen-lockfile\\n');process.exit(1)}\"",
-    "build": "tsc --noEmit && esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node20 --outdir=build --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
+    "build": "tsc --noEmit && esbuild src/index.ts src/cli.ts src/auth-cli.ts --bundle --platform=node --format=esm --target=node20 --outdir=build --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
     "start": "node build/index.js",
     "dev": "tsc --watch",
     "test": "vitest run",
@@ -67,6 +68,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "imapflow": "^1.4.1",
     "nodemailer": "^10.0.2",
+    "oauth4webapi": "3.8.8",
     "zod": "^4.6.6"
   },
   "devDependencies": {

@@ -17,6 +17,8 @@
  */
 
 import nodemailer from "nodemailer";
+import { googleReference, resolveCredential, validateOAuthTransport } from "./credentials.js";
+import { gmailOAuth, type GoogleCredentialRef } from "./gmailOAuth.js";
 // Deep import: nodemailer does not expose the raw RFC822 bytes it actually
 // sent through the Promise `sendMail` resolves to, so the only way to obtain
 // them for a Sent-folder copy (#220) is to independently compose the same
@@ -72,6 +74,7 @@ export interface SmtpSendOptions {
 
 /** Resolved SMTP connection configuration. */
 export interface SmtpConfig {
+  oauth?: GoogleCredentialRef;
   host: string;
   port: number;
   secure: boolean;
@@ -262,13 +265,18 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
 
   // Password: explicit env var wins, otherwise Keychain (service/account
   // default to the host/user but can be overridden).
-  let pass = env[SMTP_ENV.password];
-  if (!pass) {
+  const oauth = googleReference(
+    env.APPLE_MAIL_MCP_SMTP_AUTH,
+    user as string,
+    env.APPLE_MAIL_MCP_GOOGLE_CLIENT_ID
+  );
+  let pass = oauth ? "" : env[SMTP_ENV.password];
+  if (!oauth && !pass) {
     const service = env[SMTP_ENV.keychainService]?.trim() || (host as string);
     const account = env[SMTP_ENV.keychainAccount]?.trim() || (user as string);
     pass = readKeychainPassword(service, account) ?? undefined;
   }
-  if (!pass) {
+  if (!oauth && !pass) {
     throw new Error(
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet ` +
         `password in the Keychain for service "${
@@ -279,16 +287,19 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
   }
 
   const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
-  return {
+  const config: SmtpConfig = {
     host: host as string,
     port,
     secure,
     allowPlaintext,
     user: user as string,
-    pass,
+    pass: pass ?? "",
+    oauth,
     from,
     allowedFrom,
   };
+  validateOAuthTransport(config, "smtp");
+  return config;
 }
 
 /**
@@ -407,6 +418,18 @@ export async function sendViaSmtp(
       `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
     );
   }
+  let auth;
+  try {
+    const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {};
+    const credential = await resolveCredential(cfg, "smtp");
+    guard();
+    auth = "accessToken" in credential ? { type: "OAuth2" as const, ...credential } : credential;
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Credential resolution failed.",
+    };
+  }
   const transporter = createTransport({
     host: cfg.host,
     port: cfg.port,
@@ -414,8 +437,17 @@ export async function sendViaSmtp(
     // Port 587/143-style configurations must not silently downgrade to
     // plaintext when the server advertises no usable TLS upgrade.
     requireTLS,
-    auth: { user: cfg.user, pass: cfg.pass },
+    auth,
   });
+  const unsubscribe = cfg.oauth
+    ? gmailOAuth.onDisconnect((ref) => {
+        if (
+          ref.clientId === cfg.oauth?.clientId &&
+          ref.email.toLowerCase() === cfg.user.toLowerCase()
+        )
+          transporter.close();
+      })
+    : () => {};
 
   // Pin Date so the Sent-folder copy composed after the send carries the same
   // Date header as the delivered message (it was seconds later otherwise).
@@ -451,6 +483,12 @@ export async function sendViaSmtp(
 
     return { success: true, messageId: info.messageId, ...copyFields };
   } catch (error) {
+    if (cfg.oauth)
+      return {
+        success: false,
+        error:
+          "Google SMTP send failed. Check provider connectivity and reconnect if authorization expired.",
+      };
     const detail = error instanceof Error ? error.message : String(error);
     const tlsHint = requireTLS
       ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.`
@@ -460,6 +498,7 @@ export async function sendViaSmtp(
       error: `SMTP send failed: ${detail}.${tlsHint}`,
     };
   } finally {
+    unsubscribe();
     transporter.close();
   }
 }

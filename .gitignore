@@ -10,6 +10,7 @@ node_modules/
 build/*
 !build/index.js
 !build/cli.js
+!build/auth-cli.js
 
 # Test coverage
 coverage/
