@@ -192,9 +192,11 @@ export async function fanOutImapMessages(
           mailbox: `${config.accountLabel} / ${o.mailbox}`,
         }))
       );
-    } catch (e) {
+    } catch {
       accountsFailed.push(config.accountLabel);
-      console.error(`IMAP fan-out failed for account "${config.accountLabel}": ${String(e)}`);
+      console.error(
+        "IMAP fan-out failed. Check the affected account's connection and authorization."
+      );
     }
   }
   return {

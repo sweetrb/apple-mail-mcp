@@ -5,13 +5,13 @@ import * as oauth from "oauth4webapi";
 import {
   GmailOAuthManager,
   GOOGLE_SCOPES,
-  type GoogleCredentialRef,
+  type GoogleAccountBinding,
   type GoogleGrant,
   type GrantStore,
 } from "./gmailOAuth.js";
 import { resolveCredential, validateOAuthTransport } from "./credentials.js";
 
-const ref: GoogleCredentialRef = {
+const ref: GoogleAccountBinding = {
   provider: "google",
   clientId: "fixture.apps.googleusercontent.com",
   email: "person@example.com",
@@ -22,12 +22,14 @@ class MemoryStore implements GrantStore {
   snapshot = vi.fn(async () => ({ revision: String(this.currentRevision), grant: this.grant }));
   grant: GoogleGrant | null = null;
   read = vi.fn(async () => this.grant);
-  write = vi.fn(async (_ref: GoogleCredentialRef, grant: GoogleGrant, expectedRevision: string) => {
-    if (expectedRevision !== String(this.currentRevision))
-      throw new Error("Stale credential write");
-    this.currentRevision++;
-    this.grant = grant;
-  });
+  write = vi.fn(
+    async (_ref: GoogleAccountBinding, grant: GoogleGrant, expectedRevision: string) => {
+      if (expectedRevision !== String(this.currentRevision))
+        throw new Error("Stale credential write");
+      this.currentRevision++;
+      this.grant = grant;
+    }
+  );
   remove = vi.fn(async () => {
     this.currentRevision++;
     this.grant = null;
@@ -308,13 +310,13 @@ describe("credential transport boundaries", () => {
   const cfg = {
     user: ref.email,
     pass: "must-not-be-used",
-    oauth: ref,
+    googleAccount: ref,
     host: "imap.gmail.com",
     port: 993,
     secure: true,
   };
   it("retains password credentials", async () => {
-    expect(await resolveCredential({ ...cfg, oauth: undefined }, "imap")).toEqual({
+    expect(await resolveCredential({ ...cfg, googleAccount: undefined }, "imap")).toEqual({
       user: ref.email,
       pass: "must-not-be-used",
     });

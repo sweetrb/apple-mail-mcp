@@ -6,12 +6,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, rename, unlink, rmdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { GoogleAccountBinding } from "./googleAccount.js";
+import { AuthOperationError } from "./authErrors.js";
+export type { GoogleAccountBinding } from "./googleAccount.js";
 
-export interface GoogleCredentialRef {
-  provider: "google";
-  clientId: string;
-  email: string;
-}
 export interface GoogleGrant {
   accessToken: string;
   refreshToken: string;
@@ -20,11 +18,11 @@ export interface GoogleGrant {
   email: string;
 }
 export interface GrantStore {
-  revision(ref: GoogleCredentialRef): Promise<string>;
-  snapshot(ref: GoogleCredentialRef): Promise<{ revision: string; grant: GoogleGrant | null }>;
-  read(ref: GoogleCredentialRef): Promise<GoogleGrant | null>;
-  write(ref: GoogleCredentialRef, grant: GoogleGrant, expectedRevision: string): Promise<void>;
-  remove(ref: GoogleCredentialRef): Promise<void>;
+  revision(ref: GoogleAccountBinding): Promise<string>;
+  snapshot(ref: GoogleAccountBinding): Promise<{ revision: string; grant: GoogleGrant | null }>;
+  read(ref: GoogleAccountBinding): Promise<GoogleGrant | null>;
+  write(ref: GoogleAccountBinding, grant: GoogleGrant, expectedRevision: string): Promise<void>;
+  remove(ref: GoogleAccountBinding): Promise<void>;
 }
 const SERVICE = "apple-mail-mcp.oauth.google.v1";
 export const GOOGLE_SCOPES = "openid email https://mail.google.com/";
@@ -34,16 +32,21 @@ export const GOOGLE_SERVER: oauth.AuthorizationServer = {
   token_endpoint: "https://oauth2.googleapis.com/token",
   jwks_uri: "https://www.googleapis.com/oauth2/v3/certs",
 };
-function key(ref: GoogleCredentialRef): string {
+function key(ref: GoogleAccountBinding): string {
+  // Namespace hashing of public registration/account metadata, not password
+  // hashing. Tokens and passwords never enter this function.
   return createHash("sha256").update(`${ref.clientId}\n${ref.email.toLowerCase()}`).digest("hex");
 }
-function checkRef(ref: GoogleCredentialRef): void {
+function checkRef(ref: GoogleAccountBinding): void {
   if (
     ref.provider !== "google" ||
     !/^[\w.-]+\.apps\.googleusercontent\.com$/.test(ref.clientId) ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ref.email)
   ) {
-    throw new Error("Configure a Google Desktop client ID and the expected account email.");
+    throw new AuthOperationError(
+      "configuration",
+      "Configure a Google Desktop client ID and the expected account email."
+    );
   }
 }
 function security(args: string[], input?: string): Promise<string> {
@@ -53,7 +56,9 @@ function security(args: string[], input?: string): Promise<string> {
       args,
       { encoding: "utf8", maxBuffer: 128 * 1024, timeout: 15_000 },
       (error, stdout) =>
-        error ? reject(new Error("OAuth Keychain operation failed.")) : resolve(stdout)
+        error
+          ? reject(new AuthOperationError("keychain", "OAuth Keychain operation failed."))
+          : resolve(stdout)
     );
     // security's interactive parser receives secrets over a pipe, never argv or a shell.
     child.stdin?.end(input);
@@ -72,10 +77,10 @@ export class KeychainGrantStore implements GrantStore {
       "oauth-state"
     )
   ) {}
-  private revisionPath(ref: GoogleCredentialRef): string {
+  private revisionPath(ref: GoogleAccountBinding): string {
     return join(this.stateDirectory, `${key(ref)}.revision`);
   }
-  async revision(ref: GoogleCredentialRef): Promise<string> {
+  async revision(ref: GoogleAccountBinding): Promise<string> {
     try {
       return await readFile(this.revisionPath(ref), "utf8");
     } catch (error) {
@@ -83,7 +88,7 @@ export class KeychainGrantStore implements GrantStore {
       throw new Error("OAuth revision storage is unavailable.");
     }
   }
-  private async locked<T>(ref: GoogleCredentialRef, action: () => Promise<T>): Promise<T> {
+  private async locked<T>(ref: GoogleAccountBinding, action: () => Promise<T>): Promise<T> {
     await mkdir(this.stateDirectory, { recursive: true, mode: 0o700 });
     const lock = join(this.stateDirectory, `${key(ref)}.lock`);
     const deadline = Date.now() + 10_000;
@@ -95,7 +100,8 @@ export class KeychainGrantStore implements GrantStore {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST")
           throw new Error("OAuth storage lock is unavailable.");
         if (Date.now() >= deadline)
-          throw new Error(
+          throw new AuthOperationError(
+            "storage-busy",
             `OAuth storage is busy. If a process crashed, stop all mail MCP/auth processes before removing the empty lock directory: ${lock}`
           );
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -107,7 +113,7 @@ export class KeychainGrantStore implements GrantStore {
       await rmdir(lock);
     }
   }
-  private async advance(ref: GoogleCredentialRef): Promise<void> {
+  private async advance(ref: GoogleAccountBinding): Promise<void> {
     const target = this.revisionPath(ref);
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
@@ -118,21 +124,21 @@ export class KeychainGrantStore implements GrantStore {
       await unlink(temporary).catch(() => {});
     }
   }
-  async read(ref: GoogleCredentialRef): Promise<GoogleGrant | null> {
+  async read(ref: GoogleAccountBinding): Promise<GoogleGrant | null> {
     // Readers must not bind an in-progress revision to the previous Keychain
     // value. A separate revision read can be stale, which safely fails CAS,
     // but the grant itself must never be observed during a mutation.
     return this.locked(ref, () => this.readUnlocked(ref));
   }
   async snapshot(
-    ref: GoogleCredentialRef
+    ref: GoogleAccountBinding
   ): Promise<{ revision: string; grant: GoogleGrant | null }> {
     return this.locked(ref, async () => ({
       revision: await this.revision(ref),
       grant: await this.readUnlocked(ref),
     }));
   }
-  private async readUnlocked(ref: GoogleCredentialRef): Promise<GoogleGrant | null> {
+  private async readUnlocked(ref: GoogleAccountBinding): Promise<GoogleGrant | null> {
     // A missing item is distinct from an inaccessible/locked Keychain.
     return new Promise((resolve, reject) => {
       execFile(
@@ -142,7 +148,13 @@ export class KeychainGrantStore implements GrantStore {
         (error, stdout) => {
           if (error) {
             if (Number(error.code) === 44) resolve(null);
-            else reject(new Error("OAuth Keychain is unavailable; unlock it and retry."));
+            else
+              reject(
+                new AuthOperationError(
+                  "keychain",
+                  "OAuth Keychain is unavailable; unlock it and retry."
+                )
+              );
             return;
           }
           try {
@@ -164,7 +176,7 @@ export class KeychainGrantStore implements GrantStore {
     });
   }
   async write(
-    ref: GoogleCredentialRef,
+    ref: GoogleAccountBinding,
     grant: GoogleGrant,
     expectedRevision: string
   ): Promise<void> {
@@ -182,7 +194,7 @@ export class KeychainGrantStore implements GrantStore {
         throw new Error("OAuth Keychain write could not be verified.");
     });
   }
-  async remove(ref: GoogleCredentialRef): Promise<void> {
+  async remove(ref: GoogleAccountBinding): Promise<void> {
     await this.locked(ref, async () => {
       await this.advance(ref);
       if (await this.readUnlocked(ref))
@@ -204,7 +216,7 @@ export class GmailOAuthManager {
   private readonly refreshes = new Map<string, Promise<string>>();
   private readonly generations = new Map<string, number>();
   private readonly writes = new Map<string, Promise<unknown>>();
-  private readonly invalidators = new Set<(ref: GoogleCredentialRef) => void>();
+  private readonly invalidators = new Set<(ref: GoogleAccountBinding) => void>();
   constructor(
     private readonly store: GrantStore = new KeychainGrantStore(),
     private readonly server: oauth.AuthorizationServer = GOOGLE_SERVER,
@@ -212,7 +224,7 @@ export class GmailOAuthManager {
       oauth.ValidateSignatureOptions = {}
   ) {}
 
-  onDisconnect(callback: (ref: GoogleCredentialRef) => void): () => void {
+  onDisconnect(callback: (ref: GoogleAccountBinding) => void): () => void {
     this.invalidators.add(callback);
     return () => this.invalidators.delete(callback);
   }
@@ -226,21 +238,21 @@ export class GmailOAuthManager {
       .catch(() => {});
     return next;
   }
-  private version(ref: GoogleCredentialRef): number {
+  private version(ref: GoogleAccountBinding): number {
     return this.generations.get(key(ref)) ?? 0;
   }
-  connectionGuard(ref: GoogleCredentialRef): () => void {
+  connectionGuard(ref: GoogleAccountBinding): () => void {
     const generation = this.version(ref);
     return () => {
       if (generation !== this.version(ref))
         throw new Error("Google account disconnected during connection.");
     };
   }
-  private assertCurrent(ref: GoogleCredentialRef, generation: number, signal: AbortSignal): void {
+  private assertCurrent(ref: GoogleAccountBinding, generation: number, signal: AbortSignal): void {
     if (signal.aborted || generation !== this.version(ref))
       throw new Error("OAuth operation canceled.");
   }
-  async status(ref: GoogleCredentialRef): Promise<{
+  async status(ref: GoogleAccountBinding): Promise<{
     provider: "google";
     email: string;
     state: "connected" | "refresh-required" | "disconnected";
@@ -257,7 +269,7 @@ export class GmailOAuthManager {
           : "refresh-required",
     };
   }
-  async disconnect(ref: GoogleCredentialRef): Promise<void> {
+  async disconnect(ref: GoogleAccountBinding): Promise<void> {
     checkRef(ref);
     const id = key(ref);
     this.generations.set(id, this.version(ref) + 1);
@@ -266,7 +278,7 @@ export class GmailOAuthManager {
     await this.serial(id, () => this.store.remove(ref));
   }
   async connect(
-    ref: GoogleCredentialRef,
+    ref: GoogleAccountBinding,
     options: { openBrowser?: OpenBrowser; signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<void> {
     checkRef(ref);
@@ -385,7 +397,8 @@ export class GmailOAuthManager {
       });
       this.assertCurrent(ref, generation, signal);
     } catch {
-      throw new Error(
+      throw new AuthOperationError(
+        "authorization",
         "Google authorization failed or was canceled. Check the client registration, consent, and selected account; retry connect."
       );
     } finally {
@@ -412,7 +425,7 @@ export class GmailOAuthManager {
       throw new Error("Google did not grant all required scopes.");
     }
   }
-  async accessToken(ref: GoogleCredentialRef): Promise<string> {
+  async accessToken(ref: GoogleAccountBinding): Promise<string> {
     checkRef(ref);
     const id = key(ref);
     const running = this.refreshes.get(id);
@@ -464,7 +477,8 @@ export class GmailOAuthManager {
         this.assertCurrent(ref, generation, signal);
         return updated.accessToken;
       } catch {
-        throw new Error(
+        throw new AuthOperationError(
+          "reconnect",
           "Google credential unavailable or expired. Reconnect this account; no password fallback was attempted."
         );
       } finally {

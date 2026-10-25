@@ -1305,6 +1305,35 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, rename, unlink, rmdir } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
 import { join as join2 } from "node:path";
+
+// src/services/authErrors.ts
+var AuthOperationError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+    this.name = "AuthOperationError";
+  }
+  code;
+};
+function publicAuthFailure(error) {
+  if (error instanceof AuthOperationError) {
+    switch (error.code) {
+      case "configuration":
+        return "Configure a valid Google Desktop client ID and the expected account email.";
+      case "keychain":
+        return "Google credentials could not be accessed securely. Unlock the login Keychain and retry.";
+      case "storage-busy":
+        return "Google credential storage is busy. Stop mail MCP/auth processes and follow the stale-lock recovery instructions in docs/GMAIL-OAUTH.md.";
+      case "authorization":
+        return "Google authorization failed or was canceled. Check client registration, consent, and the selected account, then retry connect.";
+      case "reconnect":
+        return "Google credentials are unavailable or expired. Reconnect the account; no password fallback was attempted.";
+    }
+  }
+  return "Google authorization operation failed. Check the account configuration and Keychain access; see docs/GMAIL-OAUTH.md for recovery.";
+}
+
+// src/services/gmailOAuth.ts
 var SERVICE = "apple-mail-mcp.oauth.google.v1";
 var GOOGLE_SCOPES = "openid email https://mail.google.com/";
 var GOOGLE_SERVER = {
@@ -1319,7 +1348,10 @@ ${ref2.email.toLowerCase()}`).digest("hex");
 }
 function checkRef(ref2) {
   if (ref2.provider !== "google" || !/^[\w.-]+\.apps\.googleusercontent\.com$/.test(ref2.clientId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ref2.email)) {
-    throw new Error("Configure a Google Desktop client ID and the expected account email.");
+    throw new AuthOperationError(
+      "configuration",
+      "Configure a Google Desktop client ID and the expected account email."
+    );
   }
 }
 function security(args, input) {
@@ -1328,7 +1360,7 @@ function security(args, input) {
       "/usr/bin/security",
       args,
       { encoding: "utf8", maxBuffer: 128 * 1024, timeout: 15e3 },
-      (error, stdout) => error ? reject(new Error("OAuth Keychain operation failed.")) : resolve(stdout)
+      (error, stdout) => error ? reject(new AuthOperationError("keychain", "OAuth Keychain operation failed.")) : resolve(stdout)
     );
     child.stdin?.end(input);
   });
@@ -1370,7 +1402,8 @@ var KeychainGrantStore = class {
         if (error.code !== "EEXIST")
           throw new Error("OAuth storage lock is unavailable.");
         if (Date.now() >= deadline)
-          throw new Error(
+          throw new AuthOperationError(
+            "storage-busy",
             `OAuth storage is busy. If a process crashed, stop all mail MCP/auth processes before removing the empty lock directory: ${lock}`
           );
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -1411,7 +1444,13 @@ var KeychainGrantStore = class {
         (error, stdout) => {
           if (error) {
             if (Number(error.code) === 44) resolve(null);
-            else reject(new Error("OAuth Keychain is unavailable; unlock it and retry."));
+            else
+              reject(
+                new AuthOperationError(
+                  "keychain",
+                  "OAuth Keychain is unavailable; unlock it and retry."
+                )
+              );
             return;
           }
           try {
@@ -1620,7 +1659,8 @@ var GmailOAuthManager = class {
       });
       this.assertCurrent(ref2, generation, signal2);
     } catch {
-      throw new Error(
+      throw new AuthOperationError(
+        "authorization",
         "Google authorization failed or was canceled. Check the client registration, consent, and selected account; retry connect."
       );
     } finally {
@@ -1686,7 +1726,8 @@ var GmailOAuthManager = class {
         this.assertCurrent(ref2, generation, signal2);
         return updated.accessToken;
       } catch {
-        throw new Error(
+        throw new AuthOperationError(
+          "reconnect",
           "Google credential unavailable or expired. Reconnect this account; no password fallback was attempted."
         );
       } finally {
@@ -1738,6 +1779,6 @@ try {
       process.exitCode = 2;
   }
 } catch (error) {
-  console.error(error instanceof Error ? error.message : "Google authorization failed.");
+  console.error(publicAuthFailure(error));
   process.exitCode = 1;
 }

@@ -14,6 +14,8 @@
   supported. CLI lifecycle changes require restarting running MCP instances.
 - Add HTTP authorization/token/JWKS fixture coverage and setup guidance.
   Fixture validation is not a claim of live Google consent or provider approval.
+- Keep public account-routing metadata separate from stored token credentials,
+  and use fixed authentication diagnostics at CLI and server logging boundaries.
 
 ## [2.20.30] - 2026-10-24
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   dedupKey,
   mergeMessages,
@@ -129,6 +129,28 @@ describe("mergeMessages", () => {
 });
 
 describe("fanOutImapMessages", () => {
+  it("reports failed accounts without logging arbitrary credential/provider errors", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await fanOutImapMessages(
+        {},
+        "search",
+        {
+          connect: async () => {
+            throw new Error("ACCESS_TOKEN_CANARY REFRESH_TOKEN_CANARY provider-response");
+          },
+        },
+        [cfgA]
+      );
+      expect(result.accountsFailed).toEqual([cfgA.accountLabel]);
+      expect(log).toHaveBeenCalledWith(
+        "IMAP fan-out failed. Check the affected account's connection and authorization."
+      );
+      expect(JSON.stringify(log.mock.calls)).not.toMatch(/CANARY|provider-response/);
+    } finally {
+      log.mockRestore();
+    }
+  });
   it("fans the IMAP query out over EVERY configured IMAP account and concatenates rows", async () => {
     const seen: string[] = [];
     const res = await fanOutImapMessages(

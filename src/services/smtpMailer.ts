@@ -17,8 +17,9 @@
  */
 
 import nodemailer from "nodemailer";
-import { googleReference, resolveCredential, validateOAuthTransport } from "./credentials.js";
-import { gmailOAuth, type GoogleCredentialRef } from "./gmailOAuth.js";
+import { resolveCredential, validateOAuthTransport } from "./credentials.js";
+import { gmailOAuth } from "./gmailOAuth.js";
+import { googleReference, type GoogleAccountBinding } from "./googleAccount.js";
 // Deep import: nodemailer does not expose the raw RFC822 bytes it actually
 // sent through the Promise `sendMail` resolves to, so the only way to obtain
 // them for a Sent-folder copy (#220) is to independently compose the same
@@ -74,7 +75,7 @@ export interface SmtpSendOptions {
 
 /** Resolved SMTP connection configuration. */
 export interface SmtpConfig {
-  oauth?: GoogleCredentialRef;
+  googleAccount?: GoogleAccountBinding;
   host: string;
   port: number;
   secure: boolean;
@@ -265,18 +266,18 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
 
   // Password: explicit env var wins, otherwise Keychain (service/account
   // default to the host/user but can be overridden).
-  const oauth = googleReference(
+  const googleAccount = googleReference(
     env.APPLE_MAIL_MCP_SMTP_AUTH,
     user as string,
     env.APPLE_MAIL_MCP_GOOGLE_CLIENT_ID
   );
-  let pass = oauth ? "" : env[SMTP_ENV.password];
-  if (!oauth && !pass) {
+  let pass = googleAccount ? "" : env[SMTP_ENV.password];
+  if (!googleAccount && !pass) {
     const service = env[SMTP_ENV.keychainService]?.trim() || (host as string);
     const account = env[SMTP_ENV.keychainAccount]?.trim() || (user as string);
     pass = readKeychainPassword(service, account) ?? undefined;
   }
-  if (!oauth && !pass) {
+  if (!googleAccount && !pass) {
     throw new Error(
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet ` +
         `password in the Keychain for service "${
@@ -294,7 +295,7 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
     allowPlaintext,
     user: user as string,
     pass: pass ?? "",
-    oauth,
+    googleAccount,
     from,
     allowedFrom,
   };
@@ -420,7 +421,7 @@ export async function sendViaSmtp(
   }
   let auth;
   try {
-    const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {};
+    const guard = cfg.googleAccount ? gmailOAuth.connectionGuard(cfg.googleAccount) : () => {};
     const credential = await resolveCredential(cfg, "smtp");
     guard();
     auth = "accessToken" in credential ? { type: "OAuth2" as const, ...credential } : credential;
@@ -439,10 +440,10 @@ export async function sendViaSmtp(
     requireTLS,
     auth,
   });
-  const unsubscribe = cfg.oauth
+  const unsubscribe = cfg.googleAccount
     ? gmailOAuth.onDisconnect((ref) => {
         if (
-          ref.clientId === cfg.oauth?.clientId &&
+          ref.clientId === cfg.googleAccount?.clientId &&
           ref.email.toLowerCase() === cfg.user.toLowerCase()
         )
           transporter.close();
@@ -483,7 +484,7 @@ export async function sendViaSmtp(
 
     return { success: true, messageId: info.messageId, ...copyFields };
   } catch (error) {
-    if (cfg.oauth)
+    if (cfg.googleAccount)
       return {
         success: false,
         error:

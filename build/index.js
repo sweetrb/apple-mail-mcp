@@ -66561,6 +66561,22 @@ var init_build = __esm({
   }
 });
 
+// src/services/authErrors.ts
+var AuthOperationError;
+var init_authErrors = __esm({
+  "src/services/authErrors.ts"() {
+    "use strict";
+    AuthOperationError = class extends Error {
+      constructor(code, message) {
+        super(message);
+        this.code = code;
+        this.name = "AuthOperationError";
+      }
+      code;
+    };
+  }
+});
+
 // src/services/gmailOAuth.ts
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
@@ -66574,7 +66590,10 @@ ${ref.email.toLowerCase()}`).digest("hex");
 }
 function checkRef(ref) {
   if (ref.provider !== "google" || !/^[\w.-]+\.apps\.googleusercontent\.com$/.test(ref.clientId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ref.email)) {
-    throw new Error("Configure a Google Desktop client ID and the expected account email.");
+    throw new AuthOperationError(
+      "configuration",
+      "Configure a Google Desktop client ID and the expected account email."
+    );
   }
 }
 function security(args, input2) {
@@ -66583,7 +66602,7 @@ function security(args, input2) {
       "/usr/bin/security",
       args,
       { encoding: "utf8", maxBuffer: 128 * 1024, timeout: 15e3 },
-      (error63, stdout) => error63 ? reject(new Error("OAuth Keychain operation failed.")) : resolve5(stdout)
+      (error63, stdout) => error63 ? reject(new AuthOperationError("keychain", "OAuth Keychain operation failed.")) : resolve5(stdout)
     );
     child.stdin?.end(input2);
   });
@@ -66596,6 +66615,7 @@ var init_gmailOAuth = __esm({
   "src/services/gmailOAuth.ts"() {
     "use strict";
     init_build();
+    init_authErrors();
     SERVICE = "apple-mail-mcp.oauth.google.v1";
     GOOGLE_SCOPES = "openid email https://mail.google.com/";
     GOOGLE_SERVER = {
@@ -66638,7 +66658,8 @@ var init_gmailOAuth = __esm({
             if (error63.code !== "EEXIST")
               throw new Error("OAuth storage lock is unavailable.");
             if (Date.now() >= deadline)
-              throw new Error(
+              throw new AuthOperationError(
+                "storage-busy",
                 `OAuth storage is busy. If a process crashed, stop all mail MCP/auth processes before removing the empty lock directory: ${lock}`
               );
             await new Promise((resolve5) => setTimeout(resolve5, 50));
@@ -66679,7 +66700,13 @@ var init_gmailOAuth = __esm({
             (error63, stdout) => {
               if (error63) {
                 if (Number(error63.code) === 44) resolve5(null);
-                else reject(new Error("OAuth Keychain is unavailable; unlock it and retry."));
+                else
+                  reject(
+                    new AuthOperationError(
+                      "keychain",
+                      "OAuth Keychain is unavailable; unlock it and retry."
+                    )
+                  );
                 return;
               }
               try {
@@ -66888,7 +66915,8 @@ var init_gmailOAuth = __esm({
           });
           this.assertCurrent(ref, generation, signal2);
         } catch {
-          throw new Error(
+          throw new AuthOperationError(
+            "authorization",
             "Google authorization failed or was canceled. Check the client registration, consent, and selected account; retry connect."
           );
         } finally {
@@ -66954,7 +66982,8 @@ var init_gmailOAuth = __esm({
             this.assertCurrent(ref, generation, signal2);
             return updated.accessToken;
           } catch {
-            throw new Error(
+            throw new AuthOperationError(
+              "reconnect",
               "Google credential unavailable or expired. Reconnect this account; no password fallback was attempted."
             );
           } finally {
@@ -66974,16 +67003,9 @@ var init_gmailOAuth = __esm({
 });
 
 // src/services/credentials.ts
-function googleReference(auth, email3, clientId) {
-  if (!auth || auth === "password") return void 0;
-  if (auth !== "google") throw new Error("Unsupported authentication provider.");
-  if (!clientId?.trim())
-    throw new Error("Set APPLE_MAIL_MCP_GOOGLE_CLIENT_ID to your Google Desktop client ID.");
-  return { provider: "google", email: email3, clientId: clientId.trim() };
-}
 function validateOAuthTransport(cfg, protocol) {
-  if (!cfg.oauth) return;
-  if (cfg.oauth.email !== cfg.user || cfg.allowPlaintext || cfg.host.toLowerCase() !== (protocol === "imap" ? "imap.gmail.com" : "smtp.gmail.com") || (protocol === "imap" ? !(cfg.secure && cfg.port === 993) : !(cfg.secure && cfg.port === 465 || !cfg.secure && cfg.port === 587))) {
+  if (!cfg.googleAccount) return;
+  if (cfg.googleAccount.email !== cfg.user || cfg.allowPlaintext || cfg.host.toLowerCase() !== (protocol === "imap" ? "imap.gmail.com" : "smtp.gmail.com") || (protocol === "imap" ? !(cfg.secure && cfg.port === 993) : !(cfg.secure && cfg.port === 465 || !cfg.secure && cfg.port === 587))) {
     throw new Error(
       "Google OAuth requires the matching account and Google's TLS-only IMAP/SMTP endpoints."
     );
@@ -66991,12 +67013,26 @@ function validateOAuthTransport(cfg, protocol) {
 }
 async function resolveCredential(cfg, protocol) {
   validateOAuthTransport(cfg, protocol);
-  return cfg.oauth ? { user: cfg.user, accessToken: await gmailOAuth.accessToken(cfg.oauth) } : { user: cfg.user, pass: cfg.pass };
+  return cfg.googleAccount ? { user: cfg.user, accessToken: await gmailOAuth.accessToken(cfg.googleAccount) } : { user: cfg.user, pass: cfg.pass };
 }
 var init_credentials = __esm({
   "src/services/credentials.ts"() {
     "use strict";
     init_gmailOAuth();
+  }
+});
+
+// src/services/googleAccount.ts
+function googleReference(auth, email3, clientId) {
+  if (!auth || auth === "password") return void 0;
+  if (auth !== "google") throw new Error("Unsupported authentication provider.");
+  if (!clientId?.trim())
+    throw new Error("Set APPLE_MAIL_MCP_GOOGLE_CLIENT_ID to your Google Desktop client ID.");
+  return { provider: "google", email: email3, clientId: clientId.trim() };
+}
+var init_googleAccount = __esm({
+  "src/services/googleAccount.ts"() {
+    "use strict";
   }
 });
 
@@ -67235,18 +67271,18 @@ function resolveSmtpConfig(env = process.env) {
   }
   const from = env[SMTP_ENV.from]?.trim() || user;
   const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-  const oauth = googleReference(
+  const googleAccount = googleReference(
     env.APPLE_MAIL_MCP_SMTP_AUTH,
     user,
     env.APPLE_MAIL_MCP_GOOGLE_CLIENT_ID
   );
-  let pass = oauth ? "" : env[SMTP_ENV.password];
-  if (!oauth && !pass) {
+  let pass = googleAccount ? "" : env[SMTP_ENV.password];
+  if (!googleAccount && !pass) {
     const service = env[SMTP_ENV.keychainService]?.trim() || host;
     const account = env[SMTP_ENV.keychainAccount]?.trim() || user;
     pass = readKeychainPassword(service, account) ?? void 0;
   }
-  if (!oauth && !pass) {
+  if (!googleAccount && !pass) {
     throw new Error(
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
@@ -67259,7 +67295,7 @@ function resolveSmtpConfig(env = process.env) {
     allowPlaintext,
     user,
     pass: pass ?? "",
-    oauth,
+    googleAccount,
     from,
     allowedFrom
   };
@@ -67341,7 +67377,7 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
   }
   let auth;
   try {
-    const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {
+    const guard = cfg.googleAccount ? gmailOAuth.connectionGuard(cfg.googleAccount) : () => {
     };
     const credential = await resolveCredential(cfg, "smtp");
     guard();
@@ -67361,8 +67397,8 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
     requireTLS,
     auth
   });
-  const unsubscribe = cfg.oauth ? gmailOAuth.onDisconnect((ref) => {
-    if (ref.clientId === cfg.oauth?.clientId && ref.email.toLowerCase() === cfg.user.toLowerCase())
+  const unsubscribe = cfg.googleAccount ? gmailOAuth.onDisconnect((ref) => {
+    if (ref.clientId === cfg.googleAccount?.clientId && ref.email.toLowerCase() === cfg.user.toLowerCase())
       transporter.close();
   }) : () => {
   };
@@ -67385,7 +67421,7 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
     }
     return { success: true, messageId: info.messageId, ...copyFields };
   } catch (error63) {
-    if (cfg.oauth)
+    if (cfg.googleAccount)
       return {
         success: false,
         error: "Google SMTP send failed. Check provider connectivity and reconnect if authorization expired."
@@ -67448,6 +67484,7 @@ var init_smtpMailer = __esm({
     init_nodemailer();
     init_credentials();
     init_gmailOAuth();
+    init_googleAccount();
     init_mail_composer();
     init_attachmentLimits();
     init_attachmentReadPolicy();
@@ -68296,7 +68333,7 @@ function listImapAccountSpecs(env = process.env) {
   const user = env[IMAP_ENV.user]?.trim();
   if (user) {
     const legacy = {
-      oauth: googleReference(
+      googleAccount: googleReference(
         env.APPLE_MAIL_MCP_IMAP_AUTH,
         user,
         env.APPLE_MAIL_MCP_GOOGLE_CLIENT_ID
@@ -68335,7 +68372,7 @@ function listImapAccountSpecs(env = process.env) {
           if (specs.some((s) => s.accountLabel === label)) continue;
           seen.add(key2);
           specs.push({
-            oauth: googleReference(
+            googleAccount: googleReference(
               str(a.auth),
               u,
               str(a.clientId) || env.APPLE_MAIL_MCP_GOOGLE_CLIENT_ID
@@ -68361,11 +68398,11 @@ function specToConfig(spec, allowPlaintext = false) {
   if (!Number.isInteger(spec.port) || spec.port <= 0) {
     throw new Error(`Invalid IMAP port for account "${spec.accountLabel}": "${spec.port}".`);
   }
-  let pass = spec.oauth ? "" : spec.password;
-  if (!spec.oauth && !pass && spec.keychainService) {
+  let pass = spec.googleAccount ? "" : spec.password;
+  if (!spec.googleAccount && !pass && spec.keychainService) {
     pass = readKeychainPassword(spec.keychainService, spec.keychainAccount || spec.user) ?? void 0;
   }
-  if (!spec.oauth && !pass) {
+  if (!spec.googleAccount && !pass) {
     throw new Error(
       `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account. ${SETUP_HINT}`
     );
@@ -68377,7 +68414,7 @@ function specToConfig(spec, allowPlaintext = false) {
     allowPlaintext,
     user: spec.user,
     pass: pass ?? "",
-    oauth: spec.oauth,
+    googleAccount: spec.googleAccount,
     accountLabel: spec.accountLabel
   };
   validateOAuthTransport(config2, "imap");
@@ -69118,7 +69155,7 @@ async function verifyMoved(client, moved, uid, srcPath, destPath) {
   }
 }
 function poolKey(cfg) {
-  return `${imapIdentityKey(cfg)}:${cfg.oauth ? `google:${cfg.oauth.clientId}` : "password"}`;
+  return `${imapIdentityKey(cfg)}:${cfg.googleAccount ? `google:${cfg.googleAccount.clientId}` : "password"}`;
 }
 function imapIdleMs() {
   const raw = process.env.APPLE_MAIL_MCP_IMAP_IDLE_MS;
@@ -69177,7 +69214,7 @@ async function acquirePooled(cfg) {
   const inFlight = connecting.get(key2);
   if (inFlight) return inFlight;
   const p = (async () => {
-    const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {
+    const guard = cfg.googleAccount ? gmailOAuth.connectionGuard(cfg.googleAccount) : () => {
     };
     const client = await poolConnect(cfg);
     try {
@@ -70213,6 +70250,7 @@ var init_imapClient = __esm({
     init_attachmentLimits();
     init_credentials();
     init_gmailOAuth();
+    init_googleAccount();
     IMAP_ENV = {
       user: "APPLE_MAIL_MCP_IMAP_USER",
       account: "APPLE_MAIL_MCP_IMAP_ACCOUNT",
@@ -70227,7 +70265,7 @@ var init_imapClient = __esm({
       accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS"
     };
     defaultConnect = async (cfg) => {
-      const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {
+      const guard = cfg.googleAccount ? gmailOAuth.connectionGuard(cfg.googleAccount) : () => {
       };
       let lastCommandError;
       const keepErr = (entry) => {
@@ -70254,7 +70292,7 @@ var init_imapClient = __esm({
         await client.connect();
         guard();
       } catch (error63) {
-        if (cfg.oauth) {
+        if (cfg.googleAccount) {
           client.close();
           throw new Error("Google IMAP authentication failed; reconnect the account.");
         }
@@ -106653,9 +106691,11 @@ async function fanOutImapMessages(args, kind, deps = {}, configs = resolveImapCo
           mailbox: `${config2.accountLabel} / ${o.mailbox}`
         }))
       );
-    } catch (e) {
+    } catch {
       accountsFailed.push(config2.accountLabel);
-      console.error(`IMAP fan-out failed for account "${config2.accountLabel}": ${String(e)}`);
+      console.error(
+        "IMAP fan-out failed. Check the affected account's connection and authorization."
+      );
     }
   }
   return {
@@ -106984,7 +107024,7 @@ init_credentials();
 init_gmailOAuth();
 init_imapClient();
 var defaultIdleConnect = async (cfg) => {
-  const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {
+  const guard = cfg.googleAccount ? gmailOAuth.connectionGuard(cfg.googleAccount) : () => {
   };
   const client = new import_imapflow2.ImapFlow({
     ...buildImapConnectionOptions(cfg),
@@ -106996,7 +107036,7 @@ var defaultIdleConnect = async (cfg) => {
     await client.connect();
     guard();
   } catch (error63) {
-    if (cfg.oauth) {
+    if (cfg.googleAccount) {
       client.close();
       throw new Error("Google IMAP IDLE authentication failed; reconnect the account.");
     }
@@ -108948,8 +108988,10 @@ ${list2}`, structured3);
               messageCount: b.messages
             });
           }
-        } catch (e) {
-          console.error(`IMAP list-mailboxes failed for "${config2.accountLabel}": ${String(e)}`);
+        } catch {
+          console.error(
+            "IMAP list-mailboxes failed. Check the affected account's connection and authorization."
+          );
           failedAccounts.push(config2.accountLabel);
         }
       }
@@ -109043,8 +109085,10 @@ registerTool(
           if (src.kind === "imap") {
             try {
               total += await imapUnreadCount(mailbox, { config: src.config });
-            } catch (e) {
-              console.error(`IMAP unread-count failed for "${src.label}": ${String(e)}`);
+            } catch {
+              console.error(
+                "IMAP unread-count failed. Check the affected account's connection and authorization."
+              );
               failedAccounts.push(src.label);
             }
           } else {
@@ -109772,8 +109816,10 @@ registerTool(
               `IMAP mail-stats for "${src.label}"`
             );
             return { label: src.label, stats: stats2 };
-          } catch (e) {
-            console.error(`IMAP mail-stats failed for "${src.label}": ${String(e)}`);
+          } catch {
+            console.error(
+              "IMAP mail-stats failed. Check the affected account's connection and authorization."
+            );
             return { label: src.label, stats: void 0 };
           }
         })
@@ -109943,8 +109989,10 @@ if (/^(1|true|yes|on)$/i.test(process.env.APPLE_MAIL_MCP_IMAP_IDLE?.trim() ?? ""
       });
       await idleWatcher.start();
     }
-  } catch (e) {
-    console.error(`IMAP IDLE watcher failed to start: ${String(e)}`);
+  } catch {
+    console.error(
+      "IMAP IDLE watcher failed to start. Check configured account connections and authorization."
+    );
   }
 }
 var _shuttingDown = false;

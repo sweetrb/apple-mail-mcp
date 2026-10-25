@@ -2,11 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KeychainGrantStore, type GoogleCredentialRef, type GoogleGrant } from "./gmailOAuth.js";
+import { KeychainGrantStore, type GoogleAccountBinding, type GoogleGrant } from "./gmailOAuth.js";
 
 const mock = vi.hoisted(() => ({ run: vi.fn(), stdin: vi.fn() }));
 vi.mock("node:child_process", () => ({ execFile: mock.run }));
-const ref: GoogleCredentialRef = {
+const ref: GoogleAccountBinding = {
   provider: "google",
   clientId: "fixture.apps.googleusercontent.com",
   email: "person@example.com",

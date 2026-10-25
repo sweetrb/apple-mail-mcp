@@ -2556,8 +2556,10 @@ registerTool(
               messageCount: b.messages,
             });
           }
-        } catch (e) {
-          console.error(`IMAP list-mailboxes failed for "${config.accountLabel}": ${String(e)}`);
+        } catch {
+          console.error(
+            "IMAP list-mailboxes failed. Check the affected account's connection and authorization."
+          );
           failedAccounts.push(config.accountLabel);
         }
       }
@@ -2690,8 +2692,10 @@ registerTool(
           if (src.kind === "imap") {
             try {
               total += await imapUnreadCount(mailbox, { config: src.config });
-            } catch (e) {
-              console.error(`IMAP unread-count failed for "${src.label}": ${String(e)}`);
+            } catch {
+              console.error(
+                "IMAP unread-count failed. Check the affected account's connection and authorization."
+              );
               failedAccounts.push(src.label);
             }
           } else {
@@ -3694,8 +3698,10 @@ registerTool(
                 `IMAP mail-stats for "${src.label}"`
               );
               return { label: src.label, stats };
-            } catch (e) {
-              console.error(`IMAP mail-stats failed for "${src.label}": ${String(e)}`);
+            } catch {
+              console.error(
+                "IMAP mail-stats failed. Check the affected account's connection and authorization."
+              );
               return { label: src.label, stats: undefined };
             }
           })
@@ -3922,8 +3928,10 @@ if (/^(1|true|yes|on)$/i.test(process.env.APPLE_MAIL_MCP_IMAP_IDLE?.trim() ?? ""
       });
       await idleWatcher.start();
     }
-  } catch (e) {
-    console.error(`IMAP IDLE watcher failed to start: ${String(e)}`);
+  } catch {
+    console.error(
+      "IMAP IDLE watcher failed to start. Check configured account connections and authorization."
+    );
   }
 }
 

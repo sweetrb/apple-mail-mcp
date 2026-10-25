@@ -108,9 +108,12 @@ Cross-process writes are coordinated through per-identity locks and opaque
 revision files under `~/Library/Application Support/apple-mail-mcp/oauth-state`.
 These contain no tokens or account addresses. A delayed refresh cannot restore
 a disconnected grant or overwrite a newer sign-in. If a process crashes while
-holding its storage lock, the next operation fails closed and identifies the
-exact empty `.lock` directory. Stop all mail MCP/auth processes before removing
-that one stale empty directory and retrying; do not remove revision files.
+holding its storage lock, the next operation fails closed with a storage-busy
+diagnostic. Stop all mail MCP/auth processes, inspect the `oauth-state` directory
+above, and remove only the confirmed stale empty `.lock` directory before
+retrying; do not remove revision files. OAuth CLI diagnostics and IMAP account
+fan-out, mailbox-list, unread-count, statistics, and IDLE-start failure logs use
+fixed text instead of printing arbitrary exception payloads.
 
 ## Verification boundary
 

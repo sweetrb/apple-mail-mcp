@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import nodemailer from "nodemailer";
-import { gmailOAuth, KeychainGrantStore, type GoogleCredentialRef } from "./gmailOAuth.js";
+import { gmailOAuth, KeychainGrantStore, type GoogleAccountBinding } from "./gmailOAuth.js";
 import { imapHealthCheck, resolveImapConfig, __resetPool } from "./imapClient.js";
 import { ImapIdleWatcher } from "./imapIdle.js";
 import { resolveSmtpConfig, sendViaSmtp } from "./smtpMailer.js";
@@ -27,7 +27,7 @@ vi.mock("imapflow", () => ({
     }
   },
 }));
-const ref: GoogleCredentialRef = {
+const ref: GoogleAccountBinding = {
   provider: "google",
   clientId: "fixture.apps.googleusercontent.com",
   email: "Person@example.com",

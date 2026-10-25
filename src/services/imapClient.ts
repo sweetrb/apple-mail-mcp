@@ -50,8 +50,9 @@ import {
 } from "@/utils/headers.js";
 import { classifyCountStatus, type CountDelta } from "@/services/auditLog.js";
 import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
-import { googleReference, resolveCredential, validateOAuthTransport } from "./credentials.js";
-import { gmailOAuth, type GoogleCredentialRef } from "./gmailOAuth.js";
+import { resolveCredential, validateOAuthTransport } from "./credentials.js";
+import { gmailOAuth } from "./gmailOAuth.js";
+import { googleReference, type GoogleAccountBinding } from "./googleAccount.js";
 
 export const IMAP_ENV = {
   user: "APPLE_MAIL_MCP_IMAP_USER",
@@ -68,7 +69,7 @@ export const IMAP_ENV = {
 } as const;
 
 export interface ImapConfig {
-  oauth?: GoogleCredentialRef;
+  googleAccount?: GoogleAccountBinding;
   host: string;
   port: number;
   secure: boolean;
@@ -326,7 +327,7 @@ function depsForMessageRef(ref: ImapMessageRef, deps: ImapDeps): ImapDeps {
  * enumerate (no Keychain access), used for routing/listing (C2).
  */
 interface ImapAccountSpec {
-  oauth?: GoogleCredentialRef;
+  googleAccount?: GoogleAccountBinding;
   accountLabel: string;
   /**
    * Other labels that address this same mailbox — the nicknames of duplicate
@@ -407,7 +408,7 @@ function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccount
   const user = env[IMAP_ENV.user]?.trim();
   if (user) {
     const legacy: ImapAccountSpec = {
-      oauth: googleReference(
+      googleAccount: googleReference(
         env.APPLE_MAIL_MCP_IMAP_AUTH,
         user,
         env.APPLE_MAIL_MCP_GOOGLE_CLIENT_ID
@@ -449,7 +450,7 @@ function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccount
           if (specs.some((s) => s.accountLabel === label)) continue; // label collision
           seen.add(key);
           specs.push({
-            oauth: googleReference(
+            googleAccount: googleReference(
               str(a.auth),
               u,
               str(a.clientId) || env.APPLE_MAIL_MCP_GOOGLE_CLIENT_ID
@@ -476,12 +477,12 @@ function specToConfig(spec: ImapAccountSpec, allowPlaintext = false): ImapConfig
   if (!Number.isInteger(spec.port) || spec.port <= 0) {
     throw new Error(`Invalid IMAP port for account "${spec.accountLabel}": "${spec.port}".`);
   }
-  let pass = spec.oauth ? "" : spec.password;
-  if (!spec.oauth && !pass && spec.keychainService) {
+  let pass = spec.googleAccount ? "" : spec.password;
+  if (!spec.googleAccount && !pass && spec.keychainService) {
     pass =
       readKeychainPassword(spec.keychainService, spec.keychainAccount || spec.user) ?? undefined;
   }
-  if (!spec.oauth && !pass) {
+  if (!spec.googleAccount && !pass) {
     throw new Error(
       `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account. ${SETUP_HINT}`
     );
@@ -493,7 +494,7 @@ function specToConfig(spec: ImapAccountSpec, allowPlaintext = false): ImapConfig
     allowPlaintext,
     user: spec.user,
     pass: pass ?? "",
-    oauth: spec.oauth,
+    googleAccount: spec.googleAccount,
     accountLabel: spec.accountLabel,
   };
   validateOAuthTransport(config, "imap");
@@ -608,7 +609,7 @@ export function buildImapConnectionOptions(cfg: ImapConfig) {
 }
 
 const defaultConnect: ImapConnect = async (cfg) => {
-  const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {};
+  const guard = cfg.googleAccount ? gmailOAuth.connectionGuard(cfg.googleAccount) : () => {};
   // imapflow swallows a failed SEARCH (and every mutation — see #181): it logs
   // the error through its logger and resolves `false`. With `logger: false` the
   // reason was simply gone, so a SEARCH that timed out or hit a server limit on
@@ -644,7 +645,7 @@ const defaultConnect: ImapConnect = async (cfg) => {
     await client.connect();
     guard();
   } catch (error) {
-    if (cfg.oauth) {
+    if (cfg.googleAccount) {
       client.close();
       throw new Error("Google IMAP authentication failed; reconnect the account.");
     }
@@ -2110,7 +2111,7 @@ gmailOAuth.onDisconnect((ref) => {
 function poolKey(cfg: ImapConfig): string {
   // Preserve the shared mailbox identity, but never reuse a password session
   // for an OAuth configuration or a session authorized under another client.
-  return `${imapIdentityKey(cfg)}:${cfg.oauth ? `google:${cfg.oauth.clientId}` : "password"}`;
+  return `${imapIdentityKey(cfg)}:${cfg.googleAccount ? `google:${cfg.googleAccount.clientId}` : "password"}`;
 }
 
 function imapIdleMs(): number {
@@ -2205,7 +2206,7 @@ async function acquirePooled(cfg: ImapConfig): Promise<ImapClientLike> {
   const inFlight = connecting.get(key);
   if (inFlight) return inFlight;
   const p = (async () => {
-    const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {};
+    const guard = cfg.googleAccount ? gmailOAuth.connectionGuard(cfg.googleAccount) : () => {};
     const client = await poolConnect(cfg);
     try {
       guard();

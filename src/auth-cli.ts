@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { loadFileConfig } from "./services/fileConfig.js";
-import { gmailOAuth, type GoogleCredentialRef } from "./services/gmailOAuth.js";
+import { gmailOAuth } from "./services/gmailOAuth.js";
+import type { GoogleAccountBinding } from "./services/googleAccount.js";
+import { publicAuthFailure } from "./services/authErrors.js";
 
 loadFileConfig();
 const [command, email] = process.argv.slice(2);
-const ref: GoogleCredentialRef = {
+const ref: GoogleAccountBinding = {
   provider: "google",
   clientId: process.env.APPLE_MAIL_MCP_GOOGLE_CLIENT_ID ?? "",
   email: email ?? "",
@@ -36,6 +38,6 @@ try {
       process.exitCode = 2;
   }
 } catch (error) {
-  console.error(error instanceof Error ? error.message : "Google authorization failed.");
+  console.error(publicAuthFailure(error));
   process.exitCode = 1;
 }

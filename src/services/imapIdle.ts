@@ -34,7 +34,7 @@ export interface NewMailEvent {
 }
 
 const defaultIdleConnect: IdleConnect = async (cfg) => {
-  const guard = cfg.oauth ? gmailOAuth.connectionGuard(cfg.oauth) : () => {};
+  const guard = cfg.googleAccount ? gmailOAuth.connectionGuard(cfg.googleAccount) : () => {};
   const client = new ImapFlow({
     ...buildImapConnectionOptions(cfg),
     auth: await resolveCredential(cfg, "imap"),
@@ -49,7 +49,7 @@ const defaultIdleConnect: IdleConnect = async (cfg) => {
     await client.connect();
     guard();
   } catch (error) {
-    if (cfg.oauth) {
+    if (cfg.googleAccount) {
       client.close();
       throw new Error("Google IMAP IDLE authentication failed; reconnect the account.");
     }
