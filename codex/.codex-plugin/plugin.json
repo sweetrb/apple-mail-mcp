@@ -1,6 +1,6 @@
 {
   "name": "apple-mail",
-  "version": "2.20.32",
+  "version": "2.20.33",
   "description": "Manage Apple Mail through natural language - read, search, send, reply, forward, and organize emails and mailboxes, with diagnostics, attachments, templates, and mail-merge support (macOS only).",
   "author": {
     "name": "Rob Sweet",
@@ -22,7 +22,7 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Apple Mail",
-    "shortDescription": "Read, search, send, and organize Apple Mail.",
+    "shortDescription": "Manage Apple Mail on macOS",
     "longDescription": "A macOS-only Apple Mail connector for Codex that uses the apple-mail-mcp server to read, search, send, reply to, forward, and organize emails and mailboxes across Apple Mail accounts, with diagnostics, attachment, template, contact lookup, and mail-merge support.",
     "developerName": "Rob Sweet",
     "category": "Productivity",

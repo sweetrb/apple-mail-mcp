@@ -78,7 +78,54 @@ codex plugin marketplace add sweetrb/apple-mail-mcp
 codex plugin add apple-mail@apple-mail-mcp
 ```
 
-The Codex package registers the same `apple-mail` MCP server through an exactly pinned runtime — `npx -y apple-mail-mcp@<plugin version>` — and includes the Apple Mail skill guidance. The pin in `codex/.mcp.json` is rewritten to match `package.json` by `scripts/sync-plugin-version.mjs` on every version bump, so the plugin manifest and the server it launches are always the same release; CI fails the PR if they drift.
+The Codex package includes a portable `codex/plugin.json`, typed stdio server
+configuration in `codex/mcp.json`, the Apple Mail skill, and the existing assets.
+It retains `codex/.codex-plugin/plugin.json` and `codex/.mcp.json` for compatible
+older hosts. Both layouts register the same `apple-mail` MCP identity through
+`npx -y apple-mail-mcp@<plugin version>`. Release synchronization updates both
+runtime pins and manifest metadata; tests and CI reject drift. An unreleased
+candidate can be discovered locally, but its exact npm version must be
+published before that pinned launcher can be installed from the registry.
+
+For ongoing upstream updates, keep the Git marketplace configured. After a new
+release is published, refresh its catalog:
+
+```bash
+codex plugin marketplace upgrade apple-mail-mcp
+```
+
+Install the published plugin version from the refreshed marketplace, then start
+a new Codex session. The refresh does not replace the runtime pin with `@latest`;
+the plugin and its pinned npm runtime must refer to the same available release.
+
+The standalone plugin archive bundles the server and requires only Node.js 20+
+on the Mac; it does not fetch a runtime from npm. Download it from the release
+assets, or use the candidate artifact attached to a successful CI run. See
+[Standalone plugin archive](docs/CODEX-SETUP.md#standalone-plugin-archive) for the
+distribution format and local build command.
+
+An imported archive or separately uploaded private account plugin is a snapshot,
+not a subscription to this repository's releases. Updating that copy requires a
+replacement package. When switching to the maintained marketplace distribution,
+preserve settings and approvals, verify Mail access and reply behavior, then
+remove the redundant installation. See [Updates and migration](docs/CODEX-SETUP.md#updates-and-migration).
+
+For a personal build, you may explicitly supply a local PNG:
+`node scripts/package-codex-plugin.mjs /path/apple-mail.tar.gz --icon /path/icon.png`.
+The optional image must be square, noninterlaced, 48–2,048 pixels per side, and
+at most 4 MiB. It is bundled inside the skill's assets directory and used for
+the generated portable and compatibility manifests' light/dark logo and composer
+icons. Source manifests, the runtime, and default artwork remain unchanged;
+omitting `--icon` preserves the standard archive. No image is fetched automatically.
+Supply only artwork you have permission to use and distribute; this option does
+not grant rights to Apple or other third-party artwork, or guarantee that a host
+will refresh an existing listing's cached presentation.
+
+Native-editor composition requires computer control supplied by the host;
+this plugin does not bundle a computer-control server. Its skill describes
+inherited-size HTML insertion that preserves native signatures and quoted
+history, plus actual recipient identity, MIME, ancestry, and rendering checks.
+It does not repair the AppleScript body setter or guarantee every mail client.
 
 ### Other Hosts (Hermes, Antigravity)
 

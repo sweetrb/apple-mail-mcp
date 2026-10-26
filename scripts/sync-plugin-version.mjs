@@ -19,6 +19,31 @@ updateJson("codex/.codex-plugin/plugin.json", (data) => {
   data.version = version;
 });
 
+// Portable identity stays aligned with the supported compatibility manifest.
+// The inline OpenAI extension replaces (rather than merges) that overlay.
+const compatibility = readJson("codex/.codex-plugin/plugin.json");
+updateJson("codex/plugin.json", (data) => {
+  for (const field of [
+    "name",
+    "description",
+    "author",
+    "homepage",
+    "repository",
+    "license",
+    "keywords",
+  ]) {
+    data[field] = compatibility[field];
+  }
+  data.version = version;
+  data.extensions = {
+    ...data.extensions,
+    "com.openai": {
+      ...data.extensions?.["com.openai"],
+      interface: compatibility.interface,
+    },
+  };
+});
+
 // The Codex plugin launches the server through npx. The spec is pinned to an
 // exact version so the plugin manifest and the runtime it starts are one trust
 // claim rather than two — which only holds if the pin is synced on every bump,
@@ -31,6 +56,21 @@ updateJson("codex/.mcp.json", (data) => {
     throw new Error(`codex/.mcp.json: no ${PACKAGE} argument to pin`);
   }
   server.args[i] = `${PACKAGE}@${version}`;
+});
+
+// Portable MCP discovery uses mcp.json and requires an explicit transport type.
+// Keep all remaining server wiring identical to the legacy .mcp.json entry.
+const legacyServer = readJson("codex/.mcp.json").mcpServers["apple-mail"];
+updateJson("codex/mcp.json", (data) => {
+  data.mcpServers = {
+    "apple-mail": {
+      type: "stdio",
+      ...legacyServer,
+      args: legacyServer.args.map((arg) =>
+        arg === PACKAGE || arg.startsWith(`${PACKAGE}@`) ? `${PACKAGE}@${version}` : arg
+      ),
+    },
+  };
 });
 
 updateJson(".claude-plugin/marketplace.json", (data) => {
@@ -64,7 +104,7 @@ updateJson(".antigravity-plugin/marketplace.json", (data) => {
 
 if (checkMode && mismatches.length > 0) {
   console.error(
-    `Plugin manifest version(s) do not match package.json (${version}) — run: node scripts/sync-plugin-version.mjs`,
+    `Plugin manifest version(s) do not match package.json (${version}) — run: node scripts/sync-plugin-version.mjs`
   );
   for (const m of mismatches) {
     console.error(`  ${m}`);

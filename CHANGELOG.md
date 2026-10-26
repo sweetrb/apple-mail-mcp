@@ -1,5 +1,32 @@
 ## [Unreleased]
 
+## [2.20.33] - 2026-10-26
+
+### Added
+
+- Distribute a standalone Codex plugin archive with the bundled server, so the
+  plugin installs without fetching a runtime from npm. CI builds and verifies
+  it, and the release job attaches the archive to the matching GitHub release
+  only after confirming the tag resolves to the packaged commit. Optional — the
+  npm-pinned marketplace install is unchanged (#334, @jjoanna2-debug).
+- Ship a portable Codex plugin manifest (`codex/plugin.json`) and typed stdio
+  MCP configuration (`codex/mcp.json`) beside the existing compatibility
+  layout; release sync now updates both runtime pins, with parity tests (#334).
+- `scripts/package-codex-plugin.mjs --icon <png>` embeds local artwork in a
+  personal build; the standard archive is unchanged (#334).
+- `scripts/render-authored-body.mjs`, shipped in the npm package: renders
+  authored prose as inherited-size HTML for hosts that compose through Mail's
+  native editor. The server does not call it (#333, @jjoanna2-debug).
+
+### Documentation
+
+- Skill: an **optional** native-editor workflow for hosts that provide computer
+  control, preserving configured signatures and native reply quotation. The
+  existing `send-email` / `create-draft` / `reply-to-message` /
+  `forward-message` guidance remains the default (#333, #334).
+- `docs/NATIVE-COMPOSITION.md`, plus Codex update/migration notes in
+  `docs/CODEX-SETUP.md` (#333, #334).
+
 ## [2.20.32] - 2026-10-26
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)

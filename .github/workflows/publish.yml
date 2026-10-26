@@ -189,13 +189,28 @@ jobs:
         if: steps.check.outputs.skip == 'true'
         run: echo "Version ${{ steps.check.outputs.local }} is already published. Skipping."
 
+      # Package only in this read-only job, at the same pinned commit used for
+      # npm. The write-token job consumes this run's immutable SHA-named artifact.
+      - name: Verify and package the standalone Codex plugin
+        run: |
+          node --test test/package-codex-plugin.test.mjs
+          VERSION=$(node -p "require('./package.json').version")
+          node scripts/package-codex-plugin.mjs "$RUNNER_TEMP/apple-mail-codex-plugin-v$VERSION.tar.gz"
+
+      - name: Upload the release plugin artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: codex-plugin-release-${{ steps.pin.outputs.sha }}
+          path: ${{ runner.temp }}/apple-mail-codex-plugin-v*.tar.gz
+          if-no-files-found: error
+
   release:
     # Self-healing GitHub Release sync. It runs after EVERY successful publish
     # job, including runs that skipped an already-published version, and is
     # idempotent via `gh release view`. So a Release missed by a transient
     # failure earlier is healed by ANY later run, the daily schedule included.
     # This is the only job with a write token, and it runs no dependency code:
-    # checkout, jq, awk and gh only.
+    # checkout, artifact download, jq, awk, git and gh only.
     needs: publish
     runs-on: ubuntu-latest
     permissions:
@@ -221,3 +236,28 @@ jobs:
             gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$SHA" --title "v$VERSION" --notes "$NOTES" \
               || echo "::warning::Failed to create GitHub Release v$VERSION (will self-heal on the next run)"
           fi
+
+      - name: Download this commit's verified plugin
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: codex-plugin-release-${{ needs.publish.outputs.sha }}
+          path: release-assets
+
+      - name: Attach the standalone plugin to its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.publish.outputs.sha }}
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version package.json)
+          ASSET="apple-mail-codex-plugin-v$VERSION.tar.gz"
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"; then
+            echo "Plugin archive is already attached; preserving the published asset."
+            exit 0
+          fi
+          git fetch --depth=1 origin "refs/tags/v$VERSION"
+          if [ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$SHA" ]; then
+            echo "::error::Release tag does not identify the packaged commit; refusing to attach mismatched bytes."
+            exit 1
+          fi
+          gh release upload "v$VERSION" "release-assets/$ASSET" --repo "$GITHUB_REPOSITORY"
