@@ -174,11 +174,14 @@ fix native delivery, and this guide does not claim otherwise.
 SMTP configuration alone does not prove that a particular operation used SMTP.
 Opening or saving an AppleScript-injected draft does not fix its body wrapper.
 
-Hosts that provide supported computer control on the Mac can instead use the
-packaged skill's native-editor workflow: create a genuine native Reply, insert
-only new escaped prose as HTML divs with `font-size: inherit`, and leave the
-native signature and history intact. The host provides the computer control;
-there is no new MCP editor tool in this plugin. No companion helper is required.
+The four compose tools now accept `composition: "native-editor"`. This opt-in
+path drives Mail's visible editor directly, creates genuine native replies, and
+inserts only new prose as escaped HTML with inherited font sizing. It leaves
+the native signature and history intact; no separate computer-control plugin
+is required. Mail must run on an unlocked Mac, and the runtime must already have
+Accessibility and Automation permission for Mail and System Events. The server
+checks those grants without requesting them or changing privacy settings.
+See [native composition](NATIVE-COMPOSITION.md) for examples and failure handling.
 Fixed pixel/point sizes can look correct on Mac yet differ from the native
 signature on mobile; plain unsized HTML paste can acquire another default size.
 
@@ -186,10 +189,10 @@ Inspect the saved draft, then the actual Sent and recipient HTML, public parent
 headers, sender identity, paragraph spacing, and target-client rendering.
 Providers can rewrite an alias even when the composer and Sent copy show the
 selected identity. Rich-text mode, Sent alone, and a Mac preview do not establish
-recipient or mobile correctness. This workaround changes neither the runtime's
-AppleScript setter nor provider authentication. If computer control is absent,
-report that capability gap or use separately configured matching SMTP; do not
-invent a plugin tool or silently fall back to quoted-body injection.
+recipient or mobile correctness. Native-editor mode bypasses the body setter
+without changing provider authentication. If it fails, inspect the retained
+draft and report the error; do not retry through the old body setter or another
+transport. Omitting the option preserves the existing MCP behavior.
 
 ## Authentication boundaries
 

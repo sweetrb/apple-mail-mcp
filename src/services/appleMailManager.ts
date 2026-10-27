@@ -45,7 +45,8 @@ import {
   STALLED_MAILBOX_TTL_MS,
 } from "@/services/stalledMailboxStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
-import { pickSenderAddress, senderGuardScript } from "@/utils/senderAccount.js";
+import { extractAddress, pickSenderAddress, senderGuardScript } from "@/utils/senderAccount.js";
+import { nativeEditorPreflight, insertNativeAuthoredBody } from "@/services/nativeMailComposer.js";
 import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
 import { searchContactsDb } from "@/utils/contactsDb.js";
 import {
@@ -519,6 +520,71 @@ const senderFragment = (compose: "theReply" | "theForward", verb: "reply" | "for
               error "Mail.app would ${verb} as " & _rsGot & " instead of " & _rsFrom & ", so nothing was sent or saved."
             end if
           end if`;
+
+/** Native composition must resolve an identity before opening a compose. */
+const nativeParentSender = `set _nativeAddresses to {}
+  set _nativeOwningAccount to missing value
+  try
+    set _nativeOwningAccount to account of (mailbox of msg)
+  end try
+  if _nativeOwningAccount is missing value then
+    repeat with _nativeAccount in (every account whose enabled is true)
+      set _nativeAddresses to _nativeAddresses & (email addresses of _nativeAccount)
+    end repeat
+  else
+    if enabled of _nativeOwningAccount is false then error "The original message account is disabled; no compose was created."
+    set _nativeAddresses to email addresses of _nativeOwningAccount
+  end if
+  set _nativeMatches to {}
+  repeat with _nativeRecipient in ((to recipients of msg) & (cc recipients of msg))
+    set _nativeAddress to address of _nativeRecipient as text
+    if _nativeAddress is in _nativeAddresses and _nativeAddress is not in _nativeMatches then set end of _nativeMatches to _nativeAddress
+  end repeat
+  if (count of _nativeMatches) is 0 then
+    set _nativeAddress to extract address from (sender of msg)
+    if _nativeAddress is in _nativeAddresses then set end of _nativeMatches to _nativeAddress
+  end if
+  if (count of _nativeMatches) is 1 then
+    set _nativeSender to item 1 of _nativeMatches as text
+  else if (count of _nativeMatches) is 0 and (count of _nativeAddresses) is 1 then
+    set _nativeSender to item 1 of _nativeAddresses as text
+  else
+    error "Cannot uniquely resolve the native reply/forward sender; no compose was created."
+  end if`;
+
+/** Length-prefixed addresses detect any recipient edit without delimiter ambiguity. */
+function nativeRecipientFingerprint(message: string): string {
+  return `set _nativeRecipients to ""
+    repeat with _nativeKind in {"to", "cc", "bcc"}
+      set _nativeRecipients to _nativeRecipients & (_nativeKind as text) & ":"
+      if (_nativeKind as text) is "to" then
+        set _nativeList to to recipients of ${message}
+      else if (_nativeKind as text) is "cc" then
+        set _nativeList to cc recipients of ${message}
+      else
+        set _nativeList to bcc recipients of ${message}
+      end if
+      repeat with _nativeRecipient in _nativeList
+        set _nativeAddress to address of _nativeRecipient as text
+        set _nativeRecipients to _nativeRecipients & ((length of _nativeAddress) as text) & ":" & _nativeAddress
+      end repeat
+    end repeat`;
+}
+
+/** Preserve even control characters in Mail's original subject on restoration. */
+function nativeTextLiteral(text: string): string {
+  return (
+    text
+      // eslint-disable-next-line no-control-regex
+      .split(/([\x00-\x1f\x7f])/)
+      .map((part) =>
+        part.length === 1 && (part.charCodeAt(0) < 32 || part.charCodeAt(0) === 127)
+          ? `(character id ${part.charCodeAt(0)})`
+          : `"${escapeForAppleScript(part)}"`
+      )
+      .join(" & ")
+  );
+}
 
 /**
  * Normalize an RFC 5322 Message-ID for backend-independent matching: trim and
@@ -4207,8 +4273,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     cc?: string[],
     bcc?: string[],
     account?: string,
-    attachments?: AttachmentInput[]
+    attachments?: AttachmentInput[],
+    nativeEditor = false
   ): ComposeResult {
+    if (nativeEditor) {
+      return this.composeNative("send", body, attachments, { to, subject, cc, bcc, account });
+    }
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
 
@@ -4241,6 +4311,163 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         account,
         buildAttachmentCommands(mat.paths)
       );
+    } finally {
+      mat.cleanup();
+    }
+  }
+
+  /**
+   * Native editor transaction: create once, paste only the authored HTML, then
+   * re-identify and finalize once. Any failure leaves the compose for inspection.
+   * Neither creation nor finalization assigns Mail's body/content property.
+   */
+  private composeNative(
+    mode: "send" | "draft",
+    body: string,
+    attachments: AttachmentInput[] | undefined,
+    options: {
+      to?: string[];
+      subject?: string;
+      cc?: string[];
+      bcc?: string[];
+      account?: string;
+      id?: string;
+      kind?: "reply" | "forward";
+      replyAll?: boolean;
+    }
+  ): ComposeResult {
+    if (!options.kind && !options.account) {
+      return {
+        success: false,
+        error: "Native composition requires an explicit sender account or address.",
+      };
+    }
+    const preflight = nativeEditorPreflight();
+    if (!preflight.success) return preflight;
+
+    let pinnedAddress: string | undefined;
+    if (!options.kind) {
+      const sender = this.resolveSender(options.account);
+      if ("error" in sender) return { success: false, error: sender.error };
+      pinnedAddress = sender.address;
+      if (!pinnedAddress) return { success: false, error: "Could not resolve the native sender." };
+    }
+
+    // Materialize and policy-check every attachment before creating any compose.
+    const mat = materializeAttachments(attachments);
+    try {
+      const appendCommands = buildAttachmentCommands(mat.paths);
+      const attachmentCommands = mat.paths.length
+        ? `set _nativeExpectedAttachments to (count of attachments of content of _nativeMessage) + ${mat.paths.length}
+          tell _nativeMessage
+            ${appendCommands}
+          end tell
+          ${attachmentSettleBlock("_nativeMessage", mat.paths.length).replace(`attachCount >= ${mat.paths.length}`, "attachCount >= _nativeExpectedAttachments")}
+          if attachCount < _nativeExpectedAttachments then error "Native attachments did not finish loading; compose retained."`
+        : "";
+      const marker = `MCP Native ${randomUUID()}`;
+      const endMarker = `:native-end:${randomUUID()}`;
+      const safeMarker = escapeForAppleScript(marker);
+      let creation: string;
+      if (options.kind) {
+        creation = `${nativeParentSender}
+          set _nativeMessage to ${options.kind} msg with opening window${options.kind === "reply" && options.replyAll ? " with reply to all" : ""}
+          set sender of _nativeMessage to _nativeSender`;
+      } else {
+        creation = `set _nativeSender to "${escapeForAppleScript(pinnedAddress!)}"
+          set _nativeMessage to make new outgoing message with properties {subject:"${escapeForAppleScript(options.subject ?? "")}", visible:true}
+          set sender of _nativeMessage to _nativeSender`;
+      }
+      for (const kind of ["to", "cc", "bcc"] as const) {
+        for (const address of options[kind] ?? []) {
+          creation += `\nmake new ${kind} recipient at end of ${kind} recipients of _nativeMessage with properties {address:"${escapeForAppleScript(address)}"}`;
+        }
+      }
+      creation += `
+        set _nativeActualSender to sender of _nativeMessage as text
+        if not (_nativeActualSender is _nativeSender or _nativeActualSender ends with "<" & _nativeSender & ">") then error "Native compose sender verification failed; compose retained."
+        set _nativeSubject to subject of _nativeMessage as text
+        set subject of _nativeMessage to "${safeMarker}"
+        ${nativeRecipientFingerprint("_nativeMessage")}
+        return "native-compose:" & (id of _nativeMessage as text) & linefeed & _nativeSender & linefeed & _nativeRecipients & linefeed & _nativeSubject & "${endMarker}"`;
+      const creationScript = options.kind
+        ? this.findMessageScript(options.id!, creation)
+        : buildAppLevelScript(
+            `try\n${creation}\non error errMsg\nreturn "error:" & errMsg\nend try`
+          );
+      if (!options.kind) this.beginMutation();
+      const created = executeAppleScript(creationScript, { timeoutMs: 60000, maxRetries: 1 });
+      if (
+        !created.success ||
+        !created.output.startsWith("native-compose:") ||
+        !created.output.endsWith(endMarker)
+      ) {
+        return {
+          success: false,
+          error:
+            "Native compose creation or identity verification failed; inspect Mail drafts before retrying.",
+        };
+      }
+      const metadata = created.output.slice("native-compose:".length, -endMarker.length);
+      const first = metadata.indexOf("\n");
+      const second = metadata.indexOf("\n", first + 1);
+      const third = metadata.indexOf("\n", second + 1);
+      const messageId = Number(metadata.slice(0, first));
+      const expectedSender = metadata.slice(first + 1, second);
+      const recipients = metadata.slice(second + 1, third);
+      const originalSubject = metadata.slice(third + 1);
+      if (
+        first < 1 ||
+        second < first ||
+        third < second ||
+        !Number.isSafeInteger(messageId) ||
+        messageId < 0 ||
+        !expectedSender ||
+        extractAddress(expectedSender) !== expectedSender ||
+        (pinnedAddress && expectedSender.toLowerCase() !== pinnedAddress.toLowerCase())
+      ) {
+        return {
+          success: false,
+          error: "Native compose returned an invalid identity; compose retained for inspection.",
+        };
+      }
+      const inserted = insertNativeAuthoredBody({
+        messageId,
+        markerSubject: marker,
+        body,
+        expectedSender,
+      });
+      if (!inserted.success) return inserted;
+
+      const guard = `set _nativeMatches to (every outgoing message whose id is ${messageId})
+        if (count of _nativeMatches) is not 1 then error "Native compose identity changed; nothing finalized."
+        set _nativeMessage to item 1 of _nativeMatches
+        if (subject of _nativeMessage as text) is not "${safeMarker}" then error "Native compose subject changed; nothing finalized."
+        set _nativeActualSender to sender of _nativeMessage as text
+        if not (_nativeActualSender is "${escapeForAppleScript(expectedSender)}" or _nativeActualSender ends with "<${escapeForAppleScript(expectedSender)}>") then error "Native compose sender changed; nothing finalized."
+        ${nativeRecipientFingerprint("_nativeMessage")}
+        if _nativeRecipients is not (${nativeTextLiteral(recipients)}) then error "Native compose recipients changed; nothing finalized."`;
+      const finalized = executeAppleScript(
+        buildAppLevelScript(`try
+        ${guard}
+        ${attachmentCommands}
+        ${mat.paths.length ? guard : ""}
+        set subject of _nativeMessage to (${nativeTextLiteral(originalSubject)})
+        ${mode === "send" ? 'set _nativeSent to send _nativeMessage\nif _nativeSent is not true then error "Mail did not accept the native send; inspect the compose before retrying."' : draftSaveBlock("_nativeMessage")}
+        return "native-finalized"
+      on error errMsg
+        return "error:" & errMsg
+      end try`),
+        { timeoutMs: 60000, maxRetries: 1 }
+      );
+      if (!finalized.success || finalized.output !== "native-finalized") {
+        return {
+          success: false,
+          error:
+            "Native compose finalization failed or is uncertain; inspect Sent, Outbox, and Drafts before retrying.",
+        };
+      }
+      return { success: true, from: expectedSender };
     } finally {
       mat.cleanup();
     }
@@ -4311,7 +4538,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   private resolveSender(
     account: string | undefined
-  ): { setSender: string; guard: string } | { error: string } {
+  ): { setSender: string; guard: string; address?: string } | { error: string } {
     if (!account) return { setSender: "", guard: senderGuardScript(undefined) };
 
     const { accounts, failed } = this.listAccountsChecked({ timeoutMs: 30000 });
@@ -4323,6 +4550,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     const safeAddress = escapeForAppleScript(picked.address);
     return {
+      address: picked.address,
       setSender: `set sender to "${safeAddress}"`,
       guard: senderGuardScript(safeAddress),
     };
@@ -4420,8 +4648,12 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     cc?: string[],
     bcc?: string[],
     account?: string,
-    attachments?: AttachmentInput[]
+    attachments?: AttachmentInput[],
+    nativeEditor = false
   ): ComposeResult {
+    if (nativeEditor) {
+      return this.composeNative("draft", body, attachments, { to, subject, cc, bcc, account });
+    }
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
 
@@ -4474,8 +4706,16 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     body: string,
     replyAll = false,
     send = true,
-    attachments?: AttachmentInput[]
+    attachments?: AttachmentInput[],
+    nativeEditor = false
   ): { success: boolean; error?: string } {
+    if (nativeEditor) {
+      return this.composeNative(send ? "send" : "draft", body, attachments, {
+        id,
+        replyAll,
+        kind: "reply",
+      });
+    }
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
     // The reply is a visible compose even `without opening window`, so a draft
@@ -4516,8 +4756,16 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     to: string[],
     body?: string,
     send = true,
-    attachments?: AttachmentInput[]
+    attachments?: AttachmentInput[],
+    nativeEditor = false
   ): { success: boolean; error?: string } {
+    if (nativeEditor) {
+      return this.composeNative(send ? "send" : "draft", body ?? "", attachments, {
+        id,
+        to,
+        kind: "forward",
+      });
+    }
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
     // See replyToMessage: a draft is closed only once Drafts has it.
     const finalAction = send ? "send theForward" : draftSaveBlock("theForward");

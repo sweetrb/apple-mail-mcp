@@ -204,10 +204,33 @@ matching configured identity or an allowed email-form `account` override;
 explicit SMTP rejects bare Mail.app labels such as `"Work"`. Missing SMTP
 credentials or an unapproved sender stops the batch before any message is sent.
 
-### Optional: native editor workflow (hosts with computer control)
+### Optional: native-editor composition through MCP
 
-This is an opt-in alternative, not the default. Use the MCP tools above
-(`send-email`, `create-draft`, `reply-to-message`, `forward-message`) as usual.
+When the user wants Mail's native signature and HTML reply history, the four
+compose tools accept `composition: "native-editor"`. Pass only new prose in
+`body`; do not build or append a quotation. For a reply use `reply-to-message`
+with the actual original ID, not a new message with a `Re:` subject. Use
+`send: false` when review is requested. New messages require an explicit
+`account`; the server refuses ambiguous reply identities.
+
+This mode operates Mail's visible editor on the local unlocked Mac and requires
+existing Accessibility and Automation permissions for Mail and System Events.
+It checks permissions without requesting them. It does not require a separate
+computer-control plugin, does not change Mail preferences, and preserves the
+clipboard unless another application changes it during the operation. Do not
+interact with Mail or the clipboard while it runs. The option selects Mail.app
+even when SMTP is configured; `transport: "smtp"` and caller-built threading
+headers are incompatible. Mail merge is unchanged.
+
+On failure, inspect the retained draft and clipboard. Never silently retry
+through the AppleScript body setter or SMTP. If final delivery is uncertain,
+read Sent and Outbox before considering a retry. Apply the recipient, MIME,
+ancestry, and rendering verification below; a successful tool result alone
+does not establish how every recipient client renders the message.
+
+### Optional: host-assisted native editor workflow
+
+This is a separate opt-in alternative for hosts that supply computer control.
 Use this workflow only when there is computer control supplied by the host on
 the Mac running Mail.app **and** the user wants composition through Mail's
 native editor, for example to keep the configured signature's font size or

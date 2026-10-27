@@ -1,5 +1,37 @@
 ## [Unreleased]
 
+## [2.20.37] - 2026-10-27
+
+### Fixed
+
+- Native composition preserves ordinary image and file clipboard contents
+  instead of rejecting snapshots over 256 KiB. Snapshot, subprocess-output,
+  and restoration limits now share a bounded in-memory budget. Oversized or
+  unreadable data still stops composition before clipboard mutation, and a
+  newer clipboard owner is never overwritten.
+- Native insertion focuses the editor's interior rather than its top-left
+  corner, avoiding Mail's floating Siri writing control. The verified body
+  must still own keyboard focus before any paste.
+- Native-editor drafts use the save-confirmation guard introduced in 2.20.35.
+  New messages, replies, and forwards close only after a fresh draft ID appears;
+  an unconfirmed save leaves the composer open and reports failure without retrying.
+
+### Added
+
+- Opt-in `composition: "native-editor"` on send, draft, reply, and forward tools.
+  New prose is inserted through Mail's visible editor, preserving native
+  signatures and reply history without assigning the AppleScript body property.
+  The operation verifies the composer, sender, recipients, focus, and insertion;
+  failures stop without retrying or changing transports. Existing macOS
+  Accessibility and Automation permissions are required.
+- Preserve the clipboard during native insertion, with a parent-held recovery
+  snapshot for an interrupted editor process. Clipboard data stays in memory.
+
+### Changed
+
+- Generic MCP resource discovery no longer enumerates Mail accounts or
+  mailboxes. Explicit resource reads remain available.
+
 ## [2.20.36] - 2026-10-27
 
 ### Security
@@ -84,7 +116,9 @@
   `docs/CODEX-SETUP.md` (#333, #334).
 
 ## [2.20.32] - 2026-10-26
+
 ### Changed
+
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
 
 ## [2.20.31] - 2026-10-25
@@ -123,14 +157,18 @@
   explicit-SMTP label rejection (#329).
 
 ## [2.20.29] - 2026-10-24
+
 ### Security
+
 - **Upgrade Zod to `^4.6.6`** to address GHSA-mrhx-c7xc-m3w5. Preserve the
   existing tool input/output JSON Schema contracts, integer validation, and
   string-valued template records across the Zod 4 migration. The dependency
   retains the repository's seven-day minimum release age.
 
 ## [2.20.28] - 2026-10-23
+
 ### Security
+
 - **`ip-address` floor raised to `>=10.7.4 <11`** (Dependabot alert #39, medium). The
   tree carried 10.7.2/10.7.3 duplicates inside the vulnerable range, and the fix ships in
   the bundle (reached via `@modelcontextprotocol/sdk` and `imapflow` → `socks`).
@@ -139,7 +177,9 @@
   dependency of vitest, so it moves with vitest rather than through an override.
 
 ## [2.20.27] - 2026-10-23
+
 ### Fixed
+
 - **`resolveById` no longer discards an explicit account-only hint in favor of a
   remembered location in a different account (#319).** `get-message`,
   `get-message-headers` and the content/source reads accept `account` without
@@ -152,7 +192,9 @@
   added by #315), not to a fabricated "explicit" hit.
 
 ## [2.20.26] - 2026-10-22
+
 ### Fixed
+
 - **SMTP sends no longer leave two copies in a Gmail Sent mailbox.** The best-effort
   Sent-folder copy (#220) was APPENDed unconditionally, but `smtp.gmail.com` already
   files every submitted message into `[Gmail]/Sent Mail`, so each `send-email`,
@@ -167,7 +209,9 @@
   it was composed after the send and so was stamped seconds later.
 
 ## [2.20.25] - 2026-10-21
+
 ### Security
+
 - Raised the `vite` floor to `>=8.2.4 <9` (dev-only, via vitest/@vitest/coverage-v8;
   not in the shipped bundle), closing GHSA-r825-w8mm-5pxw (medium, alert #36),
   GHSA-587h-7wmj-h5pm (high, alert #35), and GHSA-698v-4r3x-3vcv (medium, alert #34).
@@ -177,7 +221,9 @@
   resolves correctly (landed on 8.3.4).
 
 ## [2.20.24] - 2026-10-21
+
 ### Changed
+
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
 
 ## [2.20.23] - 2026-10-19

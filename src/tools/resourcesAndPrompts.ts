@@ -49,13 +49,9 @@ export function registerResourcesAndPrompts(
   server.registerResource(
     "mailboxes",
     new ResourceTemplate("mail://mailboxes/{account}", {
-      list: () => ({
-        resources: mailManager.listAccounts().map((a) => ({
-          name: `Mailboxes — ${a.name}`,
-          uri: `mail://mailboxes/${encodeURIComponent(a.name)}`,
-          mimeType: "application/json",
-        })),
-      }),
+      // Discovery must not access Mail before the client explicitly requests
+      // mail data. The read callback still resolves individual accounts below.
+      list: undefined,
     }),
     {
       title: "Mailboxes by account",

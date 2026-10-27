@@ -1425,6 +1425,18 @@ const SENT_COPY_ALREADY_FILED_SCHEMA = z
 
 // --- send-email ---
 
+const COMPOSITION_SCHEMA = z
+  .literal("native-editor")
+  .optional()
+  .describe(
+    "Opt in to Mail's visible native editor: inserts only new prose, preserving its signature, " +
+      "HTML quotation and reply ancestry without the AppleScript content setter. Requires an unlocked " +
+      "desktop and existing Accessibility and Automation permissions. Uses Mail.app even when SMTP " +
+      "is configured; cannot be combined with transport=smtp or caller-built threading headers. " +
+      "New messages require an explicit account. Do not interact with Mail or the clipboard while it runs. " +
+      "Failure never falls back to another composition method or sends an unverified message."
+  );
+
 const SEND_ACCOUNT_SCHEMA = z
   .string()
   .optional()
@@ -1448,6 +1460,7 @@ registerTool(
       cc: z.array(z.string()).optional().describe("CC recipients"),
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
       account: SEND_ACCOUNT_SCHEMA,
+      composition: COMPOSITION_SCHEMA,
       attachments: ATTACHMENTS_SCHEMA,
       inReplyTo: IN_REPLY_TO_SCHEMA,
       references: REFERENCES_SCHEMA,
@@ -1495,6 +1508,7 @@ registerTool(
       account,
       attachments,
       transport,
+      composition,
       replyTo,
       inReplyTo,
       references,
@@ -1507,7 +1521,12 @@ registerTool(
       // configured and no transport was specified — except when a non-email
       // `account` label requests Mail.app account selection (see shouldUseSmtp).
       // Explicit transport:"applescript" always forces the Mail.app path.
-      const useSmtp = shouldUseSmtp(transport, account);
+      if (composition && transport === "smtp") {
+        return errorResponse(
+          "Native-editor composition uses Mail.app and cannot be combined with SMTP."
+        );
+      }
+      const useSmtp = !composition && shouldUseSmtp(transport, account);
       // #267: never silently drop caller threading headers on a transport that
       // cannot emit them.
       const threading = sendEmailThreading({ inReplyTo, references }, useSmtp);
@@ -1557,7 +1576,9 @@ registerTool(
         });
       }
 
-      const sent = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
+      const sent = composition
+        ? mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments, true)
+        : mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
 
       if (!sent.success) {
         return errorResponse(sent.error ?? "Failed to send email. Check Mail.app configuration.");
@@ -1664,6 +1685,7 @@ registerTool(
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       subject: z.string().min(1, "Subject is required"),
       body: z.string().min(1, "Body is required"),
+      composition: COMPOSITION_SCHEMA,
       cc: z.array(z.string()).optional().describe("CC recipients"),
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
       account: z
@@ -1694,8 +1716,23 @@ registerTool(
     },
   },
   withErrorHandling(
-    async ({ to, subject, body, cc, bcc, account, attachments, inReplyTo, references }) => {
+    async ({
+      to,
+      subject,
+      body,
+      cc,
+      bcc,
+      account,
+      attachments,
+      inReplyTo,
+      references,
+      composition,
+    }) => {
       if (threadingHeaders({ inReplyTo, references })) {
+        if (composition)
+          return errorResponse(
+            "Native-editor drafts cannot use caller-built threading headers. Use reply-to-message with send=false for a native reply."
+          );
         return runThreadedDraft(threadedDraftDeps, {
           to,
           subject,
@@ -1708,7 +1745,9 @@ registerTool(
           references,
         });
       }
-      const drafted = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
+      const drafted = composition
+        ? mailManager.createDraft(to, subject, body, cc, bcc, account, attachments, true)
+        : mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
 
       if (!drafted.success) {
         return errorResponse(
@@ -1807,6 +1846,7 @@ registerTool(
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
+      composition: COMPOSITION_SCHEMA,
       body: z
         .string()
         .min(1, "Reply body is required")
@@ -1844,6 +1884,7 @@ registerTool(
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
+      composition: COMPOSITION_SCHEMA,
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       body: z.string().optional().describe("Optional message to prepend (plain text)"),
       send: z

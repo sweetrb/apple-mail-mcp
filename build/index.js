@@ -39021,7 +39021,7 @@ var require_utils2 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var buffer_1 = __require("buffer");
-    var ERRORS = {
+    var ERRORS2 = {
       INVALID_ENCODING: "Invalid encoding provided. Please specify a valid encoding the internal Node.js Buffer supports.",
       INVALID_SMARTBUFFER_SIZE: "Invalid size provided. Size must be a valid integer greater than zero.",
       INVALID_SMARTBUFFER_BUFFER: "Invalid Buffer provided in SmartBufferOptions.",
@@ -39035,10 +39035,10 @@ var require_utils2 = __commonJS({
       INVALID_READ_BEYOND_BOUNDS: "Attempted to read beyond the bounds of the managed data.",
       INVALID_WRITE_BEYOND_BOUNDS: "Attempted to write beyond the bounds of the managed data."
     };
-    exports.ERRORS = ERRORS;
+    exports.ERRORS = ERRORS2;
     function checkEncoding(encoding) {
       if (!buffer_1.Buffer.isEncoding(encoding)) {
-        throw new Error(ERRORS.INVALID_ENCODING);
+        throw new Error(ERRORS2.INVALID_ENCODING);
       }
     }
     exports.checkEncoding = checkEncoding;
@@ -39049,10 +39049,10 @@ var require_utils2 = __commonJS({
     function checkOffsetOrLengthValue(value, offset) {
       if (typeof value === "number") {
         if (!isFiniteInteger(value) || value < 0) {
-          throw new Error(offset ? ERRORS.INVALID_OFFSET : ERRORS.INVALID_LENGTH);
+          throw new Error(offset ? ERRORS2.INVALID_OFFSET : ERRORS2.INVALID_LENGTH);
         }
       } else {
-        throw new Error(offset ? ERRORS.INVALID_OFFSET_NON_NUMBER : ERRORS.INVALID_LENGTH_NON_NUMBER);
+        throw new Error(offset ? ERRORS2.INVALID_OFFSET_NON_NUMBER : ERRORS2.INVALID_LENGTH_NON_NUMBER);
       }
     }
     function checkLengthValue(length) {
@@ -39065,7 +39065,7 @@ var require_utils2 = __commonJS({
     exports.checkOffsetValue = checkOffsetValue;
     function checkTargetOffset(offset, buff) {
       if (offset < 0 || offset > buff.length) {
-        throw new Error(ERRORS.INVALID_TARGET_OFFSET);
+        throw new Error(ERRORS2.INVALID_TARGET_OFFSET);
       }
     }
     exports.checkTargetOffset = checkTargetOffset;
@@ -40250,7 +40250,7 @@ var require_constants2 = __commonJS({
     exports.SOCKS5_NO_ACCEPTABLE_AUTH = exports.SOCKS5_CUSTOM_AUTH_END = exports.SOCKS5_CUSTOM_AUTH_START = exports.SOCKS_INCOMING_PACKET_SIZES = exports.SocksClientState = exports.Socks5Response = exports.Socks5HostType = exports.Socks5Auth = exports.Socks4Response = exports.SocksCommand = exports.ERRORS = exports.DEFAULT_TIMEOUT = void 0;
     var DEFAULT_TIMEOUT2 = 3e4;
     exports.DEFAULT_TIMEOUT = DEFAULT_TIMEOUT2;
-    var ERRORS = {
+    var ERRORS2 = {
       InvalidSocksCommand: "An invalid SOCKS command was provided. Valid options are connect, bind, and associate.",
       InvalidSocksCommandForOperation: "An invalid SOCKS command was provided. Only a subset of commands are supported for this operation.",
       InvalidSocksCommandChain: "An invalid SOCKS command was provided. Chaining currently only supports the connect command.",
@@ -40279,7 +40279,7 @@ var require_constants2 = __commonJS({
       InvalidSocks5IncomingConnectionResponse: "Received invalid Socks5 incoming connection response",
       Socks5ProxyRejectedIncomingBoundConnection: "Socks5 Proxy rejected incoming bound connection"
     };
-    exports.ERRORS = ERRORS;
+    exports.ERRORS = ERRORS2;
     var SOCKS_INCOMING_PACKET_SIZES = {
       Socks5InitialHandshakeResponse: 2,
       Socks5UserPassAuthenticationResponse: 2,
@@ -98611,7 +98611,7 @@ function integerNumber() {
 }
 
 // src/services/appleMailManager.ts
-import { spawnSync as spawnSync2 } from "child_process";
+import { spawnSync as spawnSync4 } from "child_process";
 import {
   constants as fsConstants,
   chmodSync,
@@ -98629,7 +98629,7 @@ import {
 } from "fs";
 import { resolve as resolve4, sep as sep2, join as join6 } from "path";
 import { homedir as homedir5 } from "os";
-import { randomUUID } from "crypto";
+import { randomUUID as randomUUID2 } from "crypto";
 
 // src/utils/applescript.ts
 import { execSync, spawnSync } from "child_process";
@@ -99166,6 +99166,438 @@ function senderGuardScript(safeAddress) {
         set actualSender to sender of newMessage as text${check2}`;
 }
 
+// src/services/nativeMailComposer.ts
+import { spawnSync as spawnSync3 } from "node:child_process";
+
+// src/services/nativeClipboardRecovery.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+var MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+var MAX_NATIVE_EDITOR_OUTPUT_BYTES = MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES + 64 * 1024;
+var MAX_RECOVERY_INPUT_BYTES = MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES + 4096;
+var RESTORE = String.raw`
+ObjC.import('AppKit');
+try {
+  var bytes = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+  var input = JSON.parse($.NSString.alloc.initWithDataEncoding(bytes, $.NSUTF8StringEncoding).js);
+  var pasteboard = $.NSPasteboard.generalPasteboard;
+  var count = Number(pasteboard.changeCount);
+  var marker = pasteboard.stringForType('org.apple-mail-mcp.native-composition');
+  var ownsWritten = marker && ObjC.unwrap(marker) === input.token &&
+    (input.ownedCount === null || count === input.ownedCount);
+  var ownsCleared = !marker && Number(pasteboard.pasteboardItems.count) === 0 &&
+    count === input.clearedCount;
+  if (ownsWritten || ownsCleared) {
+    var saved = input.items.map(function (types) {
+      var item = $.NSPasteboardItem.alloc.init;
+      types.forEach(function (entry) {
+        var data = $.NSData.alloc.initWithBase64EncodedStringOptions(entry.data, 0);
+        if (!data || !item.setDataForType(data, entry.type)) throw new Error('invalid snapshot');
+      });
+      return item;
+    });
+    // Never overwrite a newer clipboard owner while rebuilding the snapshot.
+    if (Number(pasteboard.changeCount) !== count) throw new Error('ownership changed');
+    pasteboard.clearContents;
+    var objects = $.NSMutableArray.alloc.init;
+    saved.forEach(function (item) { objects.addObject(item); });
+    if (saved.length && !pasteboard.writeObjects(objects)) throw new Error('restore failed');
+  }
+  JSON.stringify({success: true});
+} catch (_) { JSON.stringify({success: false}); }
+`;
+function recoverNativeClipboard(output2, token) {
+  if (typeof token !== "string" || !token) return true;
+  try {
+    if (Buffer.byteLength(output2, "utf8") > MAX_NATIVE_EDITOR_OUTPUT_BYTES) return false;
+    const records = output2.split("\n").flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+    const snapshot = records.find((r) => r.kind === "clipboard-recovery" && r.token === token);
+    if (!snapshot) return true;
+    if (!Array.isArray(snapshot.items) || !Number.isSafeInteger(snapshot.originalCount))
+      return false;
+    const cleared = records.find((r) => r.kind === "clipboard-cleared");
+    const owned = records.find((r) => r.kind === "clipboard-owned");
+    const input2 = JSON.stringify({
+      token,
+      items: snapshot.items,
+      // clearContents increments once; cover termination before the clear record flushes.
+      clearedCount: cleared?.count ?? snapshot.originalCount + 1,
+      ownedCount: owned?.count ?? null
+    });
+    if (Buffer.byteLength(input2, "utf8") > MAX_RECOVERY_INPUT_BYTES) return false;
+    const restored = spawnSync2("/usr/bin/osascript", ["-l", "JavaScript", "-e", RESTORE], {
+      input: input2,
+      encoding: "utf8",
+      timeout: 1e4,
+      maxBuffer: 4096,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    return !restored.error && restored.status === 0 && JSON.parse(restored.stdout.trim()).success === true;
+  } catch {
+    return false;
+  }
+}
+
+// src/services/nativeMailComposer.ts
+import { randomUUID } from "node:crypto";
+function renderNativeAuthoredBody(body) {
+  const entities = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  };
+  return body.normalize("NFC").replace(/\r\n?/g, "\n").split("\n").map(
+    (line) => `<div style="font-size: inherit;">${line.replace(/[&<>"']/g, (c) => entities[c]) || "<br>"}</div>`
+  ).join("");
+}
+var NATIVE_EDITOR_SCRIPT = String.raw`
+ObjC.import('AppKit');
+ObjC.import('ApplicationServices');
+ObjC.import('CoreServices');
+ObjC.bindFunction('AEDeterminePermissionToAutomateTarget', ['int', ['void *', 'unsigned int', 'unsigned int', 'bool']]);
+var currentStage = 'startup', focusFailure = null;
+function stage(value) { currentStage = value; console.log('NATIVE_STAGE:' + value); }
+function emit(record) {
+  var data = $(JSON.stringify(record) + '\n').dataUsingEncoding($.NSUTF8StringEncoding);
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
+}
+function fail(code) { throw new Error(code); }
+function preflight() {
+  if (!$.AXIsProcessTrusted()) fail('accessibility');
+  ['com.apple.mail', 'com.apple.systemevents'].forEach(function (id) {
+    if (id === 'com.apple.systemevents' &&
+        Number($.NSRunningApplication.runningApplicationsWithBundleIdentifier(id).count) === 0) {
+      // LaunchServices launch is not an Apple Event and does not request TCC
+      // permission. A stopped System Events otherwise reports procNotFound,
+      // which must not be misreported as denied Automation permission.
+      try {
+        var workspace = $.NSWorkspace.sharedWorkspace;
+        workspace.launchApplicationAtURLOptionsConfigurationError(
+          workspace.URLForApplicationWithBundleIdentifier(id),
+          $.NSWorkspaceLaunchWithoutActivation, $.NSDictionary.dictionary, Ref());
+      } catch (_) { fail('automation-unavailable'); }
+    }
+    var target = $.NSAppleEventDescriptor.descriptorWithBundleIdentifier(id);
+    // core/getd, askUserIfNeeded=false: never display an authorization prompt.
+    var status;
+    for (var attempt = 0; attempt < 12; attempt++) {
+      status = $.AEDeterminePermissionToAutomateTarget(target.aeDesc, 0x636f7265, 0x67657464, false);
+      if (status !== -600 || id !== 'com.apple.systemevents') break;
+      if (attempt < 11) delay(0.15);
+    }
+    if (status === -1743 || status === -1744) fail('automation');
+    if (status !== 0) fail('automation-unavailable');
+  });
+}
+function attr(element, name) {
+  try { return element.attributes.byName(name).value(); } catch (_) { return null; }
+}
+function descendants(root) {
+  var result = [], pending = [root];
+  while (pending.length) {
+    var element = pending.shift();
+    result.push(element);
+    if (result.length > 2000) fail('target');
+    try { pending = pending.concat(element.uiElements()); } catch (_) {}
+  }
+  return result;
+}
+function normalized(value) { return String(value).normalize('NFC').replace(/\s+/g, ' ').trim(); }
+function verifiedInsertion(before, after, authored) {
+  var oldText = normalized(before), newText = normalized(after), added = normalized(authored);
+  return added.length > 0 && newText.length > oldText.length &&
+    newText === normalized(added + '\n' + oldText);
+}
+function bodyText(body) {
+  var direct = attr(body, 'AXValue');
+  if (typeof direct === 'string' && direct.length) return direct;
+  return descendants(body).filter(function (element) {
+    var role = attr(element, 'AXRole');
+    return role === 'AXStaticText' || role === 'AXTextArea';
+  }).map(function (element) {
+    var value = attr(element, 'AXValue');
+    if (typeof value !== 'string') fail('readback');
+    return value;
+  }).join('\n');
+}
+function address(value) {
+  var text = String(value).trim(), match = text.match(/<([^<>]+)>$/);
+  return (match ? match[1] : text).toLowerCase();
+}
+function writeItems(clipboard, items) {
+  var array = $.NSMutableArray.alloc.init;
+  items.forEach(function (item) { array.addObject(item); });
+  return clipboard.writeObjects(array);
+}
+function snapshotClipboard(clipboard, token) {
+  var limit = ${MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES};
+  function bytes(value) { return Number($(JSON.stringify(value)).lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)); }
+  var originalCount = Number(clipboard.changeCount);
+  var recovery = {kind: 'clipboard-recovery', items: [], originalCount: originalCount, token: token};
+  var size = bytes(recovery), items = clipboard.pasteboardItems;
+  for (var i = 0; i < Number(items.count); i++) {
+    var item = items.objectAtIndex(i), types = item.types, recoveryTypes = [];
+    var saved = $.NSPasteboardItem.alloc.init;
+    size += 2 + (i ? 1 : 0); // Item brackets and comma, inside the existing [].
+    if (size > limit) fail('clipboard');
+    for (var j = 0; j < Number(types.count); j++) {
+      var type = types.objectAtIndex(j), data = item.dataForType(type);
+      // Preserve every flavor, including binary data; never silently drop a
+      // lazy/unrepresentable flavor. Account for base64 before allocating it.
+      if (!data) fail('clipboard');
+      var entry = {type: ObjC.unwrap(type), data: ''};
+      size += bytes(entry) + 4 * Math.ceil(Number(data.length) / 3) + (j ? 1 : 0);
+      if (size > limit) fail('clipboard');
+      if (!saved.setDataForType(data, type)) fail('clipboard');
+      entry.data = ObjC.unwrap(data.base64EncodedStringWithOptions(0));
+      recoveryTypes.push(entry);
+    }
+    recovery.items.push(recoveryTypes);
+  }
+  if (Number(clipboard.changeCount) !== originalCount || bytes(recovery) > limit) fail('clipboard');
+  return recovery;
+}
+function main(input) {
+  stage('preflight');
+  preflight();
+  if (input.operation === 'preflight') return;
+  var mail = Application('com.apple.mail');
+  var events = Application('com.apple.systemevents');
+  var process = events.processes.byName('Mail');
+  function checkMessage() {
+    var messages = mail.outgoingMessages().filter(function (m) {
+      return m.id() === input.messageId;
+    });
+    if (messages.length !== 1 || messages[0].subject() !== input.markerSubject ||
+        address(messages[0].sender()) !== address(input.expectedSender)) fail('identity');
+  }
+  stage('identity');
+  checkMessage();
+  stage('target-window');
+  var windows = process.windows().filter(function (window) {
+    // Never walk the main mailbox tree: it may contain thousands of rows.
+    return window.name() === input.markerSubject;
+  });
+  if (windows.length !== 1) fail('target');
+  var window = windows[0];
+  var elements = descendants(window);
+  var subjects = elements.filter(function (element) {
+    return attr(element, 'AXIdentifier') === 'Mail.subjectField' &&
+      attr(element, 'AXValue') === input.markerSubject;
+  });
+  if (subjects.length !== 1) fail('target');
+  var subject = subjects[0];
+  stage('target-body');
+  var bodies = elements.filter(function (element) {
+    return attr(element, 'AXRole') === 'AXWebArea' &&
+      attr(element, 'AXDescription') === 'message body';
+  });
+  if (bodies.length !== 1) fail('target');
+  var body = bodies[0];
+  stage('focus');
+  process.frontmost = true;
+  window.attributes.byName('AXMain').value = true;
+  for (var ready = 0; ready < 20; ready++) {
+    if (process.frontmost() && attr(window, 'AXMain') === true) break;
+    delay(0.1);
+  }
+  // Mail reports AXFocused=false on the editor even when it owns focus.
+  // Click the exact AX element, then inspect the application's focused element.
+  // AXPress on Mail's WebArea is a no-op on some macOS versions. Click inside
+  // the verified editor's live bounds, then verify actual keyboard focus.
+  // Empty composers can place a floating Siri writing control at the body's
+  // top-left corner. Focus at the center; Cmd+Up below sets insertion to start.
+  var position = attr(body, 'AXPosition'), size = attr(body, 'AXSize');
+  if (!position || !size || size[0] < 20 || size[1] < 20 ||
+      !process.frontmost() || attr(window, 'AXMain') !== true) fail('focus');
+  var point = {x: position[0] + size[0] / 2, y: position[1] + size[1] / 2};
+  var down = $.CGEventCreateMouseEvent(null, 1, point, 0);
+  var up = $.CGEventCreateMouseEvent(null, 2, point, 0);
+  $.CGEventPost(0, down);
+  $.CGEventPost(0, up);
+  function checkFocus() {
+    checkMessage();
+    // AX updates are asynchronous. Retry the read-only coherent snapshot, not
+    // clicks, key events, clipboard writes, or insertion.
+    for (var focusAttempt = 0; focusAttempt < 3; focusAttempt++) {
+      var focused = attr(process, 'AXFocusedUIElement');
+      var focusedWindow = focused ? attr(focused, 'AXWindow') : null;
+      focusFailure = !process.frontmost() ? 'foreground'
+        : attr(window, 'AXMain') !== true ? 'main-window'
+        : !focused ? 'missing-element'
+        : attr(focused, 'AXRole') !== 'AXWebArea' ? 'role'
+        : attr(focused, 'AXDescription') !== 'message body' ? 'description'
+        : !focusedWindow || attr(focusedWindow, 'AXTitle') !== input.markerSubject ? 'focused-window'
+        : JSON.stringify(attr(focused, 'AXPosition')) !== JSON.stringify(attr(body, 'AXPosition')) ? 'position'
+        : JSON.stringify(attr(focused, 'AXSize')) !== JSON.stringify(attr(body, 'AXSize')) ? 'size'
+        : window.name() !== input.markerSubject ? 'window-title'
+        : attr(subject, 'AXValue') !== input.markerSubject ? 'subject' : null;
+      if (!focusFailure) return;
+      if (focusAttempt < 2) delay(0.1);
+    }
+    console.log('NATIVE_FOCUS:' + focusFailure);
+    fail('focus');
+  }
+  checkFocus();
+  if (!normalized(input.body)) return;
+  var beforeText = bodyText(body);
+  stage('clipboard-snapshot');
+  var clipboard = $.NSPasteboard.generalPasteboard;
+  var recovery = snapshotClipboard(clipboard, input.recoveryToken);
+  var originalCount = recovery.originalCount;
+  emit(recovery);
+  var ownedCount = null;
+  {
+    stage('clipboard-write');
+    var authored = $.NSPasteboardItem.alloc.init;
+    if (!authored.setStringForType(input.html, $.NSPasteboardTypeHTML) ||
+        !authored.setStringForType(input.body, $.NSPasteboardTypeString) ||
+        !authored.setStringForType('', 'org.nspasteboard.TransientType') ||
+        !authored.setStringForType('', 'org.nspasteboard.AutoGeneratedType') ||
+        !authored.setStringForType(input.recoveryToken, 'org.apple-mail-mcp.native-composition')) fail('clipboard');
+    if (Number(clipboard.changeCount) !== originalCount) fail('clipboard');
+    clipboard.clearContents;
+    ownedCount = Number(clipboard.changeCount);
+    emit({kind: 'clipboard-cleared', count: ownedCount});
+    var wrote = writeItems(clipboard, [authored]);
+    ownedCount = Number(clipboard.changeCount);
+    emit({kind: 'clipboard-owned', count: ownedCount});
+    if (!wrote) fail('clipboard');
+    if (ObjC.unwrap(clipboard.stringForType($.NSPasteboardTypeHTML)) !== input.html ||
+        ObjC.unwrap(clipboard.stringForType($.NSPasteboardTypeString)) !== input.body) fail('clipboard');
+    stage('pre-cmd-up');
+    checkFocus();
+    events.keyCode(126, {using: ['command down']});
+    stage('post-cmd-up');
+    checkFocus();
+    if (Number(clipboard.changeCount) !== ownedCount) fail('clipboard');
+    stage('paste');
+    events.keyCode(9, {using: ['command down']});
+    // UI dispatch may finish before AX updates. Wait once, never paste twice.
+    delay(0.3);
+    stage('readback');
+    checkFocus();
+    if (Number(clipboard.changeCount) !== ownedCount) fail('clipboard');
+    if (!verifiedInsertion(beforeText, bodyText(body), input.body)) fail('readback');
+  }
+  // The parent owns restoration, including after a timeout. A child cannot
+  // safely recover from being killed halfway through its own restoration.
+}
+try {
+  var data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+  var text = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
+  main(JSON.parse(text));
+  JSON.stringify({success: true});
+} catch (error) {
+  var allowed = ['accessibility', 'automation', 'automation-unavailable', 'identity', 'target', 'focus', 'clipboard', 'restore', 'readback', 'paste-unavailable'];
+  JSON.stringify({success: false, code: allowed.indexOf(error.message) >= 0 ? error.message : 'bridge',
+    stage: currentStage, focus: focusFailure || undefined, runtime: typeof error.errorNumber === 'number' ? error.errorNumber : undefined});
+}
+`;
+var ERRORS = {
+  accessibility: "Native Mail composition requires existing Accessibility permission for this runtime; no permission was requested.",
+  automation: "Native Mail composition requires existing Automation permission for Mail and System Events; no permission was requested.",
+  "automation-unavailable": "Native Mail composition could not contact Mail or start System Events; this does not establish a permission denial. Nothing was sent.",
+  identity: "Native Mail composition refused an unexpected message, subject, or sender.",
+  target: "Native Mail composition could not identify exactly one marked composer and message body.",
+  focus: "Native Mail composition lost the verified composer or body focus; nothing was sent.",
+  clipboard: "Native Mail composition stopped because the clipboard could not be preserved or changed unexpectedly.",
+  restore: "Native Mail composition could not restore the previous clipboard; nothing was sent.",
+  "paste-unavailable": "Mail's Paste command is unavailable for the verified editor; nothing was sent.",
+  readback: "Native Mail composition could not verify the inserted prose; nothing was sent.",
+  bridge: "Native Mail composition failed; nothing was sent. Inspect the marked draft and clipboard before retrying."
+};
+function runNativeEditor(payload) {
+  try {
+    const result = spawnSync3(
+      "/usr/bin/osascript",
+      ["-l", "JavaScript", "-e", NATIVE_EDITOR_SCRIPT],
+      {
+        input: JSON.stringify(payload),
+        encoding: "utf8",
+        timeout: 15e3,
+        killSignal: "SIGKILL",
+        maxBuffer: MAX_NATIVE_EDITOR_OUTPUT_BYTES,
+        stdio: ["pipe", "pipe", "pipe"]
+      }
+    );
+    if (!recoverNativeClipboard(result.stdout ?? "", payload.recoveryToken)) {
+      return { success: false, error: ERRORS.restore };
+    }
+    if (result.error || result.status !== 0) {
+      const stages = [...(result.stderr ?? "").matchAll(/NATIVE_STAGE:([a-z-]+)/g)];
+      const stage = stages.at(-1)?.[1];
+      const timedOut = result.error && "code" in result.error && result.error.code === "ETIMEDOUT";
+      return {
+        success: false,
+        error: ERRORS.bridge + diagnostic(stage, timedOut ? "timeout" : void 0)
+      };
+    }
+    const response = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "");
+    return response.success === true ? { success: true } : {
+      success: false,
+      error: (ERRORS[response.code] ?? ERRORS.bridge) + diagnostic(response.stage, response.runtime, response.focus)
+    };
+  } catch {
+    return { success: false, error: ERRORS.bridge };
+  }
+}
+function diagnostic(stage, runtime, focus) {
+  const stages = [
+    "startup",
+    "preflight",
+    "identity",
+    "target-window",
+    "target-body",
+    "focus",
+    "clipboard-snapshot",
+    "clipboard-write",
+    "pre-cmd-up",
+    "post-cmd-up",
+    "paste",
+    "readback",
+    "clipboard-restore"
+  ];
+  if (typeof stage !== "string" || !stages.includes(stage)) return "";
+  const detail = runtime === "timeout" || typeof runtime === "number" && Number.isInteger(runtime) ? `; runtime=${runtime}` : "";
+  const focusDetail = typeof focus === "string" && [
+    "foreground",
+    "main-window",
+    "missing-element",
+    "role",
+    "description",
+    "focused-window",
+    "position",
+    "size",
+    "window-title",
+    "subject"
+  ].includes(focus) ? `; focus=${focus}` : "";
+  return ` [stage=${stage}${detail}${focusDetail}]`;
+}
+function nativeEditorPreflight() {
+  return runNativeEditor({ operation: "preflight" });
+}
+function insertNativeAuthoredBody(input2) {
+  if (!Number.isSafeInteger(input2.messageId) || input2.messageId < 0 || typeof input2.markerSubject !== "string" || !input2.markerSubject || typeof input2.expectedSender !== "string" || !input2.expectedSender || typeof input2.body !== "string") {
+    return { success: false, error: ERRORS.identity };
+  }
+  const body = input2.body.normalize("NFC").replace(/\r\n?/g, "\n");
+  return runNativeEditor({
+    ...input2,
+    body,
+    recoveryToken: randomUUID(),
+    operation: "insert",
+    html: renderNativeAuthoredBody(body)
+  });
+}
+
 // src/services/appleMailManager.ts
 init_attachmentReadPolicy();
 
@@ -99443,6 +99875,57 @@ var senderFragment = (compose, verb) => `set _rsAddrs to {}
               error "Mail.app would ${verb} as " & _rsGot & " instead of " & _rsFrom & ", so nothing was sent or saved."
             end if
           end if`;
+var nativeParentSender = `set _nativeAddresses to {}
+  set _nativeOwningAccount to missing value
+  try
+    set _nativeOwningAccount to account of (mailbox of msg)
+  end try
+  if _nativeOwningAccount is missing value then
+    repeat with _nativeAccount in (every account whose enabled is true)
+      set _nativeAddresses to _nativeAddresses & (email addresses of _nativeAccount)
+    end repeat
+  else
+    if enabled of _nativeOwningAccount is false then error "The original message account is disabled; no compose was created."
+    set _nativeAddresses to email addresses of _nativeOwningAccount
+  end if
+  set _nativeMatches to {}
+  repeat with _nativeRecipient in ((to recipients of msg) & (cc recipients of msg))
+    set _nativeAddress to address of _nativeRecipient as text
+    if _nativeAddress is in _nativeAddresses and _nativeAddress is not in _nativeMatches then set end of _nativeMatches to _nativeAddress
+  end repeat
+  if (count of _nativeMatches) is 0 then
+    set _nativeAddress to extract address from (sender of msg)
+    if _nativeAddress is in _nativeAddresses then set end of _nativeMatches to _nativeAddress
+  end if
+  if (count of _nativeMatches) is 1 then
+    set _nativeSender to item 1 of _nativeMatches as text
+  else if (count of _nativeMatches) is 0 and (count of _nativeAddresses) is 1 then
+    set _nativeSender to item 1 of _nativeAddresses as text
+  else
+    error "Cannot uniquely resolve the native reply/forward sender; no compose was created."
+  end if`;
+function nativeRecipientFingerprint(message) {
+  return `set _nativeRecipients to ""
+    repeat with _nativeKind in {"to", "cc", "bcc"}
+      set _nativeRecipients to _nativeRecipients & (_nativeKind as text) & ":"
+      if (_nativeKind as text) is "to" then
+        set _nativeList to to recipients of ${message}
+      else if (_nativeKind as text) is "cc" then
+        set _nativeList to cc recipients of ${message}
+      else
+        set _nativeList to bcc recipients of ${message}
+      end if
+      repeat with _nativeRecipient in _nativeList
+        set _nativeAddress to address of _nativeRecipient as text
+        set _nativeRecipients to _nativeRecipients & ((length of _nativeAddress) as text) & ":" & _nativeAddress
+      end repeat
+    end repeat`;
+}
+function nativeTextLiteral(text) {
+  return text.split(/([\x00-\x1f\x7f])/).map(
+    (part) => part.length === 1 && (part.charCodeAt(0) < 32 || part.charCodeAt(0) === 127) ? `(character id ${part.charCodeAt(0)})` : `"${escapeForAppleScript(part)}"`
+  ).join(" & ");
+}
 function normalizeRfcMessageId(mid) {
   return (mid || "").trim().replace(/^<+/, "").replace(/>+$/, "").trim();
 }
@@ -101965,7 +102448,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   // wrapping behavior below is unchanged for them.
   // Tracking issue: https://github.com/sweetrb/apple-mail-mcp/issues/12
   // ───────────────────────────────────────────────────────────────────
-  sendEmail(to, subject, body, cc, bcc, account, attachments) {
+  sendEmail(to, subject, body, cc, bcc, account, attachments, nativeEditor = false) {
+    if (nativeEditor) {
+      return this.composeNative("send", body, attachments, { to, subject, cc, bcc, account });
+    }
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
     let recipientCommands = "";
@@ -101995,6 +102481,130 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         account,
         buildAttachmentCommands(mat.paths)
       );
+    } finally {
+      mat.cleanup();
+    }
+  }
+  /**
+   * Native editor transaction: create once, paste only the authored HTML, then
+   * re-identify and finalize once. Any failure leaves the compose for inspection.
+   * Neither creation nor finalization assigns Mail's body/content property.
+   */
+  composeNative(mode, body, attachments, options) {
+    if (!options.kind && !options.account) {
+      return {
+        success: false,
+        error: "Native composition requires an explicit sender account or address."
+      };
+    }
+    const preflight = nativeEditorPreflight();
+    if (!preflight.success) return preflight;
+    let pinnedAddress;
+    if (!options.kind) {
+      const sender = this.resolveSender(options.account);
+      if ("error" in sender) return { success: false, error: sender.error };
+      pinnedAddress = sender.address;
+      if (!pinnedAddress) return { success: false, error: "Could not resolve the native sender." };
+    }
+    const mat = materializeAttachments(attachments);
+    try {
+      const appendCommands = buildAttachmentCommands(mat.paths);
+      const attachmentCommands = mat.paths.length ? `set _nativeExpectedAttachments to (count of attachments of content of _nativeMessage) + ${mat.paths.length}
+          tell _nativeMessage
+            ${appendCommands}
+          end tell
+          ${attachmentSettleBlock("_nativeMessage", mat.paths.length).replace(`attachCount >= ${mat.paths.length}`, "attachCount >= _nativeExpectedAttachments")}
+          if attachCount < _nativeExpectedAttachments then error "Native attachments did not finish loading; compose retained."` : "";
+      const marker = `MCP Native ${randomUUID2()}`;
+      const endMarker = `:native-end:${randomUUID2()}`;
+      const safeMarker = escapeForAppleScript(marker);
+      let creation;
+      if (options.kind) {
+        creation = `${nativeParentSender}
+          set _nativeMessage to ${options.kind} msg with opening window${options.kind === "reply" && options.replyAll ? " with reply to all" : ""}
+          set sender of _nativeMessage to _nativeSender`;
+      } else {
+        creation = `set _nativeSender to "${escapeForAppleScript(pinnedAddress)}"
+          set _nativeMessage to make new outgoing message with properties {subject:"${escapeForAppleScript(options.subject ?? "")}", visible:true}
+          set sender of _nativeMessage to _nativeSender`;
+      }
+      for (const kind of ["to", "cc", "bcc"]) {
+        for (const address of options[kind] ?? []) {
+          creation += `
+make new ${kind} recipient at end of ${kind} recipients of _nativeMessage with properties {address:"${escapeForAppleScript(address)}"}`;
+        }
+      }
+      creation += `
+        set _nativeActualSender to sender of _nativeMessage as text
+        if not (_nativeActualSender is _nativeSender or _nativeActualSender ends with "<" & _nativeSender & ">") then error "Native compose sender verification failed; compose retained."
+        set _nativeSubject to subject of _nativeMessage as text
+        set subject of _nativeMessage to "${safeMarker}"
+        ${nativeRecipientFingerprint("_nativeMessage")}
+        return "native-compose:" & (id of _nativeMessage as text) & linefeed & _nativeSender & linefeed & _nativeRecipients & linefeed & _nativeSubject & "${endMarker}"`;
+      const creationScript = options.kind ? this.findMessageScript(options.id, creation) : buildAppLevelScript(
+        `try
+${creation}
+on error errMsg
+return "error:" & errMsg
+end try`
+      );
+      if (!options.kind) this.beginMutation();
+      const created = executeAppleScript(creationScript, { timeoutMs: 6e4, maxRetries: 1 });
+      if (!created.success || !created.output.startsWith("native-compose:") || !created.output.endsWith(endMarker)) {
+        return {
+          success: false,
+          error: "Native compose creation or identity verification failed; inspect Mail drafts before retrying."
+        };
+      }
+      const metadata = created.output.slice("native-compose:".length, -endMarker.length);
+      const first = metadata.indexOf("\n");
+      const second = metadata.indexOf("\n", first + 1);
+      const third = metadata.indexOf("\n", second + 1);
+      const messageId = Number(metadata.slice(0, first));
+      const expectedSender = metadata.slice(first + 1, second);
+      const recipients = metadata.slice(second + 1, third);
+      const originalSubject = metadata.slice(third + 1);
+      if (first < 1 || second < first || third < second || !Number.isSafeInteger(messageId) || messageId < 0 || !expectedSender || extractAddress(expectedSender) !== expectedSender || pinnedAddress && expectedSender.toLowerCase() !== pinnedAddress.toLowerCase()) {
+        return {
+          success: false,
+          error: "Native compose returned an invalid identity; compose retained for inspection."
+        };
+      }
+      const inserted = insertNativeAuthoredBody({
+        messageId,
+        markerSubject: marker,
+        body,
+        expectedSender
+      });
+      if (!inserted.success) return inserted;
+      const guard = `set _nativeMatches to (every outgoing message whose id is ${messageId})
+        if (count of _nativeMatches) is not 1 then error "Native compose identity changed; nothing finalized."
+        set _nativeMessage to item 1 of _nativeMatches
+        if (subject of _nativeMessage as text) is not "${safeMarker}" then error "Native compose subject changed; nothing finalized."
+        set _nativeActualSender to sender of _nativeMessage as text
+        if not (_nativeActualSender is "${escapeForAppleScript(expectedSender)}" or _nativeActualSender ends with "<${escapeForAppleScript(expectedSender)}>") then error "Native compose sender changed; nothing finalized."
+        ${nativeRecipientFingerprint("_nativeMessage")}
+        if _nativeRecipients is not (${nativeTextLiteral(recipients)}) then error "Native compose recipients changed; nothing finalized."`;
+      const finalized = executeAppleScript(
+        buildAppLevelScript(`try
+        ${guard}
+        ${attachmentCommands}
+        ${mat.paths.length ? guard : ""}
+        set subject of _nativeMessage to (${nativeTextLiteral(originalSubject)})
+        ${mode === "send" ? 'set _nativeSent to send _nativeMessage\nif _nativeSent is not true then error "Mail did not accept the native send; inspect the compose before retrying."' : draftSaveBlock("_nativeMessage")}
+        return "native-finalized"
+      on error errMsg
+        return "error:" & errMsg
+      end try`),
+        { timeoutMs: 6e4, maxRetries: 1 }
+      );
+      if (!finalized.success || finalized.output !== "native-finalized") {
+        return {
+          success: false,
+          error: "Native compose finalization failed or is uncertain; inspect Sent, Outbox, and Drafts before retrying."
+        };
+      }
+      return { success: true, from: expectedSender };
     } finally {
       mat.cleanup();
     }
@@ -102056,6 +102666,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if ("error" in picked) return { error: picked.error };
     const safeAddress = escapeForAppleScript(picked.address);
     return {
+      address: picked.address,
       setSender: `set sender to "${safeAddress}"`,
       guard: senderGuardScript(safeAddress)
     };
@@ -102112,7 +102723,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         });
       }
       if (effectiveDelay > 0 && i < recipients.length - 1) {
-        spawnSync2("sleep", [(effectiveDelay / 1e3).toString()], { stdio: "ignore" });
+        spawnSync4("sleep", [(effectiveDelay / 1e3).toString()], { stdio: "ignore" });
       }
     }
     return results;
@@ -102128,7 +102739,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param account - Account to create draft in
    * @returns `from` is the sender Mail.app actually used
    */
-  createDraft(to, subject, body, cc, bcc, account, attachments) {
+  createDraft(to, subject, body, cc, bcc, account, attachments, nativeEditor = false) {
+    if (nativeEditor) {
+      return this.composeNative("draft", body, attachments, { to, subject, cc, bcc, account });
+    }
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScriptBody(body);
     let recipientCommands = "";
@@ -102174,7 +102788,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    *   base64 items (materialized to 0600 temp files, removed afterwards)
    * @returns true if reply created/sent successfully
    */
-  replyToMessage(id, body, replyAll = false, send = true, attachments) {
+  replyToMessage(id, body, replyAll = false, send = true, attachments, nativeEditor = false) {
+    if (nativeEditor) {
+      return this.composeNative(send ? "send" : "draft", body, attachments, {
+        id,
+        replyAll,
+        kind: "reply"
+      });
+    }
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
     const finalAction = send ? "send theReply" : draftSaveBlock("theReply");
@@ -102204,7 +102825,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param attachments - Additional files to attach (#267), as for replyToMessage
    * @returns true if forward created/sent successfully
    */
-  forwardMessage(id, to, body, send = true, attachments) {
+  forwardMessage(id, to, body, send = true, attachments, nativeEditor = false) {
+    if (nativeEditor) {
+      return this.composeNative(send ? "send" : "draft", body ?? "", attachments, {
+        id,
+        to,
+        kind: "forward"
+      });
+    }
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
     const finalAction = send ? "send theForward" : draftSaveBlock("theForward");
     let recipientCommands = "";
@@ -103504,7 +104132,7 @@ ${this.errorEmit("              ")}
    */
   readSmartMailboxEntries(plistPath) {
     if (!plistPath || !existsSync3(plistPath)) return [];
-    const j = spawnSync2("plutil", ["-convert", "json", "-o", "-", plistPath], {
+    const j = spawnSync4("plutil", ["-convert", "json", "-o", "-", plistPath], {
       encoding: "utf8"
     });
     if (j.status === 0 && j.stdout) {
@@ -103530,12 +104158,12 @@ ${this.errorEmit("              ")}
     const buddy = "/usr/libexec/PlistBuddy";
     const out = [];
     for (let i = 0; i < 1e3; i++) {
-      const exists = spawnSync2(buddy, ["-c", `Print :${i}`, plistPath], { encoding: "utf8" });
+      const exists = spawnSync4(buddy, ["-c", `Print :${i}`, plistPath], { encoding: "utf8" });
       if (exists.status !== 0) break;
-      const nameR = spawnSync2(buddy, ["-c", `Print :${i}:MailboxName`, plistPath], {
+      const nameR = spawnSync4(buddy, ["-c", `Print :${i}:MailboxName`, plistPath], {
         encoding: "utf8"
       });
-      const idR = spawnSync2(buddy, ["-c", `Print :${i}:MailboxID`, plistPath], {
+      const idR = spawnSync4(buddy, ["-c", `Print :${i}:MailboxID`, plistPath], {
         encoding: "utf8"
       });
       out.push({
@@ -103563,13 +104191,13 @@ ${this.errorEmit("              ")}
    */
   prepareSmartPlistWrite(plistPath) {
     copyFileSync(plistPath, `${plistPath}.bak`);
-    const temp = `${plistPath}.tmp-${randomUUID()}`;
+    const temp = `${plistPath}.tmp-${randomUUID2()}`;
     copyFileSync(plistPath, temp);
     return temp;
   }
   /** Lint the mutated temp file and atomically move it into place. */
   commitSmartPlist(temp, plistPath) {
-    const lint = spawnSync2("plutil", ["-lint", temp], { encoding: "utf8" });
+    const lint = spawnSync4("plutil", ["-lint", temp], { encoding: "utf8" });
     if (lint.status !== 0) {
       try {
         unlinkSync2(temp);
@@ -103581,7 +104209,7 @@ ${this.errorEmit("              ")}
     return true;
   }
   buildSmartMailboxEntry(name2, fromContains = "", subjectContains = "", bodyContains = "") {
-    const newUuid = () => randomUUID().toUpperCase();
+    const newUuid = () => randomUUID2().toUpperCase();
     const userExpr = fromContains || subjectContains || bodyContains || "";
     const userHeader = fromContains ? "From" : subjectContains ? "Subject" : "Body";
     const userCriterion = {
@@ -103676,7 +104304,7 @@ ${this.errorEmit("              ")}
       }
     };
     writeFileSync4(entryJson, JSON.stringify([entry]), "utf8");
-    const conv = spawnSync2("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
+    const conv = spawnSync4("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
       encoding: "utf8"
     });
     if (conv.status !== 0) {
@@ -103691,7 +104319,7 @@ ${this.errorEmit("              ")}
         error: (conv.stderr || "plutil could not encode the smart mailbox entry").trim()
       };
     }
-    const ins = spawnSync2("/usr/libexec/PlistBuddy", ["-c", `Merge ${entryPlist} :`, temp], {
+    const ins = spawnSync4("/usr/libexec/PlistBuddy", ["-c", `Merge ${entryPlist} :`, temp], {
       encoding: "utf8"
     });
     cleanupEntryFiles();
@@ -103735,7 +104363,7 @@ ${this.errorEmit("              ")}
       return { deleted: false, error: `Smart mailbox "${name2}" not found` };
     }
     const temp = this.prepareSmartPlistWrite(plistPath);
-    const del = spawnSync2("/usr/libexec/PlistBuddy", ["-c", `Delete :${idx}`, temp], {
+    const del = spawnSync4("/usr/libexec/PlistBuddy", ["-c", `Delete :${idx}`, temp], {
       encoding: "utf8"
     });
     if (del.status !== 0) {
@@ -104779,6 +105407,12 @@ async function forwardComposeBody(deps, id, body, hasAttachments = false) {
 async function runCompose(deps, args) {
   const { id, send, transport: transport2, attachments } = args;
   const verb = args.kind === "reply" ? "reply to" : "forward";
+  const nativeEditor = args.composition === "native-editor";
+  if (nativeEditor && transport2 === "smtp") {
+    return errorResponse(
+      "Native-editor composition uses Mail.app and cannot be combined with SMTP."
+    );
+  }
   if (!send && transport2 === "smtp") {
     return errorResponse(
       "SMTP cannot save a Mail.app draft. Omit transport or use transport=applescript with send=false."
@@ -104793,7 +105427,7 @@ async function runCompose(deps, args) {
   }
   const attachmentCount = attachments?.length ?? 0;
   const withFiles = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-  const smtp = send && transport2 !== "applescript" && (transport2 === "smtp" || deps.smtpConfigured());
+  const smtp = !nativeEditor && send && transport2 !== "applescript" && (transport2 === "smtp" || deps.smtpConfigured());
   if (smtp) {
     try {
       const cfg = deps.smtpConfig();
@@ -104860,7 +105494,15 @@ async function runCompose(deps, args) {
       return errorResponse(
         `Failed to ${verb} message "${id}": ${resolved.error ?? "message not found"}`
       );
-    const outcome = args.kind === "reply" ? deps.mail.replyToMessage(
+    if (nativeEditor) await readOriginal(deps, id, void 0, true);
+    const outcome = nativeEditor ? args.kind === "reply" ? deps.mail.replyToMessage(
+      resolved.numericId,
+      args.body,
+      args.replyAll,
+      send,
+      attachments,
+      true
+    ) : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send, attachments, true) : args.kind === "reply" ? deps.mail.replyToMessage(
       resolved.numericId,
       await replyComposeBody(deps, id, args.body),
       args.replyAll,
@@ -105426,13 +106068,9 @@ function registerResourcesAndPrompts(server2, mailManager2) {
   server2.registerResource(
     "mailboxes",
     new ResourceTemplate("mail://mailboxes/{account}", {
-      list: () => ({
-        resources: mailManager2.listAccounts().map((a) => ({
-          name: `Mailboxes \u2014 ${a.name}`,
-          uri: `mail://mailboxes/${encodeURIComponent(a.name)}`,
-          mimeType: "application/json"
-        }))
-      })
+      // Discovery must not access Mail before the client explicitly requests
+      // mail data. The read callback still resolves individual accounts below.
+      list: void 0
     }),
     {
       title: "Mailboxes by account",
@@ -106676,6 +107314,9 @@ var SENT_COPY_ERROR_SCHEMA = external_exports.string().optional().describe("Pres
 var SENT_COPY_ALREADY_FILED_SCHEMA = external_exports.boolean().optional().describe(
   "Present (true) only when sentCopy is true because the Sent mailbox already held this Message-ID (e.g. Gmail's SMTP files its own copy), so none was appended."
 );
+var COMPOSITION_SCHEMA = external_exports.literal("native-editor").optional().describe(
+  "Opt in to Mail's visible native editor: inserts only new prose, preserving its signature, HTML quotation and reply ancestry without the AppleScript content setter. Requires an unlocked desktop and existing Accessibility and Automation permissions. Uses Mail.app even when SMTP is configured; cannot be combined with transport=smtp or caller-built threading headers. New messages require an explicit account. Do not interact with Mail or the clipboard while it runs. Failure never falls back to another composition method or sends an unverified message."
+);
 var SEND_ACCOUNT_SCHEMA = external_exports.string().optional().describe(
   "Account to send from. AppleScript transport: a Mail account name or an exact sender address, resolved to one address and verified before sending; if it matches no enabled account, or Mail would use a different sender, nothing is sent and an error is returned. Omitted \u2192 Mail's default sender (reported back in `from`). SMTP transport: an email-form From override (see README)."
 );
@@ -106690,6 +107331,7 @@ registerTool(
       cc: external_exports.array(external_exports.string()).optional().describe("CC recipients"),
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
       account: SEND_ACCOUNT_SCHEMA,
+      composition: COMPOSITION_SCHEMA,
       attachments: ATTACHMENTS_SCHEMA,
       inReplyTo: IN_REPLY_TO_SCHEMA,
       references: REFERENCES_SCHEMA,
@@ -106722,13 +107364,19 @@ registerTool(
       account,
       attachments,
       transport: transport2,
+      composition,
       replyTo,
       inReplyTo,
       references
     }) => {
       const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
       const attachmentCount = attachments?.length ?? 0;
-      const useSmtp = shouldUseSmtp(transport2, account);
+      if (composition && transport2 === "smtp") {
+        return errorResponse(
+          "Native-editor composition uses Mail.app and cannot be combined with SMTP."
+        );
+      }
+      const useSmtp = !composition && shouldUseSmtp(transport2, account);
       const threading = sendEmailThreading({ inReplyTo, references }, useSmtp);
       if (!threading.ok) return errorResponse(threading.error);
       if (useSmtp) {
@@ -106764,7 +107412,7 @@ registerTool(
           ...result.sentCopyAlreadyFiled ? { sentCopyAlreadyFiled: true } : {}
         });
       }
-      const sent = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
+      const sent = composition ? mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments, true) : mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
       if (!sent.success) {
         return errorResponse(sent.error ?? "Failed to send email. Check Mail.app configuration.");
       }
@@ -106830,6 +107478,7 @@ registerTool(
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       subject: external_exports.string().min(1, "Subject is required"),
       body: external_exports.string().min(1, "Body is required"),
+      composition: COMPOSITION_SCHEMA,
       cc: external_exports.array(external_exports.string()).optional().describe("CC recipients"),
       bcc: external_exports.array(external_exports.string()).optional().describe("BCC recipients"),
       account: external_exports.string().optional().describe(
@@ -106853,8 +107502,23 @@ registerTool(
     }
   },
   withErrorHandling(
-    async ({ to, subject, body, cc, bcc, account, attachments, inReplyTo, references }) => {
+    async ({
+      to,
+      subject,
+      body,
+      cc,
+      bcc,
+      account,
+      attachments,
+      inReplyTo,
+      references,
+      composition
+    }) => {
       if (threadingHeaders({ inReplyTo, references })) {
+        if (composition)
+          return errorResponse(
+            "Native-editor drafts cannot use caller-built threading headers. Use reply-to-message with send=false for a native reply."
+          );
         return runThreadedDraft(threadedDraftDeps, {
           to,
           subject,
@@ -106867,7 +107531,7 @@ registerTool(
           references
         });
       }
-      const drafted = mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
+      const drafted = composition ? mailManager.createDraft(to, subject, body, cc, bcc, account, attachments, true) : mailManager.createDraft(to, subject, body, cc, bcc, account, attachments);
       if (!drafted.success) {
         return errorResponse(
           drafted.error ?? "Failed to create draft. Check Mail.app configuration."
@@ -106934,6 +107598,7 @@ registerTool(
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
+      composition: COMPOSITION_SCHEMA,
       body: external_exports.string().min(1, "Reply body is required").describe("Reply body (plain text; HTML tags such as <br> are not rendered)"),
       replyAll: external_exports.boolean().optional().default(false).describe("Reply to all recipients"),
       send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
@@ -106960,6 +107625,7 @@ registerTool(
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       transport: COMPOSE_TRANSPORT_SCHEMA,
+      composition: COMPOSITION_SCHEMA,
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       body: external_exports.string().optional().describe("Optional message to prepend (plain text)"),
       send: external_exports.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),

@@ -63,6 +63,59 @@ function expectNoApple(d: ReturnType<typeof fixture>) {
 }
 
 describe("reply and forward transport routing", () => {
+  it("uses the native editor with authored prose only, even when SMTP is configured", async () => {
+    const d = fixture();
+    const result = await runReply(d, { ...args, composition: "native-editor" });
+    expect(result.isError).not.toBe(true);
+    expect(d.mail.replyToMessage).toHaveBeenCalledWith(
+      "84",
+      args.body,
+      false,
+      true,
+      undefined,
+      true
+    );
+    expect(d.smtpSend).not.toHaveBeenCalled();
+  });
+
+  it("preserves native forward history instead of building a second plain-text quote", async () => {
+    const d = fixture();
+    await runForward(d, {
+      id,
+      to: ["me@example.com"],
+      body: "New prose",
+      send: false,
+      composition: "native-editor",
+    });
+    expect(d.mail.forwardMessage).toHaveBeenCalledWith(
+      "84",
+      ["me@example.com"],
+      "New prose",
+      false,
+      undefined,
+      true
+    );
+    expect(d.smtpSend).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting native-editor and SMTP choices before reading or composing", async () => {
+    const d = fixture();
+    const result = await runReply(d, { ...args, composition: "native-editor", transport: "smtp" });
+    expect(result.isError).toBe(true);
+    expect(d.imapSource).not.toHaveBeenCalled();
+    expect(d.smtpSend).not.toHaveBeenCalled();
+    expectNoApple(d);
+  });
+
+  it("does not compose a native reply when the original source is unreadable", async () => {
+    const d = fixture();
+    d.imapSource.mockRejectedValue(new Error("Source unavailable"));
+    const result = await runReply(d, { ...args, composition: "native-editor" });
+    expect(result.isError).toBe(true);
+    expect(d.mail.replyToMessage).not.toHaveBeenCalled();
+    expect(d.smtpSend).not.toHaveBeenCalled();
+  });
+
   it("replies to an IMAP id over SMTP without any Mail.app lookup", async () => {
     const d = fixture();
     const result = await runReply(d, args);

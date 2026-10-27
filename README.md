@@ -121,11 +121,14 @@ Supply only artwork you have permission to use and distribute; this option does
 not grant rights to Apple or other third-party artwork, or guarantee that a host
 will refresh an existing listing's cached presentation.
 
-Native-editor composition requires computer control supplied by the host;
-this plugin does not bundle a computer-control server. Its skill describes
-inherited-size HTML insertion that preserves native signatures and quoted
-history, plus actual recipient identity, MIME, ancestry, and rendering checks.
-It does not repair the AppleScript body setter or guarantee every mail client.
+The compose tools accept `composition: "native-editor"` to insert new prose
+through Mail's visible editor, leaving its signature and reply history intact.
+This opt-in path uses existing macOS Accessibility and Automation permissions;
+it does not require a separate computer-control plugin. It verifies the composer
+and sender, preserves the clipboard, and stops without sending if insertion
+cannot be verified. See [native composition](docs/NATIVE-COMPOSITION.md) for
+setup, examples, and verification limits. Existing SMTP and AppleScript behavior
+is unchanged when the option is omitted.
 
 ### Other Hosts (Hermes, Antigravity)
 

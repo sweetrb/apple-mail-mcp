@@ -35,6 +35,7 @@ export interface ReplyArgs {
   replyAll: boolean;
   send: boolean;
   transport?: "smtp" | "applescript";
+  composition?: "native-editor";
   /** Files to attach (#267) — same schema, limits and read roots as send-email. */
   attachments?: AttachmentInput[];
 }
@@ -45,6 +46,7 @@ export interface ForwardArgs {
   body?: string;
   send: boolean;
   transport?: "smtp" | "applescript";
+  composition?: "native-editor";
   /** Files to attach (#267) — same schema, limits and read roots as send-email. */
   attachments?: AttachmentInput[];
 }
@@ -155,6 +157,12 @@ async function forwardComposeBody(
 async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolResponse> {
   const { id, send, transport, attachments } = args;
   const verb = args.kind === "reply" ? "reply to" : "forward";
+  const nativeEditor = args.composition === "native-editor";
+  if (nativeEditor && transport === "smtp") {
+    return errorResponse(
+      "Native-editor composition uses Mail.app and cannot be combined with SMTP."
+    );
+  }
   if (!send && transport === "smtp") {
     return errorResponse(
       "SMTP cannot save a Mail.app draft. Omit transport or use transport=applescript with send=false."
@@ -172,7 +180,10 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
   const attachmentCount = attachments?.length ?? 0;
   const withFiles = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
   const smtp =
-    send && transport !== "applescript" && (transport === "smtp" || deps.smtpConfigured());
+    !nativeEditor &&
+    send &&
+    transport !== "applescript" &&
+    (transport === "smtp" || deps.smtpConfigured());
   if (smtp) {
     try {
       const cfg = deps.smtpConfig();
@@ -249,8 +260,21 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
       return errorResponse(
         `Failed to ${verb} message "${id}": ${resolved.error ?? "message not found"}`
       );
-    const outcome =
-      args.kind === "reply"
+    // Mail retains the original HTML and reply headers in native-editor mode.
+    // Read the source first, but never replace its body with reconstructed text.
+    if (nativeEditor) await readOriginal(deps, id, undefined, true);
+    const outcome = nativeEditor
+      ? args.kind === "reply"
+        ? deps.mail.replyToMessage(
+            resolved.numericId,
+            args.body,
+            args.replyAll,
+            send,
+            attachments,
+            true
+          )
+        : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send, attachments, true)
+      : args.kind === "reply"
         ? deps.mail.replyToMessage(
             resolved.numericId,
             await replyComposeBody(deps, id, args.body),

@@ -1,4 +1,73 @@
-# Rendering prose for a native Mail editor
+# Composing through Mail's native editor
+
+`send-email`, `create-draft`, `reply-to-message`, and `forward-message` accept
+`composition: "native-editor"`. This opt-in mode inserts newly authored prose
+through Mail's visible editor instead of assigning its AppleScript `content`
+property. Mail retains its configured signature and, for replies and forwards,
+the original HTML history. A reply starts from Mail's actual Reply command,
+preserving its relationship to the parent message.
+
+For example, create a self-addressed draft with an explicitly selected sender:
+
+```json
+{
+  "to": ["me@example.com"],
+  "account": "me@example.com",
+  "subject": "Native composition check",
+  "body": "New prose belongs above the signature and quoted history.",
+  "composition": "native-editor"
+}
+```
+
+For a reply, pass the original message's `id`, the new `body`,
+`composition: "native-editor"`, and `send: false` to `reply-to-message`.
+Do not include a manually reconstructed quote. Review the draft before a
+separately authorized send.
+
+## Requirements and failure behavior
+
+Mail must run on an unlocked Mac. The runtime needs existing Accessibility
+permission and Automation permission for Mail and System Events. The bridge
+checks those grants without requesting them; it does not change privacy
+settings. System Events is started if needed. Keep Mail and the clipboard idle
+while composition runs.
+
+Temporary clipboard content is marked as transient and app-generated using
+the [NSPasteboard conventions](https://nspasteboard.org/). This keeps compatible
+clipboard history and formatting utilities from storing or rewriting it.
+[Pure Paste](https://sindresorhus.com/pure-paste) documents support for these
+markers. If another utility still changes the clipboard, composition stops;
+the server does not disable utilities or change their settings.
+
+Clipboard recovery preserves every readable format, including image and file
+data, within a 64 MiB serialized snapshot budget. Base64 encoding counts toward
+that budget. An oversized or unreadable snapshot stops composition before the
+clipboard is changed; process-output and recovery-input limits include room
+for protocol metadata. Recovery data stays in memory and is not logged or
+written to a temporary file. A newer clipboard owner is never overwritten.
+
+New messages require an explicit `account`. Replies use the parent message's
+account and matching recipient identity, refusing an ambiguous sender. Native
+composition selects Mail.app even when SMTP is configured. Combining it with
+`transport: "smtp"` or caller-built threading headers is rejected. The default
+composition path and mail merge are unchanged.
+
+The server identifies one composer by its outgoing-message ID, temporary unique
+subject, and sender. It inserts escaped, inherited-size HTML only after verifying
+body focus. The sender, subject, and recipients are checked again before saving
+or sending. The temporary subject is then restored. Clipboard contents are
+restored unless another application has changed them in the meantime.
+
+Drafts close only after Mail confirms a new stored draft ID for the restored
+subject. If confirmation does not arrive within ten seconds, the operation
+reports failure and leaves the composer open rather than risking a lost draft.
+
+A failed operation is not retried or rerouted. A partially composed draft may
+remain open for inspection. A process crash can prevent clipboard restoration;
+inspect the clipboard and draft before retrying. If final delivery is uncertain,
+check Sent and Outbox first to avoid duplicates.
+
+## Standalone prose renderer
 
 The dependency-free `scripts/render-authored-body.mjs` helper converts new prose
 into an escaped HTML fragment. It preserves blank paragraphs and Unicode while
@@ -23,12 +92,12 @@ stderr with a nonzero exit status. Authored markup is escaped as text, not
 interpreted as HTML. The helper is also importable through its
 `renderAuthoredBody({ body })` export.
 
-## Host and verification requirements
+## Rendering and delivery verification
 
-Using the result in Mail requires a separate, supported native-editor interface
-or manual interaction. Neither this helper nor the MCP server provides computer
-control or an HTML clipboard API. A host that cannot operate the native editor
-must not claim this workflow is available or substitute an unverified send path.
+The standalone helper renders a fragment; it does not drive Mail. The MCP option
+above performs insertion itself. A host may also use the fragment through its
+own supported native-editor interface, with the same identity and verification
+requirements.
 
 For a reply, open the selected original through Mail's native Reply command;
 a new composition with a `Re:` subject is not equivalent. Verify the sender and
@@ -44,9 +113,18 @@ recipient client. An inherited CSS declaration or a matching desktop font label
 alone does not establish consistent rendering after serialization or on another
 client; plain-text quote markers alone do not prove HTML quotation bars.
 
-This is a prose-rendering helper for a host-driven native-editor workaround. It
-does not repair Mail's AppleScript body setter, change an MCP tool or transport,
-or establish uniform behavior across accounts, macOS versions, and recipient
-clients. Unit tests verify the fragment and CLI contract, not Mail delivery or
-mobile rendering. No new permissions or account access are required by the
-helper itself.
+Native-editor mode avoids the affected body setter; it does not repair macOS
+or guarantee identical rendering across providers and recipient clients.
+Unit tests verify routing, escaping, and failure handling, not delivery or mobile
+rendering. The standalone helper itself requires no Mail access or permissions.
+
+### Proton draft synchronization
+
+With Proton Bridge 3.27.1, a synchronized reply draft can lose its parent
+relationship even when Mail's local draft has correct headers. Bridge's
+[draft-import path](https://github.com/ProtonMail/proton-bridge/blob/v3.27.1/internal/services/imapservice/connector.go#L974-L998)
+omits the parent from its server-side draft request. Native-editor mode does
+not change that provider behavior. Verify the synchronized draft's ancestry
+after reopening; an immediately sent reply retaining its thread does not
+establish the same result for a saved draft. This package neither modifies
+Bridge nor requires a custom Bridge build.
