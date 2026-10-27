@@ -54,7 +54,12 @@ overrides:
   # vulnerable 3.1.5 itself) to >=3.1.6 <4.
   # 2026-09-29: GHSA-58mr-gqgx-xq4g (high), fixed in 3.1.7. Raised >=3.1.6 <4 ->
   # >=3.1.7 <4.
-  fast-uri: ">=3.1.7 <4"
+  # 2026-10-27: Dependabot alerts #41 (low, GHSA-333x-w4r6-6crp), #42 (medium,
+  # GHSA-wjr9-j795-jxcr), #43 (low, GHSA-xhq7-xmqj-769h), #44 (medium,
+  # GHSA-w74x-v6f9-j3xg), all fixed in 3.1.9. 3.1.9 published 2026-10-19T23:06Z;
+  # deferred until the 7-day minimumReleaseAge soak above cleared on
+  # 2026-10-26T23:06Z. Raised >=3.1.7 <4 -> >=3.1.9 <4.
+  fast-uri: ">=3.1.9 <4"
   # GHSA-mwp4-54f8-5fhr (high) + GHSA-4xrf-jv44-h6hh + GHSA-22jq-vg5j-6vgg.
   # express-rate-limit -> @modelcontextprotocol/sdk pulled ip-address 10.2.0 while
   # imapflow -> socks already resolved a clean 10.3.1, so the tree carried two
