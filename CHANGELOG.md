@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+## [2.20.36] - 2026-10-27
+
+### Security
+
+- Raised the `fast-uri` override floor from `>=3.1.7 <4` to `>=3.1.9 <4`,
+  clearing four Dependabot alerts: #41
+  ([GHSA-333x-w4r6-6crp](https://github.com/advisories/GHSA-333x-w4r6-6crp),
+  low), #42
+  ([GHSA-wjr9-j795-jxcr](https://github.com/advisories/GHSA-wjr9-j795-jxcr),
+  medium), #43
+  ([GHSA-xhq7-xmqj-769h](https://github.com/advisories/GHSA-xhq7-xmqj-769h),
+  low), and #44
+  ([GHSA-w74x-v6f9-j3xg](https://github.com/advisories/GHSA-w74x-v6f9-j3xg),
+  medium) — all fixed in `fast-uri@3.1.9`. `3.1.9` published
+  2026-10-19T23:06Z; deferred until this repo's 7-day `minimumReleaseAge`
+  supply-chain soak cleared on 2026-10-26T23:06Z. `fast-uri` is reachable in
+  the shipped bundle (via `ajv`), so `build/index.js` was rebuilt.
+
 ## [2.20.35] - 2026-10-26
 
 ### Fixed
