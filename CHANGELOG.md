@@ -1,7 +1,19 @@
 ## [Unreleased]
 
+## [2.20.39] - 2026-10-28
+
+### Security
+
+- **`qs` floor raised to 6.16.1** for GHSA-6pq8-jhm2-2vcw (medium: `qs.stringify` with
+  `arrayFormat: 'comma'` throws an uncaught TypeError on array elements carrying a
+  non-callable own `toString`). Reached through `@modelcontextprotocol/sdk` → express, the
+  HTTP transport this stdio server never enters, so exposure is near-zero. 6.16.1 was
+  published 2026-10-14, past the 7-day `minimumReleaseAge` soak. Clears Dependabot alert #48.
+
 ## [2.20.38] - 2026-10-28
+
 ### Changed
+
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
 
 ## [2.20.37] - 2026-10-27
