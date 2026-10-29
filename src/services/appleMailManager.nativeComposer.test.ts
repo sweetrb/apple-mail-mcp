@@ -201,6 +201,31 @@ describe("native editor compose orchestration", () => {
     expect(finalization()).not.toContain("send _nativeMessage");
   });
 
+  it("pins native replies to explicit source scope even when a different location is cached", () => {
+    const source = { account: "Proton", mailbox: "Sent", messageId: "parent@example.com" };
+    expect(
+      manager.replyToMessage("42", "Body", false, false, undefined, true, source).success
+    ).toBe(true);
+    expect(creation()).toContain('if (name of _a) is "Proton"');
+    expect(creation()).toContain('if _mPath is "Sent"');
+    expect(creation()).not.toContain('if (name of _a) is "Work"');
+    expect(creation()).toContain('set _expectedMessageId to "parent@example.com"');
+    expect(creation().indexOf("set _actualMessageId")).toBeLessThan(
+      creation().indexOf("reply msg with opening window")
+    );
+  });
+
+  it("binds an explicitly scoped native reply to a unique local mailbox", () => {
+    const source = { account: "On My Mac", mailbox: "Import", messageId: "parent@example.com" };
+    expect(
+      manager.replyToMessage("42", "Body", false, false, undefined, true, source).success
+    ).toBe(true);
+    expect(creation()).toContain("account of _m) is missing value");
+    expect(creation()).toContain("repeat with _m in _mbs");
+    expect(creation()).toContain("if (count of _mbM) is 1 then set _tmb to item 1 of _mbM");
+    expect(creation()).not.toContain("repeat with _a in accounts");
+  });
+
   it("resolves ambiguous parent senders before creating the native reply", () => {
     h.creationFailure = true;
     expect(manager.replyToMessage("42", "Body", false, true, undefined, true).success).toBe(false);

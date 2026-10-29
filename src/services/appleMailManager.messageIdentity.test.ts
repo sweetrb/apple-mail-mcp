@@ -11,7 +11,11 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ calls: [] as string[], output: "" }));
+const h = vi.hoisted(() => ({
+  calls: [] as string[],
+  output: "",
+  scopedMailboxNames: [] as string[],
+}));
 
 vi.mock("@/utils/applescript.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/utils/applescript.js")>();
@@ -19,12 +23,31 @@ vi.mock("@/utils/applescript.js", async (importOriginal) => {
     ...actual,
     executeAppleScript: (script: string) => {
       h.calls.push(script);
+      if (
+        h.scopedMailboxNames.length &&
+        script.includes("set _scopeMatches to {}") &&
+        script.includes("return source of msg")
+      ) {
+        const path = /if _mbPath is "([^"]+)" then/.exec(script)?.[1];
+        const matching = h.scopedMailboxNames.filter(
+          (name) => name.toLowerCase() === path?.toLowerCase()
+        );
+        if (matching.length > 1 && script.includes("if (count of _scopeMatches) > 1")) {
+          return { success: true, output: "\x1dERR\x1d\x1dSCOPED\x1dambiguous", error: undefined };
+        }
+        return {
+          success: true,
+          output: "Message-ID: <wrong@example.com>\r\n\r\nWrong message",
+          error: undefined,
+        };
+      }
       return { success: true, output: h.output, error: undefined as string | undefined };
     },
   };
 });
 
 import { AppleMailManager } from "@/services/appleMailManager.js";
+import { runReply } from "@/tools/compose.js";
 
 const lastScript = () => h.calls[h.calls.length - 1] ?? "";
 
@@ -34,6 +57,7 @@ describe("by-id message identity", () => {
   beforeEach(() => {
     h.calls.length = 0;
     h.output = "";
+    h.scopedMailboxNames = [];
     mgr = new AppleMailManager();
   });
 
@@ -59,6 +83,30 @@ describe("by-id message identity", () => {
     expect(script).not.toContain("messages of mb whose id is 42");
   });
 
+  it("overrides a stale recorded location with the explicitly scoped parent", () => {
+    h.output = "ok";
+    mgr.noteMessageLocation("42", "Other", "Inbox");
+    const source = { account: "Proton", mailbox: "Sent", messageId: "parent@example.com" };
+    expect(mgr.replyToMessage("42", "Body", false, false, undefined, false, source).success).toBe(
+      true
+    );
+    const script = lastScript();
+    expect(script).toContain('if (name of _a) is "Proton"');
+    expect(script).toContain('if _mPath is "Sent"');
+    expect(script).not.toContain('if (name of _a) is "Other"');
+    expect(script).toContain('set _expectedMessageId to "parent@example.com"');
+    expect(script).toContain('return "error:The source message changed after it was read');
+    const compare = script.indexOf("if _actualMessageId is not _expectedMessageId");
+    expect(script.lastIndexOf("considering case", compare)).toBeGreaterThan(
+      script.indexOf("set _actualMessageId")
+    );
+    expect(script.indexOf("end considering", compare)).toBeGreaterThan(compare);
+    expect(script.indexOf("set _actualMessageId")).toBeLessThan(
+      script.indexOf("reply msg without opening window")
+    );
+    expect(script).not.toContain("repeat with acct in accounts");
+  });
+
   it("uses the recorded mailbox resolver for message reads", () => {
     mgr.noteMessageLocation("42", "work@example.com", "INBOX");
 
@@ -70,7 +118,7 @@ describe("by-id message identity", () => {
       rfcMessageId: "id@example.com",
     });
     let script = lastScript();
-    expect(script).toContain('first account whose name is "work@example.com"');
+    expect(script).toContain('if (name of _scopeAccount) is "work@example.com"');
     expect(script).toContain('if _mbPath is "INBOX" then');
     expect(script).toContain("messages of targetMb whose id is 42");
     expect(script).not.toContain("messages of mb whose id is 42");
@@ -79,10 +127,69 @@ describe("by-id message identity", () => {
     h.output = "raw MIME source";
     expect(mgr.getRawSource("42")).toBe("raw MIME source");
     script = lastScript();
-    expect(script).toContain('first account whose name is "work@example.com"');
+    expect(script).toContain('if (name of _scopeAccount) is "work@example.com"');
     expect(script).toContain('if _mbPath is "INBOX" then');
     expect(script).toContain("messages of targetMb whose id is 42");
     expect(script).not.toContain("messages of mb whose id is 42");
+  });
+
+  it.each([
+    { transport: "smtp" as const, composition: undefined },
+    { transport: "applescript" as const, composition: undefined },
+    { transport: undefined, composition: "native-editor" as const },
+  ])("refuses case-twin mailbox paths with colliding ids before any compose: %o", async (mode) => {
+    h.scopedMailboxNames = ["Inbox", "INBOX"];
+    const smtpSend = vi.fn(async () => ({ success: true }));
+    const deps = {
+      mail: mgr,
+      imapSource: vi.fn(async () => ({ raw: "", accountUser: "me@example.com" })),
+      numericId: vi.fn(async () => ({ numericId: "42" })),
+      smtpConfigured: () => true,
+      smtpConfig: () => ({
+        host: "example.test",
+        port: 587,
+        secure: false,
+        user: "apikey",
+        pass: "fixture",
+        from: "me@example.com",
+      }),
+      smtpSend,
+    };
+    const result = await runReply(deps, {
+      id: "42",
+      account: "Work",
+      mailbox: "Inbox",
+      body: "Body",
+      replyAll: false,
+      send: mode.transport === "smtp",
+      ...mode,
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("ambiguous");
+    expect(deps.numericId).not.toHaveBeenCalled();
+    expect(smtpSend).not.toHaveBeenCalled();
+    const script =
+      h.calls.find(
+        (call) => call.includes("set _scopeMatches to {}") && call.includes("return source of msg")
+      ) ?? "";
+    expect(script.indexOf("if (count of _scopeMatches) > 1")).toBeLessThan(
+      script.indexOf("return source of msg")
+    );
+    expect(script).toContain("if (count of _scopeAccounts) > 1");
+  });
+
+  it("does not fall back to an unscoped walk when a remembered mailbox becomes ambiguous", () => {
+    mgr.noteMessageLocation("42", "Work", "Inbox");
+    h.scopedMailboxNames = ["Inbox", "INBOX"];
+    expect(mgr.getRawSource("42")).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toContain("ambiguous");
+    expect(h.calls.some((script) => script.includes("set _hits to {}"))).toBe(false);
+  });
+
+  it("reports duplicate account names as ambiguous", () => {
+    h.output = "\x1dERR\x1d\x1dSCOPED\x1dambiguousaccount";
+    expect(mgr.getRawSource("42", { account: "Work", mailbox: "Inbox" })).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toContain('Account "Work" is ambiguous');
   });
 
   it("keeps a recorded nested mailbox path intact", () => {

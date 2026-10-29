@@ -21,7 +21,7 @@ export interface ComposeDeps {
     "getRawSource" | "getMessageContent" | "replyToMessage" | "forwardMessage"
   > &
     // Optional so test doubles needn't stub it; the real manager always has it.
-    Partial<Pick<AppleMailManager, "consumeLastMessageLookupError">>;
+    Partial<Pick<AppleMailManager, "consumeLastMessageLookupError" | "listAccountsChecked">>;
   imapSource: (id: string) => Promise<ImapMessageSource>;
   numericId: (id: string) => Promise<{ numericId?: string; error?: string }>;
   smtpConfigured: () => boolean;
@@ -31,6 +31,8 @@ export interface ComposeDeps {
 
 export interface ReplyArgs {
   id: string;
+  account?: string;
+  mailbox?: string;
   body: string;
   replyAll: boolean;
   send: boolean;
@@ -42,6 +44,8 @@ export interface ReplyArgs {
 
 export interface ForwardArgs {
   id: string;
+  account?: string;
+  mailbox?: string;
   to: string[];
   body?: string;
   send: boolean;
@@ -52,13 +56,15 @@ export interface ForwardArgs {
 }
 
 type ComposeArgs = (ReplyArgs & { kind: "reply" }) | (ForwardArgs & { kind: "forward" });
+type SourceScope = { account: string; mailbox: string };
 
 /** Read composite IDs over IMAP; never pass them to a numeric AppleScript lookup. */
 async function readOriginal(
   deps: ComposeDeps,
   id: string,
   cfg?: SmtpConfig,
-  recoverReplyText = false
+  recoverReplyText = false,
+  scope?: SourceScope
 ) {
   if (decodeImapId(id)) {
     const source = await deps.imapSource(id);
@@ -76,7 +82,7 @@ async function readOriginal(
     if (source.subject !== undefined) original.subject = source.subject;
     return { original, plainText: extractTextBody(source.raw) };
   }
-  const raw = deps.mail.getRawSource(id);
+  const raw = scope ? deps.mail.getRawSource(id, scope) : deps.mail.getRawSource(id);
   if (!raw) {
     // Say WHY when the lookup knows (#270): a bounded scan that skipped a large
     // mailbox, an ambiguous id, a timeout — each has its own remedy.
@@ -85,9 +91,23 @@ async function readOriginal(
       `Cannot read the original message source${why ? ` (${why})` : ""}. Re-list the intended mailbox and retry with its message id.`
     );
   }
-  const content = deps.mail.getMessageContent(id);
+  const content = scope
+    ? deps.mail.getMessageContent(id, false, scope, { requireScopedLocation: true })
+    : deps.mail.getMessageContent(id);
+  const original = parseOriginalHeaders(raw);
+  if (scope) {
+    // The source and Mail's plain-text property are read separately. If the
+    // numeric id was reused between reads, never combine different messages.
+    const sourceId = original.messageId?.trim().replace(/^<|>$/g, "");
+    const contentId = content?.rfcMessageId?.trim().replace(/^<|>$/g, "");
+    const sameMessage = !!sourceId && sourceId === contentId;
+    return {
+      original,
+      plainText: (sameMessage ? content?.plainText : null) ?? extractTextBody(raw),
+    };
+  }
   return {
-    original: parseOriginalHeaders(raw),
+    original,
     plainText: content?.plainText ?? (recoverReplyText ? extractTextBody(raw) : null),
   };
 }
@@ -96,6 +116,14 @@ function requireReplyText(plainText: string | null): string {
   if (plainText === null)
     throw new Error(
       "The original message has no readable plain-text body. Reply composition was stopped to avoid omitting its quoted content. Open the original in Mail.app and reply there."
+    );
+  return plainText;
+}
+
+function requireForwardText(plainText: string | null): string {
+  if (plainText === null)
+    throw new Error(
+      "The original message has no readable plain-text body. Forward composition was stopped to avoid omitting its content."
     );
   return plainText;
 }
@@ -134,6 +162,26 @@ async function replyComposeBody(deps: ComposeDeps, id: string, body: string): Pr
   return buildReplyBody(body, source.original, requireReplyText(source.plainText));
 }
 
+function requireScopedSmtpIdentity(deps: ComposeDeps, scope: SourceScope, cfg: SmtpConfig): void {
+  const checked = deps.mail.listAccountsChecked?.();
+  if (!checked || checked.failed) {
+    throw new Error("Cannot verify the source Mail account against the SMTP identity.");
+  }
+  const accounts = checked.accounts.filter(
+    (account) => account.name === scope.account && account.enabled
+  );
+  if (accounts.length !== 1) {
+    throw new Error("The source Mail account is unavailable or ambiguous; no SMTP reply was sent.");
+  }
+  const addresses = new Set(accounts[0].addresses.map((address) => address.trim().toLowerCase()));
+  // SMTP authentication usernames can be service logins (for example,
+  // "apikey") rather than email addresses. The visible From must be bound to
+  // the selected Mail account; the login is not a sender identity.
+  if (!addresses.has(cfg.from.trim().toLowerCase())) {
+    throw new Error("The source Mail account does not match the configured SMTP identity.");
+  }
+}
+
 /**
  * Forward body for the AppleScript path: only rebuilds content when a body
  * was passed to prepend — matching the pre-fix behavior of leaving Mail's own
@@ -158,6 +206,18 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
   const { id, send, transport, attachments } = args;
   const verb = args.kind === "reply" ? "reply to" : "forward";
   const nativeEditor = args.composition === "native-editor";
+  const hasScope = args.account !== undefined || args.mailbox !== undefined;
+  if (hasScope && (!args.account?.trim() || !args.mailbox?.trim())) {
+    return errorResponse(
+      "Source account and mailbox must be supplied together and cannot be empty."
+    );
+  }
+  if (hasScope && id.startsWith("imap:")) {
+    return errorResponse(
+      "IMAP ids already encode their account and mailbox; omit account and mailbox."
+    );
+  }
+  const scope = hasScope ? { account: args.account!, mailbox: args.mailbox! } : undefined;
   if (nativeEditor && transport === "smtp") {
     return errorResponse(
       "Native-editor composition uses Mail.app and cannot be combined with SMTP."
@@ -184,10 +244,38 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
     send &&
     transport !== "applescript" &&
     (transport === "smtp" || deps.smtpConfigured());
+  // Validate explicit numeric-id scope before any compose, including a forward
+  // with no prepended body. Reuse the same original for every transport.
+  let scopedOriginal: Awaited<ReturnType<typeof readOriginal>> | undefined;
+  if (scope) {
+    try {
+      scopedOriginal = await readOriginal(deps, id, undefined, true, scope);
+    } catch (error) {
+      return errorResponse(
+        `Failed to ${verb} message "${id}": ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  let mutationScope: (SourceScope & { messageId: string }) | undefined;
+  if (scope && !smtp) {
+    // Numeric Mail ids can be reused. Pin the source's RFC Message-ID too so
+    // the compose script refuses if a different message takes that id between
+    // the scoped read and the native/AppleScript reply or forward.
+    const idMatch = scopedOriginal?.original.messageId?.match(/^<([^<>\s]+)>$|^([^<>\s]+)$/);
+    const messageId = idMatch?.[1] ?? idMatch?.[2];
+    if (!messageId) {
+      return errorResponse(
+        "The source has no usable Message-ID; cannot safely pin a scoped reply or forward."
+      );
+    }
+    mutationScope = { ...scope, messageId };
+  }
   if (smtp) {
     try {
       const cfg = deps.smtpConfig();
-      const { original, plainText } = await readOriginal(deps, id, cfg, args.kind === "reply");
+      if (scope) requireScopedSmtpIdentity(deps, scope, cfg);
+      const { original, plainText } =
+        scopedOriginal ?? (await readOriginal(deps, id, cfg, args.kind === "reply"));
       if (args.kind === "forward" && plainText === null)
         throw new Error(
           "The original message has no readable plain-text body. SMTP forwarding would omit its content; explicitly select transport=applescript to forward it with Mail.app."
@@ -260,35 +348,88 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
       return errorResponse(
         `Failed to ${verb} message "${id}": ${resolved.error ?? "message not found"}`
       );
+    if (scope && resolved.numericId !== id) {
+      return errorResponse(
+        `Failed to ${verb} message "${id}": the numeric message id changed during resolution.`
+      );
+    }
     // Mail retains the original HTML and reply headers in native-editor mode.
     // Read the source first, but never replace its body with reconstructed text.
-    if (nativeEditor) await readOriginal(deps, id, undefined, true);
-    const outcome = nativeEditor
-      ? args.kind === "reply"
+    if (nativeEditor && !scopedOriginal) await readOriginal(deps, id, undefined, true);
+    let outcome: { success: boolean; error?: string };
+    if (nativeEditor && args.kind === "reply") {
+      outcome = mutationScope
         ? deps.mail.replyToMessage(
             resolved.numericId,
             args.body,
             args.replyAll,
             send,
             attachments,
-            true
+            true,
+            mutationScope
           )
-        : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send, attachments, true)
-      : args.kind === "reply"
-        ? deps.mail.replyToMessage(
+        : deps.mail.replyToMessage(
             resolved.numericId,
-            await replyComposeBody(deps, id, args.body),
+            args.body,
             args.replyAll,
             send,
-            attachmentCount ? attachments : undefined
-          )
-        : deps.mail.forwardMessage(
+            attachments,
+            true
+          );
+    } else if (nativeEditor && args.kind === "forward") {
+      outcome = mutationScope
+        ? deps.mail.forwardMessage(
             resolved.numericId,
             args.to,
-            await forwardComposeBody(deps, id, args.body, attachmentCount > 0),
+            args.body,
             send,
-            attachmentCount ? attachments : undefined
-          );
+            attachments,
+            true,
+            mutationScope
+          )
+        : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send, attachments, true);
+    } else if (args.kind === "reply") {
+      const body = scopedOriginal
+        ? buildReplyBody(
+            args.body,
+            scopedOriginal.original,
+            requireReplyText(scopedOriginal.plainText)
+          )
+        : await replyComposeBody(deps, id, args.body);
+      const files = attachmentCount ? attachments : undefined;
+      outcome = mutationScope
+        ? deps.mail.replyToMessage(
+            resolved.numericId,
+            body,
+            args.replyAll,
+            send,
+            files,
+            false,
+            mutationScope
+          )
+        : deps.mail.replyToMessage(resolved.numericId, body, args.replyAll, send, files);
+    } else {
+      const body =
+        scopedOriginal && (args.body || attachmentCount)
+          ? buildForwardBody(
+              scopedOriginal.original,
+              requireForwardText(scopedOriginal.plainText),
+              args.body
+            )
+          : await forwardComposeBody(deps, id, args.body, attachmentCount > 0);
+      const files = attachmentCount ? attachments : undefined;
+      outcome = mutationScope
+        ? deps.mail.forwardMessage(
+            resolved.numericId,
+            args.to,
+            body,
+            send,
+            files,
+            false,
+            mutationScope
+          )
+        : deps.mail.forwardMessage(resolved.numericId, args.to, body, send, files);
+    }
     if (!outcome.success)
       return errorResponse(
         `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`

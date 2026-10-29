@@ -1900,6 +1900,18 @@ registerTool(
       "Use when: replying to an existing message by id, preserving its threading headers and quoting the original, optionally with attachments (same rules as send-email). Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft, with the attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
+      account: z
+        .string()
+        .optional()
+        .describe(
+          "For a numeric id, the account it was listed from; pair with mailbox. Omit for an imap: id."
+        ),
+      mailbox: z
+        .string()
+        .optional()
+        .describe(
+          "For a numeric id, the exact source mailbox path; pair with account. A miss never searches elsewhere."
+        ),
       transport: COMPOSE_TRANSPORT_SCHEMA,
       composition: COMPOSITION_SCHEMA,
       body: z
@@ -1938,6 +1950,18 @@ registerTool(
       "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend and optional extra attachments (same rules as send-email). Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft, with the attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
+      account: z
+        .string()
+        .optional()
+        .describe(
+          "For a numeric id, the account it was listed from; pair with mailbox. Omit for an imap: id."
+        ),
+      mailbox: z
+        .string()
+        .optional()
+        .describe(
+          "For a numeric id, the exact source mailbox path; pair with account. A miss never searches elsewhere."
+        ),
       transport: COMPOSE_TRANSPORT_SCHEMA,
       composition: COMPOSITION_SCHEMA,
       to: z.array(z.string()).min(1, "At least one recipient is required"),

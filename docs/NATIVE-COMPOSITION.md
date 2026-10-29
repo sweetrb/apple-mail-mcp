@@ -21,8 +21,12 @@ For example, create a self-addressed draft with an explicitly selected sender:
 
 For a reply, pass the original message's `id`, the new `body`,
 `composition: "native-editor"`, and `send: false` to `reply-to-message`.
-Do not include a manually reconstructed quote. Review the draft before a
-separately authorized send.
+For a numeric ID, also pass the `account` and full `mailbox` path from the
+search or listing together. The source read and Mail's reply target are then
+confined to that mailbox; a missing or ambiguous source, or a changed original
+`Message-ID`, stops the operation. An `imap:` ID already contains its source,
+so omit those two fields for it. Do not include a manually reconstructed quote.
+Review the draft before a separately authorized send.
 
 ## Requirements and failure behavior
 
@@ -53,7 +57,9 @@ composition selects Mail.app even when SMTP is configured. Combining it with
 composition path and mail merge are unchanged.
 
 The server identifies one composer by its outgoing-message ID, temporary unique
-subject, and sender. It inserts escaped, inherited-size HTML only after verifying
+subject, and sender. It briefly rechecks the marked window, subject, and editor
+when Mail publishes them at different times; it never selects an unmarked or
+ambiguous composer. It inserts escaped, inherited-size HTML only after verifying
 body focus. The sender, subject, and recipients are checked again before saving
 or sending. The temporary subject is then restored. Clipboard contents are
 restored unless another application has changed them in the meantime.

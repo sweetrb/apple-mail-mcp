@@ -54,6 +54,28 @@ vi.mock("@/utils/applescript.js", () => ({
   escapeForAppleScript: (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"'),
   executeAppleScript: (script: string) => {
     h.calls.push(script);
+    if (script.includes("set _localMatches to {}") && script.includes("return source of msg")) {
+      const path = /if _mbPath is "([^"]+)" then/.exec(script)?.[1];
+      const matching = h.local.filter(
+        (mailbox) => mailbox.name.toLowerCase() === path?.toLowerCase()
+      );
+      if (matching.length > 1)
+        return { success: true, output: "\x1dERR\x1d\x1dSCOPED\x1dambiguous" };
+      if (matching.length === 0)
+        return { success: true, output: "\x1dERR\x1d\x1dSCOPED\x1dnomailbox" };
+      return { success: true, output: "Message-ID: <local@example.com>\r\n\r\nLocal message" };
+    }
+    if (
+      script.includes("set _mbM to {}") &&
+      script.includes("reply msg without opening window") &&
+      script.includes("_isLoc")
+    ) {
+      const path = /if _mPath is "([^"]+)" then/.exec(script)?.[1];
+      const matching = h.local.filter(
+        (mailbox) => mailbox.name.toLowerCase() === path?.toLowerCase()
+      );
+      return { success: true, output: matching.length === 1 ? "ok" : "error:Message not found" };
+    }
     // App-level read carrying the ownership filter → the local store.
     if (script.includes("_isLoc")) {
       let visible = h.local.slice();
@@ -88,6 +110,10 @@ let mgr: AppleMailManager;
 beforeEach(() => {
   h.calls.length = 0;
   h.appLevelIncludesAccountMailboxes = false;
+  h.local = [
+    { name: "Import", unread: 0, total: 47 },
+    { name: "Deleted Messages", unread: 0, total: 0 },
+  ];
   mgr = new AppleMailManager();
 });
 
@@ -187,6 +213,43 @@ describe("#183 the local store is addressable, not just listable", () => {
     if (scoped) {
       expect(scoped).not.toMatch(/first account whose name is "On My Mac"/);
     }
+  });
+
+  it("reads and composes against one explicitly scoped local mailbox", () => {
+    const source = {
+      account: LOCAL_STORE_LABEL,
+      mailbox: "Import",
+      messageId: "local@example.com",
+    };
+    expect(mgr.getRawSource("42", source)).toContain("local@example.com");
+    expect(mgr.replyToMessage("42", "Body", false, false, undefined, false, source).success).toBe(
+      true
+    );
+    const script = lastScript();
+    expect(script).toContain("account of _m) is missing value");
+    expect(script).toContain("repeat with _m in _mbs");
+    expect(script).toContain("if (count of _mbM) is 1 then set _tmb to item 1 of _mbM");
+    expect(script).not.toContain("repeat with _a in accounts");
+  });
+
+  it("refuses duplicate local mailbox paths before reading or composing", () => {
+    h.local.push({ name: "Import", unread: 0, total: 1 });
+    const source = {
+      account: LOCAL_STORE_LABEL,
+      mailbox: "Import",
+      messageId: "local@example.com",
+    };
+    expect(mgr.getRawSource("42", source)).toBeNull();
+    expect(mgr.consumeLastMessageLookupError()).toContain("ambiguous");
+    const readScript = h.calls.find((call) => call.includes("set _localMatches to {}")) ?? "";
+    expect(readScript).toContain("if (count of _localMatches) > 1 then return");
+    expect(readScript.indexOf("if (count of _localMatches) > 1")).toBeLessThan(
+      readScript.indexOf("return source of msg")
+    );
+    expect(mgr.replyToMessage("42", "Body", false, false, undefined, false, source).success).toBe(
+      false
+    );
+    expect(lastScript()).toContain("if (count of _mbM) is 1 then set _tmb to item 1 of _mbM");
   });
 
   // Don't-regress: a real account still takes the account-scoped form.

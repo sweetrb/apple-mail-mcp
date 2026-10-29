@@ -99380,7 +99380,7 @@ ObjC.import('AppKit');
 ObjC.import('ApplicationServices');
 ObjC.import('CoreServices');
 ObjC.bindFunction('AEDeterminePermissionToAutomateTarget', ['int', ['void *', 'unsigned int', 'unsigned int', 'bool']]);
-var currentStage = 'startup', focusFailure = null;
+var currentStage = 'startup', focusFailure = null, targetFailure = null;
 function stage(value) { currentStage = value; console.log('NATIVE_STAGE:' + value); }
 function emit(record) {
   var data = $(JSON.stringify(record) + '\n').dataUsingEncoding($.NSUTF8StringEncoding);
@@ -99426,6 +99426,44 @@ function descendants(root) {
     try { pending = pending.concat(element.uiElements()); } catch (_) {}
   }
   return result;
+}
+function findMarkedComposer(process, input, checkMessage) {
+  // Mail can publish the marked outgoing message before its accessibility
+  // window, subject, and editor have all caught up. Retry only observations;
+  // never create, click, paste, or select an unmarked or ambiguous composer.
+  for (var attempt = 0; attempt < 20; attempt++) {
+    checkMessage();
+    stage('target-window');
+    var windows = process.windows().filter(function (window) {
+      // Never walk the main mailbox tree: it may contain thousands of rows.
+      return window.name() === input.markerSubject;
+    });
+    if (windows.length !== 1) {
+      targetFailure = windows.length === 0 ? 'window-missing' : 'window-ambiguous';
+    } else {
+      var window = windows[0], elements = descendants(window);
+      var subjects = elements.filter(function (element) {
+        return attr(element, 'AXIdentifier') === 'Mail.subjectField' &&
+          attr(element, 'AXValue') === input.markerSubject;
+      });
+      if (subjects.length !== 1) {
+        targetFailure = subjects.length === 0 ? 'subject-missing' : 'subject-ambiguous';
+      } else {
+        stage('target-body');
+        var bodies = elements.filter(function (element) {
+          return attr(element, 'AXRole') === 'AXWebArea' &&
+            attr(element, 'AXDescription') === 'message body';
+        });
+        if (bodies.length === 1) {
+          targetFailure = null;
+          return {window: window, subject: subjects[0], body: bodies[0]};
+        }
+        targetFailure = bodies.length === 0 ? 'body-missing' : 'body-ambiguous';
+      }
+    }
+    if (attempt < 19) delay(0.1);
+  }
+  fail('target');
 }
 function normalized(value) { return String(value).normalize('NFC').replace(/\s+/g, ' ').trim(); }
 function verifiedInsertion(before, after, authored) {
@@ -99498,27 +99536,8 @@ function main(input) {
   }
   stage('identity');
   checkMessage();
-  stage('target-window');
-  var windows = process.windows().filter(function (window) {
-    // Never walk the main mailbox tree: it may contain thousands of rows.
-    return window.name() === input.markerSubject;
-  });
-  if (windows.length !== 1) fail('target');
-  var window = windows[0];
-  var elements = descendants(window);
-  var subjects = elements.filter(function (element) {
-    return attr(element, 'AXIdentifier') === 'Mail.subjectField' &&
-      attr(element, 'AXValue') === input.markerSubject;
-  });
-  if (subjects.length !== 1) fail('target');
-  var subject = subjects[0];
-  stage('target-body');
-  var bodies = elements.filter(function (element) {
-    return attr(element, 'AXRole') === 'AXWebArea' &&
-      attr(element, 'AXDescription') === 'message body';
-  });
-  if (bodies.length !== 1) fail('target');
-  var body = bodies[0];
+  var target = findMarkedComposer(process, input, checkMessage);
+  var window = target.window, subject = target.subject, body = target.body;
   stage('focus');
   process.frontmost = true;
   window.attributes.byName('AXMain').value = true;
@@ -99616,7 +99635,8 @@ try {
 } catch (error) {
   var allowed = ['accessibility', 'automation', 'automation-unavailable', 'identity', 'target', 'focus', 'clipboard', 'restore', 'readback', 'paste-unavailable'];
   JSON.stringify({success: false, code: allowed.indexOf(error.message) >= 0 ? error.message : 'bridge',
-    stage: currentStage, focus: focusFailure || undefined, runtime: typeof error.errorNumber === 'number' ? error.errorNumber : undefined});
+    stage: currentStage, focus: focusFailure || undefined, target: targetFailure || undefined,
+    runtime: typeof error.errorNumber === 'number' ? error.errorNumber : undefined});
 }
 `;
 var ERRORS = {
@@ -99661,13 +99681,13 @@ function runNativeEditor(payload) {
     const response = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "");
     return response.success === true ? { success: true } : {
       success: false,
-      error: (ERRORS[response.code] ?? ERRORS.bridge) + diagnostic(response.stage, response.runtime, response.focus)
+      error: (ERRORS[response.code] ?? ERRORS.bridge) + diagnostic(response.stage, response.runtime, response.focus, response.target)
     };
   } catch {
     return { success: false, error: ERRORS.bridge };
   }
 }
-function diagnostic(stage, runtime, focus) {
+function diagnostic(stage, runtime, focus, target) {
   const stages = [
     "startup",
     "preflight",
@@ -99697,7 +99717,15 @@ function diagnostic(stage, runtime, focus) {
     "window-title",
     "subject"
   ].includes(focus) ? `; focus=${focus}` : "";
-  return ` [stage=${stage}${detail}${focusDetail}]`;
+  const targetDetail = typeof target === "string" && [
+    "window-missing",
+    "window-ambiguous",
+    "subject-missing",
+    "subject-ambiguous",
+    "body-missing",
+    "body-ambiguous"
+  ].includes(target) ? `; target=${target}` : "";
+  return ` [stage=${stage}${detail}${focusDetail}${targetDetail}]`;
 }
 function nativeEditorPreflight() {
   return runNativeEditor({ operation: "preflight" });
@@ -101063,6 +101091,19 @@ var AppleMailManager = class {
    */
   resolveMailboxFragment(account, mailbox) {
     const resolved = this.resolveMailbox(mailbox, account);
+    if (isLocalStoreLabel(account)) {
+      return `${localMailboxBindingFragment()}
+        set _tmb to missing value
+        set _mbM to {}
+        repeat with _m in _mbs
+          set _mPath to ""
+          ${mailboxPathFragment("_m", "_mPath")}
+          ignoring case
+            if _mPath is "${escapeForAppleScript(resolved)}" then set end of _mbM to _m
+          end ignoring
+        end repeat
+        if (count of _mbM) is 1 then set _tmb to item 1 of _mbM`;
+    }
     return `
         set _tmb to missing value
         set _acctM to {}
@@ -102379,11 +102420,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (result.output.trim() && !result.output.startsWith(scopedPrefix)) {
       return { kind: "hit", output: result.output };
     }
+    const reason = result.output.startsWith(scopedPrefix) ? result.output.slice(scopedPrefix.length) : "nomessage";
+    if (reason === "ambiguous" || reason === "ambiguousaccount") {
+      this.lastMessageLookupError = reason === "ambiguousaccount" ? `Account "${loc.account}" is ambiguous \u2014 message ${Number(id)} was not looked up.` : `Mailbox "${loc.mailbox}" in "${loc.account}" is ambiguous \u2014 message ${Number(id)} was not looked up.`;
+      return { kind: "done" };
+    }
     if (!loc.explicit) {
       this.forgetLocation(id);
       return { kind: "fallback" };
     }
-    const reason = result.output.startsWith(scopedPrefix) ? result.output.slice(scopedPrefix.length) : "nomessage";
     if (reason === "nomailbox") {
       this.lastMessageLookupError = `Mailbox "${loc.mailbox}" not found in account "${loc.account}" \u2014 message ${Number(id)} was not looked up. Check the names with list-mailboxes, or omit account/mailbox to scan every mailbox.`;
     } else if (reason.startsWith("error:")) {
@@ -102640,32 +102685,42 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   scopedByIdScript(account, mailbox, id, innerAction) {
     const resolved = this.resolveMailbox(mailbox, account);
+    const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
     const bind = isLocalStoreLabel(account) ? `${localMailboxBindingFragment()}
         set _hitAcct to "${LOCAL_STORE_LABEL}"
         set targetMb to missing value
+        set _localMatches to {}
         ignoring case
           repeat with mb in _mbs
             set _mbPath to ""
             ${mailboxPathFragment("mb", "_mbPath")}
             if _mbPath is "${escapeForAppleScript(resolved)}" then
-              set targetMb to mb
-              exit repeat
+              set end of _localMatches to mb
             end if
           end repeat
-        end ignoring` : `set acct to (first account whose name is "${escapeForAppleScript(account)}")
+        end ignoring
+        if (count of _localMatches) > 1 then return "${miss}ambiguous"
+        if (count of _localMatches) is 1 then set targetMb to item 1 of _localMatches` : `set _scopeAccounts to {}
+        repeat with _scopeAccount in accounts
+          if (name of _scopeAccount) is "${escapeForAppleScript(account)}" then set end of _scopeAccounts to _scopeAccount
+        end repeat
+        if (count of _scopeAccounts) > 1 then return "${miss}ambiguousaccount"
+        if (count of _scopeAccounts) is 0 then return "${miss}nomailbox"
+        set acct to item 1 of _scopeAccounts
         set _hitAcct to (name of acct)
         set targetMb to missing value
+        set _scopeMatches to {}
         ignoring case
           repeat with mb in mailboxes of acct
             set _mbPath to ""
             ${mailboxPathFragment("mb", "_mbPath")}
             if _mbPath is "${escapeForAppleScript(resolved)}" then
-              set targetMb to mb
-              exit repeat
+              set end of _scopeMatches to mb
             end if
           end repeat
-        end ignoring`;
-    const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
+        end ignoring
+        if (count of _scopeMatches) > 1 then return "${miss}ambiguous"
+        if (count of _scopeMatches) is 1 then set targetMb to item 1 of _scopeMatches`;
     return buildAppLevelScriptIfRunning(`
       try
         ${bind}
@@ -102694,9 +102749,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    *   the read opens that one mailbox and, on a miss, reports "not found in
    *   <account> / <mailbox>" without scanning anywhere else (#270).
    */
-  getMessageContent(id, includeHtml = false, hint) {
+  getMessageContent(id, includeHtml = false, hint, options) {
     this.lastMessageLookupError = void 0;
-    if (isEnvelopeIndexEnabled() && /^\d+$/.test(id)) {
+    if (options?.requireScopedLocation && !(hint?.account && hint.mailbox)) {
+      this.lastMessageLookupError = "A source account and mailbox are required for this read.";
+      return null;
+    }
+    if (isEnvelopeIndexEnabled() && /^\d+$/.test(id) && !options?.requireScopedLocation) {
       const stored = readMessageFromStore(Number(id), { includeHtml });
       if ("reason" in stored) {
         console.error(`[envelopeIndex] get ${id}: falling back to AppleScript \u2014 ${stored.reason}`);
@@ -103150,7 +103209,7 @@ make new ${kind} recipient at end of ${kind} recipients of _nativeMessage with p
         set subject of _nativeMessage to "${safeMarker}"
         ${nativeRecipientFingerprint("_nativeMessage")}
         return "native-compose:" & (id of _nativeMessage as text) & linefeed & _nativeSender & linefeed & _nativeRecipients & linefeed & _nativeSubject & "${endMarker}"`;
-      const creationScript = options.kind ? this.findMessageScript(options.id, creation) : buildAppLevelScript(
+      const creationScript = options.kind ? this.findMessageScript(options.id, creation, false, options.source) : buildAppLevelScript(
         `try
 ${creation}
 on error errMsg
@@ -103397,12 +103456,13 @@ end try`
    *   base64 items (materialized to 0600 temp files, removed afterwards)
    * @returns true if reply created/sent successfully
    */
-  replyToMessage(id, body, replyAll = false, send = true, attachments, nativeEditor = false) {
+  replyToMessage(id, body, replyAll = false, send = true, attachments, nativeEditor = false, source) {
     if (nativeEditor) {
       return this.composeNative(send ? "send" : "draft", body, attachments, {
         id,
         replyAll,
-        kind: "reply"
+        kind: "reply",
+        source
       });
     }
     const safeBody = escapeForAppleScriptBody(body);
@@ -103417,7 +103477,9 @@ end try`
           ${senderFragment("theReply", "reply")}
           set content of theReply to "${safeBody}"
           ${composeAttachmentBlock("theReply", mat.paths)}
-          ${finalAction}`
+          ${finalAction}`,
+        false,
+        source
       );
       return this.runComposeScript(script, "reply to");
     } finally {
@@ -103434,12 +103496,13 @@ end try`
    * @param attachments - Additional files to attach (#267), as for replyToMessage
    * @returns true if forward created/sent successfully
    */
-  forwardMessage(id, to, body, send = true, attachments, nativeEditor = false) {
+  forwardMessage(id, to, body, send = true, attachments, nativeEditor = false, source) {
     if (nativeEditor) {
       return this.composeNative(send ? "send" : "draft", body ?? "", attachments, {
         id,
         to,
-        kind: "forward"
+        kind: "forward",
+        source
       });
     }
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
@@ -103459,7 +103522,9 @@ end try`
           ${recipientCommands}
           ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
           ${composeAttachmentBlock("theForward", mat.paths)}
-          ${finalAction}`
+          ${finalAction}`,
+        false,
+        source
       );
       return this.runComposeScript(script, "forward");
     } finally {
@@ -103508,9 +103573,9 @@ end try`
     }
     return { success: true };
   }
-  findMessageScript(id, operation, instrument = false) {
+  findMessageScript(id, operation, instrument = false, source) {
     this.beginMutation();
-    const loc = this.locationFor(id);
+    const loc = source ?? this.locationFor(id);
     if (loc) {
       const acctLit = `"${escapeForAppleScript(stripStreamDelimiters(loc.account))}"`;
       const mbLit = `"${escapeForAppleScript(stripStreamDelimiters(loc.mailbox))}"`;
@@ -103520,7 +103585,12 @@ end try`
         if _tmb is missing value then return "error:Message not found"
         set matchingMsgs to (messages of _tmb whose id is ${Number(id)})
         if (count of matchingMsgs) > 0 then
-          set msg to item 1 of matchingMsgs${instrument ? `
+          set msg to item 1 of matchingMsgs${source?.messageId ? `
+          set _expectedMessageId to "${escapeForAppleScript(source.messageId)}"
+          set _actualMessageId to message id of msg as text
+          considering case
+            if _actualMessageId is not _expectedMessageId and _actualMessageId is not ("<" & _expectedMessageId & ">") then return "error:The source message changed after it was read; no reply or forward was created."
+          end considering` : ""}${instrument ? `
           set _out to ""
           set _pre to ""${this.countFragment("_cb")}${this.snapshotFragment("before", acctLit, mbLit, "_cb")}${this.preImageFragment("msg")}
           ${operation}${this.countFragment("_ca")}${this.snapshotFragment("after", acctLit, mbLit, "_ca")}${this.reconEmit(acctLit, mbLit, "_cb", "_ca")}
@@ -105967,7 +106037,7 @@ function withErrorHandling(handler, errorPrefix) {
 }
 
 // src/tools/compose.ts
-async function readOriginal(deps, id, cfg, recoverReplyText = false) {
+async function readOriginal(deps, id, cfg, recoverReplyText = false, scope) {
   if (decodeImapId(id)) {
     const source = await deps.imapSource(id);
     const identities = cfg && [cfg.user, cfg.from, ...cfg.allowedFrom ?? []].map((s) => s.trim().toLowerCase());
@@ -105976,20 +106046,30 @@ async function readOriginal(deps, id, cfg, recoverReplyText = false) {
         "The source IMAP account does not match the configured SMTP identity. Configure SMTP for that account or explicitly select transport=applescript."
       );
     }
-    const original = parseOriginalHeaders(source.raw);
-    if (source.subject !== void 0) original.subject = source.subject;
-    return { original, plainText: extractTextBody(source.raw) };
+    const original2 = parseOriginalHeaders(source.raw);
+    if (source.subject !== void 0) original2.subject = source.subject;
+    return { original: original2, plainText: extractTextBody(source.raw) };
   }
-  const raw = deps.mail.getRawSource(id);
+  const raw = scope ? deps.mail.getRawSource(id, scope) : deps.mail.getRawSource(id);
   if (!raw) {
     const why = deps.mail.consumeLastMessageLookupError?.();
     throw new Error(
       `Cannot read the original message source${why ? ` (${why})` : ""}. Re-list the intended mailbox and retry with its message id.`
     );
   }
-  const content = deps.mail.getMessageContent(id);
+  const content = scope ? deps.mail.getMessageContent(id, false, scope, { requireScopedLocation: true }) : deps.mail.getMessageContent(id);
+  const original = parseOriginalHeaders(raw);
+  if (scope) {
+    const sourceId = original.messageId?.trim().replace(/^<|>$/g, "");
+    const contentId = content?.rfcMessageId?.trim().replace(/^<|>$/g, "");
+    const sameMessage = !!sourceId && sourceId === contentId;
+    return {
+      original,
+      plainText: (sameMessage ? content?.plainText : null) ?? extractTextBody(raw)
+    };
+  }
   return {
-    original: parseOriginalHeaders(raw),
+    original,
     plainText: content?.plainText ?? (recoverReplyText ? extractTextBody(raw) : null)
   };
 }
@@ -105997,6 +106077,13 @@ function requireReplyText(plainText) {
   if (plainText === null)
     throw new Error(
       "The original message has no readable plain-text body. Reply composition was stopped to avoid omitting its quoted content. Open the original in Mail.app and reply there."
+    );
+  return plainText;
+}
+function requireForwardText(plainText) {
+  if (plainText === null)
+    throw new Error(
+      "The original message has no readable plain-text body. Forward composition was stopped to avoid omitting its content."
     );
   return plainText;
 }
@@ -106020,6 +106107,22 @@ async function replyComposeBody(deps, id, body) {
   const source = await readOriginal(deps, id, void 0, true);
   return buildReplyBody(body, source.original, requireReplyText(source.plainText));
 }
+function requireScopedSmtpIdentity(deps, scope, cfg) {
+  const checked = deps.mail.listAccountsChecked?.();
+  if (!checked || checked.failed) {
+    throw new Error("Cannot verify the source Mail account against the SMTP identity.");
+  }
+  const accounts = checked.accounts.filter(
+    (account) => account.name === scope.account && account.enabled
+  );
+  if (accounts.length !== 1) {
+    throw new Error("The source Mail account is unavailable or ambiguous; no SMTP reply was sent.");
+  }
+  const addresses = new Set(accounts[0].addresses.map((address) => address.trim().toLowerCase()));
+  if (!addresses.has(cfg.from.trim().toLowerCase())) {
+    throw new Error("The source Mail account does not match the configured SMTP identity.");
+  }
+}
 async function forwardComposeBody(deps, id, body, hasAttachments = false) {
   if (!body && !hasAttachments) return body;
   const source = await readOriginalForForward(deps, id);
@@ -106029,6 +106132,18 @@ async function runCompose(deps, args) {
   const { id, send, transport: transport2, attachments } = args;
   const verb = args.kind === "reply" ? "reply to" : "forward";
   const nativeEditor = args.composition === "native-editor";
+  const hasScope = args.account !== void 0 || args.mailbox !== void 0;
+  if (hasScope && (!args.account?.trim() || !args.mailbox?.trim())) {
+    return errorResponse(
+      "Source account and mailbox must be supplied together and cannot be empty."
+    );
+  }
+  if (hasScope && id.startsWith("imap:")) {
+    return errorResponse(
+      "IMAP ids already encode their account and mailbox; omit account and mailbox."
+    );
+  }
+  const scope = hasScope ? { account: args.account, mailbox: args.mailbox } : void 0;
   if (nativeEditor && transport2 === "smtp") {
     return errorResponse(
       "Native-editor composition uses Mail.app and cannot be combined with SMTP."
@@ -106049,10 +106164,32 @@ async function runCompose(deps, args) {
   const attachmentCount = attachments?.length ?? 0;
   const withFiles = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
   const smtp = !nativeEditor && send && transport2 !== "applescript" && (transport2 === "smtp" || deps.smtpConfigured());
+  let scopedOriginal;
+  if (scope) {
+    try {
+      scopedOriginal = await readOriginal(deps, id, void 0, true, scope);
+    } catch (error63) {
+      return errorResponse(
+        `Failed to ${verb} message "${id}": ${error63 instanceof Error ? error63.message : String(error63)}`
+      );
+    }
+  }
+  let mutationScope;
+  if (scope && !smtp) {
+    const idMatch = scopedOriginal?.original.messageId?.match(/^<([^<>\s]+)>$|^([^<>\s]+)$/);
+    const messageId = idMatch?.[1] ?? idMatch?.[2];
+    if (!messageId) {
+      return errorResponse(
+        "The source has no usable Message-ID; cannot safely pin a scoped reply or forward."
+      );
+    }
+    mutationScope = { ...scope, messageId };
+  }
   if (smtp) {
     try {
       const cfg = deps.smtpConfig();
-      const { original, plainText } = await readOriginal(deps, id, cfg, args.kind === "reply");
+      if (scope) requireScopedSmtpIdentity(deps, scope, cfg);
+      const { original, plainText } = scopedOriginal ?? await readOriginal(deps, id, cfg, args.kind === "reply");
       if (args.kind === "forward" && plainText === null)
         throw new Error(
           "The original message has no readable plain-text body. SMTP forwarding would omit its content; explicitly select transport=applescript to forward it with Mail.app."
@@ -106115,27 +106252,73 @@ async function runCompose(deps, args) {
       return errorResponse(
         `Failed to ${verb} message "${id}": ${resolved.error ?? "message not found"}`
       );
-    if (nativeEditor) await readOriginal(deps, id, void 0, true);
-    const outcome = nativeEditor ? args.kind === "reply" ? deps.mail.replyToMessage(
-      resolved.numericId,
-      args.body,
-      args.replyAll,
-      send,
-      attachments,
-      true
-    ) : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send, attachments, true) : args.kind === "reply" ? deps.mail.replyToMessage(
-      resolved.numericId,
-      await replyComposeBody(deps, id, args.body),
-      args.replyAll,
-      send,
-      attachmentCount ? attachments : void 0
-    ) : deps.mail.forwardMessage(
-      resolved.numericId,
-      args.to,
-      await forwardComposeBody(deps, id, args.body, attachmentCount > 0),
-      send,
-      attachmentCount ? attachments : void 0
-    );
+    if (scope && resolved.numericId !== id) {
+      return errorResponse(
+        `Failed to ${verb} message "${id}": the numeric message id changed during resolution.`
+      );
+    }
+    if (nativeEditor && !scopedOriginal) await readOriginal(deps, id, void 0, true);
+    let outcome;
+    if (nativeEditor && args.kind === "reply") {
+      outcome = mutationScope ? deps.mail.replyToMessage(
+        resolved.numericId,
+        args.body,
+        args.replyAll,
+        send,
+        attachments,
+        true,
+        mutationScope
+      ) : deps.mail.replyToMessage(
+        resolved.numericId,
+        args.body,
+        args.replyAll,
+        send,
+        attachments,
+        true
+      );
+    } else if (nativeEditor && args.kind === "forward") {
+      outcome = mutationScope ? deps.mail.forwardMessage(
+        resolved.numericId,
+        args.to,
+        args.body,
+        send,
+        attachments,
+        true,
+        mutationScope
+      ) : deps.mail.forwardMessage(resolved.numericId, args.to, args.body, send, attachments, true);
+    } else if (args.kind === "reply") {
+      const body = scopedOriginal ? buildReplyBody(
+        args.body,
+        scopedOriginal.original,
+        requireReplyText(scopedOriginal.plainText)
+      ) : await replyComposeBody(deps, id, args.body);
+      const files = attachmentCount ? attachments : void 0;
+      outcome = mutationScope ? deps.mail.replyToMessage(
+        resolved.numericId,
+        body,
+        args.replyAll,
+        send,
+        files,
+        false,
+        mutationScope
+      ) : deps.mail.replyToMessage(resolved.numericId, body, args.replyAll, send, files);
+    } else {
+      const body = scopedOriginal && (args.body || attachmentCount) ? buildForwardBody(
+        scopedOriginal.original,
+        requireForwardText(scopedOriginal.plainText),
+        args.body
+      ) : await forwardComposeBody(deps, id, args.body, attachmentCount > 0);
+      const files = attachmentCount ? attachments : void 0;
+      outcome = mutationScope ? deps.mail.forwardMessage(
+        resolved.numericId,
+        args.to,
+        body,
+        send,
+        files,
+        false,
+        mutationScope
+      ) : deps.mail.forwardMessage(resolved.numericId, args.to, body, send, files);
+    }
     if (!outcome.success)
       return errorResponse(
         `Failed to ${verb} message "${id}": ${outcome.error ?? "Mail.app compose failed"}`
@@ -108250,6 +108433,12 @@ registerTool(
     description: "Use when: replying to an existing message by id, preserving its threading headers and quoting the original, optionally with attachments (same rules as send-email). Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft, with the attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
+      account: external_exports.string().optional().describe(
+        "For a numeric id, the account it was listed from; pair with mailbox. Omit for an imap: id."
+      ),
+      mailbox: external_exports.string().optional().describe(
+        "For a numeric id, the exact source mailbox path; pair with account. A miss never searches elsewhere."
+      ),
       transport: COMPOSE_TRANSPORT_SCHEMA,
       composition: COMPOSITION_SCHEMA,
       body: external_exports.string().min(1, "Reply body is required").describe("Reply body (plain text; HTML tags such as <br> are not rendered)"),
@@ -108277,6 +108466,12 @@ registerTool(
     description: "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend and optional extra attachments (same rules as send-email). Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft, with the attachment count; over SMTP, also whether a Sent-folder copy was filed (sentCopy).\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent \u2014 require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
+      account: external_exports.string().optional().describe(
+        "For a numeric id, the account it was listed from; pair with mailbox. Omit for an imap: id."
+      ),
+      mailbox: external_exports.string().optional().describe(
+        "For a numeric id, the exact source mailbox path; pair with account. A miss never searches elsewhere."
+      ),
       transport: COMPOSE_TRANSPORT_SCHEMA,
       composition: COMPOSITION_SCHEMA,
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),

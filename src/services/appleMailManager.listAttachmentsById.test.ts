@@ -60,7 +60,7 @@ describe("listAttachments mailbox binding", () => {
       { id: "538208-a.pdf", name: "a.pdf", mimeType: "application/pdf", size: 10 },
     ]);
     expect(h.scripts).toHaveLength(1);
-    expect(h.scripts[0]).toContain('first account whose name is "Nopuedomas"');
+    expect(h.scripts[0]).toContain('if (name of _scopeAccount) is "Nopuedomas"');
     expect(h.scripts[0]).not.toContain("repeat with acct in accounts");
   });
 

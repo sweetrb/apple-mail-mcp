@@ -1935,6 +1935,22 @@ export class AppleMailManager {
    */
   private resolveMailboxFragment(account: string, mailbox: string): string {
     const resolved = this.resolveMailbox(mailbox, account);
+    if (isLocalStoreLabel(account)) {
+      // Local mailboxes live at the application level, not under an account.
+      // Count canonical-path matches so duplicate local names cannot silently
+      // select the wrong source message.
+      return `${localMailboxBindingFragment()}
+        set _tmb to missing value
+        set _mbM to {}
+        repeat with _m in _mbs
+          set _mPath to ""
+          ${mailboxPathFragment("_m", "_mPath")}
+          ignoring case
+            if _mPath is "${escapeForAppleScript(resolved)}" then set end of _mbM to _m
+          end ignoring
+        end repeat
+        if (count of _mbM) is 1 then set _tmb to item 1 of _mbM`;
+    }
     return `
         set _tmb to missing value
         set _acctM to {}
@@ -3613,15 +3629,22 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return { kind: "hit", output: result.output };
     }
 
+    const reason = result.output.startsWith(scopedPrefix)
+      ? result.output.slice(scopedPrefix.length)
+      : "nomessage";
+    if (reason === "ambiguous" || reason === "ambiguousaccount") {
+      this.lastMessageLookupError =
+        reason === "ambiguousaccount"
+          ? `Account "${loc.account}" is ambiguous — message ${Number(id)} was not looked up.`
+          : `Mailbox "${loc.mailbox}" in "${loc.account}" is ambiguous — message ${Number(id)} was not looked up.`;
+      return { kind: "done" };
+    }
     if (!loc.explicit) {
       // Stale index entry: the message is no longer where it was last seen.
       this.forgetLocation(id);
       return { kind: "fallback" };
     }
 
-    const reason = result.output.startsWith(scopedPrefix)
-      ? result.output.slice(scopedPrefix.length)
-      : "nomessage";
     if (reason === "nomailbox") {
       this.lastMessageLookupError = `Mailbox "${loc.mailbox}" not found in account "${loc.account}" — message ${Number(id)} was not looked up. Check the names with list-mailboxes, or omit account/mailbox to scan every mailbox.`;
     } else if (reason.startsWith("error:")) {
@@ -3902,6 +3925,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     innerAction: string
   ): string {
     const resolved = this.resolveMailbox(mailbox, account);
+    const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
     // #183: a recorded location can now name the LOCAL store, which is not an
     // account — `first account whose name is "On My Mac"` would raise and drop
     // us to the slow full scan every time. Bind the mailbox at the application
@@ -3910,30 +3934,39 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       ? `${localMailboxBindingFragment()}
         set _hitAcct to "${LOCAL_STORE_LABEL}"
         set targetMb to missing value
+        set _localMatches to {}
         ignoring case
           repeat with mb in _mbs
             set _mbPath to ""
             ${mailboxPathFragment("mb", "_mbPath")}
             if _mbPath is "${escapeForAppleScript(resolved)}" then
-              set targetMb to mb
-              exit repeat
+              set end of _localMatches to mb
             end if
           end repeat
-        end ignoring`
-      : `set acct to (first account whose name is "${escapeForAppleScript(account)}")
+        end ignoring
+        if (count of _localMatches) > 1 then return "${miss}ambiguous"
+        if (count of _localMatches) is 1 then set targetMb to item 1 of _localMatches`
+      : `set _scopeAccounts to {}
+        repeat with _scopeAccount in accounts
+          if (name of _scopeAccount) is "${escapeForAppleScript(account)}" then set end of _scopeAccounts to _scopeAccount
+        end repeat
+        if (count of _scopeAccounts) > 1 then return "${miss}ambiguousaccount"
+        if (count of _scopeAccounts) is 0 then return "${miss}nomailbox"
+        set acct to item 1 of _scopeAccounts
         set _hitAcct to (name of acct)
         set targetMb to missing value
+        set _scopeMatches to {}
         ignoring case
           repeat with mb in mailboxes of acct
             set _mbPath to ""
             ${mailboxPathFragment("mb", "_mbPath")}
             if _mbPath is "${escapeForAppleScript(resolved)}" then
-              set targetMb to mb
-              exit repeat
+              set end of _scopeMatches to mb
             end if
           end repeat
-        end ignoring`;
-    const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
+        end ignoring
+        if (count of _scopeMatches) > 1 then return "${miss}ambiguous"
+        if (count of _scopeMatches) is 1 then set targetMb to item 1 of _scopeMatches`;
     return buildAppLevelScriptIfRunning(`
       try
         ${bind}
@@ -3966,12 +3999,20 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   getMessageContent(
     id: string,
     includeHtml = false,
-    hint?: { account?: string; mailbox?: string }
+    hint?: { account?: string; mailbox?: string },
+    options?: { requireScopedLocation?: boolean }
   ): MessageContent | null {
     this.lastMessageLookupError = undefined;
+    if (options?.requireScopedLocation && !(hint?.account && hint.mailbox)) {
+      this.lastMessageLookupError = "A source account and mailbox are required for this read.";
+      return null;
+    }
     // Opt-in disk read (Envelope Index → .emlx): no `whose id is` lookup, which
     // times out on very large mailboxes. Any miss falls through to AppleScript.
-    if (isEnvelopeIndexEnabled() && /^\d+$/.test(id)) {
+    // Compose explicitly requires a scoped read: the local envelope index
+    // resolves by numeric id alone and cannot prove that it belongs there.
+    // Other reads retain the existing opt-in index behavior.
+    if (isEnvelopeIndexEnabled() && /^\d+$/.test(id) && !options?.requireScopedLocation) {
       const stored = readMessageFromStore(Number(id), { includeHtml });
       if ("reason" in stored) {
         console.error(`[envelopeIndex] get ${id}: falling back to AppleScript — ${stored.reason}`);
@@ -4507,6 +4548,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       id?: string;
       kind?: "reply" | "forward";
       replyAll?: boolean;
+      source?: { account: string; mailbox: string; messageId?: string };
     }
   ): ComposeResult {
     if (!options.kind && !options.account) {
@@ -4564,7 +4606,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         ${nativeRecipientFingerprint("_nativeMessage")}
         return "native-compose:" & (id of _nativeMessage as text) & linefeed & _nativeSender & linefeed & _nativeRecipients & linefeed & _nativeSubject & "${endMarker}"`;
       const creationScript = options.kind
-        ? this.findMessageScript(options.id!, creation)
+        ? this.findMessageScript(options.id!, creation, false, options.source)
         : buildAppLevelScript(
             `try\n${creation}\non error errMsg\nreturn "error:" & errMsg\nend try`
           );
@@ -4880,13 +4922,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     replyAll = false,
     send = true,
     attachments?: AttachmentInput[],
-    nativeEditor = false
+    nativeEditor = false,
+    source?: { account: string; mailbox: string; messageId?: string }
   ): { success: boolean; error?: string } {
     if (nativeEditor) {
       return this.composeNative(send ? "send" : "draft", body, attachments, {
         id,
         replyAll,
         kind: "reply",
+        source,
       });
     }
     const safeBody = escapeForAppleScriptBody(body);
@@ -4906,7 +4950,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           ${senderFragment("theReply", "reply")}
           set content of theReply to "${safeBody}"
           ${composeAttachmentBlock("theReply", mat.paths)}
-          ${finalAction}`
+          ${finalAction}`,
+        false,
+        source
       );
       return this.runComposeScript(script, "reply to");
     } finally {
@@ -4930,13 +4976,15 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     body?: string,
     send = true,
     attachments?: AttachmentInput[],
-    nativeEditor = false
+    nativeEditor = false,
+    source?: { account: string; mailbox: string; messageId?: string }
   ): { success: boolean; error?: string } {
     if (nativeEditor) {
       return this.composeNative(send ? "send" : "draft", body ?? "", attachments, {
         id,
         to,
         kind: "forward",
+        source,
       });
     }
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
@@ -4959,7 +5007,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           ${recipientCommands}
           ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
           ${composeAttachmentBlock("theForward", mat.paths)}
-          ${finalAction}`
+          ${finalAction}`,
+        false,
+        source
       );
       return this.runComposeScript(script, "forward");
     } finally {
@@ -5013,9 +5063,17 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     return { success: true };
   }
 
-  private findMessageScript(id: string, operation: string, instrument = false): string {
+  private findMessageScript(
+    id: string,
+    operation: string,
+    instrument = false,
+    source?: { account: string; mailbox: string; messageId?: string }
+  ): string {
     this.beginMutation();
-    const loc = this.locationFor(id);
+    // Explicit caller scope wins over a remembered location for the same
+    // numeric id. A miss stays in this mailbox; it must never fall back to an
+    // unrelated copy or account.
+    const loc = source ?? this.locationFor(id);
     if (loc) {
       // Emitter-only literals: stripped of the stream's structural bytes so a
       // mailbox or account name containing one cannot shift the record it is
@@ -5029,6 +5087,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         set matchingMsgs to (messages of _tmb whose id is ${Number(id)})
         if (count of matchingMsgs) > 0 then
           set msg to item 1 of matchingMsgs${
+            source?.messageId
+              ? `\n          set _expectedMessageId to "${escapeForAppleScript(source.messageId)}"\n          set _actualMessageId to message id of msg as text\n          considering case\n            if _actualMessageId is not _expectedMessageId and _actualMessageId is not ("<" & _expectedMessageId & ">") then return "error:The source message changed after it was read; no reply or forward was created."\n          end considering`
+              : ""
+          }${
             instrument
               ? `
           set _out to ""

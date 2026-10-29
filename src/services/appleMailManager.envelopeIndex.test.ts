@@ -263,6 +263,33 @@ describeIfSqlite("searchMessagesWithDiagnostics — Envelope Index backend", () 
     expect(h.calls.length).toBeGreaterThan(0);
   });
 
+  it("retains indexed retrieval for existing scoped get-message reads", () => {
+    process.env.APPLE_MAIL_MCP_ENVELOPE_INDEX = "1";
+    const result = mgr.getMessageContent("11", false, {
+      account: "Google",
+      mailbox: "[Gmail]/All Mail",
+    });
+    expect(result).toMatchObject({
+      id: "11",
+      plainText: expect.stringContaining("Booking ref QX7Z"),
+    });
+    expect(h.calls.some((script) => script.includes("whose id is"))).toBe(false);
+  });
+
+  it("does not use an index match from another mailbox for a strict compose read", () => {
+    process.env.APPLE_MAIL_MCP_ENVELOPE_INDEX = "1";
+    const result = mgr.getMessageContent(
+      "11",
+      false,
+      { account: "Work", mailbox: "Inbox" },
+      { requireScopedLocation: true }
+    );
+    expect(result).toBeNull();
+    expect(h.calls.some((script) => script.includes('if (name of _scopeAccount) is "Work"'))).toBe(
+      true
+    );
+  });
+
   it("falls back to AppleScript for an id it can't find on disk", () => {
     process.env.APPLE_MAIL_MCP_ENVELOPE_INDEX = "1";
     mgr.getMessageContent("999", false, { account: "Google", mailbox: "INBOX" });

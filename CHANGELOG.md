@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+## [2.20.43] - 2026-10-29
+
+### Fixed
+
+- **Replies and forwards can target the numeric ID's source mailbox explicitly.**
+  Pass `account` and `mailbox` together to bind the original read and Mail's
+  compose target to that source. Missing or ambiguous scopes fail without a
+  cross-mailbox fallback; Mail composition also checks the original Message-ID
+  again before creating a composer. Scoped SMTP checks its From address against
+  the selected account. `imap:` IDs retain their encoded scope and reject the
+  extra fields. Unscoped calls retain the remembered-location and bounded-scan
+  strategy, but an ambiguous remembered account or mailbox now stops without
+  falling back to a scan.
+- **Native composition tolerates delayed editor accessibility state.** The
+  marked composer window, subject, and body are re-observed briefly as Mail
+  publishes them; missing or ambiguous targets still stop without inserting or
+  sending. Failure diagnostics identify which part was missing or ambiguous.
+
 ## [2.20.42] - 2026-10-29
 
 ### Fixed

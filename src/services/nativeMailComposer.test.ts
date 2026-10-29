@@ -183,7 +183,7 @@ describe("native editor process contract (no live UI)", () => {
     expect(script).toContain("address(messages[0].sender()) !== address(input.expectedSender)");
     expect(script).toContain("windows.length !== 1");
     expect(script).toContain("return window.name() === input.markerSubject");
-    expect(script).toContain("bodies.length !== 1");
+    expect(script).toContain("bodies.length === 1");
     expect(script).toContain("=== 'AXWebArea'");
     expect(script).toContain("=== 'message body'");
     expect(script).toContain("$.CGEventCreateMouseEvent(null, 1, point, 0)");
@@ -201,6 +201,123 @@ describe("native editor process contract (no live UI)", () => {
     expect(script).toContain("verifiedInsertion(beforeText, bodyText(body), input.body)");
     expect(script.match(/events\.keyCode\(9,/g)).toHaveLength(1);
     expect(script).not.toMatch(/\.send\(|set content|keyCode\(48|click\(\{/);
+  });
+
+  it("waits for the uniquely marked window, subject, and body to appear before returning", () => {
+    insertNativeAuthoredBody(input);
+    const script = h.run.mock.calls[0][1][3];
+    const helper = script.slice(
+      script.indexOf("function findMarkedComposer"),
+      script.indexOf("function normalized")
+    );
+    const subject = { AXIdentifier: "Mail.subjectField", AXValue: input.markerSubject };
+    const body = { AXRole: "AXWebArea", AXDescription: "message body" };
+    const win = (elements: unknown[]) => ({ name: () => input.markerSubject, elements });
+    const finalWindow = win([subject, body]);
+    const observations = [[], [win([])], [win([subject])], [finalWindow]];
+    let current = 0;
+    const checkMessage = vi.fn();
+    const delay = vi.fn();
+    const result = runInNewContext(`${helper}\nfindMarkedComposer(process, input, checkMessage);`, {
+      process: { windows: () => observations[current++] },
+      input,
+      checkMessage,
+      delay,
+      stage: vi.fn(),
+      descendants: (window: { elements: unknown[] }) => window.elements,
+      attr: (element: Record<string, unknown>, key: string) => element[key] ?? null,
+      fail: (code: string) => {
+        throw new Error(code);
+      },
+      targetFailure: null,
+    });
+    expect(result.window).toBe(finalWindow);
+    expect(result.subject).toBe(subject);
+    expect(result.body).toBe(body);
+    expect(checkMessage).toHaveBeenCalledTimes(4);
+    expect(delay).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    "window-missing",
+    "window-ambiguous",
+    "subject-missing",
+    "subject-ambiguous",
+    "body-missing",
+    "body-ambiguous",
+  ])("fails closed after bounded observations when the target is %s", (reason) => {
+    insertNativeAuthoredBody(input);
+    const script = h.run.mock.calls[0][1][3];
+    const helper = script.slice(
+      script.indexOf("function findMarkedComposer"),
+      script.indexOf("function normalized")
+    );
+    const subject = { AXIdentifier: "Mail.subjectField", AXValue: input.markerSubject };
+    const body = { AXRole: "AXWebArea", AXDescription: "message body" };
+    const elements =
+      reason === "subject-missing"
+        ? []
+        : reason === "subject-ambiguous"
+          ? [subject, subject]
+          : reason === "body-missing"
+            ? [subject]
+            : reason === "body-ambiguous"
+              ? [subject, body, body]
+              : [subject, body];
+    const window = { name: () => input.markerSubject, elements };
+    const windows =
+      reason === "window-missing"
+        ? []
+        : reason === "window-ambiguous"
+          ? [window, window]
+          : [window];
+    const checkMessage = vi.fn();
+    const delay = vi.fn();
+    const context = {
+      process: { windows: () => windows },
+      input,
+      checkMessage,
+      delay,
+      stage: vi.fn(),
+      descendants: (item: { elements: unknown[] }) => item.elements,
+      attr: (element: Record<string, unknown>, key: string) => element[key] ?? null,
+      fail: (code: string) => {
+        throw new Error(code);
+      },
+      targetFailure: null as string | null,
+    };
+    expect(() =>
+      runInNewContext(`${helper}\nfindMarkedComposer(process, input, checkMessage);`, context)
+    ).toThrow("target");
+    expect(context.targetFailure).toBe(reason);
+    expect(checkMessage).toHaveBeenCalledTimes(20);
+    expect(delay).toHaveBeenCalledTimes(19);
+  });
+
+  it("stops waiting if the outgoing message identity changes", () => {
+    insertNativeAuthoredBody(input);
+    const script = h.run.mock.calls[0][1][3];
+    const helper = script.slice(
+      script.indexOf("function findMarkedComposer"),
+      script.indexOf("function normalized")
+    );
+    const checkMessage = vi
+      .fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error("identity");
+      });
+    expect(() =>
+      runInNewContext(`${helper}\nfindMarkedComposer(process, input, checkMessage);`, {
+        process: { windows: () => [] },
+        input,
+        checkMessage,
+        delay: vi.fn(),
+        stage: vi.fn(),
+        targetFailure: null,
+      })
+    ).toThrow("identity");
+    expect(checkMessage).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -559,6 +676,31 @@ JSON.stringify({count: Number(items.count), types: ObjC.deepUnwrap(item.types).s
         code: "focus",
         stage: "post-cmd-up",
         focus: input.body,
+      }),
+    });
+    expect(insertNativeAuthoredBody(input).error).not.toContain(input.body);
+  });
+
+  it("reports only enumerated target failures without echoing arbitrary content", () => {
+    h.run.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({
+        success: false,
+        code: "target",
+        stage: "target-window",
+        target: "subject-missing",
+      }),
+    });
+    expect(insertNativeAuthoredBody(input).error).toContain(
+      "[stage=target-window; target=subject-missing]"
+    );
+    h.run.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({
+        success: false,
+        code: "target",
+        stage: "target-window",
+        target: input.body,
       }),
     });
     expect(insertNativeAuthoredBody(input).error).not.toContain(input.body);

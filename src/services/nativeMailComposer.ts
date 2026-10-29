@@ -46,7 +46,7 @@ ObjC.import('AppKit');
 ObjC.import('ApplicationServices');
 ObjC.import('CoreServices');
 ObjC.bindFunction('AEDeterminePermissionToAutomateTarget', ['int', ['void *', 'unsigned int', 'unsigned int', 'bool']]);
-var currentStage = 'startup', focusFailure = null;
+var currentStage = 'startup', focusFailure = null, targetFailure = null;
 function stage(value) { currentStage = value; console.log('NATIVE_STAGE:' + value); }
 function emit(record) {
   var data = $(JSON.stringify(record) + '\n').dataUsingEncoding($.NSUTF8StringEncoding);
@@ -92,6 +92,44 @@ function descendants(root) {
     try { pending = pending.concat(element.uiElements()); } catch (_) {}
   }
   return result;
+}
+function findMarkedComposer(process, input, checkMessage) {
+  // Mail can publish the marked outgoing message before its accessibility
+  // window, subject, and editor have all caught up. Retry only observations;
+  // never create, click, paste, or select an unmarked or ambiguous composer.
+  for (var attempt = 0; attempt < 20; attempt++) {
+    checkMessage();
+    stage('target-window');
+    var windows = process.windows().filter(function (window) {
+      // Never walk the main mailbox tree: it may contain thousands of rows.
+      return window.name() === input.markerSubject;
+    });
+    if (windows.length !== 1) {
+      targetFailure = windows.length === 0 ? 'window-missing' : 'window-ambiguous';
+    } else {
+      var window = windows[0], elements = descendants(window);
+      var subjects = elements.filter(function (element) {
+        return attr(element, 'AXIdentifier') === 'Mail.subjectField' &&
+          attr(element, 'AXValue') === input.markerSubject;
+      });
+      if (subjects.length !== 1) {
+        targetFailure = subjects.length === 0 ? 'subject-missing' : 'subject-ambiguous';
+      } else {
+        stage('target-body');
+        var bodies = elements.filter(function (element) {
+          return attr(element, 'AXRole') === 'AXWebArea' &&
+            attr(element, 'AXDescription') === 'message body';
+        });
+        if (bodies.length === 1) {
+          targetFailure = null;
+          return {window: window, subject: subjects[0], body: bodies[0]};
+        }
+        targetFailure = bodies.length === 0 ? 'body-missing' : 'body-ambiguous';
+      }
+    }
+    if (attempt < 19) delay(0.1);
+  }
+  fail('target');
 }
 function normalized(value) { return String(value).normalize('NFC').replace(/\s+/g, ' ').trim(); }
 function verifiedInsertion(before, after, authored) {
@@ -164,27 +202,8 @@ function main(input) {
   }
   stage('identity');
   checkMessage();
-  stage('target-window');
-  var windows = process.windows().filter(function (window) {
-    // Never walk the main mailbox tree: it may contain thousands of rows.
-    return window.name() === input.markerSubject;
-  });
-  if (windows.length !== 1) fail('target');
-  var window = windows[0];
-  var elements = descendants(window);
-  var subjects = elements.filter(function (element) {
-    return attr(element, 'AXIdentifier') === 'Mail.subjectField' &&
-      attr(element, 'AXValue') === input.markerSubject;
-  });
-  if (subjects.length !== 1) fail('target');
-  var subject = subjects[0];
-  stage('target-body');
-  var bodies = elements.filter(function (element) {
-    return attr(element, 'AXRole') === 'AXWebArea' &&
-      attr(element, 'AXDescription') === 'message body';
-  });
-  if (bodies.length !== 1) fail('target');
-  var body = bodies[0];
+  var target = findMarkedComposer(process, input, checkMessage);
+  var window = target.window, subject = target.subject, body = target.body;
   stage('focus');
   process.frontmost = true;
   window.attributes.byName('AXMain').value = true;
@@ -282,7 +301,8 @@ try {
 } catch (error) {
   var allowed = ['accessibility', 'automation', 'automation-unavailable', 'identity', 'target', 'focus', 'clipboard', 'restore', 'readback', 'paste-unavailable'];
   JSON.stringify({success: false, code: allowed.indexOf(error.message) >= 0 ? error.message : 'bridge',
-    stage: currentStage, focus: focusFailure || undefined, runtime: typeof error.errorNumber === 'number' ? error.errorNumber : undefined});
+    stage: currentStage, focus: focusFailure || undefined, target: targetFailure || undefined,
+    runtime: typeof error.errorNumber === 'number' ? error.errorNumber : undefined});
 }
 `;
 
@@ -340,14 +360,14 @@ function runNativeEditor(payload: Record<string, unknown>): NativeEditorResult {
           success: false,
           error:
             (ERRORS[response.code] ?? ERRORS.bridge) +
-            diagnostic(response.stage, response.runtime, response.focus),
+            diagnostic(response.stage, response.runtime, response.focus, response.target),
         };
   } catch {
     return { success: false, error: ERRORS.bridge };
   }
 }
 
-function diagnostic(stage: unknown, runtime: unknown, focus?: unknown): string {
+function diagnostic(stage: unknown, runtime: unknown, focus?: unknown, target?: unknown): string {
   const stages = [
     "startup",
     "preflight",
@@ -384,7 +404,19 @@ function diagnostic(stage: unknown, runtime: unknown, focus?: unknown): string {
     ].includes(focus)
       ? `; focus=${focus}`
       : "";
-  return ` [stage=${stage}${detail}${focusDetail}]`;
+  const targetDetail =
+    typeof target === "string" &&
+    [
+      "window-missing",
+      "window-ambiguous",
+      "subject-missing",
+      "subject-ambiguous",
+      "body-missing",
+      "body-ambiguous",
+    ].includes(target)
+      ? `; target=${target}`
+      : "";
+  return ` [stage=${stage}${detail}${focusDetail}${targetDetail}]`;
 }
 
 export function nativeEditorPreflight(): NativeEditorResult {

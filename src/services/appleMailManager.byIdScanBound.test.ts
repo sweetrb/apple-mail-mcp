@@ -193,7 +193,7 @@ describe("#270 (b) — a stale remembered location is evicted, then the bounded 
     mgr.noteMessageLocation("42", "Work", "INBOX");
     h.router.fn = () => ({ success: true, output: CONTENT_OK });
     mgr.getMessageContent("42", false, { account: "Home", mailbox: "Receipts" });
-    expect(byId()[0].script).toContain('first account whose name is "Home"');
+    expect(byId()[0].script).toContain('if (name of _scopeAccount) is "Home"');
   });
 });
 
@@ -360,7 +360,7 @@ describe("#270 — getMessageById shares the resolver", () => {
     h.router.fn = () => ({ success: true, output: CONTENT_OK });
     mgr.getMessageContent("42");
     expect(byId()).toHaveLength(1);
-    expect(byId()[0].script).toContain('first account whose name is "Work"');
+    expect(byId()[0].script).toContain('if (name of _scopeAccount) is "Work"');
   });
 
   it("uses a remembered location first, and evicts it when stale", () => {
@@ -687,7 +687,7 @@ describe("#319 — an account-only hint is not satisfied by a remembered locatio
     // Never the scoped Work/INBOX script — the mismatched remembered entry
     // must not be treated as usable.
     expect(kinds()).toEqual(["unscoped"]);
-    expect(byId()[0].script).not.toContain('first account whose name is "Work"');
+    expect(byId()[0].script).not.toContain('if (name of _scopeAccount) is "Work"');
     expect(byId()[0].script).toContain('set _scopeAcct to "Home"');
   });
 
@@ -696,7 +696,7 @@ describe("#319 — an account-only hint is not satisfied by a remembered locatio
     h.router.fn = () => ({ success: true, output: CONTENT_OK });
     mgr.getMessageContent("42", false, { account: "Work" });
     expect(kinds()).toEqual(["scoped"]);
-    expect(byId()[0].script).toContain('first account whose name is "Work"');
+    expect(byId()[0].script).toContain('if (name of _scopeAccount) is "Work"');
   });
 
   it("with no usable remembered entry, an account-only hint falls through to the scoped scan rather than being treated as a full explicit hint", () => {

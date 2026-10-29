@@ -66,7 +66,7 @@ describe("saveAttachment resolves the message the way the reads do", () => {
     h.output = "Nopuedomas\x1fINBOX";
     saveInto(manager());
     const save = h.scripts.find((s) => s.includes("save att in savePath")) ?? "";
-    expect(save).toContain('first account whose name is "Nopuedomas"');
+    expect(save).toContain('if (name of _scopeAccount) is "Nopuedomas"');
     expect(save).not.toContain("repeat with acct in accounts");
   });
 

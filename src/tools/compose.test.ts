@@ -63,6 +63,190 @@ function expectNoApple(d: ReturnType<typeof fixture>) {
 }
 
 describe("reply and forward transport routing", () => {
+  it("pins native numeric replies to the source mailbox and Message-ID", async () => {
+    const d = fixture();
+    d.mail.getRawSource.mockReturnValue(raw);
+    d.numericId.mockResolvedValue({ numericId: "42" });
+    const scope = { account: "Proton", mailbox: "Sent" };
+    const result = await runReply(d, {
+      ...args,
+      id: "42",
+      ...scope,
+      send: false,
+      composition: "native-editor",
+    });
+    expect(result.isError).not.toBe(true);
+    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope);
+    expect(d.mail.getMessageContent).toHaveBeenCalledWith("42", false, scope, {
+      requireScopedLocation: true,
+    });
+    expect(d.mail.replyToMessage).toHaveBeenCalledWith(
+      "42",
+      args.body,
+      false,
+      false,
+      undefined,
+      true,
+      { ...scope, messageId: "parent@example.com" }
+    );
+    expect(d.smtpSend).not.toHaveBeenCalled();
+  });
+
+  it("pins an AppleScript forward even when no body is supplied", async () => {
+    const d = fixture();
+    d.mail.getRawSource.mockReturnValue(raw);
+    d.numericId.mockResolvedValue({ numericId: "42" });
+    const scope = { account: "Proton", mailbox: "Archive/Inbox" };
+    const result = await runForward(d, { id: "42", ...scope, to: ["x@example.com"], send: false });
+    expect(result.isError).not.toBe(true);
+    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope);
+    expect(d.mail.forwardMessage).toHaveBeenCalledWith(
+      "42",
+      ["x@example.com"],
+      undefined,
+      false,
+      undefined,
+      false,
+      { ...scope, messageId: "parent@example.com" }
+    );
+  });
+
+  it.each([
+    { body: "For review" },
+    { attachments: [{ filename: "note.txt", contentBase64: "eA==" }] },
+  ])(
+    "refuses a scoped forward with added content when the original has no readable plaintext",
+    async (added) => {
+      const d = fixture();
+      d.mail.getRawSource.mockReturnValue(
+        raw.replace("text/plain; charset=utf-8", "text/html; charset=utf-8")
+      );
+      d.numericId.mockResolvedValue({ numericId: "42" });
+      const result = await runForward(d, {
+        id: "42",
+        account: "Proton",
+        mailbox: "Sent",
+        to: ["x@example.com"],
+        send: false,
+        ...added,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("Forward composition was stopped");
+      expect(d.mail.forwardMessage).not.toHaveBeenCalled();
+    }
+  );
+
+  it("never quotes a different message if the numeric id changes between scoped reads", async () => {
+    const d = fixture();
+    d.mail.getRawSource.mockReturnValue(raw);
+    d.mail.getMessageContent.mockReturnValue({
+      plainText: "Wrong message body",
+      rfcMessageId: "other@example.com",
+    });
+    d.numericId.mockResolvedValue({ numericId: "42" });
+    const result = await runReply(d, {
+      ...args,
+      id: "42",
+      account: "Proton",
+      mailbox: "Sent",
+      send: false,
+    });
+    expect(result.isError).not.toBe(true);
+    const body = d.mail.replyToMessage.mock.calls[0][1];
+    expect(body).toContain("Original ✓ body.");
+    expect(body).not.toContain("Wrong message body");
+  });
+
+  it.each([{ account: "Proton" }, { mailbox: "Sent" }, { account: " ", mailbox: "Sent" }])(
+    "rejects incomplete source scope before any Mail access: %o",
+    async (scope) => {
+      const d = fixture();
+      const result = await runReply(d, { ...args, id: "42", ...scope });
+      expect(result.isError).toBe(true);
+      expectNoApple(d);
+      expect(d.smtpSend).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses an explicit scope for an IMAP id instead of targeting a different mailbox", async () => {
+    const d = fixture();
+    const result = await runReply(d, { ...args, account: "Proton", mailbox: "Sent" });
+    expect(result.isError).toBe(true);
+    expect(d.imapSource).not.toHaveBeenCalled();
+    expectNoApple(d);
+  });
+
+  it("does not fall back to another mailbox on an explicit scope miss", async () => {
+    const d = fixture();
+    const scope = { account: "Proton", mailbox: "Sent" };
+    const result = await runReply(d, { ...args, id: "42", ...scope, send: false });
+    expect(result.isError).toBe(true);
+    expect(d.mail.getRawSource).toHaveBeenCalledOnce();
+    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope);
+    expect(d.mail.replyToMessage).not.toHaveBeenCalled();
+    expect(d.smtpSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses scoped composition if the source has no usable Message-ID", async () => {
+    const d = fixture();
+    d.mail.getRawSource.mockReturnValue(raw.replace("Message-ID: <parent@example.com>\r\n", ""));
+    const result = await runReply(d, {
+      ...args,
+      id: "42",
+      account: "Proton",
+      mailbox: "Sent",
+      send: false,
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("no usable Message-ID");
+    expect(d.mail.replyToMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses a scoped SMTP reply when its sender is not in the source account", async () => {
+    const d = fixture();
+    d.mail.getRawSource.mockReturnValue(raw);
+    const mail = {
+      ...d.mail,
+      listAccountsChecked: () => ({
+        failed: false,
+        accounts: [
+          {
+            name: "Proton",
+            email: "other@example.com",
+            addresses: ["other@example.com"],
+            enabled: true,
+          },
+        ],
+      }),
+    };
+    const result = await runReply(
+      { ...d, mail },
+      { ...args, id: "42", account: "Proton", mailbox: "Sent" }
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("does not match");
+    expect(d.smtpSend).not.toHaveBeenCalled();
+  });
+
+  it("permits a scoped SMTP reply when the From matches even if the login is not an email", async () => {
+    const d = fixture();
+    d.mail.getRawSource.mockReturnValue(raw);
+    d.smtpConfig.mockReturnValue({ ...cfg, user: "apikey" });
+    const mail = {
+      ...d.mail,
+      listAccountsChecked: () => ({
+        failed: false,
+        accounts: [{ name: "Proton", email: cfg.from, addresses: [cfg.from], enabled: true }],
+      }),
+    };
+    const result = await runReply(
+      { ...d, mail },
+      { ...args, id: "42", account: "Proton", mailbox: "Sent" }
+    );
+    expect(result.isError).not.toBe(true);
+    expect(d.smtpSend).toHaveBeenCalledOnce();
+  });
+
   it("uses the native editor with authored prose only, even when SMTP is configured", async () => {
     const d = fixture();
     const result = await runReply(d, { ...args, composition: "native-editor" });
