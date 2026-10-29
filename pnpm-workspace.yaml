@@ -30,7 +30,19 @@ minimumReleaseAge: 10080
 # Keep transitive dependencies above their security floors until their direct
 # parents' ranges move past the patched releases.
 overrides:
-  "@hono/node-server": 2.0.10
+  # GHSA-rmxm-3fg6-px4f (moderate): serveStatic double-decode, fixed in 2.1.3
+  # (published 2026-09-29, past the 7-day soak). This was an EXACT pin
+  # (`2.0.10`), which is a ceiling: it held the tree on the vulnerable version
+  # and the advisory could not clear. Floor, not pin -- two-sided per the
+  # fast-uri precedent below. Reached via @modelcontextprotocol/sdk; the HTTP
+  # transport is tree-shaken out of this stdio server.
+  "@hono/node-server": ">=2.1.3 <3"
+  # GHSA-27r3-jxmh-p828 (high): body-parser, fixed in 2.4.0 (published
+  # 2026-10-22T11:39Z; floored once the 7-day minimumReleaseAge soak above
+  # cleared on 2026-10-29T11:40Z -- no minimumReleaseAgeExclude was used).
+  # Reached via @modelcontextprotocol/sdk -> express, the HTTP transport this
+  # stdio server never enters. Two-sided range, never an exact pin (see fast-uri).
+  body-parser: ">=2.4.0 <3"
   # GHSA-mh99-v99m-4gvg: floor each brace-expansion major independently on its
   # own complete (sequence-bounded) release. The bounds must be two-sided —
   # a bare "<5.0.9" also matches 1.1.18 and 2.1.4 under semver and would drag
