@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [2.20.42] - 2026-10-29
+
+### Fixed
+
+- **Unscoped `search-messages` / `list-messages` / `get-thread` no longer report a confirmed
+  empty result when Mail never answered the account-list request** (#346, reported by
+  @ToxicalNoob3062). With a cold account cache and Mail busy, the account read timed out, the
+  per-account loop ran zero times and the result stayed `partial: false` — indistinguishable
+  from "no such mail". Both paths (the AppleScript-only loops in the manager and the
+  prefer-IMAP merge in the tool layer) now use `listAccountsChecked()`; on a failed read the
+  result is `partial: true` with `* / *: could not list accounts (<error>)` in
+  `notSearchedMailboxes`, so the existing partial-coverage warning appears.
+
 ## [2.20.41] - 2026-10-29
 
 ### Added
