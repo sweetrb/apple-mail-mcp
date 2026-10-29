@@ -34,6 +34,7 @@ import {
   AppleMailManager,
   resolveAttachmentSaveTarget,
   LOCAL_STORE_LABEL,
+  noteAccountListFailure,
 } from "@/services/appleMailManager.js";
 import { writeFileSync } from "fs";
 import { join as joinPath } from "path";
@@ -359,6 +360,29 @@ interface AppleScan {
 }
 
 /**
+ * The accounts no IMAP config covers, plus whether Mail.app could be asked for
+ * its account list at all. An unreadable list yields an empty `appleScriptOnly`,
+ * which {@link withAccountListFailure} turns into a partial result rather than a
+ * confirmed "no such mail" (#346).
+ */
+function appleScriptOnlyAccounts(configs: ReturnType<typeof resolveImapConfigs>): {
+  appleScriptOnly: Account[];
+  listFailure: { error?: string } | null;
+} {
+  const { accounts, failed, error } = mailManager.listAccountsChecked();
+  return {
+    appleScriptOnly: partitionAccountsForCounts(accounts, configs).appleScriptOnly,
+    listFailure: failed ? { error } : null,
+  };
+}
+
+/** Mark an AppleScript scan partial when the account list couldn't be read (#346). */
+function withAccountListFailure(apple: AppleScan, failure: { error?: string } | null): AppleScan {
+  if (failure) noteAccountListFailure(apple.diagnostics, failure.error);
+  return apple;
+}
+
+/**
  * Run a per-account AppleScript scan over ONLY the given accounts (the ones no
  * IMAP config covers), concatenating their rows and merging diagnostics. The IMAP
  * fan-out already covers the IMAP accounts, so this avoids scanning them on the
@@ -681,10 +705,7 @@ registerTool(
               : {}),
           });
         }
-        const { appleScriptOnly } = partitionAccountsForCounts(
-          mailManager.listAccounts(),
-          resolveImapConfigs()
-        );
+        const { appleScriptOnly, listFailure } = appleScriptOnlyAccounts(resolveImapConfigs());
         if (offset > 0 && appleScriptOnly.length > 0 && !body) {
           return errorResponse(
             `offset is supported only on IMAP accounts, and ${appleScriptOnly
@@ -710,7 +731,13 @@ registerTool(
               ),
             },
           };
-          return mergedMessageResponse(fan, apple, limit, "matched", signal);
+          return mergedMessageResponse(
+            fan,
+            withAccountListFailure(apple, listFailure),
+            limit,
+            "matched",
+            signal
+          );
         }
         if (signal.aborted && appleScriptOnly.length > 0) {
           // Out of time (or cancelled) after the IMAP fan-out: don't start a
@@ -725,20 +752,23 @@ registerTool(
           };
           return mergedMessageResponse(fan, apple, limit, "matched", signal);
         }
-        const apple = appleScanForAccounts(appleScriptOnly, (acctName) =>
-          mailManager.searchMessagesWithDiagnostics(
-            query,
-            mailbox,
-            acctName,
-            limit,
-            dateFrom,
-            dateTo,
-            from,
-            subject,
-            isRead,
-            isFlagged,
-            flagColorIndex
-          )
+        const apple = withAccountListFailure(
+          appleScanForAccounts(appleScriptOnly, (acctName) =>
+            mailManager.searchMessagesWithDiagnostics(
+              query,
+              mailbox,
+              acctName,
+              limit,
+              dateFrom,
+              dateTo,
+              from,
+              subject,
+              isRead,
+              isFlagged,
+              flagColorIndex
+            )
+          ),
+          listFailure
         );
         return mergedMessageResponse(fan, apple, limit, "matched", signal);
       }
@@ -1234,21 +1264,21 @@ registerTool(
         });
       }
       const fan = await fanOutImapMessages({ subject: base, mailbox, limit }, "search");
-      const { appleScriptOnly } = partitionAccountsForCounts(
-        mailManager.listAccounts(),
-        resolveImapConfigs()
-      );
-      const apple = appleScanForAccounts(appleScriptOnly, (acctName) =>
-        mailManager.searchMessagesWithDiagnostics(
-          undefined,
-          mailbox,
-          acctName,
-          limit,
-          undefined,
-          undefined,
-          undefined,
-          base
-        )
+      const { appleScriptOnly, listFailure } = appleScriptOnlyAccounts(resolveImapConfigs());
+      const apple = withAccountListFailure(
+        appleScanForAccounts(appleScriptOnly, (acctName) =>
+          mailManager.searchMessagesWithDiagnostics(
+            undefined,
+            mailbox,
+            acctName,
+            limit,
+            undefined,
+            undefined,
+            undefined,
+            base
+          )
+        ),
+        listFailure
       );
       // Merge + de-dup (IMAP wins), then sort OLDEST-first for thread order.
       const mergedNewestFirst = mergeMessages(fan.rows, apple.rows, limit);
@@ -1376,12 +1406,12 @@ registerTool(
         });
       }
       const fan = await fanOutImapMessages({ mailbox, limit, offset, from, unreadOnly }, "list");
-      const { appleScriptOnly } = partitionAccountsForCounts(
-        mailManager.listAccounts(),
-        resolveImapConfigs()
-      );
-      const apple = appleScanForAccounts(appleScriptOnly, (acctName) =>
-        mailManager.listMessagesWithDiagnostics(mailbox, acctName, limit, from, offset)
+      const { appleScriptOnly, listFailure } = appleScriptOnlyAccounts(resolveImapConfigs());
+      const apple = withAccountListFailure(
+        appleScanForAccounts(appleScriptOnly, (acctName) =>
+          mailManager.listMessagesWithDiagnostics(mailbox, acctName, limit, from, offset)
+        ),
+        listFailure
       );
       return mergedMessageResponse(fan, apple, limit, "listed");
     }

@@ -100411,6 +100411,10 @@ function nativeTextLiteral(text) {
 function normalizeRfcMessageId(mid) {
   return (mid || "").trim().replace(/^<+/, "").replace(/>+$/, "").trim();
 }
+function noteAccountListFailure(into, error63) {
+  into.partial = true;
+  into.notSearchedMailboxes.push(`* / *: could not list accounts (${error63 ?? "unknown error"})`);
+}
 function mergeSearchDiagnostics(into, from) {
   into.timedOutAccounts.push(...from.timedOutAccounts);
   into.skippedLargeMailboxes.push(...from.skippedLargeMailboxes);
@@ -102014,7 +102018,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   searchMessagesWithDiagnostics(query, mailbox, account, limit = 50, dateFrom, dateTo, from, subject, isRead, isFlagged, flagColorIndex) {
     if (!account) {
-      const accounts = this.listAccounts();
+      const { accounts, failed, error: error63 } = this.listAccountsChecked();
       const allMessages = [];
       const diagnostics = {
         partial: false,
@@ -102022,6 +102026,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         skippedLargeMailboxes: [],
         notSearchedMailboxes: []
       };
+      if (failed) noteAccountListFailure(diagnostics, error63);
       for (const acct of accounts) {
         if (allMessages.length >= limit) break;
         const remaining = limit - allMessages.length;
@@ -102819,7 +102824,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    */
   listMessagesWithDiagnostics(mailbox, account, limit = 50, from, offset = 0) {
     if (!account) {
-      const accounts = this.listAccounts();
+      const { accounts, failed, error: error63 } = this.listAccountsChecked();
       const allMessages = [];
       const diagnostics = {
         partial: false,
@@ -102827,6 +102832,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         skippedLargeMailboxes: [],
         notSearchedMailboxes: []
       };
+      if (failed) noteAccountListFailure(diagnostics, error63);
       for (const acct of accounts) {
         if (allMessages.length >= limit) break;
         const remaining = limit - allMessages.length;
@@ -107206,6 +107212,17 @@ function backendFields(info) {
     ...info.backendByAccount ? { backendByAccount: info.backendByAccount } : {}
   };
 }
+function appleScriptOnlyAccounts(configs) {
+  const { accounts, failed, error: error63 } = mailManager.listAccountsChecked();
+  return {
+    appleScriptOnly: partitionAccountsForCounts(accounts, configs).appleScriptOnly,
+    listFailure: failed ? { error: error63 } : null
+  };
+}
+function withAccountListFailure(apple, failure2) {
+  if (failure2) noteAccountListFailure(apple.diagnostics, failure2.error);
+  return apple;
+}
 function appleScanForAccounts(accounts, scan) {
   const rows = [];
   let diagnostics = emptyDiagnostics();
@@ -107374,10 +107391,7 @@ registerTool(
             ...r.timedOutMailboxes?.length ? { timedOutMailboxes: r.timedOutMailboxes, stoppedBy: r.stoppedBy } : {}
           });
         }
-        const { appleScriptOnly } = partitionAccountsForCounts(
-          mailManager.listAccounts(),
-          resolveImapConfigs()
-        );
+        const { appleScriptOnly, listFailure } = appleScriptOnlyAccounts(resolveImapConfigs());
         if (offset > 0 && appleScriptOnly.length > 0 && !body) {
           return errorResponse(
             `offset is supported only on IMAP accounts, and ${appleScriptOnly.map((a) => `"${a.name}"`).join(", ")} ${appleScriptOnly.length === 1 ? "is" : "are"} AppleScript-only. Pass an IMAP account to page, or omit offset.`
@@ -107395,7 +107409,13 @@ registerTool(
               )
             }
           };
-          return mergedMessageResponse(fan, apple2, limit, "matched", signal);
+          return mergedMessageResponse(
+            fan,
+            withAccountListFailure(apple2, listFailure),
+            limit,
+            "matched",
+            signal
+          );
         }
         if (signal.aborted && appleScriptOnly.length > 0) {
           const apple2 = {
@@ -107408,21 +107428,24 @@ registerTool(
           };
           return mergedMessageResponse(fan, apple2, limit, "matched", signal);
         }
-        const apple = appleScanForAccounts(
-          appleScriptOnly,
-          (acctName) => mailManager.searchMessagesWithDiagnostics(
-            query,
-            mailbox,
-            acctName,
-            limit,
-            dateFrom,
-            dateTo,
-            from,
-            subject,
-            isRead,
-            isFlagged,
-            flagColorIndex
-          )
+        const apple = withAccountListFailure(
+          appleScanForAccounts(
+            appleScriptOnly,
+            (acctName) => mailManager.searchMessagesWithDiagnostics(
+              query,
+              mailbox,
+              acctName,
+              limit,
+              dateFrom,
+              dateTo,
+              from,
+              subject,
+              isRead,
+              isFlagged,
+              flagColorIndex
+            )
+          ),
+          listFailure
         );
         return mergedMessageResponse(fan, apple, limit, "matched", signal);
       }
@@ -107792,22 +107815,22 @@ ${r.text}`, {
         });
       }
       const fan = await fanOutImapMessages({ subject: base2, mailbox, limit }, "search");
-      const { appleScriptOnly } = partitionAccountsForCounts(
-        mailManager.listAccounts(),
-        resolveImapConfigs()
-      );
-      const apple = appleScanForAccounts(
-        appleScriptOnly,
-        (acctName) => mailManager.searchMessagesWithDiagnostics(
-          void 0,
-          mailbox,
-          acctName,
-          limit,
-          void 0,
-          void 0,
-          void 0,
-          base2
-        )
+      const { appleScriptOnly, listFailure } = appleScriptOnlyAccounts(resolveImapConfigs());
+      const apple = withAccountListFailure(
+        appleScanForAccounts(
+          appleScriptOnly,
+          (acctName) => mailManager.searchMessagesWithDiagnostics(
+            void 0,
+            mailbox,
+            acctName,
+            limit,
+            void 0,
+            void 0,
+            void 0,
+            base2
+          )
+        ),
+        listFailure
       );
       const mergedNewestFirst = mergeMessages(fan.rows, apple.rows, limit);
       const orderedRows = mergedNewestFirst.slice().reverse().sort(
@@ -107897,13 +107920,13 @@ registerTool(
         });
       }
       const fan = await fanOutImapMessages({ mailbox, limit, offset, from, unreadOnly }, "list");
-      const { appleScriptOnly } = partitionAccountsForCounts(
-        mailManager.listAccounts(),
-        resolveImapConfigs()
-      );
-      const apple = appleScanForAccounts(
-        appleScriptOnly,
-        (acctName) => mailManager.listMessagesWithDiagnostics(mailbox, acctName, limit, from, offset)
+      const { appleScriptOnly, listFailure } = appleScriptOnlyAccounts(resolveImapConfigs());
+      const apple = withAccountListFailure(
+        appleScanForAccounts(
+          appleScriptOnly,
+          (acctName) => mailManager.listMessagesWithDiagnostics(mailbox, acctName, limit, from, offset)
+        ),
+        listFailure
       );
       return mergedMessageResponse(fan, apple, limit, "listed");
     }

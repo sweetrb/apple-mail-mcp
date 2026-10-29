@@ -604,6 +604,16 @@ function normalizeRfcMessageId(mid: string): string {
 }
 
 /**
+ * Record that the account list itself couldn't be read, so an unscoped search or
+ * list searched nothing for want of accounts — not because nothing matched (#346).
+ * Marks the diagnostics partial and names the failure for `partialCoverageBlock`.
+ */
+export function noteAccountListFailure(into: SearchDiagnostics, error?: string): void {
+  into.partial = true;
+  into.notSearchedMailboxes.push(`* / *: could not list accounts (${error ?? "unknown error"})`);
+}
+
+/**
  * Merge a per-account SearchDiagnostics into an aggregate (all-accounts) one.
  *
  * Exported for unit testing.
@@ -3121,7 +3131,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   ): SearchResult {
     // If no account specified, search across all accounts and merge diagnostics.
     if (!account) {
-      const accounts = this.listAccounts();
+      const { accounts, failed, error } = this.listAccountsChecked();
       const allMessages: Message[] = [];
       const diagnostics: SearchDiagnostics = {
         partial: false,
@@ -3129,6 +3139,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         skippedLargeMailboxes: [],
         notSearchedMailboxes: [],
       };
+      // A failed account read (cold cache, Mail busy) must not look like "no
+      // accounts": nothing was searched, so say so instead of a confirmed empty (#346).
+      if (failed) noteAccountListFailure(diagnostics, error);
       for (const acct of accounts) {
         if (allMessages.length >= limit) break;
         const remaining = limit - allMessages.length;
@@ -4139,7 +4152,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   ): SearchResult {
     // If no account specified, list across all accounts and merge diagnostics.
     if (!account) {
-      const accounts = this.listAccounts();
+      const { accounts, failed, error } = this.listAccountsChecked();
       const allMessages: Message[] = [];
       const diagnostics: SearchDiagnostics = {
         partial: false,
@@ -4147,6 +4160,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         skippedLargeMailboxes: [],
         notSearchedMailboxes: [],
       };
+      if (failed) noteAccountListFailure(diagnostics, error); // #346
       for (const acct of accounts) {
         if (allMessages.length >= limit) break;
         const remaining = limit - allMessages.length;
