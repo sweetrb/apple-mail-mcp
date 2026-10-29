@@ -76,7 +76,7 @@ describe("reply and forward transport routing", () => {
       composition: "native-editor",
     });
     expect(result.isError).not.toBe(true);
-    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope);
+    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope, { requireScopedLocation: true });
     expect(d.mail.getMessageContent).toHaveBeenCalledWith("42", false, scope, {
       requireScopedLocation: true,
     });
@@ -99,7 +99,7 @@ describe("reply and forward transport routing", () => {
     const scope = { account: "Proton", mailbox: "Archive/Inbox" };
     const result = await runForward(d, { id: "42", ...scope, to: ["x@example.com"], send: false });
     expect(result.isError).not.toBe(true);
-    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope);
+    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope, { requireScopedLocation: true });
     expect(d.mail.forwardMessage).toHaveBeenCalledWith(
       "42",
       ["x@example.com"],
@@ -182,7 +182,7 @@ describe("reply and forward transport routing", () => {
     const result = await runReply(d, { ...args, id: "42", ...scope, send: false });
     expect(result.isError).toBe(true);
     expect(d.mail.getRawSource).toHaveBeenCalledOnce();
-    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope);
+    expect(d.mail.getRawSource).toHaveBeenCalledWith("42", scope, { requireScopedLocation: true });
     expect(d.mail.replyToMessage).not.toHaveBeenCalled();
     expect(d.smtpSend).not.toHaveBeenCalled();
   });

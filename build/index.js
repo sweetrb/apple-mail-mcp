@@ -100919,9 +100919,12 @@ var MAILBOX_ALIASES = {
 function mailboxLeaf(path3) {
   return path3.split("/").at(-1) ?? path3;
 }
-function resolveAppleMailboxPath(mailbox, actualPaths) {
+function resolveAppleMailboxPath(mailbox, actualPaths, exactPathOnly = false) {
   if (actualPaths.length === 0) return mailbox;
-  const candidates = [mailbox, ...MAILBOX_ALIASES[mailbox.toLowerCase()] ?? []];
+  const candidates = [
+    mailbox,
+    ...exactPathOnly ? [] : MAILBOX_ALIASES[mailbox.toLowerCase()] ?? []
+  ];
   const ambiguous = (matches) => {
     const sorted = [...new Set(matches)].sort();
     const paths = sorted.map((path3) => `"${path3}"`).join(" and ");
@@ -100937,6 +100940,7 @@ function resolveAppleMailboxPath(mailbox, actualPaths) {
     if (folded.length === 1) return folded[0];
     if (folded.length > 1) throw ambiguous(folded);
   }
+  if (exactPathOnly) return mailbox;
   for (const candidate of candidates) {
     const key = mailboxNameKey(candidate);
     const leafMatches = [
@@ -101089,8 +101093,8 @@ var AppleMailManager = class {
    * only, and a name matching more than one mailbox resolves to nothing rather
    * than guessing — the same rule the move destination already applies.
    */
-  resolveMailboxFragment(account, mailbox) {
-    const resolved = this.resolveMailbox(mailbox, account);
+  resolveMailboxFragment(account, mailbox, exactPathOnly = false) {
+    const resolved = this.resolveMailbox(mailbox, account, exactPathOnly);
     if (isLocalStoreLabel(account)) {
       return `${localMailboxBindingFragment()}
         set _tmb to missing value
@@ -101983,8 +101987,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param account - Account to search in
    * @returns Actual mailbox name, or original if not found
    */
-  resolveMailbox(mailbox, account) {
-    return resolveAppleMailboxPath(mailbox, this.getCachedMailboxNames(account));
+  resolveMailbox(mailbox, account, exactPathOnly = false) {
+    return resolveAppleMailboxPath(mailbox, this.getCachedMailboxNames(account), exactPathOnly);
   }
   /**
    * The 1-based position of `path` in the account's cached mailbox list, which is
@@ -102351,7 +102355,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const usable = hint?.account && remembered && remembered.account !== hint.account ? void 0 : remembered;
     const loc = hint?.account && hint?.mailbox ? { account: hint.account, mailbox: hint.mailbox, explicit: true } : usable ? { ...usable, explicit: false } : void 0;
     if (loc) {
-      const scoped = this.resolveScopedById(id, loc, innerAction);
+      const scoped = this.resolveScopedById(id, loc, innerAction, opts.requireScopedLocation);
       if (scoped.kind === "hit") return scoped.output;
       if (scoped.kind === "done") return null;
     }
@@ -102393,9 +102397,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * `lastMessageLookupError` set; `fallback` means the remembered location was
    * stale and has been evicted, so the caller should try the bounded scan.
    */
-  resolveScopedById(id, loc, innerAction) {
+  resolveScopedById(id, loc, innerAction, exactPathOnly = false) {
     const result = executeAppleScript(
-      this.scopedByIdScript(loc.account, loc.mailbox, id, innerAction),
+      this.scopedByIdScript(loc.account, loc.mailbox, id, innerAction, exactPathOnly),
       { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }
     );
     const where = `${loc.account} / ${loc.mailbox}`;
@@ -102683,8 +102687,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * `error:<Mail's text>`, so the caller can return a clean "not found in
    * <mailbox>" for an explicit hint instead of guessing.
    */
-  scopedByIdScript(account, mailbox, id, innerAction) {
-    const resolved = this.resolveMailbox(mailbox, account);
+  scopedByIdScript(account, mailbox, id, innerAction, exactPathOnly = false) {
+    const resolved = this.resolveMailbox(mailbox, account, exactPathOnly);
     const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
     const bind = isLocalStoreLabel(account) ? `${localMailboxBindingFragment()}
         set _hitAcct to "${LOCAL_STORE_LABEL}"
@@ -102785,7 +102789,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                 ${sourceFetch}
                 ${AS_MESSAGE_DATES_FRAGMENT}
                 return msgSubject & "${MSGID_MARKER}" & msgRfcId & "${DATES_MARKER}" & msgDates & "${CONTENT_MARKER}" & msgContent & "${HTML_MARKER}" & htmlSource`;
-    const output2 = this.resolveById(id, innerFetch, hint);
+    const output2 = this.resolveById(id, innerFetch, hint, options);
     return output2 === null ? null : this.parseMessageContent(id, output2, includeHtml);
   }
   /**
@@ -102854,9 +102858,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * ceiling was buying a real result a shorter one would have missed.
    * Same resolution as getMessageContent (resolveById).
    */
-  getRawSource(id, hint) {
+  getRawSource(id, hint, options) {
     this.lastMessageLookupError = void 0;
-    return this.resolveById(id, "return source of msg", hint);
+    if (options?.requireScopedLocation && !(hint?.account && hint.mailbox)) {
+      this.lastMessageLookupError = "A source account and mailbox are required for this read.";
+      return null;
+    }
+    return this.resolveById(id, "return source of msg", hint, options);
   }
   /**
    * List messages in a mailbox.
@@ -103581,7 +103589,7 @@ end try`
       const mbLit = `"${escapeForAppleScript(stripStreamDelimiters(loc.mailbox))}"`;
       return buildAppLevelScript(`
       try
-        ${this.resolveMailboxFragment(loc.account, loc.mailbox)}
+        ${this.resolveMailboxFragment(loc.account, loc.mailbox, source !== void 0)}
         if _tmb is missing value then return "error:Message not found"
         set matchingMsgs to (messages of _tmb whose id is ${Number(id)})
         if (count of matchingMsgs) > 0 then
@@ -106050,7 +106058,7 @@ async function readOriginal(deps, id, cfg, recoverReplyText = false, scope) {
     if (source.subject !== void 0) original2.subject = source.subject;
     return { original: original2, plainText: extractTextBody(source.raw) };
   }
-  const raw = scope ? deps.mail.getRawSource(id, scope) : deps.mail.getRawSource(id);
+  const raw = scope ? deps.mail.getRawSource(id, scope, { requireScopedLocation: true }) : deps.mail.getRawSource(id);
   if (!raw) {
     const why = deps.mail.consumeLastMessageLookupError?.();
     throw new Error(

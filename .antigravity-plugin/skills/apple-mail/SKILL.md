@@ -213,6 +213,12 @@ with the actual original ID, not a new message with a `Re:` subject. Use
 `send: false` when review is requested. New messages require an explicit
 `account`; the server refuses ambiguous reply identities.
 
+For a numeric reply or forward ID, pass the source `account` and full `mailbox`
+path from the search or listing together. The read and compose target must
+stay in that mailbox; if it is missing, ambiguous, or the original Message-ID
+has changed, stop and re-list rather than substituting a similarly named
+mailbox. Omit both fields for an `imap:` ID, which already encodes its source.
+
 This mode operates Mail's visible editor on the local unlocked Mac and requires
 existing Accessibility and Automation permissions for Mail and System Events.
 It checks permissions without requesting them. It does not require a separate

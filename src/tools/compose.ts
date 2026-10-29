@@ -82,7 +82,9 @@ async function readOriginal(
     if (source.subject !== undefined) original.subject = source.subject;
     return { original, plainText: extractTextBody(source.raw) };
   }
-  const raw = scope ? deps.mail.getRawSource(id, scope) : deps.mail.getRawSource(id);
+  const raw = scope
+    ? deps.mail.getRawSource(id, scope, { requireScopedLocation: true })
+    : deps.mail.getRawSource(id);
   if (!raw) {
     // Say WHY when the lookup knows (#270): a bounded scan that skipped a large
     // mailbox, an ambiguous id, a timeout — each has its own remedy.

@@ -1659,11 +1659,20 @@ function mailboxLeaf(path: string): string {
  * mailbox even when Archive/Inbox also exists. Legacy leaf names remain valid
  * only when they identify one mailbox; otherwise the caller gets the candidate
  * paths rather than an arbitrary folder.
+ * Explicit compose sources set exactPathOnly: a disappeared canonical path
+ * must not resolve to a different mailbox through an alias or a unique leaf.
  */
-export function resolveAppleMailboxPath(mailbox: string, actualPaths: readonly string[]): string {
+export function resolveAppleMailboxPath(
+  mailbox: string,
+  actualPaths: readonly string[],
+  exactPathOnly = false
+): string {
   if (actualPaths.length === 0) return mailbox;
 
-  const candidates = [mailbox, ...(MAILBOX_ALIASES[mailbox.toLowerCase()] ?? [])];
+  const candidates = [
+    mailbox,
+    ...(exactPathOnly ? [] : (MAILBOX_ALIASES[mailbox.toLowerCase()] ?? [])),
+  ];
   const ambiguous = (matches: string[]): Error => {
     const sorted = [...new Set(matches)].sort();
     const paths = sorted.map((path) => `"${path}"`).join(" and ");
@@ -1685,6 +1694,8 @@ export function resolveAppleMailboxPath(mailbox: string, actualPaths: readonly s
     if (folded.length === 1) return folded[0];
     if (folded.length > 1) throw ambiguous(folded);
   }
+
+  if (exactPathOnly) return mailbox;
 
   for (const candidate of candidates) {
     const key = mailboxNameKey(candidate);
@@ -1933,8 +1944,8 @@ export class AppleMailManager {
    * only, and a name matching more than one mailbox resolves to nothing rather
    * than guessing — the same rule the move destination already applies.
    */
-  private resolveMailboxFragment(account: string, mailbox: string): string {
-    const resolved = this.resolveMailbox(mailbox, account);
+  private resolveMailboxFragment(account: string, mailbox: string, exactPathOnly = false): string {
+    const resolved = this.resolveMailbox(mailbox, account, exactPathOnly);
     if (isLocalStoreLabel(account)) {
       // Local mailboxes live at the application level, not under an account.
       // Count canonical-path matches so duplicate local names cannot silently
@@ -3041,8 +3052,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * @param account - Account to search in
    * @returns Actual mailbox name, or original if not found
    */
-  private resolveMailbox(mailbox: string, account: string): string {
-    return resolveAppleMailboxPath(mailbox, this.getCachedMailboxNames(account));
+  private resolveMailbox(mailbox: string, account: string, exactPathOnly = false): string {
+    return resolveAppleMailboxPath(mailbox, this.getCachedMailboxNames(account), exactPathOnly);
   }
 
   /**
@@ -3523,7 +3534,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     id: string,
     innerAction: string,
     hint: { account?: string; mailbox?: string } | undefined,
-    opts: { firstHit?: boolean } = {}
+    opts: { firstHit?: boolean; requireScopedLocation?: boolean } = {}
   ): string | null {
     const remembered = this.idLocationIndex.get(String(id));
     // An explicit account-only hint must not be satisfied by a remembered
@@ -3539,7 +3550,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           : undefined;
 
     if (loc) {
-      const scoped = this.resolveScopedById(id, loc, innerAction);
+      const scoped = this.resolveScopedById(id, loc, innerAction, opts.requireScopedLocation);
       if (scoped.kind === "hit") return scoped.output;
       if (scoped.kind === "done") return null;
       // kind === "fallback": stale index entry, already evicted.
@@ -3591,10 +3602,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   private resolveScopedById(
     id: string,
     loc: ByIdLocation,
-    innerAction: string
+    innerAction: string,
+    exactPathOnly = false
   ): { kind: "hit"; output: string } | { kind: "done" } | { kind: "fallback" } {
     const result = executeAppleScript(
-      this.scopedByIdScript(loc.account, loc.mailbox, id, innerAction),
+      this.scopedByIdScript(loc.account, loc.mailbox, id, innerAction, exactPathOnly),
       { timeoutMs: READ_ONLY_BYID_TIMEOUT_MS }
     );
     const where = `${loc.account} / ${loc.mailbox}`;
@@ -3922,9 +3934,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     account: string,
     mailbox: string,
     id: string,
-    innerAction: string
+    innerAction: string,
+    exactPathOnly = false
   ): string {
-    const resolved = this.resolveMailbox(mailbox, account);
+    const resolved = this.resolveMailbox(mailbox, account, exactPathOnly);
     const miss = `${LOOKUP_ERROR_MARKER}${SCOPED_MISS_MARKER}`;
     // #183: a recorded location can now name the LOCAL store, which is not an
     // account — `first account whose name is "On My Mac"` would raise and drop
@@ -4052,7 +4065,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
 
     // Scoped fast path (explicit hint, else the remembered location), then the
     // bounded cross-mailbox scan — see resolveById.
-    const output = this.resolveById(id, innerFetch, hint);
+    const output = this.resolveById(id, innerFetch, hint, options);
     return output === null ? null : this.parseMessageContent(id, output, includeHtml);
   }
 
@@ -4149,9 +4162,17 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * ceiling was buying a real result a shorter one would have missed.
    * Same resolution as getMessageContent (resolveById).
    */
-  getRawSource(id: string, hint?: { account?: string; mailbox?: string }): string | null {
+  getRawSource(
+    id: string,
+    hint?: { account?: string; mailbox?: string },
+    options?: { requireScopedLocation?: boolean }
+  ): string | null {
     this.lastMessageLookupError = undefined;
-    return this.resolveById(id, "return source of msg", hint);
+    if (options?.requireScopedLocation && !(hint?.account && hint.mailbox)) {
+      this.lastMessageLookupError = "A source account and mailbox are required for this read.";
+      return null;
+    }
+    return this.resolveById(id, "return source of msg", hint, options);
   }
 
   /**
@@ -5082,7 +5103,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       const mbLit = `"${escapeForAppleScript(stripStreamDelimiters(loc.mailbox))}"`;
       return buildAppLevelScript(`
       try
-        ${this.resolveMailboxFragment(loc.account, loc.mailbox)}
+        ${this.resolveMailboxFragment(loc.account, loc.mailbox, source !== undefined)}
         if _tmb is missing value then return "error:Message not found"
         set matchingMsgs to (messages of _tmb whose id is ${Number(id)})
         if (count of matchingMsgs) > 0 then

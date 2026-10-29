@@ -23,10 +23,12 @@ vi.mock("@/utils/applescript.js", async (importOriginal) => {
     ...actual,
     executeAppleScript: (script: string) => {
       h.calls.push(script);
+      if (h.scopedMailboxNames.length && script.includes("set end of mbNames to mbPath")) {
+        return { success: true, output: h.scopedMailboxNames.join(", "), error: undefined };
+      }
       if (
         h.scopedMailboxNames.length &&
-        script.includes("set _scopeMatches to {}") &&
-        script.includes("return source of msg")
+        (script.includes("set _scopeMatches to {}") || script.includes("set _localMatches to {}"))
       ) {
         const path = /if _mbPath is "([^"]+)" then/.exec(script)?.[1];
         const matching = h.scopedMailboxNames.filter(
@@ -35,9 +37,25 @@ vi.mock("@/utils/applescript.js", async (importOriginal) => {
         if (matching.length > 1 && script.includes("if (count of _scopeMatches) > 1")) {
           return { success: true, output: "\x1dERR\x1d\x1dSCOPED\x1dambiguous", error: undefined };
         }
+        if (matching.length === 0) {
+          return { success: true, output: "\x1dERR\x1d\x1dSCOPED\x1dnomailbox", error: undefined };
+        }
         return {
           success: true,
-          output: "Message-ID: <wrong@example.com>\r\n\r\nWrong message",
+          output: script.includes("return source of msg")
+            ? "Message-ID: <wrong@example.com>\r\n\r\nWrong message"
+            : "Subject\x1dMSGID\x1d<wrong@example.com>\x1dCONTENT\x1dWrong message\x1dHTML\x1d",
+          error: undefined,
+        };
+      }
+      if (h.scopedMailboxNames.length && script.includes("set _mbM to {}")) {
+        const path = /if _mPath is "([^"]+)" then/.exec(script)?.[1];
+        const matching = h.scopedMailboxNames.filter(
+          (name) => name.toLowerCase() === path?.toLowerCase()
+        );
+        return {
+          success: true,
+          output: matching.length === 1 ? "ok" : "error:Message not found",
           error: undefined,
         };
       }
@@ -46,7 +64,7 @@ vi.mock("@/utils/applescript.js", async (importOriginal) => {
   };
 });
 
-import { AppleMailManager } from "@/services/appleMailManager.js";
+import { AppleMailManager, resolveAppleMailboxPath } from "@/services/appleMailManager.js";
 import { runReply } from "@/tools/compose.js";
 
 const lastScript = () => h.calls[h.calls.length - 1] ?? "";
@@ -131,6 +149,56 @@ describe("by-id message identity", () => {
     expect(script).toContain('if _mbPath is "INBOX" then');
     expect(script).toContain("messages of targetMb whose id is 42");
     expect(script).not.toContain("messages of mb whose id is 42");
+  });
+
+  it.each([
+    { mailbox: "Receipts", otherPath: "Projects/Receipts" },
+    { mailbox: "Sent", otherPath: "Sent Items" },
+  ])("never redirects an explicit compose source from $mailbox to $otherPath", (fixture) => {
+    h.scopedMailboxNames = [fixture.otherPath];
+    for (const account of ["Work", "On My Mac"]) {
+      const scope = { account, mailbox: fixture.mailbox };
+      const options = { requireScopedLocation: true };
+      expect(mgr.getRawSource("42", scope, options)).toBeNull();
+      expect(mgr.getMessageContent("42", false, scope, options)).toBeNull();
+      const source = { ...scope, messageId: "wrong@example.com" };
+      expect(mgr.replyToMessage("42", "Body", false, false, undefined, false, source).success).toBe(
+        false
+      );
+      expect(
+        mgr.forwardMessage("42", ["to@example.com"], undefined, false, undefined, false, source)
+          .success
+      ).toBe(false);
+    }
+    const lookups = h.calls.filter(
+      (script) =>
+        script.includes("set targetMb to missing value") ||
+        script.includes("set _tmb to missing value")
+    );
+    expect(lookups).toHaveLength(8);
+    for (const script of lookups) {
+      expect(script).toContain(`Path is "${fixture.mailbox}"`);
+      expect(script).not.toContain(`Path is "${fixture.otherPath}"`);
+      expect(script).not.toContain("set _hits to {}");
+    }
+  });
+
+  it("retains legacy alias and leaf resolution without strict compose scope", () => {
+    h.scopedMailboxNames = ["Projects/Receipts", "Sent Items"];
+    expect(mgr.getRawSource("42", { account: "Work", mailbox: "Receipts" })).toContain(
+      "wrong@example.com"
+    );
+    expect(lastScript()).toContain('if _mbPath is "Projects/Receipts"');
+    mgr.noteMessageLocation("42", "Work", "Sent");
+    expect(mgr.replyToMessage("42", "Body", false, false).success).toBe(true);
+    expect(lastScript()).toContain('if _mPath is "Sent Items"');
+  });
+
+  it("retains case and Unicode normalization for strict canonical paths", () => {
+    const paths = ["Inbox", "Archive/Inbox", "Rec\u0327u"];
+    expect(resolveAppleMailboxPath("Archive/Inbox", paths, true)).toBe("Archive/Inbox");
+    expect(resolveAppleMailboxPath("INBOX", paths, true)).toBe("Inbox");
+    expect(resolveAppleMailboxPath("Reçu", paths, true)).toBe("Rec\u0327u");
   });
 
   it.each([
