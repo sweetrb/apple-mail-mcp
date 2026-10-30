@@ -106,6 +106,17 @@ describe("#270 (a) — an explicit account+mailbox hint never falls back to the 
     );
   });
 
+  it("reports a missing explicit account without claiming its mailbox is missing or scanning", () => {
+    h.router.fn = () => ({ success: true, output: `${ERR}${SCOPED}noaccount` });
+    expect(
+      mgr.getRawSource("7", { account: "Wrok", mailbox: "INBOX" }, { requireScopedLocation: true })
+    ).toBeNull();
+    expect(kinds()).toEqual(["scoped"]);
+    expect(mgr.consumeLastMessageLookupError()).toBe(
+      'Account "Wrok" not found — message 7 was not looked up. Check the name with list-accounts.'
+    );
+  });
+
   it("Mail's own error from the scoped read is surfaced, without a scan", () => {
     h.router.fn = () => ({
       success: true,
@@ -140,6 +151,7 @@ describe("#270 (a) — an explicit account+mailbox hint never falls back to the 
   it("the scoped script reports its misses instead of swallowing them", () => {
     mgr.getRawSource("7", { account: "Work", mailbox: "INBOX" });
     const s = byId()[0].script;
+    expect(s).toContain(`if (count of _scopeAccounts) is 0 then return "${ERR}${SCOPED}noaccount"`);
     expect(s).toContain(`return "${ERR}${SCOPED}nomailbox"`);
     expect(s).toContain(`return "${ERR}${SCOPED}nomessage"`);
     expect(s).toContain(`return "${ERR}${SCOPED}error:" & errMsg`);
@@ -179,6 +191,20 @@ describe("#270 (b) — a stale remembered location is evicted, then the bounded 
     expect(mgr.getMessageContent("42")).toMatchObject({ subject: "Subj" });
     expect(byId()).toHaveLength(2);
     expect(isUnscoped(byId()[1].script)).toBe(true);
+  });
+
+  it("evicts a remembered location whose account no longer exists, then scans", () => {
+    mgr.noteMessageLocation("42", "Old Account", "INBOX");
+    h.router.fn = (s) => ({
+      success: true,
+      output: isScoped(s) ? `${ERR}${SCOPED}noaccount` : "raw source",
+    });
+    expect(mgr.getRawSource("42")).toBe("raw source");
+    expect(kinds()).toEqual(["scoped", "unscoped"]);
+
+    h.calls.length = 0;
+    expect(mgr.getRawSource("42")).toBe("raw source");
+    expect(kinds()).toEqual(["unscoped"]);
   });
 
   it("a timeout on a remembered scope does NOT add a second 15s scan", () => {

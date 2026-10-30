@@ -3678,7 +3678,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return { kind: "fallback" };
     }
 
-    if (reason === "nomailbox") {
+    if (reason === "noaccount") {
+      this.lastMessageLookupError = `Account "${loc.account}" not found — message ${Number(id)} was not looked up. Check the name with list-accounts.`;
+    } else if (reason === "nomailbox") {
       this.lastMessageLookupError = `Mailbox "${loc.mailbox}" not found in account "${loc.account}" — message ${Number(id)} was not looked up. Check the names with list-mailboxes, or omit account/mailbox to scan every mailbox.`;
     } else if (reason.startsWith("error:")) {
       this.lastMessageLookupError = `Could not read message ${Number(id)} from ${where}: ${reason.slice("error:".length)}`;
@@ -3947,7 +3949,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * actually named "Inbox", which would silently drop us back to the slow scan.
    *
    * A miss is reported, not swallowed (#270): `{LOOKUP_ERROR_MARKER}
-   * {SCOPED_MISS_MARKER}` followed by `nomailbox`, `nomessage` or
+   * {SCOPED_MISS_MARKER}` followed by `noaccount`, `nomailbox`, `nomessage` or
    * `error:<Mail's text>`, so the caller can return a clean "not found in
    * <mailbox>" for an explicit hint instead of guessing.
    */
@@ -3985,7 +3987,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           if (name of _scopeAccount) is "${escapeForAppleScript(account)}" then set end of _scopeAccounts to _scopeAccount
         end repeat
         if (count of _scopeAccounts) > 1 then return "${miss}ambiguousaccount"
-        if (count of _scopeAccounts) is 0 then return "${miss}nomailbox"
+        if (count of _scopeAccounts) is 0 then return "${miss}noaccount"
         set acct to item 1 of _scopeAccounts
         set _hitAcct to (name of acct)
         set targetMb to missing value
