@@ -6,7 +6,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "apple-mail-mcp@2.20.44"
+        "apple-mail-mcp@2.20.45"
       ]
     }
   }

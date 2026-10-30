@@ -101736,6 +101736,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (isLocalStoreLabel(account)) return null;
     const mailboxNames = this.getCachedMailboxNames(account);
     if (!mailboxNames.some((name2) => mailboxLeaf(name2).toLowerCase() === "all mail")) return null;
+    const cached2 = this.cache.mailboxNames.get(account);
+    if (cached2?.receivingServerHost) {
+      return gmailReceivingMailboxes(mailboxNames, cached2.receivingServerHost);
+    }
     const safeAccount = escapeForAppleScript(account);
     const result = executeAppleScript(
       buildAppLevelScript(`
@@ -101746,7 +101750,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         end try
       `)
     );
-    return gmailReceivingMailboxes(mailboxNames, result.success ? result.output : void 0);
+    const host = result.success ? result.output.trim() : void 0;
+    if (host && cached2) cached2.receivingServerHost = host;
+    return gmailReceivingMailboxes(mailboxNames, host);
   }
   /**
    * Invalidate all caches. Call after operations that change

@@ -258,8 +258,8 @@ const UNREACHED_LIST_MAX = 15;
 
 /**
  * Prefix (after LOOKUP_ERROR_MARKER) of a scoped by-id lookup's own miss —
- * `nomailbox`, `nomessage` or `error:<Mail's text>` — so the caller can tell a
- * definite "not in that mailbox" from a hit, and decide whether falling back
+ * `noaccount`, `nomailbox`, `nomessage` or `error:<Mail's text>` — so the caller
+ * can tell a definite "not in that mailbox" from a hit, and decide whether falling back
  * to the cross-mailbox scan is appropriate (it is not for an explicit hint).
  */
 const SCOPED_MISS_MARKER = "\x1dSCOPED\x1d";
@@ -1842,7 +1842,10 @@ export class AppleMailManager {
    */
   private cache = {
     accounts: null as { data: Account[]; expiry: number } | null,
-    mailboxNames: new Map<string, { data: string[]; expiry: number }>(),
+    mailboxNames: new Map<
+      string,
+      { data: string[]; expiry: number; receivingServerHost?: string }
+    >(),
     /** Account name → Mail account id (the host part of its mailbox URLs). */
     accountIds: null as { data: Map<string, string>; expiry: number } | null,
   };
@@ -2765,6 +2768,13 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (isLocalStoreLabel(account)) return null;
     const mailboxNames = this.getCachedMailboxNames(account);
     if (!mailboxNames.some((name) => mailboxLeaf(name).toLowerCase() === "all mail")) return null;
+    // Keep provider identity on the mailbox-name entry so expiry and structural
+    // invalidation discard both together. Failed/empty reads are retried rather
+    // than retaining an earlier Gmail identity or caching an unreadable host.
+    const cached = this.cache.mailboxNames.get(account);
+    if (cached?.receivingServerHost) {
+      return gmailReceivingMailboxes(mailboxNames, cached.receivingServerHost);
+    }
     const safeAccount = escapeForAppleScript(account);
     const result = executeAppleScript(
       buildAppLevelScript(`
@@ -2775,7 +2785,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         end try
       `)
     );
-    return gmailReceivingMailboxes(mailboxNames, result.success ? result.output : undefined);
+    const host = result.success ? result.output.trim() : undefined;
+    if (host && cached) cached.receivingServerHost = host;
+    return gmailReceivingMailboxes(mailboxNames, host);
   }
 
   /**

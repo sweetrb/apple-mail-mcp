@@ -15,7 +15,7 @@
  *       disagreed about a Gmail account's INBOX contents).
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   calls: [] as string[],
@@ -94,6 +94,97 @@ void RECORD_SEP;
 
 beforeEach(() => {
   h.calls = [];
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("receiving-server cache shares the mailbox-name lifetime", () => {
+  const hostReads = () => h.calls.filter((s) => s.includes("return server name of account"));
+  const mailboxReads = () => h.calls.filter((s) => s.includes("set end of mbNames to mbPath"));
+
+  it.each(["imap.gmail.com", "127.0.0.1"])(
+    "reuses the %s host across search and list without changing the routing decision",
+    (serverHost) => {
+      h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost });
+      const mgr = new AppleMailManager();
+      mgr.searchMessages(undefined, "INBOX", "Account", 50);
+      mgr.listMessages("INBOX", "Account", 50);
+      expect(hostReads()).toHaveLength(1);
+      expect(mailboxReads()).toHaveLength(1);
+      expect(lastScript("set outputText to")?.includes('"all mail"')).toBe(
+        serverHost === "imap.gmail.com"
+      );
+    }
+  );
+
+  it("keeps receiving hosts isolated by account", () => {
+    const gmail = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost: "imap.gmail.com" });
+    const other = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost: "127.0.0.1" });
+    h.router.fn = (script) => (script.includes('account "Google"') ? gmail : other)(script);
+    const mgr = new AppleMailManager();
+    mgr.searchMessages(undefined, "INBOX", "Google", 50);
+    expect(lastScript("set outputText to")).toContain('"all mail"');
+    mgr.listMessages("INBOX", "Proton", 50);
+    expect(lastScript("set outputText to")).toMatch(/if _mbcPath is "INBOX"/);
+    mgr.listMessages("INBOX", "Google", 50);
+    expect(lastScript("set outputText to")).toContain('"all mail"');
+    expect(hostReads()).toHaveLength(2);
+  });
+
+  it("expires the host with mailbox names, including when it was fetched later", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost: "imap.gmail.com" });
+    const mgr = new AppleMailManager();
+    mgr.listMessages("Sent Mail", "Account", 50);
+    expect(hostReads()).toHaveLength(0);
+    clock.mockReturnValue(50_000);
+    mgr.listMessages("INBOX", "Account", 50);
+    expect(hostReads()).toHaveLength(1);
+    clock.mockReturnValue(61_000);
+    h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost: "127.0.0.1" });
+    mgr.listMessages("INBOX", "Account", 50);
+    expect(hostReads()).toHaveLength(2);
+    expect(mailboxReads()).toHaveLength(2);
+    expect(lastScript("set outputText to")).toMatch(/if _mbcPath is "INBOX"/);
+  });
+
+  it("discards the host when mailbox structure invalidates the cache", () => {
+    h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost: "imap.gmail.com" });
+    const mgr = new AppleMailManager();
+    mgr.listMessages("INBOX", "Account", 50);
+    // Exercise the invalidation shared by successful create/delete/rename operations
+    // without introducing a live mailbox mutation into this lookup test.
+    mgr["invalidateCache"]();
+    h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost: "127.0.0.1" });
+    mgr.searchMessages(undefined, "INBOX", "Account", 50);
+    expect(hostReads()).toHaveLength(2);
+    expect(mailboxReads()).toHaveLength(2);
+    expect(lastScript("set outputText to")).toMatch(/if _mbcPath is "INBOX"/);
+  });
+
+  it.each([false, true])(
+    "does not reuse stale Gmail identity or cache an unreadable host (transport failure: %s)",
+    (serverFailure) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost: "imap.gmail.com" });
+      const mgr = new AppleMailManager();
+      mgr.listMessages("INBOX", "Account", 50);
+      clock.mockReturnValue(61_000);
+      h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverFailure, serverHost: " " });
+      mgr.searchMessages(undefined, "INBOX", "Account", 50);
+      expect(lastScript("set outputText to")).toMatch(/if _mbcPath is "INBOX"/);
+      mgr.listMessages("INBOX", "Account", 50);
+      expect(lastScript("set outputText to")).toMatch(/if _mbcPath is "INBOX"/);
+      expect(hostReads()).toHaveLength(3);
+      h.router.fn = makeRouter({ mailboxNames: GMAIL_MAILBOXES, serverHost: "imap.gmail.com" });
+      mgr.listMessages("INBOX", "Account", 50);
+      expect(lastScript("set outputText to")).toContain('"all mail"');
+      expect(hostReads()).toHaveLength(4);
+      expect(mailboxReads()).toHaveLength(2);
+    }
+  );
 });
 
 describe("A1: INBOX-scoped search on a Gmail-style account", () => {

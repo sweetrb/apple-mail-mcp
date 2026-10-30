@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [2.20.45] - 2026-10-30
+
+### Changed
+
+- **Inbox searches and lists reuse the receiving-server lookup while mailbox
+  names remain cached.** Both values expire together after 60 seconds and are
+  discarded on mailbox-structure changes. Failed or empty host reads are retried;
+  an expired Gmail identity is not reused when the next lookup fails, so an
+  unreadable host still keeps the request scoped to the literal Inbox.
+
 ## [2.20.44] - 2026-10-30
 
 ### Fixed
