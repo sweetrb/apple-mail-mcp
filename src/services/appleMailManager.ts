@@ -33,7 +33,7 @@ import { resolve, sep, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
-import { flagColorName } from "@/services/imapClient.js";
+import { flagColorName, isGmailHost } from "@/services/imapClient.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { plausibleDateSent } from "@/utils/headers.js";
@@ -1732,13 +1732,16 @@ function isInboxScope(mailbox: string): boolean {
 }
 
 /**
- * Detect a Gmail-style account from its mailbox-name list: it exposes an
- * "All Mail" special mailbox. Returns the subset of GMAIL_INBOX_MAILBOXES that
- * actually exist on the account (so we only scan mailboxes that are present),
- * or `null` when the account is not Gmail-style (no "All Mail") — callers then
- * keep the ordinary single-INBOX behavior. Matching is case-insensitive.
+ * Apply the Gmail workaround only when Mail reports a Gmail receiving server.
+ * Other providers, including Proton, can also expose an "All Mail" mailbox;
+ * its mere presence does not make that mailbox an alias for their INBOX.
+ * If the host is unavailable, retain the explicitly requested INBOX scope.
  */
-function gmailReceivingMailboxes(mailboxNames: readonly string[]): string[] | null {
+function gmailReceivingMailboxes(
+  mailboxNames: readonly string[],
+  serverHost: string | undefined
+): string[] | null {
+  if (!isGmailHost(serverHost)) return null;
   const lower = mailboxNames.map((n) => mailboxLeaf(n).toLowerCase());
   if (!lower.includes("all mail")) return null;
   const present = GMAIL_INBOX_MAILBOXES.filter((want) => lower.includes(want.toLowerCase()));
@@ -2757,6 +2760,24 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     return names;
   }
 
+  /** Gmail's inbox workaround requires a verified receiving server, not a folder name alone. */
+  private gmailReceivingMailboxesForAccount(account: string): string[] | null {
+    if (isLocalStoreLabel(account)) return null;
+    const mailboxNames = this.getCachedMailboxNames(account);
+    if (!mailboxNames.some((name) => mailboxLeaf(name).toLowerCase() === "all mail")) return null;
+    const safeAccount = escapeForAppleScript(account);
+    const result = executeAppleScript(
+      buildAppLevelScript(`
+        try
+          return server name of account "${safeAccount}"
+        on error
+          return ""
+        end try
+      `)
+    );
+    return gmailReceivingMailboxes(mailboxNames, result.success ? result.output : undefined);
+  }
+
   /**
    * Invalidate all caches. Call after operations that change
    * mailbox structure (create/delete/rename mailbox).
@@ -3289,7 +3310,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       // dedup, so scoped search/get-thread find the same messages the unscoped
       // call reports as inbox mail.
       const gmailInbox = isInboxScope(mailbox)
-        ? gmailReceivingMailboxes(this.getCachedMailboxNames(targetAccount))
+        ? this.gmailReceivingMailboxesForAccount(targetAccount)
         : null;
 
       if (gmailInbox) {
@@ -4275,7 +4296,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       // returns a small, shifting subset of the account's real inbox contents.
       // See BUG A / issue: Gmail virtual-INBOX handling.
       const gmailInbox = isInboxScope(mailbox)
-        ? gmailReceivingMailboxes(this.getCachedMailboxNames(targetAccount))
+        ? this.gmailReceivingMailboxesForAccount(targetAccount)
         : null;
 
       if (gmailInbox) {
@@ -7815,11 +7836,9 @@ ${actionStmts.join("\n")}
 
     // Scan each account's receiving mailbox for performance — scanning every
     // mailbox is too slow. For an ordinary account that's the literal "INBOX".
-    // For a Gmail-style account (BUG A2) the literal "INBOX" is an empty shell,
-    // so counting only it reported near-zero recent mail; instead we detect the
-    // "All Mail" special mailbox (matched by `name of mb`, since it's nested in
-    // the [Gmail] container and doesn't resolve by a flat name) and count that
-    // superset of received mail.
+    // For a Gmail account (BUG A2) the literal "INBOX" can be an empty shell,
+    // so count its "All Mail" special mailbox instead. Other providers also
+    // expose an "All Mail" folder; check the receiving server before using it.
     //
     // A `whose date received >=` filter is O(n) over the whole mailbox with no
     // AppleScript index, so on a huge "All Mail" (tens of thousands of messages)
@@ -7860,22 +7879,32 @@ ${actionStmts.join("\n")}
 
       repeat with acct in accounts
         try
-          -- Detect a Gmail-style account (has an "All Mail" special mailbox);
-          -- if so, count its receiving superset instead of the empty "INBOX".
+          -- Only Gmail hosts may use the "All Mail" workaround. If the host
+          -- cannot be read, retain the ordinary INBOX rather than guessing.
           set _gmailInbox to missing value
-          set _wantNames to ${gmailNameList}
-          repeat with mb in mailboxes of acct
-            set mbName to ""
-            try
-              set mbName to name of mb
-            end try
-            ignoring case
-              if _wantNames contains mbName then
-                set _gmailInbox to mb
-                exit repeat
-              end if
-            end ignoring
-          end repeat
+          set _serverHost to ""
+          try
+            set _serverHost to (server name of acct) as text
+          end try
+          set _isGmailHost to false
+          ignoring case
+            if _serverHost is "gmail.com" or _serverHost ends with ".gmail.com" or _serverHost is "googlemail.com" or _serverHost ends with ".googlemail.com" then set _isGmailHost to true
+          end ignoring
+          if _isGmailHost then
+            set _wantNames to ${gmailNameList}
+            repeat with mb in mailboxes of acct
+              set mbName to ""
+              try
+                set mbName to name of mb
+              end try
+              ignoring case
+                if _wantNames contains mbName then
+                  set _gmailInbox to mb
+                  exit repeat
+                end if
+              end ignoring
+            end repeat
+          end if
 
           if _gmailInbox is not missing value then
             try

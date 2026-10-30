@@ -100956,7 +100956,8 @@ var INBOX_SCOPE_NAMES = /* @__PURE__ */ new Set(["inbox"]);
 function isInboxScope(mailbox) {
   return INBOX_SCOPE_NAMES.has(mailbox.trim().toLowerCase());
 }
-function gmailReceivingMailboxes(mailboxNames) {
+function gmailReceivingMailboxes(mailboxNames, serverHost) {
+  if (!isGmailHost(serverHost)) return null;
   const lower = mailboxNames.map((n) => mailboxLeaf(n).toLowerCase());
   if (!lower.includes("all mail")) return null;
   const present = GMAIL_INBOX_MAILBOXES.filter((want) => lower.includes(want.toLowerCase()));
@@ -101730,6 +101731,23 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     this.cache.mailboxNames.set(account, { data: names, expiry: now + this.CACHE_TTL_MS });
     return names;
   }
+  /** Gmail's inbox workaround requires a verified receiving server, not a folder name alone. */
+  gmailReceivingMailboxesForAccount(account) {
+    if (isLocalStoreLabel(account)) return null;
+    const mailboxNames = this.getCachedMailboxNames(account);
+    if (!mailboxNames.some((name2) => mailboxLeaf(name2).toLowerCase() === "all mail")) return null;
+    const safeAccount = escapeForAppleScript(account);
+    const result = executeAppleScript(
+      buildAppLevelScript(`
+        try
+          return server name of account "${safeAccount}"
+        on error
+          return ""
+        end try
+      `)
+    );
+    return gmailReceivingMailboxes(mailboxNames, result.success ? result.output : void 0);
+  }
   /**
    * Invalidate all caches. Call after operations that change
    * mailbox structure (create/delete/rename mailbox).
@@ -102148,7 +102166,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (mailbox) {
       const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
       resultMailbox = targetMailbox;
-      const gmailInbox = isInboxScope(mailbox) ? gmailReceivingMailboxes(this.getCachedMailboxNames(targetAccount)) : null;
+      const gmailInbox = isInboxScope(mailbox) ? this.gmailReceivingMailboxesForAccount(targetAccount) : null;
       if (gmailInbox) {
         rowsIncludeMailbox = true;
         const nameList = appleScriptLowerNameList(gmailInbox);
@@ -102927,7 +102945,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     if (mailbox) {
       const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
       resultMailbox = targetMailbox;
-      const gmailInbox = isInboxScope(mailbox) ? gmailReceivingMailboxes(this.getCachedMailboxNames(targetAccount)) : null;
+      const gmailInbox = isInboxScope(mailbox) ? this.gmailReceivingMailboxesForAccount(targetAccount) : null;
       if (gmailInbox) {
         rowsIncludeMailbox = true;
         const nameList = appleScriptLowerNameList(gmailInbox);
@@ -105664,22 +105682,32 @@ ${actionStmts.join("\n")}
 
       repeat with acct in accounts
         try
-          -- Detect a Gmail-style account (has an "All Mail" special mailbox);
-          -- if so, count its receiving superset instead of the empty "INBOX".
+          -- Only Gmail hosts may use the "All Mail" workaround. If the host
+          -- cannot be read, retain the ordinary INBOX rather than guessing.
           set _gmailInbox to missing value
-          set _wantNames to ${gmailNameList}
-          repeat with mb in mailboxes of acct
-            set mbName to ""
-            try
-              set mbName to name of mb
-            end try
-            ignoring case
-              if _wantNames contains mbName then
-                set _gmailInbox to mb
-                exit repeat
-              end if
-            end ignoring
-          end repeat
+          set _serverHost to ""
+          try
+            set _serverHost to (server name of acct) as text
+          end try
+          set _isGmailHost to false
+          ignoring case
+            if _serverHost is "gmail.com" or _serverHost ends with ".gmail.com" or _serverHost is "googlemail.com" or _serverHost ends with ".googlemail.com" then set _isGmailHost to true
+          end ignoring
+          if _isGmailHost then
+            set _wantNames to ${gmailNameList}
+            repeat with mb in mailboxes of acct
+              set mbName to ""
+              try
+                set mbName to name of mb
+              end try
+              ignoring case
+                if _wantNames contains mbName then
+                  set _gmailInbox to mb
+                  exit repeat
+                end if
+              end ignoring
+            end repeat
+          end if
 
           if _gmailInbox is not missing value then
             try
