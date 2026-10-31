@@ -352,9 +352,14 @@ set `APPLE_MAIL_MCP_ENVELOPE_INDEX=1` to answer header searches (`query`, `from`
 `subject`, read/flagged state, dates, mailbox) from Mail's own on-disk Envelope Index
 instead of an AppleScript scan, so large mailboxes are searched completely rather than
 skipped. It needs Full Disk Access for the server's Node runtime and opens the database
-read-only. Anything the index can't answer completely (a `flagColor` filter, an unknown
-mailbox, no Full Disk Access, an unrecognised schema, or a corrupt or locked database)
-falls back to the AppleScript scan. The `backend` field below reports which one answered.
+read-only. Text filters ignore case the way Mail does, accented and non-Latin letters
+included (`über` finds `Über`). Anything the index can't answer completely (a
+`flagColor` filter, an unknown mailbox, no Full Disk Access, an unrecognised schema, a
+corrupt or locked database, or Mail not running — opening the index then would create
+files in the mail store) falls back to the AppleScript scan. (Mail not running is judged
+by its `-wal`/`-shm` files being gone; after a Mail crash leaves them behind, a search can
+still update `-shm`, which SQLite rebuilds when Mail next opens the index.) The `backend`
+field below reports which one answered.
 ([#342](https://github.com/sweetrb/apple-mail-mcp/issues/342))
 
 **Body search for AppleScript-only accounts (opt-in local body index).** Without IMAP,
@@ -392,9 +397,17 @@ on disk. ([#349](https://github.com/sweetrb/apple-mail-mcp/issues/349))
   the server. If that process can't start or can't read the store, the server builds
   on its own main thread instead and `doctor` says why (and tries a build process again
   an hour later). A build process that stops responding for a minute is stopped and
-  restarted. New mail is picked up through
+  restarted. (A host that runs the server on Electron's Node gets the main-thread build:
+  a forked process there would start the app.) A message file that can't be read or
+  parsed is skipped, counted, and tried
+  again on the next full check; it never holds up the rest. New mail is picked up through
   file-system events within seconds, with a full check every 10 minutes as a safety
   net. A build of ~22,000 messages took about 40 s on an Apple-silicon Mac.
+- **What it matches.** Words and word beginnings, ignoring case and accents: `invoice`
+  finds `invoices` and `Invoice`, but not `reinvoice`, as the index stores words, not
+  text. Text with no letters or digits (`@`), and Chinese, Japanese or Thai text (written
+  without spaces between words), can't be matched that way, so a body search for it
+  reports the account as not searched rather than as no match.
 - **Coverage is always reported.** A body search never presents an incomplete index as
   "no matches". Messages in the searched scope that it couldn't read in full are
   counted, and the result is `partial: true` with a `notSearchedMailboxes` entry such as
@@ -402,6 +415,8 @@ on disk. ([#349](https://github.com/sweetrb/apple-mail-mcp/issues/349))
   means Mail has only the headers (common for older mail on IMAP/Exchange accounts set
   to download recent messages only); open those messages in Mail, or change the
   account's download setting, to make them searchable. Messages over 25 MB are not read.
+  Until the first build has walked the whole store, messages it hasn't reached yet are
+  counted as _not indexed yet_.
 - **Requirements.** Node 22.5 or later (for `node:sqlite`); on older runtimes the
   feature turns itself off and says why in the logs and `doctor`.
 

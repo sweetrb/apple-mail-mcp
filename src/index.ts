@@ -153,7 +153,7 @@ import {
   reconciliationWarnings,
   type DestructiveOpReport,
 } from "@/services/auditLog.js";
-import { BODY_INDEX_BUILDER_ARG, runBuilderProcess } from "@/utils/bodyIndexBuild.js";
+import { BODY_INDEX_BUILDER_ARG, fileIdentity, runBuilderProcess } from "@/utils/bodyIndexBuild.js";
 import { realClock } from "@/utils/bodyIndex.js";
 import { loadSqlite } from "@/utils/envelopeIndex.js";
 
@@ -168,6 +168,7 @@ if (process.argv.includes(BODY_INDEX_BUILDER_ARG) && process.send) {
       onMessage: (fn) => process.on("message", fn),
       onDisconnect: (fn) => process.on("disconnect", fn),
       ppid: () => process.ppid,
+      entry: () => fileIdentity(process.argv[1]),
       exit: (code) => process.exit(code),
     },
     { sqlite: loadSqlite(), clock: realClock }
@@ -617,7 +618,7 @@ registerTool(
         .string()
         .optional()
         .describe(
-          "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched, or the opt-in local body index (APPLE_MAIL_MCP_BODY_INDEX); otherwise AppleScript-only accounts cannot search bodies and are reported as not searched."
+          "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched, or the opt-in local body index (APPLE_MAIL_MCP_BODY_INDEX); otherwise AppleScript-only accounts cannot search bodies and are reported as not searched. The local index matches words and word beginnings ('invoice' finds 'invoices', not 'reinvoice'); text with no letters or digits, or in Chinese, Japanese or Thai, is reported as not searched rather than as no match."
         ),
       from: z
         .string()

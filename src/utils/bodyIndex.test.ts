@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -23,7 +24,9 @@ import {
   BODY_INDEX_APPLICATION_ID,
   BODY_INDEX_SCHEMA_VERSION,
   BodyIndexWriter,
+  DocState,
   MAX_EMLX_BYTES,
+  bodyMatchQuery,
   describeScopeGap,
   ftsPhrase,
   fts5Unsupported,
@@ -31,6 +34,7 @@ import {
   isScopeComplete,
   messageIdFromFilename,
   parseEmlxBody,
+  readAndParse,
 } from "@/utils/bodyIndex.js";
 import { searchEnvelopeIndex, type SqliteModule } from "@/utils/envelopeIndex.js";
 import {
@@ -127,14 +131,20 @@ describe("parseEmlxBody", () => {
 
 describe("scope coverage wording", () => {
   it("names only the non-zero gaps", () => {
-    const c = { notDownloaded: 1234, notIndexedYet: 0, partlyDownloaded: 2, tooLarge: 1 };
+    const c = {
+      notDownloaded: 1234,
+      notIndexedYet: 0,
+      partlyDownloaded: 2,
+      tooLarge: 1,
+      unreadable: 3,
+    };
     expect(isScopeComplete(c)).toBe(false);
     expect(describeScopeGap(c)).toBe(
-      "1,234 messages not downloaded, 2 with no body downloaded yet, 1 over the 25 MB size cap"
+      "1,234 messages not downloaded, 2 with no body downloaded yet, 1 over the 25 MB size cap, 3 that couldn't be read"
     );
-    expect(
-      isScopeComplete({ notDownloaded: 0, notIndexedYet: 0, partlyDownloaded: 0, tooLarge: 0 })
-    ).toBe(true);
+    const none = { notDownloaded: 0, notIndexedYet: 0, partlyDownloaded: 0, tooLarge: 0 };
+    expect(isScopeComplete({ ...none, unreadable: 0 })).toBe(true);
+    expect(isScopeComplete({ ...none, unreadable: 1 })).toBe(false);
   });
 });
 
@@ -298,7 +308,13 @@ describeIfSqlite("BodyIndexWriter.openExisting (the build process's open)", () =
     if ("reason" in second) throw new Error(second.reason);
     buildAll(second);
     // The server's connection sees what the second one wrote.
-    expect(main.state().counts).toEqual({ indexed: 1, queued: 0, partial: 0, tooLarge: 0 });
+    expect(main.state().counts).toEqual({
+      indexed: 1,
+      queued: 0,
+      partial: 0,
+      tooLarge: 0,
+      unreadable: 0,
+    });
     expect(second.rebuilt).toBeNull();
     second.close();
     main.close();
@@ -374,11 +390,23 @@ describeIfSqlite("BodyIndexWriter: walking and indexing", () => {
   it("walks, queues, then indexes; counts move from queued to indexed", () => {
     w.startWalk();
     while (!w.walkStep(60_000));
-    expect(w.state().counts).toEqual({ indexed: 0, queued: 3, partial: 0, tooLarge: 0 });
+    expect(w.state().counts).toEqual({
+      indexed: 0,
+      queued: 3,
+      partial: 0,
+      tooLarge: 0,
+      unreadable: 0,
+    });
     expect(w.state().meta.lastWalkFiles).toBe(3);
     expect(w.state().meta.lastFullWalk).toBeDefined();
     while (w.indexStep(60_000) > 0);
-    expect(w.state().counts).toEqual({ indexed: 3, queued: 0, partial: 0, tooLarge: 0 });
+    expect(w.state().counts).toEqual({
+      indexed: 3,
+      queued: 0,
+      partial: 0,
+      tooLarge: 0,
+      unreadable: 0,
+    });
     expect(bodies("cafe")).toEqual([2]);
     expect(bodies("wire transfer")).toEqual([3]);
   });
@@ -683,6 +711,7 @@ describeIfSqlite("body search through the Envelope Index (attached read-only)", 
       notIndexedYet: 0,
       partlyDownloaded: 0,
       tooLarge: 0,
+      unreadable: 0,
     });
     // Archive has every body: that scope is complete.
     const archive = search({ mailbox: "Archive" });
@@ -707,7 +736,8 @@ describeIfSqlite("body search through the Envelope Index (attached read-only)", 
   it("before the first walk: every message in scope is counted as not searched", () => {
     const r = search();
     expect(r.ok && r.rows).toEqual([]);
-    expect(r.ok && r.bodyCoverage!.notDownloaded).toBe(4);
+    // Not "not downloaded": until the walk has finished, it can't tell.
+    expect(r.ok && r.bodyCoverage).toMatchObject({ notDownloaded: 0, notIndexedYet: 4 });
   });
 
   it("stale: a message that arrived after the last update is counted, not missed silently", () => {
@@ -759,5 +789,237 @@ describeIfSqlite("body search through the Envelope Index (attached read-only)", 
     const before = statSync(path).mtimeMs;
     search();
     expect(statSync(path).mtimeMs).toBe(before);
+  });
+});
+
+describe("bodyMatchQuery", () => {
+  it("quotes the text as one phrase whose last word matches as a prefix", () => {
+    expect(bodyMatchQuery("wire transfer")).toEqual({ query: '"wire transfer"*' });
+    expect(bodyMatchQuery('say "hi" NEAR')).toEqual({ query: '"say ""hi"" NEAR"*' });
+    expect(bodyMatchQuery("cafe\u0301")).toEqual({ query: '"cafe\u0301"*' }); // ends in a mark
+  });
+
+  it("leaves the prefix off when the text ends after its last word", () => {
+    for (const text of ["foo ", "foo-", "foo.", 'say "hi"']) {
+      expect(bodyMatchQuery(text)).toEqual({ query: `"${text.replace(/"/g, '""')}"` });
+    }
+  });
+
+  it("refuses text the index can't answer as a 'contains' search would", () => {
+    for (const text of ["@", "!!!", " ", "🎉", "--"]) {
+      expect(bodyMatchQuery(text)).toEqual({
+        reason: expect.stringContaining("no letters or digits"),
+      });
+    }
+    for (const text of ["明天", "会議の資料", "カタカナ", "ภาษาไทย", "invoice 明天"]) {
+      expect(bodyMatchQuery(text)).toEqual({ reason: expect.stringContaining("no spaces") });
+    }
+    expect(bodyMatchQuery("a\u0000b")).toEqual({ reason: expect.stringContaining("NUL") });
+  });
+
+  it("accepts scripts written with spaces between words", () => {
+    for (const text of ["회의", "Grüße", "привет", "مرحبا", "नमस्ते", "x2"]) {
+      expect(bodyMatchQuery(text)).toHaveProperty("query");
+    }
+  });
+});
+
+describeIfSqlite("body search: what a 'contains' search finds, or an honest refusal", () => {
+  let root: string;
+  let store: string;
+  let indexPath: string;
+  let path: string;
+  let w: BodyIndexWriter;
+  const base = { account: "ACC", mailbox: "INBOX", address: "a@x.com", received: 1_700_000_000 };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bodyidx-words-"));
+    store = join(root, "V10");
+    mkdirSync(join(store, "MailData"), { recursive: true });
+    indexPath = join(store, "MailData", "Envelope Index");
+    buildEnvelopeIndex(indexPath, [
+      { ...base, id: 1, subject: "a" },
+      { ...base, id: 2, subject: "b" },
+      { ...base, id: 3, subject: "c" },
+      { ...base, id: 4, subject: "d" },
+    ]);
+    writeEmlx(store, "ACC", "INBOX", 1, plainMessage("a", "the invoices attached for March"));
+    // writeEmlx takes latin1 (raw bytes); these bodies are UTF-8.
+    const utf8 = (text: string) => Buffer.from(text, "utf8").toString("latin1");
+    writeEmlx(store, "ACC", "INBOX", 2, plainMessage("b", utf8("회의를 내일 합니다")));
+    writeEmlx(store, "ACC", "INBOX", 3, plainMessage("c", utf8("我们明天开会")));
+    writeEmlx(store, "ACC", "INBOX", 4, plainMessage("d", "write to me at a@b.com"));
+    path = join(root, "support", "body.db");
+    w = openWriter(store, path);
+    buildAll(w);
+  });
+  afterEach(() => {
+    w.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const find = (text: string) => {
+    const r = searchEnvelopeIndex(
+      { accountId: "ACC", limit: 50, body: { text, indexFile: path } },
+      { indexPath, sqlite }
+    );
+    return r.ok ? r.rows.map((m) => m.id) : r;
+  };
+
+  it("finds a word with an ending added, as 'contains' does", () => {
+    expect(find("invoice")).toEqual([1]);
+    expect(find("invoice ")).toEqual([]); // the word is complete: not "invoices"
+    expect(find("attached for mar")).toEqual([1]);
+    expect(find("회의")).toEqual([2]);
+    expect(find("b.com")).toEqual([4]);
+  });
+
+  it("refuses punctuation-only and unspaced-script text instead of reporting no match", () => {
+    expect(find("@")).toEqual({
+      ok: false,
+      reason: expect.stringContaining("no letters or digits"),
+    });
+    expect(find("明天")).toEqual({ ok: false, reason: expect.stringContaining("no spaces") });
+  });
+});
+
+describeIfSqlite("BodyIndexWriter: a bad file stops nothing, and isn't counted as searched", () => {
+  let root: string;
+  let store: string;
+  let path: string;
+  let w: BodyIndexWriter;
+  const messages = () => join(store, "ACC", "INBOX.mbox", "STORE-UUID", "Data", "Messages");
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "bodyidx-bad-"));
+    store = join(root, "V10");
+    path = join(root, "support", "body.db");
+    writeEmlx(store, "ACC", "INBOX", 1, plainMessage("a", "tracking number ZX-99"));
+    writeEmlx(store, "ACC", "INBOX", 2, plainMessage("b", "lunch on friday"));
+    w = openWriter(store, path);
+  });
+  afterEach(() => {
+    w.close();
+    try {
+      chmodSync(join(messages(), "2.emlx"), 0o644);
+    } catch {
+      /* not chmodded */
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const bodies = (text: string) =>
+    w.db
+      .prepare("SELECT rowid AS id FROM bodies WHERE bodies MATCH ? ORDER BY rowid")
+      .all(ftsPhrase(text))
+      .map((r) => Number(r.id));
+  const stateOf = (id: number) =>
+    Number(w.db.prepare("SELECT state FROM docs WHERE id = ?").get(id)?.state ?? -1);
+
+  // Root reads every file whatever its mode, so this can only be seen as a user.
+  it.skipIf(process.getuid?.() === 0)(
+    "counts a file it can't read as unreadable, says why, and reads it on the next walk",
+    () => {
+      chmodSync(join(messages(), "2.emlx"), 0o000);
+      buildAll(w);
+      expect(stateOf(2)).toBe(DocState.unreadable);
+      expect(w.state().counts).toMatchObject({ indexed: 1, unreadable: 1, queued: 0 });
+      expect(w.state().meta.lastError).toMatch(/couldn't be read \(EACCES\)/);
+      expect(bodies("tracking")).toEqual([1]);
+      // Unchanged on disk, yet queued again by the next walk, and read once it can be.
+      chmodSync(join(messages(), "2.emlx"), 0o644);
+      buildAll(w);
+      expect(stateOf(2)).toBe(DocState.indexed);
+      expect(bodies("lunch")).toEqual([2]);
+    }
+  );
+
+  it("counts a read error other than a vanished file as unreadable", () => {
+    const dir = join(messages(), "7.emlx");
+    mkdirSync(dir); // a directory where a message file should be: EISDIR
+    w.applyChanges([dir]);
+    w.indexStep(60_000);
+    expect(stateOf(7)).toBe(DocState.unreadable);
+    expect(readAndParse(dir)).toEqual({ state: DocState.unreadable, failure: "EISDIR" });
+  });
+
+  it("drops the row of a file that vanished before it was read", () => {
+    w.startWalk();
+    while (!w.walkStep(60_000));
+    unlinkSync(join(messages(), "2.emlx"));
+    while (w.indexStep(60_000) > 0);
+    expect(stateOf(2)).toBe(-1);
+    expect(readAndParse(join(messages(), "2.emlx"))).toEqual({ state: "gone" });
+    expect(readAndParse(join(messages(), "1.emlx", "x"))).toEqual({ state: "gone" }); // ENOTDIR
+  });
+
+  it("ignores <n>.emlx files outside Messages folders: those are attachments", () => {
+    const attachments = join(
+      store,
+      "ACC",
+      "INBOX.mbox",
+      "STORE-UUID",
+      "Data",
+      "Attachments",
+      "1",
+      "2"
+    );
+    mkdirSync(attachments, { recursive: true });
+    const saved = join(attachments, "1.emlx");
+    writeFileSync(saved, emlx(plainMessage("fwd", "an attached message about bananas")));
+    buildAll(w);
+    expect(bodies("bananas")).toEqual([]);
+    expect(bodies("tracking")).toEqual([1]);
+    w.applyChanges([saved]);
+    expect(w.state().counts.queued).toBe(0);
+    expect(String(w.db.prepare("SELECT path FROM docs WHERE id = 1").get()!.path)).toBe(
+      join(messages(), "1.emlx")
+    );
+  });
+
+  it("leaves files above maxBytes queued for a later step", () => {
+    writeEmlx(store, "ACC", "INBOX", 3, plainMessage("c", "big " + "x".repeat(5_000)));
+    w.startWalk();
+    while (!w.walkStep(60_000));
+    expect(w.indexStep(60_000, { maxBytes: 1_000 })).toBe(2);
+    expect(stateOf(3)).toBe(DocState.queued);
+    expect(w.indexStep(60_000)).toBe(1);
+    expect(stateOf(3)).toBe(DocState.indexed);
+  });
+
+  it("upgrades a v3 index in place, keeping what it indexed", () => {
+    buildAll(w);
+    w.db.exec("PRAGMA user_version = 3");
+    w.close();
+    w = openWriter(store, path);
+    expect(w.rebuilt).toBeNull();
+    expect(Number(w.db.prepare("PRAGMA user_version").get()!.user_version)).toBe(
+      BODY_INDEX_SCHEMA_VERSION
+    );
+    expect(w.state().counts.indexed).toBe(2);
+    expect(bodies("tracking")).toEqual([1]);
+  });
+
+  it("upgrading from v3, reads again what 2.20.46 marked indexed without reading it", () => {
+    writeEmlx(store, "ACC", "INBOX", 3, plainMessage("c", "")); // no text at all
+    buildAll(w);
+    // What 2.20.46 did with a file it couldn't open: indexed, no body.
+    w.db.prepare("DELETE FROM bodies WHERE rowid = 2").run();
+    expect(stateOf(2)).toBe(DocState.indexed);
+    w.db.exec("PRAGMA user_version = 3");
+    w.close();
+    w = openWriter(store, path);
+    expect(w.rebuilt).toBeNull();
+    expect(stateOf(2)).toBe(DocState.queued); // no longer a silent "no match"
+    expect(stateOf(3)).toBe(DocState.queued);
+    expect(stateOf(1)).toBe(DocState.indexed); // has its body: left alone
+    while (w.indexStep(60_000) > 0);
+    expect(bodies("lunch")).toEqual([2]);
+    expect(stateOf(3)).toBe(DocState.indexed); // truly empty: the same as before
+    // A current index is never requeued on open.
+    w.db.prepare("DELETE FROM bodies WHERE rowid = 2").run();
+    w.close();
+    w = openWriter(store, path);
+    expect(stateOf(2)).toBe(DocState.indexed);
   });
 });
