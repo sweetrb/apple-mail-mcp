@@ -1,5 +1,36 @@
 ## [Unreleased]
 
+## [2.20.49] - 2026-10-31
+
+### Fixed
+
+- Preserve SMTP recipient acceptance through send, reply, forward, serial-send,
+  and CLI results. Partial submission reports the accepted and rejected
+  addresses without retrying; a lost final acknowledgment reports
+  `deliveryUnknown` rather than claiming that nothing was sent. Known
+  connection-timeout failures remain ordinary errors.
+- Partial and unknown SMTP outcomes are non-error MCP responses with
+  `ok: false`. Callers must inspect the structured result, not only `isError`.
+  An unknown outcome omits `sent`; serial results count it separately from
+  successful and failed submissions. CLI exit status `2` means partial
+  acceptance and `3` means unknown; neither permits an automatic full retry.
+- Parse reply address headers as structured address lists, retaining quoted
+  display names and groups without creating unintended recipients. Refuse
+  computed mailbox forms that would change meaning during SMTP serialization.
+- Require unscoped numeric SMTP replies and forwards to establish the source's
+  account and mailbox before composition. The configured From mailbox must
+  belong to that enabled account; an SMTP login or `allowedFrom` entry alone
+  does not authorize a different From. Display names around a single valid
+  sender mailbox remain supported. Incomplete unscoped scans now require
+  explicit account and mailbox inputs.
+- Build the quotation for an unscoped numeric SMTP source from its bound raw
+  MIME instead of a second content lookup. An unreadable original stops the
+  operation. Preserve Unicode returned by Mail and recognize multipart
+  boundaries only as MIME delimiter lines, so body text cannot silently
+  truncate the quotation. Existing AppleScript composition and IMAP account
+  matching are unchanged.
+
+||||||| fd18dcf
 ## [2.20.48] - 2026-10-31
 
 ### Fixed

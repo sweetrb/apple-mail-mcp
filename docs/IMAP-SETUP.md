@@ -42,6 +42,25 @@ When an account is IMAP-configured, these route to IMAP (otherwise AppleScript):
 
 ## Prerequisites
 
+### Interpret SMTP results before retrying
+
+The SMTP server can accept some recipients and reject others, or lose the
+connection after accepting the message but before confirming it. A partial
+result includes `accepted`, `rejected`, and `partial: true`. An uncertain result
+includes `deliveryUnknown: true`. Both return `ok: false` without an MCP tool
+error: check the structured fields even when `isError` is absent. Do not retry
+accepted recipients or an unknown submission automatically. The CLI returns
+`2` for partial acceptance and `3` for an unknown outcome. See
+[SMTP submission outcomes](../README.md#smtp-submission-outcomes).
+
+For replies and forwards from a numeric Mail message ID, the configured
+`APPLE_MAIL_MCP_SMTP_FROM` mailbox must belong to the source's enabled Mail
+account. Listing another address in `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` does not
+change the From used for that reply. If an unscoped lookup cannot establish the
+source, provide its account and full mailbox path from the original listing.
+
+### Account requirements
+
 - macOS with Mail.app configured (the AppleScript backend still handles anything
   not IMAP-configured).
 - **`apple-mail-mcp` v2.1.0+** for the IMAP acceleration features, and **v2.1.1+**

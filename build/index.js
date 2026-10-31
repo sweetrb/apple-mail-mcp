@@ -65920,8 +65920,60 @@ var init_docsUrls = __esm({
 
 // src/services/smtpMailer.ts
 import { execFileSync } from "child_process";
+function smtpDeliveryFields(result) {
+  return {
+    ...result.deliveryUnknown !== void 0 ? { deliveryUnknown: result.deliveryUnknown } : {},
+    ...result.partial !== void 0 ? { partial: result.partial } : {},
+    ...result.accepted !== void 0 ? { accepted: result.accepted } : {},
+    ...result.rejected !== void 0 ? { rejected: result.rejected } : {}
+  };
+}
+function smtpDeliveryNotice(result) {
+  if (result.deliveryUnknown) {
+    return "SMTP submission outcome is unknown. The provider may already have accepted the message. Do not resend automatically; verify this submission with the provider or recipients before retrying." + (result.error ? ` Details: ${result.error}` : "");
+  }
+  if (!result.partial) return "";
+  return `Partial SMTP submission. Accepted: ${result.accepted?.join(", ") || "not reported"}. Rejected: ${result.rejected?.join(", ") || "not reported"}. Do not resend to accepted recipients; reconsider only rejected recipients.`;
+}
+function recipientAddresses(value) {
+  if (!Array.isArray(value)) return void 0;
+  return value.flatMap((recipient) => {
+    if (typeof recipient === "string") return [recipient];
+    if (recipient && typeof recipient === "object" && "address" in recipient && typeof recipient.address === "string") {
+      return [recipient.address];
+    }
+    return [];
+  });
+}
 function errText(e) {
   return e instanceof Error ? e.message : String(e);
+}
+function unknownSmtpResult(error63) {
+  const rejected = recipientAddresses(
+    error63 && typeof error63 === "object" && "rejected" in error63 ? error63.rejected : void 0
+  );
+  return {
+    success: false,
+    deliveryUnknown: true,
+    error: `SMTP submission outcome unknown: ${errText(error63)}`,
+    ...rejected !== void 0 ? { rejected } : {}
+  };
+}
+function definiteSmtpFailure(error63) {
+  if (!error63 || typeof error63 !== "object") return false;
+  const { code, originalCode, command, responseCode, timeoutType, syscall } = error63;
+  if (code === "EAUTH" || code === "EDNS") return true;
+  if (code === "ETIMEDOUT" && ["CONNECT_TIMEOUT", "GREETING_TIMEOUT", "UPGRADE_TIMEOUT"].includes(timeoutType ?? ""))
+    return true;
+  if ((originalCode ?? code) === "ETIMEDOUT" && syscall === "connect") return true;
+  if (["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(originalCode ?? code ?? "")) {
+    return true;
+  }
+  if (/^(?:AUTH(?: |$)|EHLO$|HELO$|STARTTLS$|MAIL FROM$|RCPT TO$)/.test(command ?? "")) {
+    return true;
+  }
+  if (command === "API" && (code === "EENVELOPE" || code === "EMESSAGE")) return true;
+  return command === "DATA" && typeof responseCode === "number" && responseCode >= 400 && responseCode < 600;
 }
 async function defaultAppendSentCopy(smtpUser, raw, smtpHost) {
   const { imapAppendSentCopy: imapAppendSentCopy2 } = await Promise.resolve().then(() => (init_imapClient(), imapClient_exports));
@@ -66073,21 +66125,30 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
       `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
     );
   }
-  const transporter = createTransport2({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    // Port 587/143-style configurations must not silently downgrade to
-    // plaintext when the server advertises no usable TLS upgrade.
-    requireTLS,
-    auth: { user: cfg.user, pass: cfg.pass }
-  });
-  const mailOptions = {
-    ...buildMailOptions(opts, from, attachments),
-    date: /* @__PURE__ */ new Date()
-  };
+  let transporter;
+  let submissionAttempted = false;
   try {
+    const mailOptions = {
+      ...buildMailOptions(opts, from, attachments),
+      date: /* @__PURE__ */ new Date()
+    };
+    transporter = createTransport2({
+      host: cfg.host,
+      port: cfg.port,
+      secure: cfg.secure,
+      // Port 587-style configurations must not silently downgrade to plaintext.
+      requireTLS,
+      auth: { user: cfg.user, pass: cfg.pass }
+    });
+    submissionAttempted = true;
     const info = await transporter.sendMail(mailOptions);
+    const accepted = recipientAddresses(info.accepted);
+    const rejected = recipientAddresses(info.rejected);
+    const delivery = {
+      ...accepted !== void 0 ? { accepted } : {},
+      ...rejected !== void 0 ? { rejected } : {},
+      ...accepted !== void 0 && rejected !== void 0 ? { partial: accepted.length > 0 && rejected.length > 0 } : {}
+    };
     let copyFields = {};
     try {
       const raw = await buildRawMime({
@@ -66099,16 +66160,25 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
     } catch (copyError) {
       copyFields = { sentCopy: false, sentCopyError: errText(copyError) };
     }
-    return { success: true, messageId: info.messageId, ...copyFields };
+    return { success: true, messageId: info.messageId, ...delivery, ...copyFields };
   } catch (error63) {
+    if (submissionAttempted && !definiteSmtpFailure(error63)) return unknownSmtpResult(error63);
     const detail = error63 instanceof Error ? error63.message : String(error63);
+    const rejected = recipientAddresses(
+      error63 && typeof error63 === "object" && "rejected" in error63 ? error63.rejected : void 0
+    );
     const tlsHint = requireTLS ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.` : "";
     return {
       success: false,
-      error: `SMTP send failed: ${detail}.${tlsHint}`
+      error: `SMTP send failed: ${detail}.${tlsHint}`,
+      ...rejected !== void 0 ? { rejected } : {}
     };
   } finally {
-    transporter.close();
+    try {
+      transporter?.close();
+    } catch (error63) {
+      console.error(`Failed to close SMTP transport: ${errText(error63)}`);
+    }
   }
 }
 function applyPlaceholders(template, variables) {
@@ -66137,12 +66207,16 @@ async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) 
         },
         config2
       );
-      results.push({ email: r.email, success: res.success, error: res.error });
+      results.push({
+        email: r.email,
+        success: res.success,
+        error: res.error,
+        ...smtpDeliveryFields(res)
+      });
     } catch (error63) {
       results.push({
         email: r.email,
-        success: false,
-        error: error63 instanceof Error ? error63.message : String(error63)
+        ...unknownSmtpResult(error63)
       });
     }
     if (delay > 0 && i < recipients.length - 1) {
@@ -66398,15 +66472,38 @@ function splitMimeParts(source, boundary) {
   }
   return parts;
 }
-function walkLeafParts(source, boundary, depth = 0) {
+function splitMimePartsOnBoundaryLines(source, boundary) {
+  const escaped = boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const delimiter3 = new RegExp("^--" + escaped + "(--)?[ \\t]*(?:\\r?\\n|$)", "gm");
+  const parts = [];
+  let start;
+  let closed = false;
+  for (const match of source.matchAll(delimiter3)) {
+    if (start !== void 0) {
+      const section = source.slice(start, match.index);
+      const blankLineIdx = section.search(/\r?\n\r?\n/);
+      if (blankLineIdx === -1) return [];
+      const headers = section.slice(0, blankLineIdx);
+      const body = section.slice(blankLineIdx).replace(/^\r?\n\r?\n/, "").replace(/\r?\n$/, "");
+      parts.push({ headers, body });
+    }
+    if (match[1]) {
+      closed = start !== void 0;
+      break;
+    }
+    start = match.index + match[0].length;
+  }
+  return closed ? parts : [];
+}
+function walkLeafParts(source, boundary, depth = 0, strictDelimiters = false) {
   const result = [];
-  const parts = splitMimeParts(source, boundary);
+  const parts = strictDelimiters ? splitMimePartsOnBoundaryLines(source, boundary) : splitMimeParts(source, boundary);
   for (const part of parts) {
     const ct = getHeader(part.headers, "Content-Type");
     if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
-      const nestedBoundary = extractBoundary(ct);
+      const nestedBoundary = strictDelimiters ? parseParams(ct).get("boundary") ?? null : extractBoundary(ct);
       if (nestedBoundary) {
-        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1));
+        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1, strictDelimiters));
         continue;
       }
     }
@@ -66488,26 +66585,41 @@ function extractHtmlBody(source) {
   const encoding = getHeader(headers, "Content-Transfer-Encoding");
   return decodePartText(decodeBody(body, encoding), extractCharset(headers));
 }
-function extractTextBody(source) {
+function extractTextBody(source, options = {}) {
   if (!source || !source.trim()) return null;
-  const boundary = extractBoundary(source);
-  if (boundary) {
-    for (const part of walkLeafParts(source, boundary)) {
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  if (blankLineIdx === -1) return null;
+  const headers = source.substring(0, blankLineIdx);
+  const contentType = getHeader(headers, "Content-Type");
+  const multipart = contentType !== null && /^multipart\//i.test(contentType);
+  const boundary = multipart ? parseParams(contentType).get("boundary") ?? null : null;
+  const partText = (body2, partHeaders) => {
+    const encoding = getHeader(partHeaders, "Content-Transfer-Encoding");
+    const transferEncoding = (encoding ?? "").trim().toLowerCase();
+    if (options.sourceRepresentation === "unicode") {
+      if (transferEncoding !== "base64" && transferEncoding !== "quoted-printable") return body2;
+      if (/[^\x00-\x7F]/.test(body2)) return null;
+    }
+    return decodePartText(decodeBody(body2, encoding), extractCharset(partHeaders));
+  };
+  if (multipart) {
+    if (!boundary) return null;
+    for (const part of walkLeafParts(
+      source,
+      boundary,
+      0,
+      options.sourceRepresentation === "unicode"
+    )) {
       if (extractMimeType(part.headers) === "text/plain") {
-        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodePartText(decodeBody(part.body, encoding2), extractCharset(part.headers));
+        return partText(part.body, part.headers);
       }
     }
     return null;
   }
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  if (blankLineIdx === -1) return null;
-  const headers = source.substring(0, blankLineIdx);
   const ct = extractMimeType(headers);
-  if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
+  if (ct !== "text/plain" && contentType !== null) return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
+  return partText(body, headers);
 }
 function extractRfcMessageIdFromSource(source) {
   if (!source || !source.trim()) return "";
@@ -101854,8 +101966,12 @@ function describeUnscopedMiss(id, raw) {
   const unreached = list(unreachedRaw);
   const budgetHit = budgetRaw.trim() === "true";
   const probeStalled = stalledRaw.trim() === "true";
-  if (skipped.length === 0 && !budgetHit && !probeStalled) return base2;
-  const parts = [`Message ${Number(id)} not found in the mailboxes scanned.`];
+  const incompleteSource = base2 === "Source lookup incomplete";
+  if (skipped.length === 0 && !budgetHit && !probeStalled && !(incompleteSource && unreached.length))
+    return base2;
+  const parts = [
+    incompleteSource ? `Message ${Number(id)} could not be uniquely verified because the scan was incomplete.` : `Message ${Number(id)} not found in the mailboxes scanned.`
+  ];
   if (skipped.length > 0) {
     parts.push(
       `Not scanned \u2014 too large for a cross-mailbox id scan (over ${getByIdScanThreshold()} messages; APPLE_MAIL_MAX_BYID_SCAN_MAILBOX): ${skipped.join(", ")}.`
@@ -101868,6 +101984,10 @@ function describeUnscopedMiss(id, raw) {
     );
   } else if (budgetHit) {
     parts.push(`The scan also stopped after its ${BYID_SCAN_BUDGET_SECONDS}s budget ${reach}`);
+  } else if (incompleteSource && unreached.length) {
+    parts.push(
+      `The scan did not reach or could not search: ${summariseList(unreached, UNREACHED_LIST_MAX)}.`
+    );
   }
   parts.push(
     "If the message is in a mailbox that was not scanned, pass account + mailbox to read it from that mailbox directly, or use its imap: id from list-messages/search-messages."
@@ -104177,6 +104297,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end if`;
     const hitFound = opts.firstHit ? "(count of _hits) > 0" : "false";
     const stopOnHit = opts.firstHit ? `if (count of _hits) > 0 then exit repeat` : "";
+    const scanError = (accountExpr) => opts.requireCompleteCoverage ? `on error
+                  set _unreached to _unreached & ${accountExpr} & " / " & _mbName & " (message lookup failed)${DIAG_ITEM_SEP}"` : "";
     return buildAppLevelScriptIfRunning(`
       try
         set _hits to {}
@@ -104241,6 +104363,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                     set end of _hitAccts to _acctName
                     set _names to _names & _acctName & "/" & _mbName & ", "
                   end if
+                ${scanError("_acctName")}
                 end try
               end if
               ${stopOnHit}
@@ -104290,6 +104413,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                   set end of _hitAccts to "${LOCAL_STORE_LABEL}"
                   set _names to _names & "${LOCAL_STORE_LABEL}/" & _mbName & ", "
                 end if
+              ${scanError(`"${LOCAL_STORE_LABEL}"`)}
               end try
             end if
             ${stopOnHit}
@@ -104298,8 +104422,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             set _unreached to _unreached & "${LOCAL_STORE_LABEL} (" & ((length of _mbs) - _stopAt + 1) & " more local mailboxes)${DIAG_ITEM_SEP}"
           end if
         end if
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached
         ${opts.firstHit ? "" : `if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"`}
+        ${opts.requireCompleteCoverage ? `if _skipped is not "" or _budgetHit or _probeStalled or _unreached is not "" then return "${LOOKUP_ERROR_MARKER}Source lookup incomplete${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached` : ""}
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached
         if (count of _hits) ${opts.firstHit ? "> 0" : "is 1"} then
           set msg to item 1 of _hits
           set _hitMb to item 1 of _hitMbs
@@ -104508,6 +104633,31 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return null;
     }
     return this.resolveById(id, "return source of msg", hint, options);
+  }
+  /** Read a numeric message's source and owning location in the same strict lookup. */
+  getRawSourceWithLocation(id) {
+    this.lastMessageLookupError = void 0;
+    const output2 = this.resolveById(
+      id,
+      `set _sourceMailbox to ""
+       ${mailboxPathFragment("_hitMb", "_sourceMailbox")}
+       if _hitAcct contains "${FIELD_SEP}" or _sourceMailbox contains "${FIELD_SEP}" then return "invalid-source-scope"
+       return _hitAcct & "${FIELD_SEP}" & _sourceMailbox & "${FIELD_SEP}" & (source of msg)`,
+      void 0,
+      { requireCompleteCoverage: true }
+    );
+    if (output2 === null) return null;
+    const first = output2.indexOf(FIELD_SEP);
+    const second = output2.indexOf(FIELD_SEP, first + 1);
+    if (first < 1 || second <= first + 1 || !output2.slice(second + 1).trim()) {
+      this.lastMessageLookupError = "Mail could not return a readable source with its account and mailbox.";
+      return null;
+    }
+    return {
+      account: output2.slice(0, first),
+      mailbox: output2.slice(first + 1, second),
+      raw: output2.slice(second + 1)
+    };
   }
   /**
    * List messages in a mailbox.
@@ -107442,14 +107592,14 @@ import { join as joinPath } from "path";
 
 // src/tools/compose.ts
 init_imapClient();
+init_addressparser();
+init_smtpMailer();
 
 // src/services/replyForward.ts
+init_addressparser();
 function extractAddresses(headerValue) {
   if (!headerValue.trim()) return [];
-  return headerValue.split(",").map((part) => {
-    const angle = part.match(/<([^>]+)>/);
-    return (angle ? angle[1] : part).trim();
-  }).filter((addr) => addr.includes("@"));
+  return addressparser_default(headerValue, { flatten: true }).map(({ address }) => address.trim()).filter((addr) => addr.includes("@"));
 }
 function parseOriginalHeaders(raw) {
   const headerBlock = raw.split(/\r?\n\r?\n/)[0] ?? "";
@@ -107502,7 +107652,9 @@ function quoteBody(plainText) {
 }
 function buildReplyOptions(args) {
   const { original, originalPlainText, body, replyAll, self, from } = args;
-  const selfSet = new Set(self.filter(Boolean).map((s) => s.toLowerCase()));
+  const selfSet = new Set(
+    self.filter(Boolean).flatMap((value) => [value, ...extractAddresses(value)]).map((s) => s.toLowerCase())
+  );
   const to = dedupe((original.replyTo.length ? original.replyTo : original.from).filter(Boolean));
   const toSet = new Set(to.map((t) => t.toLowerCase()));
   let cc;
@@ -107513,6 +107665,11 @@ function buildReplyOptions(args) {
       )
     );
     cc = extra.length ? extra : void 0;
+  }
+  if ([...to, ...cc ?? []].some((address) => /[\x00-\x1F\x7F<>]/.test(address))) {
+    throw new Error(
+      "The original message contains a reply recipient that SMTP composition cannot preserve. Reply composition was stopped to avoid changing its address."
+    );
   }
   const references = dedupe(
     original.messageId ? [...original.references, original.messageId] : original.references
@@ -107711,6 +107868,20 @@ async function readOriginal(deps, id, cfg, recoverReplyText = false, scope) {
     if (source.subject !== void 0) original2.subject = source.subject;
     return { original: original2, plainText: extractTextBody(source.raw) };
   }
+  if (cfg && !scope) {
+    const source = deps.mail.getRawSourceWithLocation?.(id);
+    if (!source) {
+      const why = deps.mail.consumeLastMessageLookupError?.();
+      throw new Error(
+        `Cannot read the original message source${why ? ` (${why})` : ""}. Its account and mailbox must be verified before SMTP composition. Re-list the intended mailbox or supply its account and mailbox.`
+      );
+    }
+    requireScopedSmtpIdentity(deps, { account: source.account, mailbox: source.mailbox }, cfg);
+    return {
+      original: parseOriginalHeaders(source.raw),
+      plainText: extractTextBody(source.raw, { sourceRepresentation: "unicode" })
+    };
+  }
   const raw = scope ? deps.mail.getRawSource(id, scope, { requireScopedLocation: true }) : deps.mail.getRawSource(id);
   if (!raw) {
     const why = deps.mail.consumeLastMessageLookupError?.();
@@ -107780,7 +107951,9 @@ function requireScopedSmtpIdentity(deps, scope, cfg) {
     throw new Error("The source Mail account is unavailable or ambiguous; no SMTP reply was sent.");
   }
   const addresses = new Set(accounts[0].addresses.map((address) => address.trim().toLowerCase()));
-  if (!addresses.has(cfg.from.trim().toLowerCase())) {
+  const parsed = /[\r\n\0]/.test(cfg.from) ? [] : addressparser_default(cfg.from);
+  const from = parsed.length === 1 && "address" in parsed[0] ? parsed[0].address?.trim() : void 0;
+  if (!from || !from.includes("@") || !addresses.has(from.toLowerCase())) {
     throw new Error("The source Mail account does not match the configured SMTP identity.");
   }
 }
@@ -107879,20 +108052,30 @@ async function runCompose(deps, args) {
         from: cfg.from
       });
       if (attachmentCount) opts.attachments = attachments;
-      const result = await deps.smtpSend(opts, cfg);
+      const result = await Promise.resolve().then(() => deps.smtpSend(opts, cfg)).catch(unknownSmtpResult);
+      if (result.deliveryUnknown) {
+        return successResponse(smtpDeliveryNotice(result), {
+          ok: false,
+          id,
+          transport: "smtp",
+          ...smtpDeliveryFields(result)
+        });
+      }
       if (!result.success)
         return errorResponse(
-          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`
+          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`,
+          { ok: false, sent: false, transport: "smtp", ...smtpDeliveryFields(result) }
         );
       return successResponse(
-        args.kind === "reply" ? `Reply sent via SMTP${withFiles}` : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
+        result.partial ? smtpDeliveryNotice(result) : args.kind === "reply" ? `Reply sent via SMTP${withFiles}` : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
         {
-          ok: true,
+          ok: !result.partial,
           sent: true,
           id,
           transport: "smtp",
           messageId: result.messageId,
           attachmentCount,
+          ...smtpDeliveryFields(result),
           ...args.kind === "forward" ? { recipients: args.to } : {},
           // Best-effort Sent-folder copy (issue #220) — same field shape as
           // send-email, since it's the same sendViaSmtp underneath.
@@ -108028,17 +108211,40 @@ function createSerialEmailHandler(deps) {
       } else {
         results = deps.appleScriptSend(recipients, subject, body, account, delayMs);
       }
-      const successCount = results.filter((r) => r.success).length;
-      const failCount = results.length - successCount;
-      const details = results.map((r) => `  - ${r.email}: ${r.success ? "sent" : `FAILED (${r.error})`}`).join("\n");
+      const successCount = results.filter((r) => r.success && !r.deliveryUnknown).length;
+      const unknownCount = results.filter((r) => r.deliveryUnknown).length;
+      const failCount = results.length - successCount - unknownCount;
+      const partialCount = results.filter((r) => r.partial && !r.deliveryUnknown).length;
+      const details = results.map(
+        (r) => `  - ${r.email}: ${r.deliveryUnknown || r.partial ? smtpDeliveryNotice(r) : r.success ? "sent" : `FAILED (${r.error})`}`
+      ).join("\n");
       const structured = {
-        ok: failCount === 0,
+        ok: failCount === 0 && partialCount === 0 && unknownCount === 0,
         sent: successCount,
         failed: failCount,
+        partial: partialCount > 0 || successCount > 0 && failCount + unknownCount > 0,
+        ...unknownCount ? { unknown: unknownCount, deliveryUnknown: true } : {},
         transport: useSmtp ? "smtp" : "applescript",
-        results: results.map((r) => ({ email: r.email, success: r.success, error: r.error }))
+        results: results.map((r) => ({
+          email: r.email,
+          success: r.success,
+          error: r.error,
+          ...smtpDeliveryFields(r)
+        }))
       };
-      if (failCount === 0) {
+      if (unknownCount > 0) {
+        return successResponse(
+          `SMTP confirmed ${successCount} submission(s), ${failCount} known failure(s), and ${unknownCount} unknown outcome(s):
+${details}`,
+          structured
+        );
+      } else if (partialCount > 0) {
+        return successResponse(
+          `SMTP accepted ${successCount} submission(s), including ${partialCount} with rejected recipients; ${failCount} submission(s) failed:
+${details}`,
+          structured
+        );
+      } else if (failCount === 0) {
         return successResponse(
           `Successfully sent ${successCount} email(s):
 ${details}`,
@@ -109872,6 +110078,14 @@ var SENT_COPY_ERROR_SCHEMA = external_exports.string().optional().describe("Pres
 var SENT_COPY_ALREADY_FILED_SCHEMA = external_exports.boolean().optional().describe(
   "Present (true) only when sentCopy is true because the Sent mailbox already held this Message-ID (e.g. Gmail's SMTP files its own copy), so none was appended."
 );
+var SMTP_DELIVERY_SCHEMA = {
+  deliveryUnknown: external_exports.boolean().optional().describe("SMTP returned no definitive submission result. Verify before retrying."),
+  partial: external_exports.boolean().optional().describe(
+    "SMTP accepted some recipients and rejected others; do not resend to accepted recipients."
+  ),
+  accepted: external_exports.array(external_exports.string()).optional().describe("Recipients accepted by the SMTP server, not final inbox delivery."),
+  rejected: external_exports.array(external_exports.string()).optional().describe("Recipients rejected by the SMTP server.")
+};
 var COMPOSITION_SCHEMA = external_exports.literal("native-editor").optional().describe(
   "Opt in to Mail's visible native editor: inserts only new prose, preserving its signature, HTML quotation and reply ancestry without the AppleScript content setter. Requires an unlocked desktop and existing Accessibility and Automation permissions. Uses Mail.app even when SMTP is configured; cannot be combined with transport=smtp or caller-built threading headers. New messages require an explicit account. Do not interact with Mail or the clipboard while it runs. Failure never falls back to another composition method or sends an unverified message."
 );
@@ -109902,6 +110116,8 @@ registerTool(
     },
     outputSchema: {
       ok: external_exports.boolean().optional(),
+      sent: external_exports.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       recipients: external_exports.array(external_exports.string()).optional(),
       attachmentCount: external_exports.number().optional(),
       transport: external_exports.string().optional(),
@@ -109954,16 +110170,31 @@ registerTool(
           attachments,
           replyTo,
           ...threading.headers
-        });
+        }).catch(unknownSmtpResult);
+        if (result.deliveryUnknown) {
+          return successResponse(smtpDeliveryNotice(result), {
+            ok: false,
+            transport: "smtp",
+            ...smtpDeliveryFields(result)
+          });
+        }
         if (!result.success) {
-          return errorResponse(result.error ?? "Failed to send email via SMTP.");
+          return errorResponse(result.error ?? "Failed to send email via SMTP.", {
+            ok: false,
+            sent: false,
+            transport: "smtp",
+            ...smtpDeliveryFields(result)
+          });
         }
         const copyNote = result.sentCopy === true ? result.sentCopyAlreadyFiled ? " (Sent-folder copy already filed by the server)" : " (Sent-folder copy filed)" : result.sentCopy === false ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})` : "";
-        return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}${copyNote}`, {
-          ok: true,
+        const delivery = result.partial ? smtpDeliveryNotice(result) : `Email sent via SMTP to ${to.join(", ")}`;
+        return successResponse(`${delivery}${attachInfo}${copyNote}`, {
+          ok: !result.partial,
+          sent: true,
           recipients: to,
           attachmentCount,
           transport: "smtp",
+          ...smtpDeliveryFields(result),
           ...result.messageId ? { messageId: result.messageId } : {},
           ...result.sentCopy !== void 0 ? { sentCopy: result.sentCopy } : {},
           ...result.sentCopyError !== void 0 ? { sentCopyError: result.sentCopyError } : {},
@@ -110011,12 +110242,16 @@ registerTool(
       ok: external_exports.boolean().optional(),
       sent: external_exports.number().optional(),
       failed: external_exports.number().optional(),
+      unknown: external_exports.number().optional().describe("Submissions with an unknown outcome, excluded from sent and failed counts."),
+      deliveryUnknown: SMTP_DELIVERY_SCHEMA.deliveryUnknown,
+      partial: external_exports.boolean().optional(),
       transport: external_exports.enum(["smtp", "applescript"]).optional().describe("Transport used for this batch"),
       results: external_exports.array(
         external_exports.object({
           email: external_exports.string().optional(),
           success: external_exports.boolean().optional(),
-          error: external_exports.string().optional()
+          error: external_exports.string().optional(),
+          ...SMTP_DELIVERY_SCHEMA
         }).passthrough()
       ).optional()
     }
@@ -110173,6 +110408,7 @@ registerTool(
       messageId: external_exports.string().optional(),
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       id: external_exports.string().optional(),
       attachmentCount: external_exports.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
@@ -110206,6 +110442,7 @@ registerTool(
       messageId: external_exports.string().optional(),
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       recipients: external_exports.array(external_exports.string()).optional(),
       id: external_exports.string().optional(),
       attachmentCount: external_exports.number().optional(),

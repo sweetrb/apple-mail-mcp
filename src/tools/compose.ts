@@ -1,7 +1,15 @@
 /** Reply/forward routing, kept separate from server startup for regression tests. */
 import { decodeImapId, type ImapMessageSource } from "@/services/imapClient.js";
 import type { AppleMailManager } from "@/services/appleMailManager.js";
-import type { SmtpConfig, SmtpSendOptions, SmtpSendResult } from "@/services/smtpMailer.js";
+import addressparser from "nodemailer/lib/addressparser/index.js";
+import {
+  smtpDeliveryFields,
+  smtpDeliveryNotice,
+  unknownSmtpResult,
+  type SmtpConfig,
+  type SmtpSendOptions,
+  type SmtpSendResult,
+} from "@/services/smtpMailer.js";
 import {
   buildReplyOptions,
   buildForwardOptions,
@@ -21,7 +29,12 @@ export interface ComposeDeps {
     "getRawSource" | "getMessageContent" | "replyToMessage" | "forwardMessage"
   > &
     // Optional so test doubles needn't stub it; the real manager always has it.
-    Partial<Pick<AppleMailManager, "consumeLastMessageLookupError" | "listAccountsChecked">>;
+    Partial<
+      Pick<
+        AppleMailManager,
+        "consumeLastMessageLookupError" | "listAccountsChecked" | "getRawSourceWithLocation"
+      >
+    >;
   imapSource: (id: string) => Promise<ImapMessageSource>;
   numericId: (id: string) => Promise<{ numericId?: string; error?: string }>;
   smtpConfigured: () => boolean;
@@ -81,6 +94,22 @@ async function readOriginal(
     // The IMAP envelope supplies the decoded subject, unlike the raw MIME header.
     if (source.subject !== undefined) original.subject = source.subject;
     return { original, plainText: extractTextBody(source.raw) };
+  }
+  if (cfg && !scope) {
+    // The unscoped numeric id carries no account. Bind source and ownership in
+    // one strict lookup and quote only that snapshot, never a second lookup.
+    const source = deps.mail.getRawSourceWithLocation?.(id);
+    if (!source) {
+      const why = deps.mail.consumeLastMessageLookupError?.();
+      throw new Error(
+        `Cannot read the original message source${why ? ` (${why})` : ""}. Its account and mailbox must be verified before SMTP composition. Re-list the intended mailbox or supply its account and mailbox.`
+      );
+    }
+    requireScopedSmtpIdentity(deps, { account: source.account, mailbox: source.mailbox }, cfg);
+    return {
+      original: parseOriginalHeaders(source.raw),
+      plainText: extractTextBody(source.raw, { sourceRepresentation: "unicode" }),
+    };
   }
   const raw = scope
     ? deps.mail.getRawSource(id, scope, { requireScopedLocation: true })
@@ -179,7 +208,10 @@ function requireScopedSmtpIdentity(deps: ComposeDeps, scope: SourceScope, cfg: S
   // SMTP authentication usernames can be service logins (for example,
   // "apikey") rather than email addresses. The visible From must be bound to
   // the selected Mail account; the login is not a sender identity.
-  if (!addresses.has(cfg.from.trim().toLowerCase())) {
+  const parsed = /[\r\n\0]/.test(cfg.from) ? [] : addressparser(cfg.from);
+  const from =
+    parsed.length === 1 && "address" in parsed[0] ? parsed[0].address?.trim() : undefined;
+  if (!from || !from.includes("@") || !addresses.has(from.toLowerCase())) {
     throw new Error("The source Mail account does not match the configured SMTP identity.");
   }
 }
@@ -311,22 +343,36 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
       // Same attachment path as send-email: sendViaSmtp's builder, so the wire
       // message and the Sent-folder copy both carry the files (#267).
       if (attachmentCount) opts.attachments = attachments;
-      const result = await deps.smtpSend(opts, cfg);
+      const result = await Promise.resolve()
+        .then(() => deps.smtpSend(opts, cfg))
+        .catch(unknownSmtpResult);
+      if (result.deliveryUnknown) {
+        return successResponse(smtpDeliveryNotice(result), {
+          ok: false,
+          id,
+          transport: "smtp",
+          ...smtpDeliveryFields(result),
+        });
+      }
       if (!result.success)
         return errorResponse(
-          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`
+          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`,
+          { ok: false, sent: false, transport: "smtp", ...smtpDeliveryFields(result) }
         );
       return successResponse(
-        args.kind === "reply"
-          ? `Reply sent via SMTP${withFiles}`
-          : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
+        result.partial
+          ? smtpDeliveryNotice(result)
+          : args.kind === "reply"
+            ? `Reply sent via SMTP${withFiles}`
+            : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
         {
-          ok: true,
+          ok: !result.partial,
           sent: true,
           id,
           transport: "smtp",
           messageId: result.messageId,
           attachmentCount,
+          ...smtpDeliveryFields(result),
           ...(args.kind === "forward" ? { recipients: args.to } : {}),
           // Best-effort Sent-folder copy (issue #220) — same field shape as
           // send-email, since it's the same sendViaSmtp underneath.

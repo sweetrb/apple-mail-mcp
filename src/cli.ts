@@ -23,7 +23,13 @@
 import { readFileSync, realpathSync } from "fs";
 import { fileURLToPath } from "url";
 import { parseArgs } from "util";
-import { sendViaSmtp, resolveSmtpConfig, SMTP_ENV } from "@/services/smtpMailer.js";
+import {
+  sendViaSmtp,
+  resolveSmtpConfig,
+  smtpDeliveryNotice,
+  unknownSmtpResult,
+  SMTP_ENV,
+} from "@/services/smtpMailer.js";
 import type { AttachmentInput } from "@/types.js";
 import { SETUP_GUIDE_URL } from "@/utils/docsUrls.js";
 
@@ -31,6 +37,10 @@ import { SETUP_GUIDE_URL } from "@/utils/docsUrls.js";
 export const EX_USAGE = 64;
 export const EX_NOINPUT = 66;
 export const EX_CONFIG = 78;
+/** Some recipients accepted the message; do not automatically retry the full command. */
+export const EX_PARTIAL = 2;
+/** The provider may have accepted the message; verification is required before retrying. */
+export const EX_DELIVERY_UNKNOWN = 3;
 
 const USAGE = `apple-mail-send — send a clean email via SMTP (no Mail.app blockquote wrapping).
 
@@ -50,6 +60,10 @@ Optional:
                         multipart/alternative)
   --attach <path>       Absolute path to a file to attach (repeatable)
   --help                Show this help
+
+Exit status 2 means partial SMTP submission. Do not retry the full recipient list;
+the output names accepted recipients and recipients to reconsider separately.
+Exit status 3 means the submission outcome is unknown. Verify it before retrying.
 
 SMTP connection comes from ${SMTP_ENV.host} / ${SMTP_ENV.user} (+ password via
 ${SMTP_ENV.password} or the macOS Keychain). Setup guide:
@@ -157,21 +171,29 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
     ? values.attach
     : undefined;
 
-  const result = await send(
-    {
-      from: values.from,
-      to: values.to as string[],
-      cc: values.cc,
-      bcc: values.bcc,
-      replyTo: values["reply-to"],
-      subject: values.subject as string,
-      body,
-      htmlBody,
-      attachments,
-    },
-    config
-  );
+  const result = await Promise.resolve()
+    .then(() =>
+      send(
+        {
+          from: values.from,
+          to: values.to as string[],
+          cc: values.cc,
+          bcc: values.bcc,
+          replyTo: values["reply-to"],
+          subject: values.subject as string,
+          body,
+          htmlBody,
+          attachments,
+        },
+        config
+      )
+    )
+    .catch(unknownSmtpResult);
 
+  if (result.deliveryUnknown) {
+    err(smtpDeliveryNotice(result));
+    return EX_DELIVERY_UNKNOWN;
+  }
   if (!result.success) {
     err(result.error ?? "SMTP send failed.");
     return 1;
@@ -183,7 +205,12 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
       : result.sentCopy === false
         ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})`
         : "";
-  out(`sent to ${(values.to as string[]).join(", ")} from ${values.from}${copyNote}`);
+  const accepted = result.accepted ?? (values.to as string[]);
+  out(`sent to ${accepted.join(", ")} from ${values.from}${copyNote}`);
+  if (result.partial) {
+    err(smtpDeliveryNotice(result));
+    return EX_PARTIAL;
+  }
   return 0;
 }
 
