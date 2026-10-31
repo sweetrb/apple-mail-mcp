@@ -65920,8 +65920,60 @@ var init_docsUrls = __esm({
 
 // src/services/smtpMailer.ts
 import { execFileSync } from "child_process";
+function smtpDeliveryFields(result) {
+  return {
+    ...result.deliveryUnknown !== void 0 ? { deliveryUnknown: result.deliveryUnknown } : {},
+    ...result.partial !== void 0 ? { partial: result.partial } : {},
+    ...result.accepted !== void 0 ? { accepted: result.accepted } : {},
+    ...result.rejected !== void 0 ? { rejected: result.rejected } : {}
+  };
+}
+function smtpDeliveryNotice(result) {
+  if (result.deliveryUnknown) {
+    return "SMTP submission outcome is unknown. The provider may already have accepted the message. Do not resend automatically; verify this submission with the provider or recipients before retrying." + (result.error ? ` Details: ${result.error}` : "");
+  }
+  if (!result.partial) return "";
+  return `Partial SMTP submission. Accepted: ${result.accepted?.join(", ") || "not reported"}. Rejected: ${result.rejected?.join(", ") || "not reported"}. Do not resend to accepted recipients; reconsider only rejected recipients.`;
+}
+function recipientAddresses(value) {
+  if (!Array.isArray(value)) return void 0;
+  return value.flatMap((recipient) => {
+    if (typeof recipient === "string") return [recipient];
+    if (recipient && typeof recipient === "object" && "address" in recipient && typeof recipient.address === "string") {
+      return [recipient.address];
+    }
+    return [];
+  });
+}
 function errText(e) {
   return e instanceof Error ? e.message : String(e);
+}
+function unknownSmtpResult(error63) {
+  const rejected = recipientAddresses(
+    error63 && typeof error63 === "object" && "rejected" in error63 ? error63.rejected : void 0
+  );
+  return {
+    success: false,
+    deliveryUnknown: true,
+    error: `SMTP submission outcome unknown: ${errText(error63)}`,
+    ...rejected !== void 0 ? { rejected } : {}
+  };
+}
+function definiteSmtpFailure(error63) {
+  if (!error63 || typeof error63 !== "object") return false;
+  const { code, originalCode, command, responseCode, timeoutType, syscall } = error63;
+  if (code === "EAUTH" || code === "EDNS") return true;
+  if (code === "ETIMEDOUT" && ["CONNECT_TIMEOUT", "GREETING_TIMEOUT", "UPGRADE_TIMEOUT"].includes(timeoutType ?? ""))
+    return true;
+  if ((originalCode ?? code) === "ETIMEDOUT" && syscall === "connect") return true;
+  if (["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(originalCode ?? code ?? "")) {
+    return true;
+  }
+  if (/^(?:AUTH(?: |$)|EHLO$|HELO$|STARTTLS$|MAIL FROM$|RCPT TO$)/.test(command ?? "")) {
+    return true;
+  }
+  if (command === "API" && (code === "EENVELOPE" || code === "EMESSAGE")) return true;
+  return command === "DATA" && typeof responseCode === "number" && responseCode >= 400 && responseCode < 600;
 }
 async function defaultAppendSentCopy(smtpUser, raw, smtpHost) {
   const { imapAppendSentCopy: imapAppendSentCopy2 } = await Promise.resolve().then(() => (init_imapClient(), imapClient_exports));
@@ -66073,21 +66125,30 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
       `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
     );
   }
-  const transporter = createTransport2({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    // Port 587/143-style configurations must not silently downgrade to
-    // plaintext when the server advertises no usable TLS upgrade.
-    requireTLS,
-    auth: { user: cfg.user, pass: cfg.pass }
-  });
-  const mailOptions = {
-    ...buildMailOptions(opts, from, attachments),
-    date: /* @__PURE__ */ new Date()
-  };
+  let transporter;
+  let submissionAttempted = false;
   try {
+    const mailOptions = {
+      ...buildMailOptions(opts, from, attachments),
+      date: /* @__PURE__ */ new Date()
+    };
+    transporter = createTransport2({
+      host: cfg.host,
+      port: cfg.port,
+      secure: cfg.secure,
+      // Port 587-style configurations must not silently downgrade to plaintext.
+      requireTLS,
+      auth: { user: cfg.user, pass: cfg.pass }
+    });
+    submissionAttempted = true;
     const info = await transporter.sendMail(mailOptions);
+    const accepted = recipientAddresses(info.accepted);
+    const rejected = recipientAddresses(info.rejected);
+    const delivery = {
+      ...accepted !== void 0 ? { accepted } : {},
+      ...rejected !== void 0 ? { rejected } : {},
+      ...accepted !== void 0 && rejected !== void 0 ? { partial: accepted.length > 0 && rejected.length > 0 } : {}
+    };
     let copyFields = {};
     try {
       const raw = await buildRawMime({
@@ -66099,16 +66160,25 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
     } catch (copyError) {
       copyFields = { sentCopy: false, sentCopyError: errText(copyError) };
     }
-    return { success: true, messageId: info.messageId, ...copyFields };
+    return { success: true, messageId: info.messageId, ...delivery, ...copyFields };
   } catch (error63) {
+    if (submissionAttempted && !definiteSmtpFailure(error63)) return unknownSmtpResult(error63);
     const detail = error63 instanceof Error ? error63.message : String(error63);
+    const rejected = recipientAddresses(
+      error63 && typeof error63 === "object" && "rejected" in error63 ? error63.rejected : void 0
+    );
     const tlsHint = requireTLS ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.` : "";
     return {
       success: false,
-      error: `SMTP send failed: ${detail}.${tlsHint}`
+      error: `SMTP send failed: ${detail}.${tlsHint}`,
+      ...rejected !== void 0 ? { rejected } : {}
     };
   } finally {
-    transporter.close();
+    try {
+      transporter?.close();
+    } catch (error63) {
+      console.error(`Failed to close SMTP transport: ${errText(error63)}`);
+    }
   }
 }
 function applyPlaceholders(template, variables) {
@@ -66137,12 +66207,16 @@ async function sendSerialViaSmtp(recipients, subject, body, config2, opts = {}) 
         },
         config2
       );
-      results.push({ email: r.email, success: res.success, error: res.error });
+      results.push({
+        email: r.email,
+        success: res.success,
+        error: res.error,
+        ...smtpDeliveryFields(res)
+      });
     } catch (error63) {
       results.push({
         email: r.email,
-        success: false,
-        error: error63 instanceof Error ? error63.message : String(error63)
+        ...unknownSmtpResult(error63)
       });
     }
     if (delay > 0 && i < recipients.length - 1) {
@@ -66413,15 +66487,38 @@ function splitMimeParts(source, boundary) {
   }
   return parts;
 }
-function walkLeafParts(source, boundary, depth = 0) {
+function splitMimePartsOnBoundaryLines(source, boundary) {
+  const escaped = boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const delimiter3 = new RegExp("^--" + escaped + "(--)?[ \\t]*(?:\\r?\\n|$)", "gm");
+  const parts = [];
+  let start;
+  let closed = false;
+  for (const match of source.matchAll(delimiter3)) {
+    if (start !== void 0) {
+      const section = source.slice(start, match.index);
+      const blankLineIdx = section.search(/\r?\n\r?\n/);
+      if (blankLineIdx === -1) return [];
+      const headers = section.slice(0, blankLineIdx);
+      const body = section.slice(blankLineIdx).replace(/^\r?\n\r?\n/, "").replace(/\r?\n$/, "");
+      parts.push({ headers, body });
+    }
+    if (match[1]) {
+      closed = start !== void 0;
+      break;
+    }
+    start = match.index + match[0].length;
+  }
+  return closed ? parts : [];
+}
+function walkLeafParts(source, boundary, depth = 0, strictDelimiters = false) {
   const result = [];
-  const parts = splitMimeParts(source, boundary);
+  const parts = strictDelimiters ? splitMimePartsOnBoundaryLines(source, boundary) : splitMimeParts(source, boundary);
   for (const part of parts) {
     const ct = getHeader(part.headers, "Content-Type");
     if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
-      const nestedBoundary = extractBoundary(ct);
+      const nestedBoundary = strictDelimiters ? parseParams(ct).get("boundary") ?? null : extractBoundary(ct);
       if (nestedBoundary) {
-        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1));
+        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1, strictDelimiters));
         continue;
       }
     }
@@ -66503,26 +66600,41 @@ function extractHtmlBody(source) {
   const encoding = getHeader(headers, "Content-Transfer-Encoding");
   return decodePartText(decodeBody(body, encoding), extractCharset(headers));
 }
-function extractTextBody(source) {
+function extractTextBody(source, options = {}) {
   if (!source || !source.trim()) return null;
-  const boundary = extractBoundary(source);
-  if (boundary) {
-    for (const part of walkLeafParts(source, boundary)) {
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  if (blankLineIdx === -1) return null;
+  const headers = source.substring(0, blankLineIdx);
+  const contentType = getHeader(headers, "Content-Type");
+  const multipart = contentType !== null && /^multipart\//i.test(contentType);
+  const boundary = multipart ? parseParams(contentType).get("boundary") ?? null : null;
+  const partText = (body2, partHeaders) => {
+    const encoding = getHeader(partHeaders, "Content-Transfer-Encoding");
+    const transferEncoding = (encoding ?? "").trim().toLowerCase();
+    if (options.sourceRepresentation === "unicode") {
+      if (transferEncoding !== "base64" && transferEncoding !== "quoted-printable") return body2;
+      if (/[^\x00-\x7F]/.test(body2)) return null;
+    }
+    return decodePartText(decodeBody(body2, encoding), extractCharset(partHeaders));
+  };
+  if (multipart) {
+    if (!boundary) return null;
+    for (const part of walkLeafParts(
+      source,
+      boundary,
+      0,
+      options.sourceRepresentation === "unicode"
+    )) {
       if (extractMimeType(part.headers) === "text/plain") {
-        const encoding2 = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodePartText(decodeBody(part.body, encoding2), extractCharset(part.headers));
+        return partText(part.body, part.headers);
       }
     }
     return null;
   }
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  if (blankLineIdx === -1) return null;
-  const headers = source.substring(0, blankLineIdx);
   const ct = extractMimeType(headers);
-  if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
+  if (ct !== "text/plain" && contentType !== null) return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
+  return partText(body, headers);
 }
 function extractRfcMessageIdFromSource(source) {
   if (!source || !source.trim()) return "";
@@ -99878,11 +99990,12 @@ function searchContactsDb(query, opts) {
 
 // src/utils/envelopeIndex.ts
 init_mimeParse();
-import { existsSync as existsSync5, readFileSync as readFileSync3, readdirSync as readdirSync4 } from "fs";
+import { closeSync as closeSync2, existsSync as existsSync5, openSync as openSync2, readFileSync as readFileSync3, readSync as readSync2, readdirSync as readdirSync4 } from "fs";
 import { join as join8 } from "path";
 import { homedir as homedir6 } from "os";
 
 // src/utils/emlx.ts
+init_mimeParse();
 import { existsSync as existsSync3, readdirSync as readdirSync2 } from "fs";
 import { join as join6 } from "path";
 function dataSubdirs(id) {
@@ -99913,12 +100026,76 @@ function emlxSource(bytes) {
   if (!Number.isInteger(count) || count <= 0) return null;
   return bytes.subarray(nl + 1, nl + 1 + count).toString("latin1");
 }
+function asciiWordAt(s, at, word) {
+  for (let k = 0; k < word.length; k++) {
+    const c = s.charCodeAt(at + k);
+    if (c !== word.charCodeAt(k) && !(c >= 65 && c <= 90 && (c | 32) === word.charCodeAt(k))) {
+      return false;
+    }
+  }
+  return true;
+}
+function closingTagAt(html, tag, from) {
+  for (let i = html.indexOf("</", from); i !== -1; i = html.indexOf("</", i + 2)) {
+    if (asciiWordAt(html, i + 2, tag) && html.charCodeAt(i + 2 + tag.length) === 62) return i;
+  }
+  return -1;
+}
+function dropScriptsAndStyles(html) {
+  const noCloseFrom = { script: Infinity, style: Infinity };
+  let out = "";
+  let kept = 0;
+  let gt = -1;
+  let at = html.indexOf("<");
+  while (at !== -1) {
+    const tag = asciiWordAt(html, at + 1, "script") ? "script" : asciiWordAt(html, at + 1, "style") ? "style" : null;
+    if (tag) {
+      const from = at + 1 + tag.length;
+      if (gt < from) gt = html.indexOf(">", from);
+      if (gt === -1) break;
+      if (gt < noCloseFrom[tag]) {
+        const close = closingTagAt(html, tag, gt + 1);
+        if (close !== -1) {
+          out += html.slice(kept, at) + " ";
+          kept = close + tag.length + 3;
+          at = html.indexOf("<", kept);
+          continue;
+        }
+        noCloseFrom[tag] = gt;
+      }
+    }
+    at = html.indexOf("<", at + 1);
+  }
+  return kept === 0 ? html : out + html.slice(kept);
+}
+function replaceTags(s) {
+  let out = "";
+  let kept = 0;
+  let at = s.indexOf("<");
+  while (at !== -1) {
+    const gt = s.indexOf(">", at + 1);
+    if (gt === -1) break;
+    if (gt > at + 1) {
+      out += s.slice(kept, at) + " ";
+      kept = gt + 1;
+      at = s.indexOf("<", kept);
+    } else {
+      at = s.indexOf("<", at + 1);
+    }
+  }
+  return kept === 0 ? s : out + s.slice(kept);
+}
 function htmlToText(html) {
-  return html.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>|<\/(p|div|tr|li|h[1-6])>/gi, "\n").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&amp;/gi, "&").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
+  return replaceTags(dropScriptsAndStyles(html).replace(/<br\s*\/?>|<\/(p|div|tr|li|h[1-6])>/gi, "\n")).replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&amp;/gi, "&").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
+}
+function messageText(source, html) {
+  const plain = extractTextBody(source);
+  if (plain !== null && plain.trim() !== "") return plain;
+  const part = html === void 0 ? extractHtmlBody(source) : html;
+  return part !== null ? htmlToText(part) : plain ?? "";
 }
 
 // src/utils/bodyIndex.ts
-init_mimeParse();
 import {
   chmodSync,
   closeSync,
@@ -99935,7 +100112,8 @@ import { basename, dirname as dirname3, join as join7 } from "path";
 import { homedir as homedir5 } from "os";
 var BODY_INDEX_FILE_ENV = "APPLE_MAIL_MCP_BODY_INDEX_FILE";
 var BODY_INDEX_APPLICATION_ID = 1095582281;
-var BODY_INDEX_SCHEMA_VERSION = 3;
+var BODY_INDEX_SCHEMA_VERSION = 4;
+var UPGRADE_IN_PLACE_FROM = 3;
 var MAX_EMLX_BYTES = 25 * 1024 * 1024;
 var MAX_BODY_CHARS = 1e5;
 var INDEX_BATCH = 200;
@@ -99951,7 +100129,12 @@ var DocState = {
    */
   partial: 2,
   /** Larger than {@link MAX_EMLX_BYTES}; not read. */
-  tooLarge: 3
+  tooLarge: 3,
+  /**
+   * Reading or parsing it failed (no permission, an I/O error, a parser
+   * exception). Not searched; queued again by the next full walk.
+   */
+  unreadable: 4
 };
 function bodyIndexPath(env = process.env) {
   const override = env[BODY_INDEX_FILE_ENV];
@@ -99965,15 +100148,32 @@ function messageIdFromFilename(name2) {
   const m = /^(\d+)(\.partial)?\.emlx$/.exec(name2);
   return m ? Number(m[1]) : null;
 }
+function inMessagesFolder(dir) {
+  return basename(dir) === "Messages";
+}
 function parseEmlxBody(bytes) {
   const source = emlxSource(bytes);
   if (source === null) return null;
-  const text = extractTextBody(source) ?? htmlToText(extractHtmlBody(source) ?? "");
-  const normalized2 = text.replace(/\s+/g, " ").trim();
+  const normalized2 = messageText(source).replace(/\s+/g, " ").trim();
   return normalized2 ? normalized2.slice(0, MAX_BODY_CHARS) : null;
 }
 function ftsPhrase(text) {
   return `"${text.replace(/"/g, '""')}"`;
+}
+var WORD_CHAR = /[\p{L}\p{N}\p{Co}]/u;
+var UNSPACED_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+var WORD_END = /[\p{L}\p{N}\p{Co}\p{M}]$/u;
+function bodyMatchQuery(text) {
+  if (text.includes("\0")) return { reason: "the body text contains a NUL character" };
+  if (!WORD_CHAR.test(text)) {
+    return { reason: "the body index matches words, and the body text has no letters or digits" };
+  }
+  if (UNSPACED_SCRIPT.test(text)) {
+    return {
+      reason: "the body index matches words, and Chinese, Japanese, Thai, Lao, Khmer and Burmese text has no spaces to split it into words"
+    };
+  }
+  return { query: WORD_END.test(text) ? `${ftsPhrase(text)}*` : ftsPhrase(text) };
 }
 var fts5Checked = null;
 function fts5Unsupported(sqlite) {
@@ -100044,7 +100244,7 @@ function stampMismatch(db, schema = "main") {
   }
   const version4 = Number(db.prepare(`PRAGMA ${schema}.user_version`).get()?.user_version ?? 0);
   if (version4 !== BODY_INDEX_SCHEMA_VERSION) {
-    return `body index is being rebuilt (schema v${version4}, this server expects v${BODY_INDEX_SCHEMA_VERSION})`;
+    return `body index is being rebuilt, or kept by another version of apple-mail-mcp (schema v${version4}, this server expects v${BODY_INDEX_SCHEMA_VERSION})`;
   }
   return null;
 }
@@ -100063,7 +100263,7 @@ var SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 function readIndexState(db, schema = "main") {
-  const counts = { indexed: 0, queued: 0, partial: 0, tooLarge: 0 };
+  const counts = { indexed: 0, queued: 0, partial: 0, tooLarge: 0, unreadable: 0 };
   for (const r of db.prepare(`SELECT state, count(*) AS n FROM ${schema}.docs GROUP BY state`).all()) {
     const n = Number(r.n);
     switch (Number(r.state)) {
@@ -100078,6 +100278,9 @@ function readIndexState(db, schema = "main") {
         break;
       case DocState.tooLarge:
         counts.tooLarge = n;
+        break;
+      case DocState.unreadable:
+        counts.unreadable = n;
         break;
     }
   }
@@ -100094,9 +100297,11 @@ function readIndexState(db, schema = "main") {
 }
 var ATTACH_ALIAS = "bi";
 function bodyMatchClause(text) {
+  const match = bodyMatchQuery(text);
+  if ("reason" in match) return match;
   return {
     sql: `m.ROWID IN (SELECT rowid FROM ${ATTACH_ALIAS}.bodies WHERE bodies MATCH ?)`,
-    args: [ftsPhrase(text)]
+    args: [match.query]
   };
 }
 function scopeCoverage(db, fromSql, where, args) {
@@ -100105,20 +100310,24 @@ function scopeCoverage(db, fromSql, where, args) {
          sum(d.id IS NULL) AS missing,
          sum(d.state = ${DocState.queued}) AS queued,
          sum(d.state = ${DocState.partial}) AS partial,
-         sum(d.state = ${DocState.tooLarge}) AS too_large
+         sum(d.state = ${DocState.tooLarge}) AS too_large,
+         sum(d.state = ${DocState.unreadable}) AS unreadable
        ${fromSql}
        LEFT JOIN ${ATTACH_ALIAS}.docs d ON d.id = m.ROWID
        WHERE ${where.join(" AND ")}`
   ).get(...args);
+  const walked = db.prepare(`SELECT 1 AS x FROM ${ATTACH_ALIAS}.meta WHERE key = 'lastFullWalk'`).get() !== void 0;
+  const missing = Number(row?.missing ?? 0);
   return {
-    notDownloaded: Number(row?.missing ?? 0),
-    notIndexedYet: Number(row?.queued ?? 0),
+    notDownloaded: walked ? missing : 0,
+    notIndexedYet: Number(row?.queued ?? 0) + (walked ? 0 : missing),
     partlyDownloaded: Number(row?.partial ?? 0),
-    tooLarge: Number(row?.too_large ?? 0)
+    tooLarge: Number(row?.too_large ?? 0),
+    unreadable: Number(row?.unreadable ?? 0)
   };
 }
 function isScopeComplete(c) {
-  return c.notDownloaded + c.notIndexedYet + c.partlyDownloaded + c.tooLarge === 0;
+  return c.notDownloaded + c.notIndexedYet + c.partlyDownloaded + c.tooLarge + c.unreadable === 0;
 }
 function describeScopeGap(c) {
   const fmt = (n) => n.toLocaleString("en-US");
@@ -100127,6 +100336,7 @@ function describeScopeGap(c) {
   if (c.notIndexedYet) parts.push(`${fmt(c.notIndexedYet)} not indexed yet`);
   if (c.partlyDownloaded) parts.push(`${fmt(c.partlyDownloaded)} with no body downloaded yet`);
   if (c.tooLarge) parts.push(`${fmt(c.tooLarge)} over the 25 MB size cap`);
+  if (c.unreadable) parts.push(`${fmt(c.unreadable)} that couldn't be read`);
   return parts.join(", ");
 }
 var realClock = { now: () => Date.now(), monotonic: () => performance.now() };
@@ -100159,12 +100369,14 @@ var StoreWalk = class {
         continue;
       }
       const names = new Set(entries.map((e) => e.name));
+      const messages = inMessagesFolder(dir);
       for (const e of entries) {
         const full = join7(dir, e.name);
         if (e.isDirectory()) {
           if (!(dir === this.versionDir && e.name === "MailData")) this.stack.push(full);
           continue;
         }
+        if (!messages) continue;
         const id = messageIdFromFilename(e.name);
         if (id === null || this.seen.has(id)) continue;
         if (e.name.endsWith(".partial.emlx") && names.has(`${id}.emlx`)) continue;
@@ -100188,6 +100400,10 @@ var StoreWalk = class {
 var WRITER_BUSY_TIMEOUT_MS = 5e3;
 function writerPragmas(db) {
   db.exec(`PRAGMA busy_timeout = ${WRITER_BUSY_TIMEOUT_MS}; PRAGMA temp_store = MEMORY`);
+}
+function rowIsCurrent(known, path3, mtime, size) {
+  return known !== void 0 && String(known.path) === path3 && Number(known.mtime) === mtime && Number(known.size) === size && // An unreadable file is tried again whenever it is seen.
+  Number(known.state) !== DocState.unreadable;
 }
 var BodyIndexWriter = class _BodyIndexWriter {
   constructor(versionDir, path3, db, rebuilt, clock2) {
@@ -100250,7 +100466,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
     }
     try {
       const version4 = Number(db.prepare(`PRAGMA user_version`).get()?.user_version ?? 0);
-      if (what === "ours" && version4 !== BODY_INDEX_SCHEMA_VERSION) {
+      if (what === "ours" && version4 !== BODY_INDEX_SCHEMA_VERSION && version4 !== UPGRADE_IN_PLACE_FROM) {
         rebuilt ??= `schema v${version4} \u2192 v${BODY_INDEX_SCHEMA_VERSION}`;
         db.exec(
           `DROP TABLE IF EXISTS docs; DROP TABLE IF EXISTS bodies; DROP TABLE IF EXISTS meta;`
@@ -100260,7 +100476,13 @@ var BodyIndexWriter = class _BodyIndexWriter {
         PRAGMA journal_mode = WAL;
         PRAGMA application_id = ${BODY_INDEX_APPLICATION_ID};
         ${SCHEMA_SQL}
+      `);
+      const upgrading = what === "ours" && version4 === UPGRADE_IN_PLACE_FROM;
+      db.exec(`
+        BEGIN IMMEDIATE;
+        ${upgrading ? `UPDATE docs SET state = ${DocState.queued} WHERE state = ${DocState.indexed} AND id NOT IN (SELECT rowid FROM bodies);` : ""}
         PRAGMA user_version = ${BODY_INDEX_SCHEMA_VERSION};
+        COMMIT;
       `);
       privateSidecars(path3);
       const w = new _BodyIndexWriter(versionDir, path3, db, rebuilt, clock2);
@@ -100326,7 +100548,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
     const walk = this.walk;
     if (!walk) return false;
     const t0 = this.clock.monotonic();
-    const get = this.prep(`SELECT path, mtime, size FROM docs WHERE id = ?`);
+    const get = this.prep(`SELECT path, mtime, size, state FROM docs WHERE id = ?`);
     const queue = this.prep(
       `INSERT INTO docs (id, path, mtime, size, state) VALUES (?, ?, ?, ?, ${DocState.queued})
        ON CONFLICT(id) DO UPDATE SET path = excluded.path, mtime = excluded.mtime,
@@ -100336,10 +100558,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       finished3 = walk.step(t0 + budgetMs, this.clock, (id, path3, mtime, size) => {
-        const known = get.get(id);
-        if (!known || String(known.path) !== path3 || Number(known.mtime) !== mtime || Number(known.size) !== size) {
-          queue.run(id, path3, mtime, size);
-        }
+        if (!rowIsCurrent(get.get(id), path3, mtime, size)) queue.run(id, path3, mtime, size);
       });
       if (finished3) this.dropMissing(walk);
       this.db.exec("COMMIT");
@@ -100391,20 +100610,28 @@ var BodyIndexWriter = class _BodyIndexWriter {
   }
   /**
    * Index queued messages, newest id first, until `budgetMs` has passed.
-   * Returns how many were processed. A file that can't be read or carries no
-   * text is still marked done, so it isn't retried on every step. Each batch
-   * is picked inside its own write transaction, so two connections indexing
-   * at once never parse the same message twice.
+   * Returns how many were processed. Each message ends in a state: indexed
+   * (with or without text), partial, too large, or unreadable when reading or
+   * parsing it failed — never left to fail the whole batch again, so one bad
+   * file can't stall the index. A file that vanished drops its row: it is no
+   * longer the message's file. Each batch is picked inside its own write
+   * transaction, so two connections indexing at once never parse the same
+   * message twice. `maxBytes` leaves larger files for later (a search's
+   * catch-up uses it, so it never waits on a big parse).
    */
-  indexStep(budgetMs) {
+  indexStep(budgetMs, opts = {}) {
     const deadline = this.clock.monotonic() + budgetMs;
     const next = this.prep(
-      `SELECT id, path FROM docs WHERE state = ${DocState.queued} ORDER BY id DESC LIMIT ${INDEX_BATCH}`
+      `SELECT id, path FROM docs WHERE state = ${DocState.queued}
+       ${opts.maxBytes === void 0 ? "" : `AND size <= ${Math.floor(opts.maxBytes)}`}
+       ORDER BY id DESC LIMIT ${INDEX_BATCH}`
     );
     const setState = this.prep(`UPDATE docs SET state = ? WHERE id = ?`);
+    const delDoc = this.prep(`DELETE FROM docs WHERE id = ?`);
     const delBody = this.deleteBodyStatement();
     const addBody = this.prep(`INSERT INTO bodies (rowid, body) VALUES (?, ?)`);
     let done = 0;
+    const failures = /* @__PURE__ */ new Set();
     let more = true;
     while (more && this.clock.monotonic() < deadline) {
       this.db.exec("BEGIN IMMEDIATE");
@@ -100415,17 +100642,23 @@ var BodyIndexWriter = class _BodyIndexWriter {
           if (done > 0 && this.clock.monotonic() >= deadline) break;
           const id = Number(r.id);
           const path3 = String(r.path);
-          const read = readEmlxCapped(path3);
+          const outcome = readAndParse(path3);
           delBody.run(id);
-          if (read === "tooLarge") {
-            setState.run(DocState.tooLarge, id);
+          if (outcome.state === "gone") {
+            delDoc.run(id);
           } else {
-            const text = read === null ? null : parseEmlxBody(read);
-            if (text) addBody.run(id, text);
-            const bodyMissing = !text && path3.endsWith(".partial.emlx");
-            setState.run(bodyMissing ? DocState.partial : DocState.indexed, id);
+            if (outcome.text) addBody.run(id, outcome.text);
+            setState.run(outcome.state, id);
+            if (outcome.failure) failures.add(outcome.failure);
           }
           done++;
+        }
+        if (failures.size > 0) {
+          this.setMeta(
+            "lastError",
+            `${new Date(this.clock.now()).toISOString()} some message files couldn't be read (${[...failures].join(", ")}); they are tried again on the next full walk`
+          );
+          failures.clear();
         }
         this.db.exec("COMMIT");
       } catch (err) {
@@ -100444,7 +100677,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
    * the full file for the same id exists.
    */
   applyChanges(paths) {
-    const get = this.prep(`SELECT path, mtime, size FROM docs WHERE id = ?`);
+    const get = this.prep(`SELECT path, mtime, size, state FROM docs WHERE id = ?`);
     const queue = this.prep(
       `INSERT INTO docs (id, path, mtime, size, state) VALUES (?, ?, ?, ?, ${DocState.queued})
        ON CONFLICT(id) DO UPDATE SET path = excluded.path, mtime = excluded.mtime,
@@ -100457,7 +100690,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
       for (const path3 of paths) {
         const name2 = basename(path3);
         const id = messageIdFromFilename(name2);
-        if (id === null) continue;
+        if (id === null || !inMessagesFolder(dirname3(path3))) continue;
         let st;
         try {
           st = statSync2(path3);
@@ -100476,9 +100709,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
           continue;
         }
         const mtime = Math.floor(st.mtimeMs);
-        if (known && String(known.path) === path3 && Number(known.mtime) === mtime && Number(known.size) === st.size) {
-          continue;
-        }
+        if (rowIsCurrent(known, path3, mtime, st.size)) continue;
         queue.run(id, path3, mtime, st.size);
       }
       this.db.exec("COMMIT");
@@ -100500,12 +100731,28 @@ var BodyIndexWriter = class _BodyIndexWriter {
 };
 var READ_BUFFER_BYTES = 1024 * 1024;
 var readBuffer = Buffer.allocUnsafe(0);
+function readAndParse(path3) {
+  const read = readEmlxCapped(path3);
+  if (read === "tooLarge") return { state: DocState.tooLarge };
+  if (!Buffer.isBuffer(read)) {
+    return read.code === "ENOENT" || read.code === "ENOTDIR" ? { state: "gone" } : { state: DocState.unreadable, failure: read.code };
+  }
+  let text;
+  try {
+    text = parseEmlxBody(read);
+  } catch {
+    return { state: DocState.unreadable, failure: "parse error" };
+  }
+  if (!text && path3.endsWith(".partial.emlx")) return { state: DocState.partial };
+  return { state: DocState.indexed, text };
+}
 function readEmlxCapped(path3) {
+  const failed = (err) => ({ code: err.code ?? "EIO" });
   let fd;
   try {
     fd = openSync(path3, "r");
-  } catch {
-    return null;
+  } catch (err) {
+    return failed(err);
   }
   try {
     const size = fstatSync(fd).size;
@@ -100522,8 +100769,8 @@ function readEmlxCapped(path3) {
       off += n;
     }
     return buf.subarray(0, off);
-  } catch {
-    return null;
+  } catch (err) {
+    return failed(err);
   } finally {
     closeSync(fd);
   }
@@ -100621,6 +100868,55 @@ function checkSchema(db) {
 function likePattern(text) {
   return `%${text.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 }
+function foldKey(ch) {
+  if (ch === "\u0130") return "i";
+  const upper = ch.toUpperCase();
+  const lower = ([...upper].length === 1 ? upper : ch).toLowerCase();
+  return [...lower].length === 1 ? lower : ch;
+}
+var caseClasses = null;
+function buildCaseClasses() {
+  const byKey = /* @__PURE__ */ new Map();
+  for (let cp = 0; cp <= 131071; cp++) {
+    if (cp >= 55296 && cp <= 57343) continue;
+    const c = String.fromCodePoint(cp);
+    if (c.toUpperCase() === c && c.toLowerCase() === c) continue;
+    const key = foldKey(c);
+    const members2 = byKey.get(key);
+    if (members2) members2.push(c);
+    else byKey.set(key, [c]);
+  }
+  const classes = /* @__PURE__ */ new Map();
+  for (const [key, members2] of byKey) {
+    if (!members2.includes(key)) members2.push(key);
+    if (members2.length > 1) for (const m of members2) classes.set(m, members2);
+  }
+  return classes;
+}
+function caseClass(ch) {
+  if (ch.charCodeAt(0) < 128) {
+    const other = ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase();
+    return other === ch ? [ch] : [ch, other];
+  }
+  caseClasses ??= buildCaseClasses();
+  const members2 = caseClasses.get(ch);
+  return members2 ? [ch, ...members2.filter((m) => m !== ch)] : [ch];
+}
+function needsUnicodeCaseFold(text) {
+  for (const ch of text) {
+    if (ch.charCodeAt(0) >= 128 && caseClass(ch).length > 1) return true;
+  }
+  return false;
+}
+function containsGlob(text) {
+  let pattern = "*";
+  for (const ch of text) {
+    const forms = caseClass(ch);
+    if (forms.length > 1) pattern += `[${forms.join("")}]`;
+    else pattern += ch === "*" || ch === "?" || ch === "[" ? `[${ch}]` : ch;
+  }
+  return `${pattern}*`;
+}
 function parseFilterDate(value) {
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
   return iso ? new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])) : new Date(value);
@@ -100632,14 +100928,15 @@ function upperBound(dateTo) {
 }
 function resolveMailboxIds(db, accountId, mailbox) {
   const rows = db.prepare(`SELECT ROWID AS id, url FROM mailboxes WHERE url LIKE ?`).all(`%://${accountId}/%`);
-  const wanted = mailbox.replace(/\/+$/, "").toLowerCase();
+  const fold = (p) => p.normalize("NFC").toLowerCase();
+  const wanted = fold(mailbox.replace(/\/+$/, ""));
   const exact = [];
   const leaf = [];
   for (const r of rows) {
     const parsed = parseMailboxUrl(String(r.url ?? ""));
     if (!parsed || parsed.accountId !== accountId) continue;
     const path3 = parsed.path;
-    const lower = path3.toLowerCase();
+    const lower = fold(path3);
     if (lower === wanted) exact.push({ id: Number(r.id), path: path3 });
     else if (lower.split("/").pop() === wanted) leaf.push({ id: Number(r.id), path: path3 });
   }
@@ -100657,6 +100954,14 @@ function toDate(seconds) {
   return Number.isFinite(n) && n > 0 ? new Date(n * 1e3) : void 0;
 }
 function searchOpenIndex(db, features, params) {
+  if ([params.query, params.subject, params.from].some((t) => t?.includes("\0"))) {
+    return { ok: false, reason: "a text filter contains a NUL character" };
+  }
+  const dateFrom = params.dateFrom ? parseFilterDate(params.dateFrom).getTime() : void 0;
+  const dateTo = params.dateTo ? upperBound(params.dateTo).getTime() : void 0;
+  if ([dateFrom, dateTo].some((t) => t !== void 0 && !Number.isFinite(t))) {
+    return { ok: false, reason: "unreadable date filter" };
+  }
   const where = ["m.deleted = 0"];
   const args = [];
   let scopedPath;
@@ -100680,20 +100985,19 @@ function searchOpenIndex(db, features, params) {
   }
   const subjectExpr = features.subjectPrefix ? `COALESCE(m.subject_prefix, '') || COALESCE(s.subject, '')` : `COALESCE(s.subject, '')`;
   const senderExpr = `COALESCE(a.comment, '') || ' <' || COALESCE(a.address, '') || '>'`;
+  const contains = (expr, text) => {
+    if (needsUnicodeCaseFold(text)) {
+      args.push(containsGlob(text));
+      return `${expr} GLOB ?`;
+    }
+    args.push(likePattern(text));
+    return `lower(${expr}) LIKE ? ESCAPE '\\'`;
+  };
   if (params.query) {
-    where.push(
-      `(lower(${subjectExpr}) LIKE ? ESCAPE '\\' OR lower(${senderExpr}) LIKE ? ESCAPE '\\')`
-    );
-    args.push(likePattern(params.query), likePattern(params.query));
+    where.push(`(${contains(subjectExpr, params.query)} OR ${contains(senderExpr, params.query)})`);
   }
-  if (params.subject) {
-    where.push(`lower(${subjectExpr}) LIKE ? ESCAPE '\\'`);
-    args.push(likePattern(params.subject));
-  }
-  if (params.from) {
-    where.push(`lower(${senderExpr}) LIKE ? ESCAPE '\\'`);
-    args.push(likePattern(params.from));
-  }
+  if (params.subject) where.push(contains(subjectExpr, params.subject));
+  if (params.from) where.push(contains(senderExpr, params.from));
   if (params.isRead !== void 0) {
     where.push(`m.read = ?`);
     args.push(params.isRead ? 1 : 0);
@@ -100702,13 +101006,13 @@ function searchOpenIndex(db, features, params) {
     where.push(`m.flagged = ?`);
     args.push(params.isFlagged ? 1 : 0);
   }
-  if (params.dateFrom) {
+  if (dateFrom !== void 0) {
     where.push(`m.date_received >= ?`);
-    args.push(Math.floor(parseFilterDate(params.dateFrom).getTime() / 1e3));
+    args.push(Math.floor(dateFrom / 1e3));
   }
-  if (params.dateTo) {
+  if (dateTo !== void 0) {
     where.push(`m.date_received <= ?`);
-    args.push(Math.floor(upperBound(params.dateTo).getTime() / 1e3));
+    args.push(Math.floor(dateTo / 1e3));
   }
   if (params.rowIds) {
     where.push(`m.ROWID IN (SELECT value FROM json_each(?))`);
@@ -100719,11 +101023,12 @@ function searchOpenIndex(db, features, params) {
     LEFT JOIN subjects s ON m.subject = s.ROWID
     LEFT JOIN addresses a ON m.sender = a.ROWID
     LEFT JOIN mailboxes mb ON m.mailbox = mb.ROWID`;
-  const bodyCoverage = params.body ? scopeCoverage(db, fromSql, where, args) : void 0;
+  const clause = params.body ? bodyMatchClause(params.body.text) : void 0;
+  if (clause && "reason" in clause) return { ok: false, reason: clause.reason };
+  const bodyCoverage = clause ? scopeCoverage(db, fromSql, where, args) : void 0;
   const filterWhere = [...where];
   const filterArgs = [...args];
-  if (params.body) {
-    const clause = bodyMatchClause(params.body.text);
+  if (clause) {
     filterWhere.push(clause.sql);
     filterArgs.push(...clause.args);
   }
@@ -100768,6 +101073,21 @@ function searchOpenIndex(db, features, params) {
     })
   };
 }
+function envelopeIndexClosed(indexPath) {
+  let fd;
+  let wal;
+  try {
+    fd = openSync2(indexPath, "r");
+    const header = Buffer.alloc(20);
+    wal = readSync2(fd, header, 0, 20, 0) === 20 && (header[18] === 2 || header[19] === 2);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== void 0) closeSync2(fd);
+  }
+  if (!wal || existsSync5(`${indexPath}-wal`) && existsSync5(`${indexPath}-shm`)) return null;
+  return "Mail isn't running: the Envelope Index has no -wal/-shm files, and reading it would create them in the mail store";
+}
 function searchEnvelopeIndex(params, opts = {}) {
   const sqlite = opts.sqlite === void 0 ? loadSqlite2() : opts.sqlite;
   if (!sqlite) return { ok: false, reason: "node:sqlite unavailable (requires Node >= 22.5)" };
@@ -100778,6 +101098,8 @@ function searchEnvelopeIndex(params, opts = {}) {
       reason: FULL_DISK_ACCESS_REASON
     };
   }
+  const closed = envelopeIndexClosed(indexPath);
+  if (closed) return { ok: false, reason: closed };
   let db = null;
   try {
     db = new sqlite.DatabaseSync(indexPath, { readOnly: true });
@@ -100819,6 +101141,8 @@ function readMessageFromStore(id, opts = {}) {
       reason: FULL_DISK_ACCESS_REASON
     };
   }
+  const closed = envelopeIndexClosed(store.indexPath);
+  if (closed) return { reason: closed };
   let db = null;
   let row;
   let features;
@@ -100862,7 +101186,11 @@ function readMessageFromStore(id, opts = {}) {
     const source = emlxSource(bytes);
     if (source === null) continue;
     const html = extractHtmlBody(source);
-    const text = extractTextBody(source) ?? (html !== null ? htmlToText(html) : "");
+    const text = messageText(source, html);
+    const partial2 = path3.endsWith(".partial.emlx");
+    if (partial2 && html === null && text.trim() === "") {
+      return { reason: `message ${id} is only partly downloaded (no body on disk yet)` };
+    }
     return {
       subject: typeof row.subject === "string" ? row.subject : "",
       plainText: text,
@@ -100870,7 +101198,7 @@ function readMessageFromStore(id, opts = {}) {
       rfcMessageId: extractRfcMessageIdFromSource(source),
       ...toDate(row.date_sent) ? { dateSent: toDate(row.date_sent) } : {},
       ...toDate(row.date_received) ? { dateReceived: toDate(row.date_received) } : {},
-      partial: path3.endsWith(".partial.emlx")
+      partial: partial2
     };
   }
   return { reason: `no readable .emlx for message ${id} under ${location.path}` };
@@ -100883,7 +101211,7 @@ import { fork } from "child_process";
 import { fileURLToPath } from "url";
 
 // src/utils/bodyIndexBuild.ts
-import { readdirSync as readdirSync5 } from "fs";
+import { readdirSync as readdirSync5, statSync as statSync3 } from "fs";
 
 // src/utils/orphan.ts
 function isOrphaned(ppid = process.ppid) {
@@ -100895,6 +101223,17 @@ var BODY_INDEX_BUILDER_ARG = "--body-index-builder";
 var ORPHAN_CHECK_MS = 2e3;
 var HEARTBEAT_MS = 5e3;
 var BUILDER_PROTOCOL = 1;
+function fileIdentity(path3) {
+  try {
+    const st = statSync3(path3);
+    return { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+function sameFile(a, b) {
+  return b !== null && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+}
 function errText3(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -101009,7 +101348,20 @@ function runBuilderProcess(proc, deps) {
   proc.onMessage((msg) => {
     if (done) return;
     if (msg.type === "start") {
-      loop ??= runBuilder(
+      if (loop) return;
+      if (msg.entry && !sameFile(msg.entry, proc.entry())) {
+        try {
+          proc.send({
+            type: "failed",
+            where: "version",
+            message: "the server's files were replaced on disk after it started (an update), so a build process would run other code than the server"
+          });
+        } catch {
+          quit();
+        }
+        return;
+      }
+      loop = runBuilder(
         {
           postMessage: (m) => {
             try {
@@ -101040,6 +101392,7 @@ var WRITER_RETRY_MS = 3e4;
 var SLICE_MS = 50;
 var PAUSE_MS = 100;
 var SEARCH_CATCHUP_MS = 50;
+var SEARCH_CATCHUP_MAX_BYTES = 1024 * 1024;
 var BUILD_RESTART_MS = 5e3;
 var BUILD_STALL_MS = 6e4;
 var FALLBACK_RETRY_MS = 60 * 6e4;
@@ -101058,9 +101411,11 @@ var fsEventsWatch = (dir, onEvent, onError) => {
 var STOP_GRACE_MS = 2e3;
 function builderExecArgv(execArgv = process.execArgv, nodeOptions = process.env.NODE_OPTIONS) {
   const flag = "--experimental-sqlite";
-  return execArgv.includes(flag) || (nodeOptions ?? "").split(/\s+/).includes(flag) ? [flag] : [];
+  const sqlite = execArgv.includes(flag) || (nodeOptions ?? "").split(/\s+/).includes(flag) ? [flag] : [];
+  return [...sqlite, "--disable-warning=ExperimentalWarning"];
 }
 function childProcessRunner(entry, opts = {}) {
+  const loaded = fileIdentity(entry);
   return {
     runsOn: "child process",
     start(init, events) {
@@ -101096,7 +101451,7 @@ function childProcessRunner(entry, opts = {}) {
         if (child.connected) child.send(msg, () => {
         });
       };
-      send({ type: "start", init });
+      send({ type: "start", init, entry: loaded });
       return {
         post: (work) => send(work),
         stop: async () => {
@@ -101162,6 +101517,7 @@ var lastError = null;
 var build = null;
 var buildReady = false;
 var buildSeq = 0;
+var buildDoneSeq = 0;
 var buildFailures = 0;
 var buildFallback = null;
 var lastBuildReport = 0;
@@ -101309,8 +101665,11 @@ function handToBuild(w, walk, paths) {
   if (walk) walkInFlight = true;
   b.post({ type: "work", seq: ++buildSeq, walk, paths });
 }
+function forkUnavailable() {
+  return process.versions.electron !== void 0 ? "the server runs on Electron's Node, where a forked process would start the app instead of Node; building on the main thread" : null;
+}
 function onMainThread() {
-  return buildFallback !== null && clock.now() - buildFallback.since < FALLBACK_RETRY_MS;
+  return forkUnavailable() !== null || buildFallback !== null && clock.now() - buildFallback.since < FALLBACK_RETRY_MS;
 }
 function startBuild(w) {
   const init = {
@@ -101353,7 +101712,7 @@ function stopBuild() {
   buildReady = false;
   if (watchdog) clearInterval(watchdog);
   watchdog = null;
-  if (walkInFlight) walkRequested = true;
+  if (walkInFlight || b !== null && buildDoneSeq !== buildSeq) walkRequested = true;
   walkInFlight = false;
   if (b) buildStopped = b.stop();
 }
@@ -101368,6 +101727,7 @@ function onBuildReport(msg) {
       return;
     case "idle":
       if (msg.seq !== buildSeq) return;
+      buildDoneSeq = msg.seq;
       buildFailures = 0;
       stopBuild();
       wake(0);
@@ -101454,12 +101814,22 @@ function tick() {
     wake(WRITER_RETRY_MS);
     return;
   }
+  let failed = false;
   try {
     if (dispatch(w)) return;
   } catch (err) {
     noteError("indexing step failed", err);
+    failed = true;
   }
-  wake(lastWalkDone === 0 ? rescanInterval() : lastWalkDone + rescanInterval() - clock.now());
+  wake(
+    nextTickDelay(
+      lastWalkDone === 0 ? rescanInterval() : lastWalkDone + rescanInterval() - clock.now(),
+      failed
+    )
+  );
+}
+function nextTickDelay(untilWalk, failed) {
+  return Math.max(failed ? BUILD_RESTART_MS : PAUSE_MS, untilWalk);
 }
 function startBackgroundIndexing() {
   if (running) return;
@@ -101489,6 +101859,7 @@ function stopBodyIndexing() {
   walkRequested = false;
   walkInFlight = false;
   buildSeq = 0;
+  buildDoneSeq = 0;
   buildFailures = 0;
   lastWalkDone = 0;
   writer?.close();
@@ -101518,7 +101889,7 @@ function catchUp(w) {
     walkRequested = true;
   } else {
     if (paths.length > 0) w.applyChanges(paths);
-    if (w.hasQueued()) w.indexStep(SEARCH_CATCHUP_MS);
+    if (w.hasQueued()) w.indexStep(SEARCH_CATCHUP_MS, { maxBytes: SEARCH_CATCHUP_MAX_BYTES });
   }
   if (walkRequested || w.hasQueued()) wake(0);
 }
@@ -101536,7 +101907,7 @@ function bodyIndexStatus() {
       build: {
         runsOn: onMainThread() ? "main thread" : runner.runsOn,
         running: build !== null,
-        ...onMainThread() ? { fallback: buildFallback.why } : {}
+        ...onMainThread() ? { fallback: forkUnavailable() ?? buildFallback.why } : {}
       }
     } : {},
     ...lastError ? { lastError } : {}
@@ -101616,8 +101987,12 @@ function describeUnscopedMiss(id, raw) {
   const unreached = list(unreachedRaw);
   const budgetHit = budgetRaw.trim() === "true";
   const probeStalled = stalledRaw.trim() === "true";
-  if (skipped.length === 0 && !budgetHit && !probeStalled) return base2;
-  const parts = [`Message ${Number(id)} not found in the mailboxes scanned.`];
+  const incompleteSource = base2 === "Source lookup incomplete";
+  if (skipped.length === 0 && !budgetHit && !probeStalled && !(incompleteSource && unreached.length))
+    return base2;
+  const parts = [
+    incompleteSource ? `Message ${Number(id)} could not be uniquely verified because the scan was incomplete.` : `Message ${Number(id)} not found in the mailboxes scanned.`
+  ];
   if (skipped.length > 0) {
     parts.push(
       `Not scanned \u2014 too large for a cross-mailbox id scan (over ${getByIdScanThreshold()} messages; APPLE_MAIL_MAX_BYID_SCAN_MAILBOX): ${skipped.join(", ")}.`
@@ -101630,6 +102005,10 @@ function describeUnscopedMiss(id, raw) {
     );
   } else if (budgetHit) {
     parts.push(`The scan also stopped after its ${BYID_SCAN_BUDGET_SECONDS}s budget ${reach}`);
+  } else if (incompleteSource && unreached.length) {
+    parts.push(
+      `The scan did not reach or could not search: ${summariseList(unreached, UNREACHED_LIST_MAX)}.`
+    );
   }
   parts.push(
     "If the message is in a mailbox that was not scanned, pass account + mailbox to read it from that mailbox directly, or use its imap: id from list-messages/search-messages."
@@ -103939,6 +104318,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end if`;
     const hitFound = opts.firstHit ? "(count of _hits) > 0" : "false";
     const stopOnHit = opts.firstHit ? `if (count of _hits) > 0 then exit repeat` : "";
+    const scanError = (accountExpr) => opts.requireCompleteCoverage ? `on error
+                  set _unreached to _unreached & ${accountExpr} & " / " & _mbName & " (message lookup failed)${DIAG_ITEM_SEP}"` : "";
     return buildAppLevelScriptIfRunning(`
       try
         set _hits to {}
@@ -104003,6 +104384,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                     set end of _hitAccts to _acctName
                     set _names to _names & _acctName & "/" & _mbName & ", "
                   end if
+                ${scanError("_acctName")}
                 end try
               end if
               ${stopOnHit}
@@ -104052,6 +104434,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                   set end of _hitAccts to "${LOCAL_STORE_LABEL}"
                   set _names to _names & "${LOCAL_STORE_LABEL}/" & _mbName & ", "
                 end if
+              ${scanError(`"${LOCAL_STORE_LABEL}"`)}
               end try
             end if
             ${stopOnHit}
@@ -104060,8 +104443,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             set _unreached to _unreached & "${LOCAL_STORE_LABEL} (" & ((length of _mbs) - _stopAt + 1) & " more local mailboxes)${DIAG_ITEM_SEP}"
           end if
         end if
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached
         ${opts.firstHit ? "" : `if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"`}
+        ${opts.requireCompleteCoverage ? `if _skipped is not "" or _budgetHit or _probeStalled or _unreached is not "" then return "${LOOKUP_ERROR_MARKER}Source lookup incomplete${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached` : ""}
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached
         if (count of _hits) ${opts.firstHit ? "> 0" : "is 1"} then
           set msg to item 1 of _hits
           set _hitMb to item 1 of _hitMbs
@@ -104270,6 +104654,31 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return null;
     }
     return this.resolveById(id, "return source of msg", hint, options);
+  }
+  /** Read a numeric message's source and owning location in the same strict lookup. */
+  getRawSourceWithLocation(id) {
+    this.lastMessageLookupError = void 0;
+    const output2 = this.resolveById(
+      id,
+      `set _sourceMailbox to ""
+       ${mailboxPathFragment("_hitMb", "_sourceMailbox")}
+       if _hitAcct contains "${FIELD_SEP}" or _sourceMailbox contains "${FIELD_SEP}" then return "invalid-source-scope"
+       return _hitAcct & "${FIELD_SEP}" & _sourceMailbox & "${FIELD_SEP}" & (source of msg)`,
+      void 0,
+      { requireCompleteCoverage: true }
+    );
+    if (output2 === null) return null;
+    const first = output2.indexOf(FIELD_SEP);
+    const second = output2.indexOf(FIELD_SEP, first + 1);
+    if (first < 1 || second <= first + 1 || !output2.slice(second + 1).trim()) {
+      this.lastMessageLookupError = "Mail could not return a readable source with its account and mailbox.";
+      return null;
+    }
+    return {
+      account: output2.slice(0, first),
+      mailbox: output2.slice(first + 1, second),
+      raw: output2.slice(second + 1)
+    };
   }
   /**
    * List messages in a mailbox.
@@ -107204,14 +107613,14 @@ import { join as joinPath } from "path";
 
 // src/tools/compose.ts
 init_imapClient();
+init_addressparser();
+init_smtpMailer();
 
 // src/services/replyForward.ts
+init_addressparser();
 function extractAddresses(headerValue) {
   if (!headerValue.trim()) return [];
-  return headerValue.split(",").map((part) => {
-    const angle = part.match(/<([^>]+)>/);
-    return (angle ? angle[1] : part).trim();
-  }).filter((addr) => addr.includes("@"));
+  return addressparser_default(headerValue, { flatten: true }).map(({ address }) => address.trim()).filter((addr) => addr.includes("@"));
 }
 function parseOriginalHeaders(raw) {
   const headerBlock = raw.split(/\r?\n\r?\n/)[0] ?? "";
@@ -107264,7 +107673,9 @@ function quoteBody(plainText) {
 }
 function buildReplyOptions(args) {
   const { original, originalPlainText, body, replyAll, self, from } = args;
-  const selfSet = new Set(self.filter(Boolean).map((s) => s.toLowerCase()));
+  const selfSet = new Set(
+    self.filter(Boolean).flatMap((value) => [value, ...extractAddresses(value)]).map((s) => s.toLowerCase())
+  );
   const to = dedupe((original.replyTo.length ? original.replyTo : original.from).filter(Boolean));
   const toSet = new Set(to.map((t) => t.toLowerCase()));
   let cc;
@@ -107275,6 +107686,11 @@ function buildReplyOptions(args) {
       )
     );
     cc = extra.length ? extra : void 0;
+  }
+  if ([...to, ...cc ?? []].some((address) => /[\x00-\x1F\x7F<>]/.test(address))) {
+    throw new Error(
+      "The original message contains a reply recipient that SMTP composition cannot preserve. Reply composition was stopped to avoid changing its address."
+    );
   }
   const references = dedupe(
     original.messageId ? [...original.references, original.messageId] : original.references
@@ -107480,6 +107896,20 @@ async function readOriginal(deps, id, cfg, recoverReplyText = false, scope) {
     if (source.subject !== void 0) original2.subject = source.subject;
     return { original: original2, plainText: extractTextBody(source.raw) };
   }
+  if (cfg && !scope) {
+    const source = deps.mail.getRawSourceWithLocation?.(id);
+    if (!source) {
+      const why = deps.mail.consumeLastMessageLookupError?.();
+      throw new Error(
+        `Cannot read the original message source${why ? ` (${why})` : ""}. Its account and mailbox must be verified before SMTP composition. Re-list the intended mailbox or supply its account and mailbox.`
+      );
+    }
+    requireScopedSmtpIdentity(deps, { account: source.account, mailbox: source.mailbox }, cfg);
+    return {
+      original: parseOriginalHeaders(source.raw),
+      plainText: extractTextBody(source.raw, { sourceRepresentation: "unicode" })
+    };
+  }
   const raw = scope ? deps.mail.getRawSource(id, scope, { requireScopedLocation: true }) : deps.mail.getRawSource(id);
   if (!raw) {
     const why = deps.mail.consumeLastMessageLookupError?.();
@@ -107549,7 +107979,9 @@ function requireScopedSmtpIdentity(deps, scope, cfg) {
     throw new Error("The source Mail account is unavailable or ambiguous; no SMTP reply was sent.");
   }
   const addresses = new Set(accounts[0].addresses.map((address) => address.trim().toLowerCase()));
-  if (!addresses.has(cfg.from.trim().toLowerCase())) {
+  const parsed = /[\r\n\0]/.test(cfg.from) ? [] : addressparser_default(cfg.from);
+  const from = parsed.length === 1 && "address" in parsed[0] ? parsed[0].address?.trim() : void 0;
+  if (!from || !from.includes("@") || !addresses.has(from.toLowerCase())) {
     throw new Error("The source Mail account does not match the configured SMTP identity.");
   }
 }
@@ -107648,20 +108080,30 @@ async function runCompose(deps, args) {
         from: cfg.from
       });
       if (attachmentCount) opts.attachments = attachments;
-      const result = await deps.smtpSend(opts, cfg);
+      const result = await Promise.resolve().then(() => deps.smtpSend(opts, cfg)).catch(unknownSmtpResult);
+      if (result.deliveryUnknown) {
+        return successResponse(smtpDeliveryNotice(result), {
+          ok: false,
+          id,
+          transport: "smtp",
+          ...smtpDeliveryFields(result)
+        });
+      }
       if (!result.success)
         return errorResponse(
-          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`
+          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`,
+          { ok: false, sent: false, transport: "smtp", ...smtpDeliveryFields(result) }
         );
       return successResponse(
-        args.kind === "reply" ? `Reply sent via SMTP${withFiles}` : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
+        result.partial ? smtpDeliveryNotice(result) : args.kind === "reply" ? `Reply sent via SMTP${withFiles}` : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
         {
-          ok: true,
+          ok: !result.partial,
           sent: true,
           id,
           transport: "smtp",
           messageId: result.messageId,
           attachmentCount,
+          ...smtpDeliveryFields(result),
           ...args.kind === "forward" ? { recipients: args.to } : {},
           // Best-effort Sent-folder copy (issue #220) — same field shape as
           // send-email, since it's the same sendViaSmtp underneath.
@@ -107797,17 +108239,40 @@ function createSerialEmailHandler(deps) {
       } else {
         results = deps.appleScriptSend(recipients, subject, body, account, delayMs);
       }
-      const successCount = results.filter((r) => r.success).length;
-      const failCount = results.length - successCount;
-      const details = results.map((r) => `  - ${r.email}: ${r.success ? "sent" : `FAILED (${r.error})`}`).join("\n");
+      const successCount = results.filter((r) => r.success && !r.deliveryUnknown).length;
+      const unknownCount = results.filter((r) => r.deliveryUnknown).length;
+      const failCount = results.length - successCount - unknownCount;
+      const partialCount = results.filter((r) => r.partial && !r.deliveryUnknown).length;
+      const details = results.map(
+        (r) => `  - ${r.email}: ${r.deliveryUnknown || r.partial ? smtpDeliveryNotice(r) : r.success ? "sent" : `FAILED (${r.error})`}`
+      ).join("\n");
       const structured = {
-        ok: failCount === 0,
+        ok: failCount === 0 && partialCount === 0 && unknownCount === 0,
         sent: successCount,
         failed: failCount,
+        partial: partialCount > 0 || successCount > 0 && failCount + unknownCount > 0,
+        ...unknownCount ? { unknown: unknownCount, deliveryUnknown: true } : {},
         transport: useSmtp ? "smtp" : "applescript",
-        results: results.map((r) => ({ email: r.email, success: r.success, error: r.error }))
+        results: results.map((r) => ({
+          email: r.email,
+          success: r.success,
+          error: r.error,
+          ...smtpDeliveryFields(r)
+        }))
       };
-      if (failCount === 0) {
+      if (unknownCount > 0) {
+        return successResponse(
+          `SMTP confirmed ${successCount} submission(s), ${failCount} known failure(s), and ${unknownCount} unknown outcome(s):
+${details}`,
+          structured
+        );
+      } else if (partialCount > 0) {
+        return successResponse(
+          `SMTP accepted ${successCount} submission(s), including ${partialCount} with rejected recipients; ${failCount} submission(s) failed:
+${details}`,
+          structured
+        );
+      } else if (failCount === 0) {
         return successResponse(
           `Successfully sent ${successCount} email(s):
 ${details}`,
@@ -108295,7 +108760,7 @@ function bodyIndexCheck(s, env = process.env) {
   if (s.counts) {
     const c = s.counts;
     parts.push(
-      `${fmt(c.indexed + c.partial)} messages indexed` + (c.queued ? `, ${fmt(c.queued)} not indexed yet` : "") + (c.partial ? `, ${fmt(c.partial)} with no body downloaded yet` : "") + (c.tooLarge ? `, ${fmt(c.tooLarge)} over the 25 MB cap` : "")
+      `${fmt(c.indexed + c.partial)} messages indexed` + (c.queued ? `, ${fmt(c.queued)} not indexed yet` : "") + (c.partial ? `, ${fmt(c.partial)} with no body downloaded yet` : "") + (c.tooLarge ? `, ${fmt(c.tooLarge)} over the 25 MB cap` : "") + (c.unreadable ? `, ${fmt(c.unreadable)} that couldn't be read` : "")
     );
   }
   if (s.meta) {
@@ -108767,6 +109232,7 @@ if (process.argv.includes(BODY_INDEX_BUILDER_ARG) && process.send) {
       onMessage: (fn) => process.on("message", fn),
       onDisconnect: (fn) => process.on("disconnect", fn),
       ppid: () => process.ppid,
+      entry: () => fileIdentity(process.argv[1]),
       exit: (code) => process.exit(code)
     },
     { sqlite: loadSqlite2(), clock: realClock }
@@ -108982,7 +109448,7 @@ registerTool(
     inputSchema: {
       query: external_exports.string().optional().describe("Text to search for in subject or sender"),
       body: external_exports.string().optional().describe(
-        "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched, or the opt-in local body index (APPLE_MAIL_MCP_BODY_INDEX); otherwise AppleScript-only accounts cannot search bodies and are reported as not searched."
+        "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched, or the opt-in local body index (APPLE_MAIL_MCP_BODY_INDEX); otherwise AppleScript-only accounts cannot search bodies and are reported as not searched. The local index matches words and word beginnings ('invoice' finds 'invoices', not 'reinvoice'); text with no letters or digits, or in Chinese, Japanese or Thai, is reported as not searched rather than as no match."
       ),
       from: external_exports.string().optional().describe(
         "Filter by sender (substring match against the full sender string, i.e. display name + address \u2014 not an exact address match)"
@@ -109636,6 +110102,14 @@ var SENT_COPY_ERROR_SCHEMA = external_exports.string().optional().describe("Pres
 var SENT_COPY_ALREADY_FILED_SCHEMA = external_exports.boolean().optional().describe(
   "Present (true) only when sentCopy is true because the Sent mailbox already held this Message-ID (e.g. Gmail's SMTP files its own copy), so none was appended."
 );
+var SMTP_DELIVERY_SCHEMA = {
+  deliveryUnknown: external_exports.boolean().optional().describe("SMTP returned no definitive submission result. Verify before retrying."),
+  partial: external_exports.boolean().optional().describe(
+    "SMTP accepted some recipients and rejected others; do not resend to accepted recipients."
+  ),
+  accepted: external_exports.array(external_exports.string()).optional().describe("Recipients accepted by the SMTP server, not final inbox delivery."),
+  rejected: external_exports.array(external_exports.string()).optional().describe("Recipients rejected by the SMTP server.")
+};
 var COMPOSITION_SCHEMA = external_exports.literal("native-editor").optional().describe(
   "Opt in to Mail's visible native editor: inserts only new prose, preserving its signature, HTML quotation and reply ancestry without the AppleScript content setter. Requires an unlocked desktop and existing Accessibility and Automation permissions. Uses Mail.app even when SMTP is configured; cannot be combined with transport=smtp or caller-built threading headers. New messages require an explicit account. Do not interact with Mail or the clipboard while it runs. Failure never falls back to another composition method or sends an unverified message."
 );
@@ -109666,6 +110140,8 @@ registerTool(
     },
     outputSchema: {
       ok: external_exports.boolean().optional(),
+      sent: external_exports.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       recipients: external_exports.array(external_exports.string()).optional(),
       attachmentCount: external_exports.number().optional(),
       transport: external_exports.string().optional(),
@@ -109718,16 +110194,31 @@ registerTool(
           attachments,
           replyTo,
           ...threading.headers
-        });
+        }).catch(unknownSmtpResult);
+        if (result.deliveryUnknown) {
+          return successResponse(smtpDeliveryNotice(result), {
+            ok: false,
+            transport: "smtp",
+            ...smtpDeliveryFields(result)
+          });
+        }
         if (!result.success) {
-          return errorResponse(result.error ?? "Failed to send email via SMTP.");
+          return errorResponse(result.error ?? "Failed to send email via SMTP.", {
+            ok: false,
+            sent: false,
+            transport: "smtp",
+            ...smtpDeliveryFields(result)
+          });
         }
         const copyNote = result.sentCopy === true ? result.sentCopyAlreadyFiled ? " (Sent-folder copy already filed by the server)" : " (Sent-folder copy filed)" : result.sentCopy === false ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})` : "";
-        return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}${copyNote}`, {
-          ok: true,
+        const delivery = result.partial ? smtpDeliveryNotice(result) : `Email sent via SMTP to ${to.join(", ")}`;
+        return successResponse(`${delivery}${attachInfo}${copyNote}`, {
+          ok: !result.partial,
+          sent: true,
           recipients: to,
           attachmentCount,
           transport: "smtp",
+          ...smtpDeliveryFields(result),
           ...result.messageId ? { messageId: result.messageId } : {},
           ...result.sentCopy !== void 0 ? { sentCopy: result.sentCopy } : {},
           ...result.sentCopyError !== void 0 ? { sentCopyError: result.sentCopyError } : {},
@@ -109775,12 +110266,16 @@ registerTool(
       ok: external_exports.boolean().optional(),
       sent: external_exports.number().optional(),
       failed: external_exports.number().optional(),
+      unknown: external_exports.number().optional().describe("Submissions with an unknown outcome, excluded from sent and failed counts."),
+      deliveryUnknown: SMTP_DELIVERY_SCHEMA.deliveryUnknown,
+      partial: external_exports.boolean().optional(),
       transport: external_exports.enum(["smtp", "applescript"]).optional().describe("Transport used for this batch"),
       results: external_exports.array(
         external_exports.object({
           email: external_exports.string().optional(),
           success: external_exports.boolean().optional(),
-          error: external_exports.string().optional()
+          error: external_exports.string().optional(),
+          ...SMTP_DELIVERY_SCHEMA
         }).passthrough()
       ).optional()
     }
@@ -109937,6 +110432,7 @@ registerTool(
       messageId: external_exports.string().optional(),
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       id: external_exports.string().optional(),
       attachmentCount: external_exports.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
@@ -109970,6 +110466,7 @@ registerTool(
       messageId: external_exports.string().optional(),
       ok: external_exports.boolean().optional(),
       sent: external_exports.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       recipients: external_exports.array(external_exports.string()).optional(),
       id: external_exports.string().optional(),
       attachmentCount: external_exports.number().optional(),

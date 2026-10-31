@@ -83,8 +83,20 @@ export interface SmtpConfig {
   allowedFrom?: string[];
 }
 
-/** Result of an SMTP send. */
-export interface SmtpSendResult {
+/** Recipient acceptance for an SMTP submission; this is not final inbox delivery. */
+export interface SmtpDeliveryStatus {
+  /** No final SMTP result was received; the provider may already have accepted it. */
+  deliveryUnknown?: boolean;
+  /** True when SMTP accepted the message for some recipients but rejected others. */
+  partial?: boolean;
+  /** Envelope recipients accepted for the successful submission. */
+  accepted?: string[];
+  /** Envelope recipients rejected by the SMTP server. */
+  rejected?: string[];
+}
+
+/** Result of an SMTP send. Partial submission remains successful: do not resend it. */
+export interface SmtpSendResult extends SmtpDeliveryStatus {
   success: boolean;
   messageId?: string;
   error?: string;
@@ -109,8 +121,104 @@ export interface SmtpSendResult {
 /** Fields {@link sendViaSmtp} merges into its result for the Sent-copy step. */
 type SentCopyFields = Pick<SmtpSendResult, "sentCopy" | "sentCopyError" | "sentCopyAlreadyFiled">;
 
+/** Preserve recipient status consistently through public tools and serial results. */
+export function smtpDeliveryFields(result: SmtpDeliveryStatus): SmtpDeliveryStatus {
+  return {
+    ...(result.deliveryUnknown !== undefined ? { deliveryUnknown: result.deliveryUnknown } : {}),
+    ...(result.partial !== undefined ? { partial: result.partial } : {}),
+    ...(result.accepted !== undefined ? { accepted: result.accepted } : {}),
+    ...(result.rejected !== undefined ? { rejected: result.rejected } : {}),
+  };
+}
+
+/** A partial submission is actionable without inviting duplicate delivery. */
+export function smtpDeliveryNotice(result: SmtpDeliveryStatus & { error?: string }): string {
+  if (result.deliveryUnknown) {
+    return (
+      "SMTP submission outcome is unknown. The provider may already have accepted the message. " +
+      "Do not resend automatically; verify this submission with the provider or recipients before retrying." +
+      (result.error ? ` Details: ${result.error}` : "")
+    );
+  }
+  if (!result.partial) return "";
+  return (
+    `Partial SMTP submission. Accepted: ${result.accepted?.join(", ") || "not reported"}. ` +
+    `Rejected: ${result.rejected?.join(", ") || "not reported"}. ` +
+    "Do not resend to accepted recipients; reconsider only rejected recipients."
+  );
+}
+
+/** Nodemailer may represent a recipient as a bare address or an address object. */
+function recipientAddresses(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((recipient: unknown) => {
+    if (typeof recipient === "string") return [recipient];
+    if (
+      recipient &&
+      typeof recipient === "object" &&
+      "address" in recipient &&
+      typeof recipient.address === "string"
+    ) {
+      return [recipient.address];
+    }
+    return [];
+  });
+}
+
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** An unclassified transport exception cannot establish that nothing was sent. */
+export function unknownSmtpResult(error: unknown): SmtpSendResult {
+  const rejected = recipientAddresses(
+    error && typeof error === "object" && "rejected" in error ? error.rejected : undefined
+  );
+  return {
+    success: false,
+    deliveryUnknown: true,
+    error: `SMTP submission outcome unknown: ${errText(error)}`,
+    ...(rejected !== undefined ? { rejected } : {}),
+  };
+}
+
+/**
+ * Only protocol phases or explicit negative DATA replies prove no submission.
+ * Nodemailer labels socket close/timeouts CONN even AFTER sending DATA, so a
+ * generic connection error must remain unknown. RCPT acceptance is not delivery.
+ */
+function definiteSmtpFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { code, originalCode, command, responseCode, timeoutType, syscall } = error as {
+    code?: string;
+    originalCode?: string;
+    command?: string;
+    responseCode?: number;
+    timeoutType?: string;
+    syscall?: string;
+  };
+  if (code === "EAUTH" || code === "EDNS") return true;
+  // Nodemailer reports both setup and post-DATA socket timeouts as CONN.
+  // Only the explicit setup phases, or an OS connect syscall, prove unsent.
+  if (
+    code === "ETIMEDOUT" &&
+    ["CONNECT_TIMEOUT", "GREETING_TIMEOUT", "UPGRADE_TIMEOUT"].includes(timeoutType ?? "")
+  )
+    return true;
+  if ((originalCode ?? code) === "ETIMEDOUT" && syscall === "connect") return true;
+  if (["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(originalCode ?? code ?? "")) {
+    return true;
+  }
+  if (/^(?:AUTH(?: |$)|EHLO$|HELO$|STARTTLS$|MAIL FROM$|RCPT TO$)/.test(command ?? "")) {
+    return true;
+  }
+  if (command === "API" && (code === "EENVELOPE" || code === "EMESSAGE")) return true;
+  return (
+    command === "DATA" &&
+    typeof responseCode === "number" &&
+    responseCode >= 400 &&
+    responseCode < 600
+  );
 }
 
 /**
@@ -407,25 +515,37 @@ export async function sendViaSmtp(
       `SMTP plaintext explicitly enabled via ${SMTP_ENV.allowPlaintext}; credentials and message content may be exposed.`
     );
   }
-  const transporter = createTransport({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    // Port 587/143-style configurations must not silently downgrade to
-    // plaintext when the server advertises no usable TLS upgrade.
-    requireTLS,
-    auth: { user: cfg.user, pass: cfg.pass },
-  });
-
-  // Pin Date so the Sent-folder copy composed after the send carries the same
-  // Date header as the delivered message (it was seconds later otherwise).
-  const mailOptions = {
-    ...buildMailOptions(opts, from, attachments),
-    date: new Date(),
-  };
+  let transporter: ReturnType<typeof createTransport> | undefined;
+  let submissionAttempted = false;
 
   try {
+    // Pin Date so the Sent-folder copy carries the delivered message's date.
+    // Preparation/factory failures before sendMail are known to be unsent.
+    const mailOptions = {
+      ...buildMailOptions(opts, from, attachments),
+      date: new Date(),
+    };
+    transporter = createTransport({
+      host: cfg.host,
+      port: cfg.port,
+      secure: cfg.secure,
+      // Port 587-style configurations must not silently downgrade to plaintext.
+      requireTLS,
+      auth: { user: cfg.user, pass: cfg.pass },
+    });
+    submissionAttempted = true;
     const info = await transporter.sendMail(mailOptions);
+    const accepted = recipientAddresses(info.accepted);
+    const rejected = recipientAddresses(info.rejected);
+    // Stream/other test transports have no SMTP acceptance result. Do not
+    // manufacture one from requested recipients or a generated envelope.
+    const delivery: SmtpDeliveryStatus = {
+      ...(accepted !== undefined ? { accepted } : {}),
+      ...(rejected !== undefined ? { rejected } : {}),
+      ...(accepted !== undefined && rejected !== undefined
+        ? { partial: accepted.length > 0 && rejected.length > 0 }
+        : {}),
+    };
 
     // Best-effort Sent-folder copy (2.18.0, issue #220): never lets a copy
     // failure affect the send that already succeeded above.
@@ -449,18 +569,28 @@ export async function sendViaSmtp(
       copyFields = { sentCopy: false, sentCopyError: errText(copyError) };
     }
 
-    return { success: true, messageId: info.messageId, ...copyFields };
+    return { success: true, messageId: info.messageId, ...delivery, ...copyFields };
   } catch (error) {
+    if (submissionAttempted && !definiteSmtpFailure(error)) return unknownSmtpResult(error);
     const detail = error instanceof Error ? error.message : String(error);
+    const rejected = recipientAddresses(
+      error && typeof error === "object" && "rejected" in error ? error.rejected : undefined
+    );
     const tlsHint = requireTLS
       ? ` STARTTLS is required for non-implicit TLS; to explicitly allow plaintext (not recommended), set ${SMTP_ENV.allowPlaintext}=1.`
       : "";
     return {
       success: false,
       error: `SMTP send failed: ${detail}.${tlsHint}`,
+      ...(rejected !== undefined ? { rejected } : {}),
     };
   } finally {
-    transporter.close();
+    try {
+      transporter?.close();
+    } catch (error) {
+      // Cleanup must not turn an acknowledged submission into a retryable failure.
+      console.error(`Failed to close SMTP transport: ${errText(error)}`);
+    }
   }
 }
 
@@ -471,7 +601,7 @@ export interface SerialSmtpRecipient {
 }
 
 /** Per-recipient outcome of a serial SMTP send. */
-export interface SerialSmtpResult {
+export interface SerialSmtpResult extends SmtpDeliveryStatus {
   email: string;
   success: boolean;
   error?: string;
@@ -532,12 +662,16 @@ export async function sendSerialViaSmtp(
         },
         config
       );
-      results.push({ email: r.email, success: res.success, error: res.error });
+      results.push({
+        email: r.email,
+        success: res.success,
+        error: res.error,
+        ...smtpDeliveryFields(res),
+      });
     } catch (error) {
       results.push({
         email: r.email,
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
+        ...unknownSmtpResult(error),
       });
     }
     if (delay > 0 && i < recipients.length - 1) {

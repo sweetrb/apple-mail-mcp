@@ -325,7 +325,13 @@ describe("sendViaSmtp", () => {
   });
 
   it("returns a clean error (not a throw) when the transport fails", async () => {
-    const sendMail = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const sendMail = vi.fn().mockRejectedValue(
+      Object.assign(new Error("ECONNREFUSED"), {
+        code: "ESOCKET",
+        originalCode: "ECONNREFUSED",
+        command: "CONN",
+      })
+    );
     const close = vi.fn();
     const createTransport = vi.fn().mockReturnValue({ sendMail, close });
 
@@ -337,7 +343,71 @@ describe("sendViaSmtp", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/SMTP send failed: ECONNREFUSED/);
+    expect(result.deliveryUnknown).not.toBe(true);
     expect(close).toHaveBeenCalled(); // transporter closed even on failure
+  });
+
+  it.each([
+    { code: "ECONNECTION", command: "CONN" },
+    { code: "ETIMEDOUT", command: "CONN" },
+    { code: "ESTREAM", command: "API" },
+  ])(
+    "keeps an unclassified $code/$command send failure unknown without treating RCPT acceptance as delivery",
+    async (properties) => {
+      const sendMail = vi.fn().mockRejectedValue(
+        Object.assign(new Error("Lost final result"), {
+          ...properties,
+          accepted: ["bob@example.com"],
+          rejected: ["refused@example.com"],
+        })
+      );
+      const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
+      const result = await sendViaSmtp(
+        { to: ["bob@example.com", "refused@example.com"], subject: "s", body: "b" },
+        testConfig,
+        createTransport as never
+      );
+      expect(result).toMatchObject({
+        success: false,
+        deliveryUnknown: true,
+        rejected: ["refused@example.com"],
+      });
+      expect(result.accepted).toBeUndefined();
+      expect(sendMail).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("does not turn an acknowledged send into a failure when closing its transport throws", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<accepted@example.com>" });
+    const createTransport = vi.fn().mockReturnValue({
+      sendMail,
+      close: () => {
+        throw new Error("Cleanup failed");
+      },
+    });
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport as never,
+      async () => ({})
+    );
+    expect(result).toMatchObject({ success: true, messageId: "<accepted@example.com>" });
+    expect(result.deliveryUnknown).not.toBe(true);
+    expect(sendMail).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a preparation failure before sendMail a known unsent result", async () => {
+    const createTransport = vi.fn(() => {
+      throw new Error("Transport setup failed");
+    });
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport as never
+    );
+    expect(result.success).toBe(false);
+    expect(result.deliveryUnknown).not.toBe(true);
+    expect(result.error).toContain("Transport setup failed");
   });
 
   it("rejects a non-absolute attachment path before connecting", async () => {
@@ -350,6 +420,7 @@ describe("sendViaSmtp", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/must be absolute/);
+    expect(result.deliveryUnknown).not.toBe(true);
     expect(createTransport).not.toHaveBeenCalled();
   });
 
@@ -628,6 +699,58 @@ describe("applyPlaceholders", () => {
 });
 
 describe("sendSerialViaSmtp", () => {
+  it.each(["returned", "thrown"])(
+    "preserves a %s unknown outcome without resending that message",
+    async (mode) => {
+      const send = vi.fn();
+      if (mode === "returned")
+        send.mockResolvedValue({ success: false, deliveryUnknown: true, error: "Lost result" });
+      else send.mockRejectedValue(new Error("Lost result"));
+      const results = await sendSerialViaSmtp(
+        [{ email: "recipient@example.test", variables: {} }],
+        "s",
+        "b",
+        testConfig,
+        { delayMs: 0, send }
+      );
+      expect(results).toEqual([
+        expect.objectContaining({
+          email: "recipient@example.test",
+          success: false,
+          deliveryUnknown: true,
+        }),
+      ]);
+      expect(send).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("preserves per-message recipient outcomes without resending accepted submissions", async () => {
+    const send = vi.fn(async () => ({
+      success: true,
+      partial: true,
+      accepted: ["accepted@example.test"],
+      rejected: ["refused@example.test"],
+    }));
+    const results = await sendSerialViaSmtp(
+      [{ email: "accepted@example.test", variables: {} }],
+      "Subject",
+      "Body",
+      testConfig,
+      { delayMs: 0, send }
+    );
+    expect(results).toEqual([
+      {
+        email: "accepted@example.test",
+        success: true,
+        error: undefined,
+        partial: true,
+        accepted: ["accepted@example.test"],
+        rejected: ["refused@example.test"],
+      },
+    ]);
+    expect(send).toHaveBeenCalledOnce();
+  });
+
   it("passes literal replacement markers through to each personalized SMTP message", async () => {
     const send = vi.fn(async () => ({ success: true }));
 

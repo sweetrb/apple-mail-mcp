@@ -4,9 +4,145 @@ import {
   parseMimeAttachments,
   extractMimeAttachment,
   extractHtmlBody,
+  extractTextBody,
   extractRfcMessageIdFromSource,
   base64DecodedSize,
 } from "./mimeParse.js";
+
+describe("extractTextBody source representations", () => {
+  it.each(["Olá 世界 — café", "こんにちは 🌍"])("preserves Unicode 8bit text %s", (body) => {
+    const source = `Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${body}`;
+    expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBe(body);
+  });
+
+  it("keeps Unicode 8bit source text and literal body boundary lines", () => {
+    const body =
+      "Olá 世界 — café\r\nこんにちは 🌍\r\nFirst line boundary=abc\r\n--abc\r\nIMPORTANT SECOND HALF";
+    const source = `Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${body}`;
+    expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBe(body);
+  });
+
+  it("preserves the default byte-string representation for IMAP sources", () => {
+    const header =
+      "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
+    const source = Buffer.from(`${header}Olá 世界 — café`, "utf8").toString("latin1");
+    expect(extractTextBody(source)).toBe("Olá 世界 — café");
+  });
+
+  it.each([
+    {
+      encoding: "quoted-printable",
+      charset: "utf-8",
+      body: "Ol=C3=A1 =E4=B8=96=E7=95=8C",
+      expected: "Olá 世界",
+    },
+    {
+      encoding: "base64",
+      charset: "utf-8",
+      body: Buffer.from("こんにちは 🌍").toString("base64"),
+      expected: "こんにちは 🌍",
+    },
+    {
+      encoding: "quoted-printable",
+      charset: "windows-1252",
+      body: "Se=F1or Jos=E9 =80",
+      expected: "Señor José €",
+    },
+  ])(
+    "decodes $encoding with $charset in Unicode-source mode",
+    ({ encoding, charset, body, expected }) => {
+      const source = `Content-Type: text/plain; charset=${charset}\r\nContent-Transfer-Encoding: ${encoding}\r\n\r\n${body}`;
+      expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBe(expected);
+    }
+  );
+
+  it.each([
+    { encoding: "quoted-printable", body: "Olá =E4=B8=96" },
+    { encoding: "base64", body: "SGVsbG8=🌍" },
+  ])(
+    "rejects non-ASCII in a Unicode-source $encoding payload instead of corrupting it",
+    ({ encoding, body }) => {
+      const source = `Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: ${encoding}\r\n\r\n${body}`;
+      expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBeNull();
+    }
+  );
+
+  it("decodes a Unicode 8bit text leaf in multipart source text", () => {
+    const source = [
+      'Content-Type: multipart/alternative; boundary="outer"',
+      "",
+      "--outer",
+      "Content-Type: text/plain; charset=utf-8",
+      "Content-Transfer-Encoding: 8bit",
+      "",
+      "Olá 世界 — café",
+      "--outer",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      "<p>HTML</p>",
+      "--outer--",
+    ].join("\r\n");
+    expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBe("Olá 世界 — café");
+  });
+
+  it("uses the actual top-level boundary parameter, not a similarly named parameter", () => {
+    const source = [
+      'Content-Type: multipart/mixed; x-boundary=decoy; boundary="real boundary"',
+      "",
+      "--real boundary",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Exact text.",
+      "--real boundary--",
+    ].join("\r\n");
+    expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBe("Exact text.");
+  });
+
+  it("preserves boundary substrings and meaningful whitespace in a multipart text part", () => {
+    const body =
+      "  First --abc suffix.  \r\n--abc is ordinary text\r\nIMPORTANT SECOND HALF\r\n\r\n  Last line.  ";
+    const source = [
+      'Content-Type: multipart/alternative; boundary="abc"',
+      "",
+      "--abc",
+      "Content-Type: text/plain; charset=utf-8",
+      "Content-Transfer-Encoding: 8bit",
+      "",
+      body,
+      "--abc--",
+    ].join("\r\n");
+    expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBe(body);
+  });
+
+  it("does not return a partial multipart body without a closing delimiter", () => {
+    const source = [
+      'Content-Type: multipart/alternative; boundary="abc"',
+      "",
+      "--abc",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Potentially incomplete text",
+    ].join("\r\n");
+    expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBeNull();
+  });
+
+  it("walks nested multipart boundary lines with metacharacters", () => {
+    const source = [
+      'Content-Type: multipart/mixed; boundary="outer.+"',
+      "",
+      "--outer.+",
+      'Content-Type: multipart/alternative; x-boundary=decoy; boundary="inner[1]"',
+      "",
+      "--inner[1]",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "  Olá 世界  ",
+      "--inner[1]--",
+      "--outer.+--",
+    ].join("\r\n");
+    expect(extractTextBody(source, { sourceRepresentation: "unicode" })).toBe("  Olá 世界  ");
+  });
+});
 
 describe("extractRfcMessageIdFromSource", () => {
   it("extracts a Message-ID header and strips angle brackets", () => {

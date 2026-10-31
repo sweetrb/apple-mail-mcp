@@ -150,7 +150,8 @@ export function bodyIndexCheck(
       `${fmt(c.indexed + c.partial)} messages indexed` +
         (c.queued ? `, ${fmt(c.queued)} not indexed yet` : "") +
         (c.partial ? `, ${fmt(c.partial)} with no body downloaded yet` : "") +
-        (c.tooLarge ? `, ${fmt(c.tooLarge)} over the 25 MB cap` : "")
+        (c.tooLarge ? `, ${fmt(c.tooLarge)} over the 25 MB cap` : "") +
+        (c.unreadable ? `, ${fmt(c.unreadable)} that couldn't be read` : "")
     );
   }
   if (s.meta) {

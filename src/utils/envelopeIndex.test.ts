@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
   checkSchema,
+  containsGlob,
+  envelopeIndexClosed,
   isEnvelopeIndexEnabled,
   isTruthyFlag,
   likePattern,
+  needsUnicodeCaseFold,
   parseMailboxUrl,
   readMessageFromStore,
   resolveMailStore,
@@ -158,6 +161,39 @@ describe("likePattern", () => {
 
   it("escapes LIKE wildcards and the escape character", () => {
     expect(likePattern("100%_a\\b")).toBe("%100\\%\\_a\\\\b%");
+  });
+});
+
+describe("needsUnicodeCaseFold", () => {
+  it("is true only for a letter outside ASCII that has case forms", () => {
+    for (const t of ["über", "CAFÉ", "Ελλάδα", "Привет", "ß2", "İ"])
+      expect(needsUnicodeCaseFold(t)).toBe(true);
+    for (const t of ["Invoice 100%", "明天", "🎉", ""]) expect(needsUnicodeCaseFold(t)).toBe(false);
+  });
+});
+
+describe("containsGlob", () => {
+  it("turns every cased character into a class of its case forms", () => {
+    expect(containsGlob("Ab1")).toBe("*[Aa][bB]1*");
+    expect(containsGlob("ü")).toBe("*[üÜ]*");
+    expect(containsGlob("Σ")).toBe("*[Σςσ]*");
+  });
+
+  it("matches GLOB's own wildcards literally and leaves LIKE's alone", () => {
+    expect(containsGlob("*?[")).toBe("*[*][?][[]*");
+    expect(containsGlob("100%_")).toBe("*100%_*");
+  });
+
+  it("pairs every case form of a letter, not only one upper and one lower", () => {
+    expect(containsGlob("ß")).toBe("*[ßẞ]*"); // its upper case is "SS", yet ẞ lowers to it
+    expect(containsGlob("ς")).toBe("*[ςΣσ]*"); // final sigma
+    expect(containsGlob("İ")).toBe("*[İIiı]*"); // lowers to i + a combining dot
+    expect(containsGlob("ǅ")).toBe("*[ǅǄǆ]*"); // a titlecase digraph
+    expect(containsGlob("\u{10400}")).toBe("*[\u{10400}\u{10428}]*"); // Deseret, past the BMP
+  });
+
+  it("pairs an ASCII letter with its other ASCII case only, as LIKE does", () => {
+    expect(containsGlob("ks")).toBe("*[kK][sS]*"); // not the Kelvin sign or long s
   });
 });
 
@@ -389,6 +425,90 @@ describeIfSqlite("searchOpenIndex", () => {
   });
 });
 
+describeIfSqlite("searchOpenIndex: text the index must match like AppleScript does", () => {
+  const INTL = "INTL-ACCOUNT-ID";
+  const NFD_MAILBOX = "Bu\u0308ro"; // "Büro" as macOS file names spell it
+  let dir: string;
+  let db: InstanceType<NonNullable<typeof sqlite>["DatabaseSync"]>;
+  let features: SchemaFeatures;
+  const search = (p: Partial<EnvelopeSearchParams>) =>
+    searchOpenIndex(db, features, { accountId: INTL, limit: 50, ...p });
+  const ids = (p: Partial<EnvelopeSearchParams>) => {
+    const r = search(p);
+    if (!r.ok) throw new Error(r.reason);
+    return r.rows.map((row) => row.id);
+  };
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "envidx-intl-"));
+    const path = join(dir, "Envelope Index");
+    const base = { account: INTL, mailbox: "INBOX", address: "x@example.com", received: T0 };
+    buildEnvelopeIndex(path, [
+      { ...base, id: 1, subject: "Über das Projekt" },
+      { ...base, id: 2, subject: "CAFÉ menu", name: "JOSÉ García", received: T0 - 1 },
+      { ...base, id: 3, subject: "ΕΛΛΗΝΙΚΆ νέα", received: T0 - 2 },
+      { ...base, id: 4, subject: "[URGENT] *action* needed?", received: T0 - 3 },
+      { ...base, id: 5, subject: "axb", mailbox: NFD_MAILBOX, received: T0 - 4 },
+      { ...base, id: 6, subject: "GROẞE STRAẞE", received: T0 - 5 },
+      { ...base, id: 7, subject: "ΟΔΟΣ ΑΘΗΝΩΝ", received: T0 - 6 },
+      { ...base, id: 8, subject: "istanbul trip", received: T0 - 7 },
+    ]);
+    db = new sqlite!.DatabaseSync(path, { readOnly: true });
+    features = checkSchema(db) as SchemaFeatures;
+  });
+  afterAll(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ignores case outside ASCII too (SQLite's LIKE folds ASCII only)", () => {
+    expect(ids({ query: "über" })).toEqual([1]);
+    expect(ids({ subject: "ÜBER DAS" })).toEqual([1]);
+    expect(ids({ subject: "café" })).toEqual([2]);
+    expect(ids({ subject: "ελληνικά" })).toEqual([3]);
+    expect(ids({ from: "josé garcía" })).toEqual([2]);
+    expect(ids({ query: "projekt" })).toEqual([1]);
+  });
+
+  it("matches letters whose case forms aren't one upper and one lower", () => {
+    expect(ids({ subject: "straße" })).toEqual([6]);
+    expect(ids({ subject: "οδος" })).toEqual([7]); // final sigma against Σ
+    expect(ids({ subject: "İstanbul" })).toEqual([8]);
+  });
+
+  it("takes GLOB wildcards in user text literally, on the GLOB path too", () => {
+    expect(ids({ subject: "über da?" })).toEqual([]);
+    expect(ids({ subject: "über da*" })).toEqual([]);
+    expect(ids({ subject: "über [d]" })).toEqual([]);
+    expect(ids({ subject: "über das" })).toEqual([1]);
+  });
+
+  it("takes wildcards in plain ASCII text literally", () => {
+    expect(ids({ subject: "[urgent]" })).toEqual([4]);
+    expect(ids({ subject: "*action*" })).toEqual([4]);
+    expect(ids({ subject: "?" })).toEqual([4]);
+    expect(ids({ subject: "a?b" })).toEqual([]);
+    expect(ids({ subject: "a*b" })).toEqual([]);
+  });
+
+  it("finds a mailbox stored in another Unicode normalization", () => {
+    expect(ids({ mailbox: "Büro" })).toEqual([5]);
+    expect(ids({ mailbox: "BÜRO" })).toEqual([5]);
+  });
+
+  it("refuses a filter it would answer wrongly instead of returning nothing", () => {
+    expect(search({ query: "a\u0000b" })).toEqual({
+      ok: false,
+      reason: "a text filter contains a NUL character",
+    });
+    expect(search({ dateFrom: "not a date" })).toEqual({
+      ok: false,
+      reason: "unreadable date filter",
+    });
+    expect(search({ dateTo: "also not a date" })).toMatchObject({ ok: false });
+  });
+});
+
 describeIfSqlite("searchEnvelopeIndex", () => {
   let dir: string;
 
@@ -459,6 +579,56 @@ describeIfSqlite("searchEnvelopeIndex", () => {
       writer.exec(`ROLLBACK`);
       writer.close();
     }
+  });
+
+  it("falls back on text too long for a SQLite pattern instead of failing or matching nothing", () => {
+    const path = join(dir, "long-pattern");
+    buildEnvelopeIndex(path, MESSAGES);
+    // SQLite refuses LIKE/GLOB patterns over 50,000 bytes; a class per letter grows fast.
+    for (const subject of ["ü".repeat(10_000), "a".repeat(60_000)]) {
+      expect(searchEnvelopeIndex(params({ subject }), { indexPath: path })).toEqual({
+        ok: false,
+        reason: expect.stringContaining("pattern too complex"),
+      });
+    }
+  });
+
+  it("leaves a closed WAL index alone rather than create its -wal/-shm in the mail store", () => {
+    const path = join(dir, "closed-wal");
+    buildEnvelopeIndex(path, MESSAGES);
+    const mail = new sqlite!.DatabaseSync(path);
+    mail.exec(`PRAGMA journal_mode = WAL`);
+    mail.close(); // the last connection to close deletes -wal and -shm, as when Mail quits
+    expect(existsSync(`${path}-shm`)).toBe(false);
+    expect(searchEnvelopeIndex(params({ query: "invoice" }), { indexPath: path })).toEqual({
+      ok: false,
+      reason: expect.stringContaining("Mail isn't running"),
+    });
+    expect(existsSync(`${path}-wal`) || existsSync(`${path}-shm`)).toBe(false);
+  });
+
+  it("reads a WAL index while Mail has it open", () => {
+    const path = join(dir, "open-wal");
+    buildEnvelopeIndex(path, MESSAGES);
+    const mail = new sqlite!.DatabaseSync(path);
+    try {
+      mail.exec(`PRAGMA journal_mode = WAL; UPDATE messages SET read = read`);
+      expect(envelopeIndexClosed(path)).toBeNull();
+      const r = searchEnvelopeIndex(params({ query: "invoice" }), { indexPath: path });
+      expect(r.ok && r.rows.map((x) => x.id)).toEqual([101]);
+    } finally {
+      mail.close();
+    }
+  });
+
+  it("judges only WAL databases, and lets the open report a file it can't read", () => {
+    const path = join(dir, "rollback");
+    buildEnvelopeIndex(path, MESSAGES);
+    expect(envelopeIndexClosed(path)).toBeNull(); // rollback journal: nothing is created
+    expect(envelopeIndexClosed(join(dir, "missing"))).toBeNull();
+    const short = join(dir, "short");
+    writeFileSync(short, "SQLite");
+    expect(envelopeIndexClosed(short)).toBeNull();
   });
 
   it("never writes to the index", () => {
@@ -546,5 +716,78 @@ describeIfSqlite("readMessageFromStore", () => {
     expect(readMessageFromStore(101, { store, sqlite: null })).toEqual({
       reason: expect.stringContaining("node:sqlite unavailable"),
     });
+  });
+});
+
+describeIfSqlite("readMessageFromStore: bodies it must not report as empty", () => {
+  const ACC = "READ-ACCOUNT-ID";
+  let root: string;
+  let store: { versionDir: string; indexPath: string };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "envidx-read-edge-"));
+    const versionDir = join(root, "V10");
+    mkdirSync(join(versionDir, "MailData"), { recursive: true });
+    store = { versionDir, indexPath: join(versionDir, "MailData", "Envelope Index") };
+    const base = { account: ACC, mailbox: "INBOX", address: "x@example.com", received: T0 };
+    buildEnvelopeIndex(store.indexPath, [
+      { ...base, id: 1, subject: "headers only" },
+      { ...base, id: 2, subject: "blank plain part" },
+      { ...base, id: 3, subject: "partial with text" },
+    ]);
+    writeEmlx(
+      versionDir,
+      ACC,
+      "INBOX",
+      1,
+      "Subject: headers only\r\nContent-Type: text/plain\r\n\r\n",
+      {
+        partial: true,
+      }
+    );
+    writeEmlx(
+      versionDir,
+      ACC,
+      "INBOX",
+      2,
+      'Subject: blank plain part\r\nContent-Type: multipart/alternative; boundary="b"\r\n\r\n' +
+        "--b\r\nContent-Type: text/plain\r\n\r\n \r\n\r\n" +
+        "--b\r\nContent-Type: text/html\r\n\r\n<p>The real message</p>\r\n--b--\r\n"
+    );
+    writeEmlx(versionDir, ACC, "INBOX", 3, plainMessage("p", "text arrived"), { partial: true });
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("sends a message with only its headers on disk to AppleScript, which downloads the body", () => {
+    expect(readMessageFromStore(1, { store })).toEqual({
+      reason: "message 1 is only partly downloaded (no body on disk yet)",
+    });
+  });
+
+  it("reads the HTML part when the plain part is blank", () => {
+    expect(readMessageFromStore(2, { store })).toMatchObject({ plainText: "The real message" });
+  });
+
+  it("still reads a partial download that has its text", () => {
+    expect(readMessageFromStore(3, { store })).toMatchObject({
+      plainText: expect.stringContaining("text arrived"),
+      partial: true,
+    });
+  });
+
+  it("leaves a closed WAL index alone here too", () => {
+    const mail = new sqlite!.DatabaseSync(store.indexPath);
+    mail.exec(`PRAGMA journal_mode = WAL`);
+    mail.close();
+    try {
+      expect(readMessageFromStore(3, { store })).toEqual({
+        reason: expect.stringContaining("Mail isn't running"),
+      });
+      expect(existsSync(`${store.indexPath}-shm`)).toBe(false);
+    } finally {
+      const back = new sqlite!.DatabaseSync(store.indexPath);
+      back.exec(`PRAGMA journal_mode = DELETE`);
+      back.close();
+    }
   });
 });

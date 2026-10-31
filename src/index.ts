@@ -40,6 +40,9 @@ import { writeFileSync } from "fs";
 import { join as joinPath } from "path";
 import {
   sendViaSmtp,
+  smtpDeliveryFields,
+  smtpDeliveryNotice,
+  unknownSmtpResult,
   sendSerialViaSmtp,
   shouldUseSmtp,
   isSmtpConfigured,
@@ -151,7 +154,7 @@ import {
   reconciliationWarnings,
   type DestructiveOpReport,
 } from "@/services/auditLog.js";
-import { BODY_INDEX_BUILDER_ARG, runBuilderProcess } from "@/utils/bodyIndexBuild.js";
+import { BODY_INDEX_BUILDER_ARG, fileIdentity, runBuilderProcess } from "@/utils/bodyIndexBuild.js";
 import { realClock } from "@/utils/bodyIndex.js";
 import { loadSqlite } from "@/utils/envelopeIndex.js";
 
@@ -166,6 +169,7 @@ if (process.argv.includes(BODY_INDEX_BUILDER_ARG) && process.send) {
       onMessage: (fn) => process.on("message", fn),
       onDisconnect: (fn) => process.on("disconnect", fn),
       ppid: () => process.ppid,
+      entry: () => fileIdentity(process.argv[1]),
       exit: (code) => process.exit(code),
     },
     { sqlite: loadSqlite(), clock: realClock }
@@ -615,7 +619,7 @@ registerTool(
         .string()
         .optional()
         .describe(
-          "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched, or the opt-in local body index (APPLE_MAIL_MCP_BODY_INDEX); otherwise AppleScript-only accounts cannot search bodies and are reported as not searched."
+          "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched, or the opt-in local body index (APPLE_MAIL_MCP_BODY_INDEX); otherwise AppleScript-only accounts cannot search bodies and are reported as not searched. The local index matches words and word beginnings ('invoice' finds 'invoices', not 'reinvoice'); text with no letters or digits, or in Chinese, Japanese or Thai, is reported as not searched rather than as no match."
         ),
       from: z
         .string()
@@ -1494,6 +1498,24 @@ const SENT_COPY_ALREADY_FILED_SCHEMA = z
       "held this Message-ID (e.g. Gmail's SMTP files its own copy), so none was appended."
   );
 
+const SMTP_DELIVERY_SCHEMA = {
+  deliveryUnknown: z
+    .boolean()
+    .optional()
+    .describe("SMTP returned no definitive submission result. Verify before retrying."),
+  partial: z
+    .boolean()
+    .optional()
+    .describe(
+      "SMTP accepted some recipients and rejected others; do not resend to accepted recipients."
+    ),
+  accepted: z
+    .array(z.string())
+    .optional()
+    .describe("Recipients accepted by the SMTP server, not final inbox delivery."),
+  rejected: z.array(z.string()).optional().describe("Recipients rejected by the SMTP server."),
+};
+
 // --- send-email ---
 
 const COMPOSITION_SCHEMA = z
@@ -1559,6 +1581,8 @@ registerTool(
     },
     outputSchema: {
       ok: z.boolean().optional(),
+      sent: z.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       recipients: z.array(z.string()).optional(),
       attachmentCount: z.number().optional(),
       transport: z.string().optional(),
@@ -1623,9 +1647,21 @@ registerTool(
           attachments,
           replyTo,
           ...threading.headers,
-        });
+        }).catch(unknownSmtpResult);
+        if (result.deliveryUnknown) {
+          return successResponse(smtpDeliveryNotice(result), {
+            ok: false,
+            transport: "smtp",
+            ...smtpDeliveryFields(result),
+          });
+        }
         if (!result.success) {
-          return errorResponse(result.error ?? "Failed to send email via SMTP.");
+          return errorResponse(result.error ?? "Failed to send email via SMTP.", {
+            ok: false,
+            sent: false,
+            transport: "smtp",
+            ...smtpDeliveryFields(result),
+          });
         }
         const copyNote =
           result.sentCopy === true
@@ -1635,11 +1671,16 @@ registerTool(
             : result.sentCopy === false
               ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})`
               : "";
-        return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}${copyNote}`, {
-          ok: true,
+        const delivery = result.partial
+          ? smtpDeliveryNotice(result)
+          : `Email sent via SMTP to ${to.join(", ")}`;
+        return successResponse(`${delivery}${attachInfo}${copyNote}`, {
+          ok: !result.partial,
+          sent: true,
           recipients: to,
           attachmentCount,
           transport: "smtp",
+          ...smtpDeliveryFields(result),
           ...(result.messageId ? { messageId: result.messageId } : {}),
           ...(result.sentCopy !== undefined ? { sentCopy: result.sentCopy } : {}),
           ...(result.sentCopyError !== undefined ? { sentCopyError: result.sentCopyError } : {}),
@@ -1720,6 +1761,12 @@ registerTool(
       ok: z.boolean().optional(),
       sent: z.number().optional(),
       failed: z.number().optional(),
+      unknown: z
+        .number()
+        .optional()
+        .describe("Submissions with an unknown outcome, excluded from sent and failed counts."),
+      deliveryUnknown: SMTP_DELIVERY_SCHEMA.deliveryUnknown,
+      partial: z.boolean().optional(),
       transport: z
         .enum(["smtp", "applescript"])
         .optional()
@@ -1731,6 +1778,7 @@ registerTool(
               email: z.string().optional(),
               success: z.boolean().optional(),
               error: z.string().optional(),
+              ...SMTP_DELIVERY_SCHEMA,
             })
             .passthrough()
         )
@@ -1947,6 +1995,7 @@ registerTool(
       messageId: z.string().optional(),
       ok: z.boolean().optional(),
       sent: z.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       id: z.string().optional(),
       attachmentCount: z.number().optional(),
       sentCopy: SENT_COPY_SCHEMA,
@@ -1994,6 +2043,7 @@ registerTool(
       messageId: z.string().optional(),
       ok: z.boolean().optional(),
       sent: z.boolean().optional(),
+      ...SMTP_DELIVERY_SCHEMA,
       recipients: z.array(z.string()).optional(),
       id: z.string().optional(),
       attachmentCount: z.number().optional(),
