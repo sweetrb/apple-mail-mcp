@@ -66262,6 +66262,21 @@ var init_mailboxName = __esm({
   }
 });
 
+// src/utils/messageLocation.ts
+function locationSuffix(mailbox, account) {
+  if (typeof mailbox !== "string" || mailbox === "") return "";
+  const owner = typeof account === "string" && account !== "" ? ` (${account})` : "";
+  return ` | in "${mailbox}"${owner}`;
+}
+function spansLocations(rows) {
+  return rows.some((r) => r.mailbox !== rows[0].mailbox || r.account !== rows[0].account);
+}
+var init_messageLocation = __esm({
+  "src/utils/messageLocation.ts"() {
+    "use strict";
+  }
+});
+
 // src/utils/mimeParse.ts
 function extractBoundary(source) {
   const match = source.match(/boundary="?([^";\s\r\n]+)"?/i);
@@ -67328,7 +67343,7 @@ function headerDate(m, headerText) {
 function sentDate(m, headerText) {
   return plausibleDateSent(headerDate(m, headerText), validDate(m.internalDate));
 }
-function formatRow(m, account, path3) {
+function formatRow(m, account, path3, located = false) {
   const env = m.envelope ?? {};
   const subject = env.subject || "(no subject)";
   const a = env.from?.[0];
@@ -67336,7 +67351,7 @@ function formatRow(m, account, path3) {
   const shown = sentDate(m) ?? validDate(m.internalDate);
   const date5 = shown ? shown.toLocaleDateString() : "";
   const read = m.flags?.has("\\Seen") ? "read" : "unread";
-  return `  - ID: ${encodeImapId(account, path3, m.uid)} | ${date5} | ${subject} (from: ${from}) [${read}]`;
+  return `  - ID: ${encodeImapId(account, path3, m.uid)} | ${date5} | ${subject} (from: ${from}) [${read}]` + (located ? locationSuffix(path3, account) : "");
 }
 function isoOrEmpty(d) {
   if (!d) return "";
@@ -67760,7 +67775,9 @@ async function run(args, listMode, deps) {
         }
         ordered = [...unique.values()].slice(offset, offset + limit);
       }
-      const rows = ordered.map(({ message, path: path3 }) => formatRow(message, cfg.accountLabel, path3));
+      const rows = ordered.map(
+        ({ message, path: path3 }) => formatRow(message, cfg.accountLabel, path3, paths.length > 1)
+      );
       const messages = ordered.map(
         ({ message, path: path3 }) => structuredRow(message, cfg.accountLabel, path3)
       );
@@ -68983,7 +69000,10 @@ async function imapThread(id, deps = {}, limit = 50) {
             // `RangeError: Invalid time value` out of get-thread (#226 follow-up).
             // Same omitted-not-invented contract as `structuredRow` (2.19.2).
             date: isoOrEmpty(sentDate(m)),
-            isRead: m.flags?.has("\\Seen") ?? false
+            isRead: m.flags?.has("\\Seen") ?? false,
+            // Every message here is in the seed's mailbox, as the other paths' rows say.
+            mailbox: ref.path,
+            account: ref.account
           }))
         };
         const text = `Thread "${subject}" \u2014 ${msgs.length} message(s) via IMAP (References-linked, oldest first):
@@ -69005,6 +69025,7 @@ var init_imapClient = __esm({
     init_smtpMailer();
     init_docsUrls();
     init_mailboxName();
+    init_messageLocation();
     init_mimeParse();
     init_headers();
     init_auditLog();
@@ -107747,6 +107768,7 @@ function settle2(ms) {
 }
 
 // src/tools/respond.ts
+init_messageLocation();
 function messageSummary(m) {
   return {
     id: m.id,
@@ -107779,6 +107801,12 @@ function messageSummary(m) {
     account: m.account,
     hasAttachments: m.hasAttachments
   };
+}
+function formatMessageLines(messages, opts) {
+  const located = !(opts.mailbox && opts.account) || spansLocations(messages);
+  return messages.map(
+    (m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender})` + (opts.readState ? ` [${m.isRead ? "read" : "unread"}]` : "") + (located ? locationSuffix(m.mailbox, m.account) : "")
+  ).join("\n");
 }
 function successResponse(message, structured) {
   const res = {
@@ -108486,6 +108514,7 @@ async function runBatchMove(deps, args) {
 
 // src/services/imapMultiAccount.ts
 init_imapClient();
+init_messageLocation();
 function normalizeMessageId2(row) {
   const raw = typeof row.messageId === "string" ? row.messageId.trim() : "";
   if (!raw) return void 0;
@@ -108622,7 +108651,8 @@ function formatMergedRows(rows, showReadState = true) {
     const subject = typeof m.subject === "string" ? m.subject : "(no subject)";
     const sender = typeof m.sender === "string" ? m.sender : "(unknown)";
     const state = showReadState ? ` [${m.isRead ? "read" : "unread"}]` : "";
-    return `  - ID: ${String(m.id)} | ${date5} | ${subject} (from: ${sender})${state}`;
+    const where = locationSuffix(m.mailbox, m.account);
+    return `  - ID: ${String(m.id)} | ${date5} | ${subject} (from: ${sender})${state}${where}`;
   }).join("\n");
 }
 
@@ -109414,7 +109444,7 @@ function collectForensics(tool, args) {
 registerTool(
   "search-messages",
   {
-    description: "Use when: finding messages by query/sender/subject/date/read/flag/flag-color filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, read state, and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped). An IMAP search stops at its deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, default 45s) or when the request is cancelled, returning the matches found so far with partial: true and timedOutMailboxes \u2014 narrow with mailbox/dateFrom rather than repeating it.\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.\nTip: use flagColor to find messages you tagged earlier (e.g. all 'orange' across mailboxes) \u2014 colored flags work as cross-mailbox labels this way, via flag-message/batch-flag-messages to set them and this filter to find them again, without moving anything into a dedicated folder.",
+    description: "Use when: finding messages by query/sender/subject/date/read/flag/flag-color filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, read state, mailbox and account (each text line names its mailbox and account when the results can come from more than one), and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped). An IMAP search stops at its deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, default 45s) or when the request is cancelled, returning the matches found so far with partial: true and timedOutMailboxes \u2014 narrow with mailbox/dateFrom rather than repeating it.\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.\nTip: use flagColor to find messages you tagged earlier (e.g. all 'orange' across mailboxes) \u2014 colored flags work as cross-mailbox labels this way, via flag-message/batch-flag-messages to set them and this filter to find them again, without moving anything into a dedicated folder.",
     inputSchema: {
       query: external_exports.string().optional().describe("Text to search for in subject or sender"),
       body: external_exports.string().optional().describe(
@@ -109599,9 +109629,7 @@ registerTool(
           const base2 = diagnostics.partial ? "No messages found in the portions that were searched." : "No messages found matching criteria";
           return successResponse(`${base2}${backendInfo.note}${coverageBlock}`, structured);
         }
-        const messageList = messages.map(
-          (m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
-        ).join("\n");
+        const messageList = formatMessageLines(messages, { readState: true, mailbox, account });
         return successResponse(
           `Found ${messages.length} message(s)${backendInfo.note}:
 ${messageList}${coverageBlock}`,
@@ -109874,7 +109902,7 @@ registerTool(
 registerTool(
   "get-thread",
   {
-    description: "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject.\nReturns: the thread's normalized subject and its messages (id, date, subject, sender, read state).\nDo not use when: you only need the single message (use get-message) or are searching by arbitrary criteria (use search-messages).",
+    description: "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject.\nReturns: the thread's normalized subject and its messages (id, date, subject, sender, read state, mailbox and account; each text line names its mailbox and account when the messages can come from more than one).\nDo not use when: you only need the single message (use get-message) or are searching by arbitrary criteria (use search-messages).",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA.describe("A message ID in the conversation (numeric or imap:\u2026)"),
       account: external_exports.string().optional().describe("Account to search (omit to search all)"),
@@ -109993,9 +110021,7 @@ ${formatMergedRows(orderedRows)}${coverage}`,
     if (ordered.length === 0) {
       return successResponse(`No messages found in thread "${base2}".${coverageBlock}`, structured);
     }
-    const list = ordered.map(
-      (m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
-    ).join("\n");
+    const list = formatMessageLines(ordered, { readState: true, mailbox, account });
     return successResponse(
       `Thread "${base2}" \u2014 ${ordered.length} message(s), oldest first:
 ${list}${coverageBlock}`,
@@ -110006,7 +110032,7 @@ ${list}${coverageBlock}`,
 registerTool(
   "list-messages",
   {
-    description: "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, sender, and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags/flag color (use search-messages, which also supports filtering by flagColor) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.",
+    description: "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, sender, mailbox and account (each text line names its mailbox and account when the results can come from more than one), and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags/flag color (use search-messages, which also supports filtering by flagColor) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.",
     inputSchema: {
       mailbox: external_exports.string().optional().describe("Mailbox to list messages from. Omit to list from all mailboxes."),
       account: external_exports.string().optional().describe("Account to list messages from"),
@@ -110061,9 +110087,7 @@ registerTool(
       const base2 = diagnostics.partial ? "No messages found in the portions that were listed." : "No messages found";
       return successResponse(`${base2}${coverageBlock}`, structured);
     }
-    const messageList = messages.map(
-      (m) => `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender})`
-    ).join("\n");
+    const messageList = formatMessageLines(messages, { readState: false, mailbox, account });
     return successResponse(
       `Found ${messages.length} message(s):
 ${messageList}${coverageBlock}`,

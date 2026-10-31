@@ -7,6 +7,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createSerialGate } from "@/utils/serialize.js";
+import { locationSuffix, spansLocations } from "@/utils/messageLocation.js";
 import type { SearchBackend, SearchDiagnostics, Message } from "@/types.js";
 
 /**
@@ -56,6 +57,29 @@ export function messageSummary(m: Message): Record<string, unknown> {
     account: m.account,
     hasAttachments: m.hasAttachments,
   };
+}
+
+/**
+ * The text lines `search-messages`, `list-messages` and `get-thread` print for
+ * messages read through Mail.app: `  - ID: … | date | subject (from: sender)`,
+ * then the read state when `readState` is set. Each line also says which
+ * mailbox and account the message is in, unless the call named one mailbox of
+ * one account and every message is in it. (A Gmail-style INBOX is read from
+ * All Mail and Important, so naming both is not always enough.)
+ */
+export function formatMessageLines(
+  messages: Message[],
+  opts: { readState: boolean; mailbox?: string; account?: string }
+): string {
+  const located = !(opts.mailbox && opts.account) || spansLocations(messages);
+  return messages
+    .map(
+      (m) =>
+        `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender})` +
+        (opts.readState ? ` [${m.isRead ? "read" : "unread"}]` : "") +
+        (located ? locationSuffix(m.mailbox, m.account) : "")
+    )
+    .join("\n");
 }
 
 /**

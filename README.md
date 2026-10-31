@@ -298,7 +298,12 @@ Search for messages matching criteria. Searches all accounts by default.
 | `offset`    | number  | No       | Newest matches to skip, ≥ 0 (for pagination). IMAP accounts only; without a `mailbox`, `offset` + `limit` may not exceed 5,000                                                                                                        |
 
 **Returns:** List of matching messages with ID, date, subject, sender, read state,
-and `flagColor` when flagged with an explicit color.
+mailbox and account, and `flagColor` when flagged with an explicit color. When
+the results can come from more than one mailbox or account, each text line ends
+with where that message is, e.g. `| in "Deleted Items" (Exchange)`: a sent
+message and the earlier drafts of it that Exchange keeps in Deleted Items share
+a subject, and the ids alone don't tell them apart. A search of one mailbox of
+one account leaves the lines as they were.
 
 **Flag color as a label (#286).** Every row from both backends carries
 `flagColor` (the palette name — `red`, `orange`, `yellow`, `green`, `blue`,
@@ -538,9 +543,11 @@ List messages in a mailbox.
 | `from`       | string  | No       | Filter by sender email address or name           |
 | `unreadOnly` | boolean | No       | Only show unread messages                        |
 
-**Returns:** List of messages with ID, date, subject, sender, and `flagColor`
-when flagged with an explicit color (see the flag-color note under
-[`search-messages`](#search-messages), which also supports filtering by it).
+**Returns:** List of messages with ID, date, subject, sender, mailbox and
+account, and `flagColor` when flagged with an explicit color (see the flag-color
+note under [`search-messages`](#search-messages), which also supports filtering
+by it). As there, each text line names its mailbox and account when the listing
+can span more than one.
 
 ⚠️ **Row dates.** Since 2.19.7 every row — on both the **IMAP** and
 **AppleScript** backends — carries both `dateSent` (the message's `Date:`
@@ -1028,7 +1035,9 @@ Group a conversation by normalized subject (across the AppleScript or IMAP backe
 | `mailbox` | string | No       | Mailbox to search (omit to search all)                 |
 | `limit`   | number | No       | Max messages in the thread (default 50)                |
 
-**Returns:** The conversation's messages, oldest-first.
+**Returns:** The conversation's messages, oldest-first. A thread usually spans
+mailboxes (INBOX and Sent), so each text line ends with where that message is,
+unless the call named one mailbox of one account.
 
 #### `fetch-attachment`
 

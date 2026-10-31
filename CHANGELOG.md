@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+## [2.20.50] - 2026-10-31
+
+### Changed
+
+- **Search, list and thread results say which mailbox each message is in.**
+  `search-messages`, `list-messages` and `get-thread` return each message's
+  `mailbox` and `account` in the structured result, but not in the text, and
+  some clients show a model only the text. When the results can come from more
+  than one mailbox or account, each text line now ends with where that message
+  is: `| in "Deleted Items" (Exchange)`. (The rows of `get-thread`'s IMAP
+  References path, which reads only the seed's mailbox, now carry the two
+  fields too.)
+  - **Why.** On a real store, a search for one sent Exchange message matched
+    four times: once in Sent Items, and three times in Deleted Items, where
+    Exchange keeps the drafts Mail replaced while the message was being
+    written. With only ids, dates, subjects and senders, the four lines read as
+    duplicates of one message.
+  - **When.** A call that names one mailbox of one account prints its lines as
+    before, unless that mailbox is read from several (a Gmail-style INBOX is
+    read from All Mail and Important). A merged multi-account result always
+    names them. Over IMAP, a search names them when it covers more than one
+    mailbox; its `imap:` ids encode the mailbox, but not readably.
+
+||||||| fd18dcf
 ## [2.20.49] - 2026-10-31
 
 ### Fixed

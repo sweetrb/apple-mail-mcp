@@ -38,6 +38,7 @@ import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { mailboxNameKey, nfc } from "@/utils/mailboxName.js";
+import { locationSuffix } from "@/utils/messageLocation.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
 import {
   decodeHeaderBytes,
@@ -819,7 +820,8 @@ function sentDate(m: ImapMessage, headerText?: string): Date | undefined {
   return plausibleDateSent(headerDate(m, headerText), validDate(m.internalDate));
 }
 
-function formatRow(m: ImapMessage, account: string, path: string): string {
+/** One message's text line; `located` adds which mailbox it is in, for a search of several. */
+function formatRow(m: ImapMessage, account: string, path: string, located = false): string {
   const env = m.envelope ?? {};
   const subject = env.subject || "(no subject)";
   const a = env.from?.[0];
@@ -833,7 +835,10 @@ function formatRow(m: ImapMessage, account: string, path: string): string {
   const read = m.flags?.has("\\Seen") ? "read" : "unread";
   // Emit the self-describing IMAP id so get-message and the message mutations
   // can route this row back to IMAP (Phase 3).
-  return `  - ID: ${encodeImapId(account, path, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]`;
+  return (
+    `  - ID: ${encodeImapId(account, path, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]` +
+    (located ? locationSuffix(path, account) : "")
+  );
 }
 
 /**
@@ -1719,7 +1724,10 @@ async function run(
         ordered = [...unique.values()].slice(offset, offset + limit);
       }
 
-      const rows = ordered.map(({ message, path }) => formatRow(message, cfg.accountLabel, path));
+      // The id is opaque, so a search of several mailboxes says which one each hit is in.
+      const rows = ordered.map(({ message, path }) =>
+        formatRow(message, cfg.accountLabel, path, paths.length > 1)
+      );
       const messages = ordered.map(({ message, path }) =>
         structuredRow(message, cfg.accountLabel, path)
       );
@@ -4000,6 +4008,9 @@ export async function imapThread(
             // Same omitted-not-invented contract as `structuredRow` (2.19.2).
             date: isoOrEmpty(sentDate(m)),
             isRead: m.flags?.has("\\Seen") ?? false,
+            // Every message here is in the seed's mailbox, as the other paths' rows say.
+            mailbox: ref.path,
+            account: ref.account,
           })),
         };
         const text =

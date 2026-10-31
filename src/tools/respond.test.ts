@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { messageSummary, searchBackendInfo } from "./respond.js";
+import { formatMessageLines, messageSummary, searchBackendInfo } from "./respond.js";
 import type { Message, SearchDiagnostics } from "@/types.js";
 
 function baseMessage(dateReceived: Date): Message {
@@ -76,5 +76,72 @@ describe("searchBackendInfo (#342)", () => {
       backendByAccount: { Google: "envelope-index", Work: "applescript" },
       note: " [backend: Google: envelope-index, Work: applescript]",
     });
+  });
+});
+
+describe("formatMessageLines", () => {
+  const at = (id: string, mailbox: string, account: string, isRead = false): Message => ({
+    ...baseMessage(new Date("2026-10-28T23:49:08Z")),
+    id,
+    mailbox,
+    account,
+    isRead,
+  });
+  const where = (text: string) =>
+    text.split("\n").map((l) => (l.includes(" | in ") ? l.slice(l.indexOf(" | in ")) : ""));
+
+  // One email that was sent, and two earlier drafts of it in Exchange's trash.
+  const sentAndDrafts = [
+    at("72982", "Sent Items", "Exchange", true),
+    at("72984", "Deleted Items", "Exchange", true),
+    at("72980", "Deleted Items", "Exchange", true),
+  ];
+
+  it("says where each message is when the call didn't name a mailbox", () => {
+    const text = formatMessageLines(sentAndDrafts, { readState: true, account: "Exchange" });
+    expect(text.split("\n")[0]).toMatch(
+      /^ {2}- ID: 72982 \| .+ \| diferencial de temperatura \(from: someone@example\.com\) \[read\] \| in "Sent Items" \(Exchange\)$/
+    );
+    expect(where(text)).toEqual([
+      ' | in "Sent Items" (Exchange)',
+      ' | in "Deleted Items" (Exchange)',
+      ' | in "Deleted Items" (Exchange)',
+    ]);
+  });
+
+  it("says where each message is when the call didn't name an account", () => {
+    const text = formatMessageLines([at("1", "INBOX", "Work"), at("2", "INBOX", "Home")], {
+      readState: false,
+      mailbox: "INBOX",
+    });
+    expect(where(text)).toEqual([' | in "INBOX" (Work)', ' | in "INBOX" (Home)']);
+    expect(text).not.toContain("[unread]");
+  });
+
+  it("leaves the lines as they were when the call named one mailbox of one account", () => {
+    const inbox = [at("1", "INBOX", "Work"), at("2", "INBOX", "Work", true)];
+    const text = formatMessageLines(inbox, { readState: true, mailbox: "INBOX", account: "Work" });
+    expect(where(text)).toEqual(["", ""]);
+    expect(text.split("\n")[1]).toMatch(/\[read\]$/);
+  });
+
+  it("still says where when a named mailbox is read from several (a Gmail-style INBOX)", () => {
+    const gmailInbox = [
+      at("1", "[Gmail]/All Mail", "Google"),
+      at("2", "[Gmail]/Important", "Google"),
+    ];
+    const text = formatMessageLines(gmailInbox, {
+      readState: false,
+      mailbox: "INBOX",
+      account: "Google",
+    });
+    expect(where(text)).toEqual([
+      ' | in "[Gmail]/All Mail" (Google)',
+      ' | in "[Gmail]/Important" (Google)',
+    ]);
+  });
+
+  it("is empty for no messages", () => {
+    expect(formatMessageLines([], { readState: true })).toBe("");
   });
 });

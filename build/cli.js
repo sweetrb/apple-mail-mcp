@@ -58676,6 +58676,18 @@ var init_mailboxName = __esm({
   }
 });
 
+// src/utils/messageLocation.ts
+function locationSuffix(mailbox, account) {
+  if (typeof mailbox !== "string" || mailbox === "") return "";
+  const owner = typeof account === "string" && account !== "" ? ` (${account})` : "";
+  return ` | in "${mailbox}"${owner}`;
+}
+var init_messageLocation = __esm({
+  "src/utils/messageLocation.ts"() {
+    "use strict";
+  }
+});
+
 // src/utils/mimeParse.ts
 function extractBoundary(source) {
   const match = source.match(/boundary="?([^";\s\r\n]+)"?/i);
@@ -59465,7 +59477,7 @@ function headerDate(m, headerText) {
 function sentDate(m, headerText) {
   return plausibleDateSent(headerDate(m, headerText), validDate(m.internalDate));
 }
-function formatRow(m, account, path3) {
+function formatRow(m, account, path3, located = false) {
   const env = m.envelope ?? {};
   const subject = env.subject || "(no subject)";
   const a = env.from?.[0];
@@ -59473,7 +59485,7 @@ function formatRow(m, account, path3) {
   const shown = sentDate(m) ?? validDate(m.internalDate);
   const date = shown ? shown.toLocaleDateString() : "";
   const read = m.flags?.has("\\Seen") ? "read" : "unread";
-  return `  - ID: ${encodeImapId(account, path3, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]`;
+  return `  - ID: ${encodeImapId(account, path3, m.uid)} | ${date} | ${subject} (from: ${from}) [${read}]` + (located ? locationSuffix(path3, account) : "");
 }
 function isoOrEmpty(d) {
   if (!d) return "";
@@ -59897,7 +59909,9 @@ async function run(args, listMode, deps) {
         }
         ordered = [...unique.values()].slice(offset, offset + limit);
       }
-      const rows = ordered.map(({ message, path: path3 }) => formatRow(message, cfg.accountLabel, path3));
+      const rows = ordered.map(
+        ({ message, path: path3 }) => formatRow(message, cfg.accountLabel, path3, paths.length > 1)
+      );
       const messages = ordered.map(
         ({ message, path: path3 }) => structuredRow(message, cfg.accountLabel, path3)
       );
@@ -61120,7 +61134,10 @@ async function imapThread(id, deps = {}, limit = 50) {
             // `RangeError: Invalid time value` out of get-thread (#226 follow-up).
             // Same omitted-not-invented contract as `structuredRow` (2.19.2).
             date: isoOrEmpty(sentDate(m)),
-            isRead: m.flags?.has("\\Seen") ?? false
+            isRead: m.flags?.has("\\Seen") ?? false,
+            // Every message here is in the seed's mailbox, as the other paths' rows say.
+            mailbox: ref.path,
+            account: ref.account
           }))
         };
         const text = `Thread "${subject}" \u2014 ${msgs.length} message(s) via IMAP (References-linked, oldest first):
@@ -61142,6 +61159,7 @@ var init_imapClient = __esm({
     init_smtpMailer();
     init_docsUrls();
     init_mailboxName();
+    init_messageLocation();
     init_mimeParse();
     init_headers();
     init_auditLog();

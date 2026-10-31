@@ -111,6 +111,7 @@ import {
   withErrorHandling,
   currentCallTiming,
   messageSummary,
+  formatMessageLines,
 } from "@/tools/respond.js";
 import { unlistableStoreError } from "@/tools/mailboxListing.js";
 import { createCallStop, searchDeadlineMs, stoppedByDeadline } from "@/utils/callStop.js";
@@ -611,7 +612,7 @@ registerTool(
   "search-messages",
   {
     description:
-      "Use when: finding messages by query/sender/subject/date/read/flag/flag-color filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, read state, and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped). An IMAP search stops at its deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, default 45s) or when the request is cancelled, returning the matches found so far with partial: true and timedOutMailboxes — narrow with mailbox/dateFrom rather than repeating it.\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.\nTip: use flagColor to find messages you tagged earlier (e.g. all 'orange' across mailboxes) — colored flags work as cross-mailbox labels this way, via flag-message/batch-flag-messages to set them and this filter to find them again, without moving anything into a dedicated folder.",
+      "Use when: finding messages by query/sender/subject/date/read/flag/flag-color filters and you need their ids for follow-up operations.\nReturns: matching messages with id, date, subject, sender, read state, mailbox and account (each text line names its mailbox and account when the results can come from more than one), and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped). An IMAP search stops at its deadline (APPLE_MAIL_MCP_SEARCH_DEADLINE_MS, default 45s) or when the request is cancelled, returning the matches found so far with partial: true and timedOutMailboxes — narrow with mailbox/dateFrom rather than repeating it.\nDo not use when: you want a plain mailbox listing without filters (use list-messages), already have an id and want the body (use get-message), or want a whole conversation (use get-thread).\nPrefer this first to obtain the message ids that get-message/mark-as-read/delete-message/move-message and the batch tools require.\nTip: use flagColor to find messages you tagged earlier (e.g. all 'orange' across mailboxes) — colored flags work as cross-mailbox labels this way, via flag-message/batch-flag-messages to set them and this filter to find them again, without moving anything into a dedicated folder.",
     inputSchema: {
       query: z.string().optional().describe("Text to search for in subject or sender"),
       body: z
@@ -857,12 +858,7 @@ registerTool(
           return successResponse(`${base}${backendInfo.note}${coverageBlock}`, structured);
         }
 
-        const messageList = messages
-          .map(
-            (m) =>
-              `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
-          )
-          .join("\n");
+        const messageList = formatMessageLines(messages, { readState: true, mailbox, account });
 
         return successResponse(
           `Found ${messages.length} message(s)${backendInfo.note}:\n${messageList}${coverageBlock}`,
@@ -1234,7 +1230,7 @@ registerTool(
   "get-thread",
   {
     description:
-      "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject.\nReturns: the thread's normalized subject and its messages (id, date, subject, sender, read state).\nDo not use when: you only need the single message (use get-message) or are searching by arbitrary criteria (use search-messages).",
+      "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject.\nReturns: the thread's normalized subject and its messages (id, date, subject, sender, read state, mailbox and account; each text line names its mailbox and account when the messages can come from more than one).\nDo not use when: you only need the single message (use get-message) or are searching by arbitrary criteria (use search-messages).",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA.describe("A message ID in the conversation (numeric or imap:…)"),
       account: z.string().optional().describe("Account to search (omit to search all)"),
@@ -1378,12 +1374,7 @@ registerTool(
     if (ordered.length === 0) {
       return successResponse(`No messages found in thread "${base}".${coverageBlock}`, structured);
     }
-    const list = ordered
-      .map(
-        (m) =>
-          `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
-      )
-      .join("\n");
+    const list = formatMessageLines(ordered, { readState: true, mailbox, account });
     return successResponse(
       `Thread "${base}" — ${ordered.length} message(s), oldest first:\n${list}${coverageBlock}`,
       structured
@@ -1397,7 +1388,7 @@ registerTool(
   "list-messages",
   {
     description:
-      "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, sender, and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags/flag color (use search-messages, which also supports filtering by flagColor) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.",
+      "Use when: browsing a mailbox's recent messages (optionally filtered by sender or unread-only) with pagination via limit/offset, and you need their ids.\nReturns: messages with id, date, subject, sender, mailbox and account (each text line names its mailbox and account when the results can come from more than one), and flagColor when flagged with an explicit color (plus partial-coverage diagnostics when some mailboxes were skipped).\nDo not use when: you have specific search criteria like subject/date/flags/flag color (use search-messages, which also supports filtering by flagColor) or already have an id and want the body (use get-message).\nLike search-messages, use this to obtain the ids that read/mark/delete/move and batch tools require.",
     inputSchema: {
       mailbox: z
         .string()
@@ -1475,12 +1466,7 @@ registerTool(
       return successResponse(`${base}${coverageBlock}`, structured);
     }
 
-    const messageList = messages
-      .map(
-        (m) =>
-          `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender})`
-      )
-      .join("\n");
+    const messageList = formatMessageLines(messages, { readState: false, mailbox, account });
 
     return successResponse(
       `Found ${messages.length} message(s):\n${messageList}${coverageBlock}`,

@@ -513,6 +513,8 @@ describe("imapSearchMessages", () => {
     expect(first?.path).toBe("[Gmail]/All Mail");
     expect(out).toContain("5 total matched");
     expect(out).toMatch(/work with get-message/);
+    // One mailbox searched, named in the header: the lines don't repeat it.
+    expect(out).not.toContain(' | in "');
     // structuredContent now mirrors the AppleScript path's shape (messages + count).
     expect(res.count).toBe(2);
     expect(res.messages.map((m) => decodeImapId(m.id as string)?.uid)).toEqual([5, 4]);
@@ -590,6 +592,12 @@ describe("imapSearchMessages", () => {
       "Archive:3",
     ]);
     expect(res.partial).toBe(false);
+    // The ids are opaque, so each line says which of the mailboxes its hit is in.
+    const lines = res.text.split("\n").filter((l) => l.startsWith("  - ID: "));
+    expect(lines.map((l) => l.slice(l.lastIndexOf(" | ")))).toEqual([
+      ' | in "INBOX" (iCloud)',
+      ' | in "Archive" (iCloud)',
+    ]);
   });
 
   it("reports a partial all-mailbox search instead of hiding a failed mailbox", async () => {
@@ -736,6 +744,7 @@ describe("imapListMessages", () => {
     const uids = [...out.matchAll(/imap:[A-Za-z0-9_-]+/g)].map((m) => decodeImapId(m[0])?.uid);
     expect(uids).toEqual([8, 7]); // newest-first
     expect(out).toContain("2 total listed");
+    expect(out).not.toContain(' | in "'); // one mailbox, named in the header
     expect(res.count).toBe(2);
     expect(res.messages.map((m) => decodeImapId(m.id as string)?.uid)).toEqual([8, 7]);
   });
@@ -1528,6 +1537,14 @@ describe("true threading via References (I5)", () => {
     expect(t?.count).toBe(3); // seed 10 + descendant 11 + ancestor 9
     expect(t?.structured.messages.map((m) => m.subject)).toEqual(["Plan", "Re: Plan", "Re: Plan"]);
     expect(t?.text).toMatch(/References-linked/);
+    // Each row says where it is, like every other path's rows. One mailbox is
+    // read, so the text lines don't repeat it.
+    expect(t?.structured.messages.map((m) => [m.mailbox, m.account])).toEqual([
+      ["INBOX", "acct"],
+      ["INBOX", "acct"],
+      ["INBOX", "acct"],
+    ]);
+    expect(t?.text).not.toContain(' | in "');
   });
 
   it("returns null when only the seed is found (caller falls back to subject)", async () => {

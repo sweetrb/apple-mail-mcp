@@ -29,6 +29,7 @@ import {
   type ImapDeps,
   type OmittedMessage,
 } from "@/services/imapClient.js";
+import { locationSuffix } from "@/utils/messageLocation.js";
 import type { Account } from "@/types.js";
 
 /** A structured message row as emitted by either backend (permissive on keys). */
@@ -326,7 +327,9 @@ export function planCountSources(accounts: Account[], configs: ImapConfig[]): Co
  * Render the structured message rows into the human text block the read tools
  * emit (`  - ID: … | date | subject (from: sender) [read|unread]`). Shared so the
  * merged path matches the single-backend formatting. `showReadState` mirrors
- * search/list (which show [read]) vs. plain list rows.
+ * search/list (which show [read]) vs. plain list rows. Every line ends with its
+ * mailbox and account (` | in "INBOX" (Work)`): a merged result is never
+ * limited to one account.
  */
 export function formatMergedRows(rows: MessageRow[], showReadState = true): string {
   return rows
@@ -338,7 +341,8 @@ export function formatMergedRows(rows: MessageRow[], showReadState = true): stri
       const subject = typeof m.subject === "string" ? m.subject : "(no subject)";
       const sender = typeof m.sender === "string" ? m.sender : "(unknown)";
       const state = showReadState ? ` [${m.isRead ? "read" : "unread"}]` : "";
-      return `  - ID: ${String(m.id)} | ${date} | ${subject} (from: ${sender})${state}`;
+      const where = locationSuffix(m.mailbox, m.account);
+      return `  - ID: ${String(m.id)} | ${date} | ${subject} (from: ${sender})${state}${where}`;
     })
     .join("\n");
 }

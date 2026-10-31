@@ -394,4 +394,17 @@ describe("formatMergedRows", () => {
     expect(line).toContain("[read]");
     expect(formatMergedRows([row()], false)).not.toContain("[");
   });
+
+  it("ends every line with the message's mailbox and account, since a merge spans accounts", () => {
+    const lines = formatMergedRows([
+      row({ id: "imap:a", mailbox: "Sent Items", account: "Exchange", isRead: true }),
+      row({ id: "2", mailbox: "Deleted Items", account: "Exchange" }),
+      row({ id: "3", mailbox: "INBOX", account: "" }),
+      row({ id: "4", mailbox: undefined, account: "Work" }),
+    ]).split("\n");
+    expect(lines[0]).toMatch(/\[read\] \| in "Sent Items" \(Exchange\)$/);
+    expect(lines[1]).toMatch(/\[unread\] \| in "Deleted Items" \(Exchange\)$/);
+    expect(lines[2]).toMatch(/ \| in "INBOX"$/); // no account to name
+    expect(lines[3]).not.toContain(" | in "); // nothing to say where it is
+  });
 });
