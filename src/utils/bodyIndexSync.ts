@@ -36,12 +36,16 @@
  *    crashes or stops responding (no report for {@link BUILD_STALL_MS}) is
  *    noted, stopped and started again after {@link BUILD_RESTART_MS}, then at
  *    the walk interval while it keeps failing; nothing waits on it, a search
- *    least of all. One that can't start at all (fork failed, or it exited
- *    before it was ready), can't read a Mail store the server can read (no
- *    Full Disk Access in a separate process), or runs other code than the
- *    server (its files were updated on disk) is noted, and the same loop runs
- *    on the main thread, as before this split — for {@link FALLBACK_RETRY_MS},
- *    then a build process is tried again. `doctor` says which.
+ *    least of all. A build that stops before it reported its work done loses
+ *    the file events it was handed, so a walk is asked for; nothing is lost.
+ *    One that can't start at all (fork failed, or it exited before it was
+ *    ready), can't read a Mail store the server can read (no Full Disk Access
+ *    in a separate process), or runs other code than the server (its bundle
+ *    was replaced on disk after the server loaded it) is noted, and the same
+ *    loop runs on the main thread, as before this split — for
+ *    {@link FALLBACK_RETRY_MS}, then a build process is tried again. Under
+ *    Electron's Node, where a fork would start the app, it always runs there.
+ *    `doctor` says which.
  *  - **Watcher plus walk.** A recursive `fs.watch` (one FSEvents stream on
  *    macOS) reports new, changed, moved and deleted `.emlx` files, applied in a
  *    batch after a short quiet period. FSEvents can coalesce or drop events and
@@ -84,6 +88,7 @@ import {
 import {
   BODY_INDEX_BUILDER_ARG,
   BUILDER_PROTOCOL,
+  fileIdentity,
   runBuilder,
   type BuilderInit,
   type BuilderReport,
@@ -114,6 +119,8 @@ export const SLICE_MS = 50;
 export const PAUSE_MS = 100;
 /** Most indexing a search does before answering (queued file events only, in practice). */
 export const SEARCH_CATCHUP_MS = 50;
+/** A search's catch-up leaves files larger than this to the build, so it never waits on a big parse. */
+export const SEARCH_CATCHUP_MAX_BYTES = 1024 * 1024;
 /** After a failed or crashed build, start it again this soon; after another failure in a row, at the walk interval. */
 export const BUILD_RESTART_MS = 5_000;
 /** A running build that has reported nothing for this long is stuck, and is stopped. */
@@ -177,7 +184,11 @@ export function builderExecArgv(
   nodeOptions: string | undefined = process.env.NODE_OPTIONS
 ): string[] {
   const flag = "--experimental-sqlite";
-  return execArgv.includes(flag) || (nodeOptions ?? "").split(/\s+/).includes(flag) ? [flag] : [];
+  const sqlite =
+    execArgv.includes(flag) || (nodeOptions ?? "").split(/\s+/).includes(flag) ? [flag] : [];
+  // Node 22–24 print an ExperimentalWarning for node:sqlite into the server's
+  // stderr, once per fork; nothing else in the build process is experimental.
+  return [...sqlite, "--disable-warning=ExperimentalWarning"];
 }
 
 /**
@@ -190,6 +201,8 @@ export function builderExecArgv(
  * `execPath` (tests only) replaces the Node binary.
  */
 export function childProcessRunner(entry: string, opts: { execPath?: string } = {}): BuildRunner {
+  // The bundle as this server loaded it (the default runner is made at startup).
+  const loaded = fileIdentity(entry);
   return {
     runsOn: "child process",
     start(init, events) {
@@ -225,7 +238,7 @@ export function childProcessRunner(entry: string, opts: { execPath?: string } = 
       const send = (msg: unknown) => {
         if (child.connected) child.send(msg as BuilderWork, () => {}); // a closed channel shows as "exit"
       };
-      send({ type: "start", init });
+      send({ type: "start", init, entry: loaded });
       return {
         post: (work) => send(work),
         stop: async () => {
@@ -307,6 +320,8 @@ let build: BuildHandle | null = null;
 let buildReady = false;
 /** Number of the last hand-off, to match the build's `idle` report. */
 let buildSeq = 0;
+/** Number of the last hand-off the build reported done (`idle`). */
+let buildDoneSeq = 0;
 /** Failed or crashed builds in a row, for the restart delay. */
 let buildFailures = 0;
 /** Why, and since when, the build runs on the main thread, once a build process couldn't run. */
@@ -514,9 +529,23 @@ function handToBuild(w: BodyIndexWriter, walk: boolean, paths: string[]): void {
   b.post({ type: "work", seq: ++buildSeq, walk, paths });
 }
 
-/** Whether the build runs on the main thread now (a build process couldn't, recently). */
+/**
+ * Why no build process can be forked here at all, or null. Under Electron the
+ * binary is the app unless `ELECTRON_RUN_AS_NODE` is set, and a build process
+ * gets an empty environment, so a fork would start the app instead of Node.
+ */
+function forkUnavailable(): string | null {
+  return process.versions.electron !== undefined
+    ? "the server runs on Electron's Node, where a forked process would start the app instead of Node; building on the main thread"
+    : null;
+}
+
+/** Whether the build runs on the main thread now (a build process can't, or couldn't recently). */
 function onMainThread(): boolean {
-  return buildFallback !== null && clock.now() - buildFallback.since < FALLBACK_RETRY_MS;
+  return (
+    forkUnavailable() !== null ||
+    (buildFallback !== null && clock.now() - buildFallback.since < FALLBACK_RETRY_MS)
+  );
 }
 
 function startBuild(w: BodyIndexWriter): BuildHandle {
@@ -562,8 +591,9 @@ function stopBuild(): void {
   buildReady = false;
   if (watchdog) clearInterval(watchdog);
   watchdog = null;
-  // A walk it didn't finish is gone with it: ask for it again.
-  if (walkInFlight) walkRequested = true;
+  // A walk it didn't finish, and file events it was handed but never reported
+  // done, are gone with it: a walk sees them all, so ask for one.
+  if (walkInFlight || (b !== null && buildDoneSeq !== buildSeq)) walkRequested = true;
   walkInFlight = false;
   if (b) buildStopped = b.stop();
 }
@@ -579,6 +609,7 @@ function onBuildReport(msg: BuilderReport): void {
       return;
     case "idle":
       if (msg.seq !== buildSeq) return; // more work is on its way to it
+      buildDoneSeq = msg.seq;
       buildFailures = 0;
       stopBuild();
       wake(0); // anything that arrived meanwhile; else sleep until the next walk
@@ -696,12 +727,29 @@ function tick(): void {
     wake(WRITER_RETRY_MS);
     return;
   }
+  let failed = false;
   try {
     if (dispatch(w)) return;
   } catch (err) {
     noteError("indexing step failed", err);
+    failed = true;
   }
-  wake(lastWalkDone === 0 ? rescanInterval() : lastWalkDone + rescanInterval() - clock.now());
+  wake(
+    nextTickDelay(
+      lastWalkDone === 0 ? rescanInterval() : lastWalkDone + rescanInterval() - clock.now(),
+      failed
+    )
+  );
+}
+
+/**
+ * How long the loop sleeps when no build is running: until the next timed
+ * walk, but never less than a pause, and after a failed step never less than
+ * a restart — a due walk that keeps failing to start would otherwise retry
+ * every millisecond.
+ */
+export function nextTickDelay(untilWalk: number, failed: boolean): number {
+  return Math.max(failed ? BUILD_RESTART_MS : PAUSE_MS, untilWalk);
 }
 
 /**
@@ -739,6 +787,7 @@ export function stopBodyIndexing(): void {
   walkRequested = false;
   walkInFlight = false;
   buildSeq = 0;
+  buildDoneSeq = 0;
   buildFailures = 0;
   lastWalkDone = 0;
   writer?.close();
@@ -786,7 +835,7 @@ function catchUp(w: BodyIndexWriter): void {
     walkRequested = true; // a build will walk; nothing here is worth indexing first
   } else {
     if (paths.length > 0) w.applyChanges(paths);
-    if (w.hasQueued()) w.indexStep(SEARCH_CATCHUP_MS);
+    if (w.hasQueued()) w.indexStep(SEARCH_CATCHUP_MS, { maxBytes: SEARCH_CATCHUP_MAX_BYTES });
   }
   if (walkRequested || w.hasQueued()) wake(0);
 }
@@ -828,7 +877,7 @@ export function bodyIndexStatus(): BodyIndexStatus {
           build: {
             runsOn: onMainThread() ? "main thread" : runner.runsOn,
             running: build !== null,
-            ...(onMainThread() ? { fallback: buildFallback!.why } : {}),
+            ...(onMainThread() ? { fallback: forkUnavailable() ?? buildFallback!.why } : {}),
           },
         }
       : {}),

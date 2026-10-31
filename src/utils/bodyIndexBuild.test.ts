@@ -3,7 +3,7 @@
  * a hand-held port with fake timers, on a synthetic mail store.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { BODY_INDEX_SCHEMA_VERSION, BodyIndexWriter, ftsPhrase } from "@/utils/bodyIndex.js";
@@ -18,6 +18,8 @@ import {
   type BuilderReport,
   type BuilderStart,
   type BuilderWork,
+  type FileIdentity,
+  fileIdentity,
 } from "@/utils/bodyIndexBuild.js";
 import { realClock } from "@/utils/bodyIndex.js";
 import { plainMessage, sqlite, writeEmlx } from "@/utils/envelopeIndex.testFixture.js";
@@ -237,6 +239,7 @@ function fakeProcess() {
   const state = {
     sent: [] as BuilderReport[],
     ppid: 4242,
+    entry: { dev: 1, ino: 2, size: 3, mtimeMs: 4 } as FileIdentity | null,
     exited: null as number | null,
     sendFails: false,
     onMessage: null as null | ((m: BuilderStart | BuilderWork) => void),
@@ -254,6 +257,7 @@ function fakeProcess() {
       state.onDisconnect = fn;
     },
     ppid: () => state.ppid,
+    entry: () => state.entry,
     exit: (code) => {
       state.exited = code;
     },
@@ -287,6 +291,55 @@ describeIfSqlite("runBuilderProcess (the forked build process)", () => {
     vi.useRealTimers();
     main.close();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("runs only when its bundle is the one the server loaded", () => {
+    const same = fakeProcess();
+    runBuilderProcess(same.proc, { sqlite, clock: realClock });
+    same.state.onMessage!({ type: "start", init, entry: { dev: 1, ino: 2, size: 3, mtimeMs: 4 } });
+    expect(same.state.sent[0]).toMatchObject({ type: "ready" });
+    same.state.onDisconnect!();
+
+    for (const entry of [
+      { dev: 1, ino: 9, size: 3, mtimeMs: 4 }, // replaced: a new file
+      { dev: 1, ino: 2, size: 3, mtimeMs: 5 }, // rewritten in place
+    ]) {
+      const other = fakeProcess();
+      runBuilderProcess(other.proc, { sqlite, clock: realClock });
+      other.state.onMessage!({ type: "start", init, entry });
+      other.state.onMessage!({ type: "work", seq: 1, walk: true, paths: [] });
+      vi.advanceTimersByTime(5_000);
+      expect(other.state.sent).toEqual([
+        { type: "failed", where: "version", message: expect.stringContaining("replaced on disk") },
+      ]);
+      expect(main.state().counts.queued).toBe(0); // it touched nothing
+      other.state.onDisconnect!();
+    }
+
+    const unreadable = fakeProcess();
+    unreadable.state.entry = null; // can't stat its own bundle
+    runBuilderProcess(unreadable.proc, { sqlite, clock: realClock });
+    unreadable.state.onMessage!({
+      type: "start",
+      init,
+      entry: { dev: 1, ino: 2, size: 3, mtimeMs: 4 },
+    });
+    expect(unreadable.state.sent).toEqual([expect.objectContaining({ where: "version" })]);
+    unreadable.state.sendFails = true;
+    unreadable.state.onMessage!({
+      type: "start",
+      init,
+      entry: { dev: 7, ino: 7, size: 7, mtimeMs: 7 },
+    });
+    unreadable.state.onDisconnect!();
+  });
+
+  it("exits when the refusal itself can't be sent", () => {
+    const f = fakeProcess();
+    f.state.sendFails = true;
+    runBuilderProcess(f.proc, { sqlite, clock: realClock });
+    f.state.onMessage!({ type: "start", init, entry: { dev: 9, ino: 9, size: 9, mtimeMs: 9 } });
+    expect(f.state.exited).toBe(0);
   });
 
   it("waits for start, then serves work over the channel", () => {
@@ -337,5 +390,24 @@ describeIfSqlite("runBuilderProcess (the forked build process)", () => {
     runBuilderProcess(f.proc, { sqlite, clock: realClock, orphanCheckMs: 10 });
     f.state.onMessage!({ type: "start", init });
     expect(f.state.exited).toBe(0);
+  });
+});
+
+describe("fileIdentity", () => {
+  it("names a file by device, inode, size and mtime, and gives null for one it can't read", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bodyidx-ident-"));
+    try {
+      const file = join(dir, "bundle.js");
+      writeFileSync(file, "a");
+      expect(fileIdentity(file)).toEqual({
+        dev: expect.any(Number),
+        ino: expect.any(Number),
+        size: 1,
+        mtimeMs: expect.any(Number),
+      });
+      expect(fileIdentity(join(dir, "missing.js"))).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

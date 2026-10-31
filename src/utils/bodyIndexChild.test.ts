@@ -6,7 +6,16 @@
  * is bounded.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { fileURLToPath } from "url";
@@ -138,17 +147,24 @@ function find(text: string): number[] {
 }
 
 describe("builderExecArgv", () => {
+  const quiet = "--disable-warning=ExperimentalWarning";
   it("carries over only --experimental-sqlite, from the command line or NODE_OPTIONS", () => {
-    expect(builderExecArgv([], undefined)).toEqual([]);
+    expect(builderExecArgv([], undefined)).toEqual([quiet]);
     expect(
       builderExecArgv(["--inspect=9229", "--max-old-space-size=4096"], "--trace-warnings")
-    ).toEqual([]);
+    ).toEqual([quiet]);
     expect(builderExecArgv(["--experimental-sqlite"], undefined)).toEqual([
       "--experimental-sqlite",
+      quiet,
     ]);
     expect(builderExecArgv([], "--no-warnings --experimental-sqlite")).toEqual([
       "--experimental-sqlite",
+      quiet,
     ]);
+  });
+
+  it("silences Node's SQLite ExperimentalWarning, which would print on every fork", () => {
+    expect(builderExecArgv([], undefined)).toContain(quiet);
   });
 });
 
@@ -245,7 +261,7 @@ describeIfSqlite("the build in a child process", () => {
     expect(rec.reports[0]).toEqual({
       type: "probe",
       argv: [BODY_INDEX_BUILDER_ARG],
-      execArgv: [],
+      execArgv: ["--disable-warning=ExperimentalWarning"],
       env: probed.env,
       stdoutIsDevNull: true,
       init: {
@@ -417,6 +433,26 @@ describeIfSqlite("the build in a child process", () => {
     expect(took).toBeGreaterThanOrEqual(STOP_GRACE_MS - 50);
     expect(took).toBeLessThan(STOP_GRACE_MS + 5_000);
     await handle.stop(); // already gone: returns at once
+  }, 30_000);
+
+  it("a bundle replaced on disk after the server loaded it is not run: the build stays on the main thread", async () => {
+    // The server loaded this copy; an update then rewrites it in place.
+    const copy = join(root, "copy.mjs");
+    writeFileSync(copy, readFileSync(bundle));
+    const loaded = childProcessRunner(copy); // as the server's is, at startup
+    appendFileSync(copy, "\n// a newer release\n");
+    const rec = recording(() => loaded);
+    await resetBodyIndexForTests({ watch: noWatch, runner: rec.runner });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    startBackgroundIndexing();
+    await until(() => bodyIndexStatus().build?.fallback !== undefined);
+    expect(bodyIndexStatus().build?.fallback).toMatch(
+      /^the server's files were replaced on disk after it started .*; building on the main thread$/
+    );
+    await until(() => !isBodyIndexBuilding() && bodyIndexStatus().counts!.indexed === MESSAGES);
+    log.mockRestore();
+    expect(rec.starts()).toBe(1);
+    expect(find("harbour")).toHaveLength(MESSAGES);
   }, 30_000);
 
   it("a build process that can't load is noted once, and the build runs on the main thread", async () => {

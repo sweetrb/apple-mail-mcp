@@ -12,6 +12,7 @@ import {
   FALLBACK_RETRY_MS,
   PAUSE_MS,
   RESCAN_WATCHED_MS,
+  SEARCH_CATCHUP_MAX_BYTES,
   SEARCH_CATCHUP_MS,
   SLICE_MS,
   WATCH_DEBOUNCE_MS,
@@ -24,6 +25,7 @@ import {
   isBodyIndexWatching,
   isBodyIndexWriter,
   mainThreadRunner,
+  nextTickDelay,
   type BuildEvents,
   type BuildRunner,
   prepareBodySearch,
@@ -382,6 +384,23 @@ describeIfSqlite("keeping the index current", () => {
     expect(SLICE_MS).toBeLessThanOrEqual(50);
   });
 
+  it("a search's catch-up leaves a big new file to the build, and says it isn't indexed yet", () => {
+    const fake = started();
+    const big = writeEmlx(
+      v10,
+      "ACC",
+      "INBOX",
+      2,
+      plainMessage("b", `harbour ${"x".repeat(SEARCH_CATCHUP_MAX_BYTES)}`)
+    );
+    const small = writeEmlx(v10, "ACC", "INBOX", 3, plainMessage("c", "harbour small"));
+    fake.state.onEvent!("rename", rel(big));
+    fake.state.onEvent!("rename", rel(small));
+    expect(find("harbour")).toEqual({ ids: [3, 1], partial: true });
+    runToIdle();
+    expect(find("harbour")).toEqual({ ids: [3, 2, 1], partial: false });
+  });
+
   it("makes a new message searchable from its file event, on the next search", () => {
     const fake = started();
     const added = writeEmlx(v10, "ACC", "INBOX", 2, plainMessage("b", "dentist appointment"));
@@ -488,7 +507,7 @@ describeIfSqlite("keeping the index current", () => {
       role: "writer",
       watching: true,
       build: { runsOn: "main thread", running: false },
-      counts: { indexed: 1, queued: 0, partial: 0, tooLarge: 0 },
+      counts: { indexed: 1, queued: 0, partial: 0, tooLarge: 0, unreadable: 0 },
       meta: { lastWalkFiles: 1, lastFullWalk: expect.any(String) },
     });
   });
@@ -586,6 +605,52 @@ describeIfSqlite("the build: started when there is work, stopped when there is n
     expect(vi.getTimerCount()).toBe(1); // only the next timed walk
   });
 
+  it("walks again after a build stops before it reported the file events it was handed", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const m = startedManual();
+    m.last().events.report({ type: "ready", pid: 7 });
+    m.last().events.report({ type: "walked" }); // walked; still indexing
+    const added = writeEmlx(v10, "ACC", "INBOX", 2, plainMessage("b", "dentist"));
+    m.fake.state.onEvent!("rename", rel(added));
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS + 1);
+    expect(m.last().posts[1]).toEqual({ type: "work", seq: 2, walk: false, paths: [added] });
+    m.last().events.exit("exit code 1"); // crashed before applying them
+    vi.advanceTimersByTime(BUILD_RESTART_MS + 1);
+    err.mockRestore();
+    // The events are gone with it; a walk finds the file instead.
+    expect(m.starts).toHaveLength(2);
+    expect(m.last().posts).toEqual([{ type: "work", seq: 3, walk: true, paths: [] }]);
+  });
+
+  it("does not walk again after a build that reported everything done", () => {
+    const m = startedManual();
+    m.last().events.report({ type: "ready", pid: 7 });
+    m.last().events.report({ type: "walked" });
+    m.last().events.report({ type: "idle", seq: 1 });
+    vi.advanceTimersByTime(BUILD_RESTART_MS * 4);
+    expect(m.starts).toHaveLength(1);
+  });
+
+  it("under Electron's Node, builds on the main thread: a fork would start the app", () => {
+    Object.defineProperty(process.versions, "electron", { value: "30.0.0", configurable: true });
+    try {
+      vi.useFakeTimers();
+      const m = manualRunner();
+      resetBodyIndexForTests({ watch: fakeWatch().watch, runner: m.runner });
+      startBackgroundIndexing();
+      expect(bodyIndexStatus().build).toEqual({
+        runsOn: "main thread",
+        running: false,
+        fallback: expect.stringContaining("Electron"),
+      });
+      runToIdle();
+      expect(m.starts).toHaveLength(0);
+      expect(find("harbour")).toEqual({ ids: [1], partial: false });
+    } finally {
+      delete (process.versions as Record<string, string | undefined>).electron;
+    }
+  });
+
   it("hands file events to a running build instead of writing them on the main thread", () => {
     const m = startedManual();
     const added = writeEmlx(v10, "ACC", "INBOX", 2, plainMessage("b", "dentist"));
@@ -593,7 +658,13 @@ describeIfSqlite("the build: started when there is work, stopped when there is n
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS + 1);
     // Handed over, not applied here: the main thread wrote no row for it.
     expect(m.last().posts[1]).toEqual({ type: "work", seq: 2, walk: false, paths: [added] });
-    expect(bodyIndexStatus().counts).toEqual({ indexed: 0, queued: 0, partial: 0, tooLarge: 0 });
+    expect(bodyIndexStatus().counts).toEqual({
+      indexed: 0,
+      queued: 0,
+      partial: 0,
+      tooLarge: 0,
+      unreadable: 0,
+    });
     // A search during the build hands its events over too, and indexes nothing here.
     const again = writeEmlx(v10, "ACC", "INBOX", 3, plainMessage("c", "boarding"));
     m.fake.state.onEvent!("rename", rel(again));
@@ -882,5 +953,15 @@ describeIfSqlite("the build: started when there is work, stopped when there is n
       other.exec("ROLLBACK");
       other.close();
     }
+  });
+});
+
+describe("nextTickDelay", () => {
+  it("waits for the next timed walk, never less than a pause, and after a failure never less than a restart", () => {
+    expect(nextTickDelay(RESCAN_WATCHED_MS, false)).toBe(RESCAN_WATCHED_MS);
+    expect(nextTickDelay(RESCAN_WATCHED_MS, true)).toBe(RESCAN_WATCHED_MS);
+    // A walk that is already due, but whose step keeps failing, mustn't spin.
+    expect(nextTickDelay(-3, false)).toBe(PAUSE_MS);
+    expect(nextTickDelay(0, true)).toBe(BUILD_RESTART_MS);
   });
 });
