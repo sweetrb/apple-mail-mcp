@@ -342,6 +342,40 @@ function splitMimeParts(source: string, boundary: string): MimePart[] {
 }
 
 /**
+ * Split Unicode source text only at complete MIME delimiter lines. Preserve
+ * part content whitespace and require a closing boundary before returning
+ * anything, so a truncated source is not quoted as if it were complete.
+ */
+function splitMimePartsOnBoundaryLines(source: string, boundary: string): MimePart[] {
+  const escaped = boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const delimiter = new RegExp("^--" + escaped + "(--)?[ \\t]*(?:\\r?\\n|$)", "gm");
+  const parts: MimePart[] = [];
+  let start: number | undefined;
+  let closed = false;
+  for (const match of source.matchAll(delimiter)) {
+    if (start !== undefined) {
+      const section = source.slice(start, match.index);
+      const blankLineIdx = section.search(/\r?\n\r?\n/);
+      if (blankLineIdx === -1) return [];
+      const headers = section.slice(0, blankLineIdx);
+      // The final line break precedes the delimiter, rather than belonging to
+      // the body. Keep all other leading/trailing whitespace.
+      const body = section
+        .slice(blankLineIdx)
+        .replace(/^\r?\n\r?\n/, "")
+        .replace(/\r?\n$/, "");
+      parts.push({ headers, body });
+    }
+    if (match[1]) {
+      closed = start !== undefined;
+      break;
+    }
+    start = match.index + match[0].length;
+  }
+  return closed ? parts : [];
+}
+
+/**
  * Maximum nesting depth for multipart MIME traversal. Bounds recursion so a
  * pathologically (or maliciously) deeply nested multipart tree can't blow the
  * stack — past this depth we stop descending and treat the container as a leaf.
@@ -357,16 +391,25 @@ const MAX_MIME_DEPTH = 20;
  * containers are returned as-is (as leaf parts) rather than recursed into,
  * yielding what's parsed so far instead of overflowing the stack.
  */
-function walkLeafParts(source: string, boundary: string, depth = 0): MimePart[] {
+function walkLeafParts(
+  source: string,
+  boundary: string,
+  depth = 0,
+  strictDelimiters = false
+): MimePart[] {
   const result: MimePart[] = [];
-  const parts = splitMimeParts(source, boundary);
+  const parts = strictDelimiters
+    ? splitMimePartsOnBoundaryLines(source, boundary)
+    : splitMimeParts(source, boundary);
 
   for (const part of parts) {
     const ct = getHeader(part.headers, "Content-Type");
     if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
-      const nestedBoundary = extractBoundary(ct);
+      const nestedBoundary = strictDelimiters
+        ? (parseParams(ct).get("boundary") ?? null)
+        : extractBoundary(ct);
       if (nestedBoundary) {
-        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1));
+        result.push(...walkLeafParts(part.body, nestedBoundary, depth + 1, strictDelimiters));
         continue;
       }
     }
@@ -511,30 +554,54 @@ export function extractHtmlBody(source: string): string | null {
  * Extract the decoded `text/plain` body from raw MIME source. Mirror of
  * extractHtmlBody; used by the IMAP get-message path (#43 Phase 3) to render a
  * message fetched by UID. Returns null when there's no text/plain part.
+ * By default `source` is a byte-preserving latin1 string. For source text
+ * returned by AppleScript, select `unicode`: raw 7bit/8bit text is already a
+ * string, while base64 and quoted-printable parts still require byte decoding.
  */
-export function extractTextBody(source: string): string | null {
+export function extractTextBody(
+  source: string,
+  options: { sourceRepresentation?: "byte-string" | "unicode" } = {}
+): string | null {
   if (!source || !source.trim()) return null;
 
-  const boundary = extractBoundary(source);
-  if (boundary) {
-    for (const part of walkLeafParts(source, boundary)) {
+  const blankLineIdx = source.search(/\r?\n\r?\n/);
+  if (blankLineIdx === -1) return null;
+  const headers = source.substring(0, blankLineIdx);
+  const contentType = getHeader(headers, "Content-Type");
+  const multipart = contentType !== null && /^multipart\//i.test(contentType);
+  const boundary = multipart ? (parseParams(contentType).get("boundary") ?? null) : null;
+  const partText = (body: string, partHeaders: string): string | null => {
+    const encoding = getHeader(partHeaders, "Content-Transfer-Encoding");
+    const transferEncoding = (encoding ?? "").trim().toLowerCase();
+    if (options.sourceRepresentation === "unicode") {
+      if (transferEncoding !== "base64" && transferEncoding !== "quoted-printable") return body;
+      // Encoded MIME payloads must be ASCII. Once source is Unicode text, an
+      // unescaped non-ASCII character cannot safely be reconstructed as bytes.
+      // eslint-disable-next-line no-control-regex -- detecting non-ASCII transfer-encoded payloads
+      if (/[^\x00-\x7F]/.test(body)) return null;
+    }
+    return decodePartText(decodeBody(body, encoding), extractCharset(partHeaders));
+  };
+  if (multipart) {
+    if (!boundary) return null;
+    for (const part of walkLeafParts(
+      source,
+      boundary,
+      0,
+      options.sourceRepresentation === "unicode"
+    )) {
       if (extractMimeType(part.headers) === "text/plain") {
-        const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
-        return decodePartText(decodeBody(part.body, encoding), extractCharset(part.headers));
+        return partText(part.body, part.headers);
       }
     }
     return null;
   }
 
   // Non-multipart: treat as text/plain unless the Content-Type says otherwise.
-  const blankLineIdx = source.search(/\r?\n\r?\n/);
-  if (blankLineIdx === -1) return null;
-  const headers = source.substring(0, blankLineIdx);
   const ct = extractMimeType(headers);
-  if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
+  if (ct !== "text/plain" && contentType !== null) return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
-  return decodePartText(decodeBody(body, encoding), extractCharset(headers));
+  return partText(body, headers);
 }
 
 /**

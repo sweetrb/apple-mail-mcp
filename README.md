@@ -634,6 +634,27 @@ Both plain-text and HTML bodies are supported — over SMTP an HTML body (CLI
 `--html-body-file`) is sent as `multipart/alternative` with the plain-text
 fallback.
 
+###### SMTP submission outcomes
+
+SMTP acceptance is not confirmation that a message reached an inbox. The
+`send-email`, `reply-to-message`, and `forward-message` tools preserve the
+server's `accepted` and `rejected` recipient lists when available:
+
+| Outcome                                    | Result                                               | Retry guidance                                                                        |
+| ------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| All recipients accepted                    | `ok: true`, `sent: true`                             | The submission succeeded.                                                             |
+| Some recipients rejected                   | `ok: false`, `sent: true`, `partial: true`           | Do not resend to accepted recipients; reconsider only the rejected addresses.         |
+| Known refusal or failure before submission | Tool error, `ok: false`, `sent: false`               | Correct the reported problem before retrying.                                         |
+| Final acknowledgment lost                  | `ok: false`, `deliveryUnknown: true`; `sent` omitted | Verify the outcome before retrying; the server may already have accepted the message. |
+
+Partial and unknown outcomes are **non-error MCP responses** so callers do not
+automatically retry a submission that may have succeeded. Check `ok`, `partial`,
+and `deliveryUnknown`, not only `isError`. No automatic retry or transport fallback
+occurs. Serial sends retain recipient acceptance fields on each result and use
+numeric `sent`, `failed`, and optional `unknown` counts rather than a boolean
+`sent`. Unknown submissions are excluded from the other two counts. A best-effort
+Sent-folder copy remains a separate result, not proof of recipient delivery.
+
 Configure SMTP via environment variables on the MCP server. The password is
 read from the macOS **Keychain** by default, so no secret goes in config:
 
@@ -698,8 +719,11 @@ apple-mail-send \
 
 Repeatable `--to`/`--cc`/`--bcc`/`--attach`; an `--html-body-file` is sent as a
 `multipart/alternative` alongside the plain `--body-file`. Exit codes follow
-`sysexits.h`: `0` success, `64` usage error, `66` unreadable body file, `78`
-SMTP not configured.
+`sysexits.h` for usage/configuration failures: `64` usage error, `66` unreadable
+body file, `78` SMTP not configured. Submission exits are `0` for full acceptance,
+`1` for a known failure, `2` for partial acceptance, and `3` for an unknown
+outcome. Do not retry the complete command after exit `2` or `3`; follow the
+recipient details and verification guidance in its output.
 
 ##### IMAP backend — opt-in
 
@@ -1095,16 +1119,26 @@ encodes its source: omit both fields for that form. Supplying only one field, or
 supplying either with an `imap:` ID, returns an error. Without explicit scope,
 numeric IDs retain the remembered-location and bounded-scan strategy described
 under [numeric IDs](#get-message), but an ambiguous remembered account or mailbox
-now stops instead of falling back to a scan. For scoped SMTP, the configured From
-address must belong to the selected enabled Mail account; an SMTP login can be a separate
-service username. A local "On My Mac" source has no Mail account whose SMTP From
-can be verified, so scoped SMTP stops rather than selecting an identity.
+now stops instead of falling back to a scan. For numeric SMTP replies and forwards,
+the configured From mailbox must belong to the source's enabled Mail account,
+whether the scope was supplied or resolved. A matching SMTP login or an entry in
+`APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` does not authorize a different configured From.
+A display name around one valid From mailbox is supported. A local "On My Mac"
+source has no Mail account whose SMTP From can be verified, so SMTP stops rather
+than selecting an identity.
+
+Unscoped numeric SMTP requests read the MIME source and location together. The
+quotation comes from that same MIME source, not a second plaintext lookup. If a
+bounded scan cannot establish a unique source because it skipped or could not
+reach a mailbox, provide the original account and full mailbox path explicitly.
+An unreadable MIME body stops the request; no alternative sender or transport
+is chosen.
 
 **AppleScript transport quoting (v2.19.12):** every draft (`send: false`) and any send that falls back to AppleScript (SMTP not configured) also gets the original quoted — an "On \<date\>, \<sender\> wrote:" attribution line followed by the `> `-prefixed original body, built the same way as the SMTP path. Mail's own `reply`/`forward` AppleScript commands generate this quote internally but expose no way to read it back, so it's built here instead of relying on Mail's (unreadable) copy. Unlike SMTP, this path has no sending-identity restriction — it's read-only source lookup, not sending.
 
 **Sender on the AppleScript transport (2.20.15, #294):** Mail's `reply`/`forward` commands set no sender, so Mail would answer from its default sending account. The reply or forward is now sent from the account the original sits in: the original's to/cc address that belongs to that account — or, for a message you sent, its own From address — else the account's first address. The sender is read back before saving or sending; a mismatch deletes the compose and returns an error. A message in an "On My Mac" mailbox has no account, so its recipients are matched against every enabled account and, with no match, the sender is left to Mail. The same applies to `forward-message`.
 
-**Failure behavior:** SMTP and AppleScript-content replies stop if the original source or plain-text body cannot be read, rather than silently dropping the quote. Numeric-message replies can recover text from raw MIME when Mail.app's decoded content is unavailable. A genuinely empty original body is allowed; an unreadable body is not. Native-editor mode preserves Mail's own reply history and requires the original source to be readable, but does not reconstruct its plain-text quote. Once SMTP is selected, a missing password, unreadable source, missing reply address or `Message-ID`, or SMTP failure returns an error. It does not silently switch to AppleScript or create an unthreaded new message. With SMTP unconfigured and transport omitted, AppleScript remains available. `send: false` saves a Mail.app draft; combining it with `transport: "smtp"` is rejected before composing.
+**Failure behavior:** SMTP and AppleScript-content replies stop if the original source or plain-text body cannot be read, rather than silently dropping the quote. Numeric-message replies can recover text from raw MIME when Mail.app's decoded content is unavailable. A genuinely empty original body is allowed; an unreadable body is not. Native-editor mode preserves Mail's own reply history and requires the original source to be readable, but does not reconstruct its plain-text quote. Once SMTP is selected, a missing password, unreadable source, missing reply address or `Message-ID`, or known SMTP refusal returns an error. Partial acceptance and uncertain submission use the [structured SMTP outcomes](#smtp-submission-outcomes) above instead of implying that nothing was sent. The tool does not silently switch to AppleScript or create an unthreaded new message. With SMTP unconfigured and transport omitted, AppleScript remains available. `send: false` saves a Mail.app draft; combining it with `transport: "smtp"` is rejected before composing.
 
 The direct IMAP source read is bounded to 25 MiB, including MIME attachments. Its account login must match the SMTP login, configured From, or an explicitly configured `APPLE_MAIL_MCP_SMTP_ALLOWED_FROM` identity; otherwise the call fails rather than sending from an unrelated account. The SMTP configuration still represents a single sending identity, not a per-account SMTP registry.
 

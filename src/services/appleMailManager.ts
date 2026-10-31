@@ -310,8 +310,19 @@ export function describeUnscopedMiss(id: string, raw: string): string {
   const unreached = list(unreachedRaw);
   const budgetHit = budgetRaw.trim() === "true";
   const probeStalled = stalledRaw.trim() === "true";
-  if (skipped.length === 0 && !budgetHit && !probeStalled) return base;
-  const parts = [`Message ${Number(id)} not found in the mailboxes scanned.`];
+  const incompleteSource = base === "Source lookup incomplete";
+  if (
+    skipped.length === 0 &&
+    !budgetHit &&
+    !probeStalled &&
+    !(incompleteSource && unreached.length)
+  )
+    return base;
+  const parts = [
+    incompleteSource
+      ? `Message ${Number(id)} could not be uniquely verified because the scan was incomplete.`
+      : `Message ${Number(id)} not found in the mailboxes scanned.`,
+  ];
   if (skipped.length > 0) {
     parts.push(
       `Not scanned — too large for a cross-mailbox id scan (over ${getByIdScanThreshold()} messages; APPLE_MAIL_MAX_BYID_SCAN_MAILBOX): ${skipped.join(", ")}.`
@@ -327,6 +338,10 @@ export function describeUnscopedMiss(id: string, raw: string): string {
     );
   } else if (budgetHit) {
     parts.push(`The scan also stopped after its ${BYID_SCAN_BUDGET_SECONDS}s budget ${reach}`);
+  } else if (incompleteSource && unreached.length) {
+    parts.push(
+      `The scan did not reach or could not search: ${summariseList(unreached, UNREACHED_LIST_MAX)}.`
+    );
   }
   parts.push(
     "If the message is in a mailbox that was not scanned, pass account + mailbox to read it from that mailbox directly, or use its imap: id from list-messages/search-messages."
@@ -3618,7 +3633,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     id: string,
     innerAction: string,
     hint: { account?: string; mailbox?: string } | undefined,
-    opts: { firstHit?: boolean; requireScopedLocation?: boolean } = {}
+    opts: {
+      firstHit?: boolean;
+      requireScopedLocation?: boolean;
+      requireCompleteCoverage?: boolean;
+    } = {}
   ): string | null {
     const remembered = this.idLocationIndex.get(String(id));
     // An explicit account-only hint must not be satisfied by a remembered
@@ -3799,7 +3818,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   private unscopedByIdScript(
     id: string,
     innerAction: string,
-    opts: { firstHit?: boolean; account?: string } = {}
+    opts: { firstHit?: boolean; account?: string; requireCompleteCoverage?: boolean } = {}
   ): string {
     const threshold = getByIdScanThreshold();
     const scopeAcct = escapeForAppleScript(opts.account ?? "");
@@ -3862,6 +3881,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             end if`;
     const hitFound = opts.firstHit ? "(count of _hits) > 0" : "false";
     const stopOnHit = opts.firstHit ? `if (count of _hits) > 0 then exit repeat` : "";
+    const scanError = (accountExpr: string) =>
+      opts.requireCompleteCoverage
+        ? `on error\n                  set _unreached to _unreached & ${accountExpr} & " / " & _mbName & " (message lookup failed)${DIAG_ITEM_SEP}"`
+        : "";
     return buildAppLevelScriptIfRunning(`
       try
         set _hits to {}
@@ -3926,6 +3949,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                     set end of _hitAccts to _acctName
                     set _names to _names & _acctName & "/" & _mbName & ", "
                   end if
+                ${scanError("_acctName")}
                 end try
               end if
               ${stopOnHit}
@@ -3975,6 +3999,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                   set end of _hitAccts to "${LOCAL_STORE_LABEL}"
                   set _names to _names & "${LOCAL_STORE_LABEL}/" & _mbName & ", "
                 end if
+              ${scanError(`"${LOCAL_STORE_LABEL}"`)}
               end try
             end if
             ${stopOnHit}
@@ -3983,8 +4008,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             set _unreached to _unreached & "${LOCAL_STORE_LABEL} (" & ((length of _mbs) - _stopAt + 1) & " more local mailboxes)${DIAG_ITEM_SEP}"
           end if
         end if
-        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached
         ${opts.firstHit ? "" : `if (count of _hits) > 1 then return "${LOOKUP_ERROR_MARKER}${AMBIGUOUS_ID_PREFIX}${Number(id)} is present in more than one mailbox (" & _names & "); list or search that mailbox first so the read targets the right copy"`}
+        ${opts.requireCompleteCoverage ? `if _skipped is not "" or _budgetHit or _probeStalled or _unreached is not "" then return "${LOOKUP_ERROR_MARKER}Source lookup incomplete${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached` : ""}
+        if (count of _hits) is 0 then return "${LOOKUP_ERROR_MARKER}Message not found${BYID_COVERAGE_MARKER}" & _skipped & "${DIAG_FIELD_SEP}" & (_budgetHit as string) & "${DIAG_FIELD_SEP}" & (_probeStalled as string) & "${DIAG_FIELD_SEP}" & _unreached
         if (count of _hits) ${opts.firstHit ? "> 0" : "is 1"} then
           set msg to item 1 of _hits
           set _hitMb to item 1 of _hitMbs
@@ -4259,6 +4285,33 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       return null;
     }
     return this.resolveById(id, "return source of msg", hint, options);
+  }
+
+  /** Read a numeric message's source and owning location in the same strict lookup. */
+  getRawSourceWithLocation(id: string): { raw: string; account: string; mailbox: string } | null {
+    this.lastMessageLookupError = undefined;
+    const output = this.resolveById(
+      id,
+      `set _sourceMailbox to ""
+       ${mailboxPathFragment("_hitMb", "_sourceMailbox")}
+       if _hitAcct contains "${FIELD_SEP}" or _sourceMailbox contains "${FIELD_SEP}" then return "invalid-source-scope"
+       return _hitAcct & "${FIELD_SEP}" & _sourceMailbox & "${FIELD_SEP}" & (source of msg)`,
+      undefined,
+      { requireCompleteCoverage: true }
+    );
+    if (output === null) return null;
+    const first = output.indexOf(FIELD_SEP);
+    const second = output.indexOf(FIELD_SEP, first + 1);
+    if (first < 1 || second <= first + 1 || !output.slice(second + 1).trim()) {
+      this.lastMessageLookupError =
+        "Mail could not return a readable source with its account and mailbox.";
+      return null;
+    }
+    return {
+      account: output.slice(0, first),
+      mailbox: output.slice(first + 1, second),
+      raw: output.slice(second + 1),
+    };
   }
 
   /**

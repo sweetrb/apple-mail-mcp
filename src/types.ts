@@ -420,6 +420,18 @@ export interface SerialEmailResult {
 
   /** Error message if sending failed */
   error?: string;
+
+  /** SMTP returned no definitive submission result; verify before retrying. */
+  deliveryUnknown?: boolean;
+
+  /** SMTP accepted this submission for some recipients but rejected others. */
+  partial?: boolean;
+
+  /** SMTP envelope recipients accepted for the submitted message. */
+  accepted?: string[];
+
+  /** SMTP envelope recipients refused by the server. */
+  rejected?: string[];
 }
 
 // =============================================================================

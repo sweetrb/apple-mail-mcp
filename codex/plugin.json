@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "apple-mail",
-  "version": "2.20.47",
+  "version": "2.20.48",
   "description": "Manage Apple Mail through natural language - read, search, send, reply, forward, and organize emails and mailboxes, with diagnostics, attachments, templates, and mail-merge support (macOS only).",
   "author": {
     "name": "Rob Sweet",

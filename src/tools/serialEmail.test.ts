@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSerialEmailHandler, type SerialEmailDeps } from "./serialEmail.js";
-import type { SmtpConfig } from "@/services/smtpMailer.js";
+import type { SmtpConfig, SerialSmtpResult } from "@/services/smtpMailer.js";
 
 const config: SmtpConfig = {
   host: "smtp.example.test",
@@ -12,7 +12,7 @@ const config: SmtpConfig = {
 };
 const recipients = [{ email: "recipient@example.test", variables: { Name: "Recipient" } }];
 const args = { recipients, subject: "Hello {{Name}}", body: "Test body", delayMs: 0 };
-const results = [{ email: recipients[0].email, success: true }];
+const results: SerialSmtpResult[] = [{ email: recipients[0].email, success: true }];
 
 function fixture() {
   return {
@@ -24,6 +24,37 @@ function fixture() {
 }
 
 describe("mail-merge transport selection", () => {
+  it("separates unknown outcomes from confirmed submissions and known failures", async () => {
+    const deps = fixture();
+    deps.smtpSend.mockResolvedValue([
+      { email: "confirmed@example.test", success: true },
+      { email: "refused@example.test", success: false, error: "Rejected" },
+      {
+        email: "unknown@example.test",
+        success: false,
+        deliveryUnknown: true,
+        error: "Lost acknowledgment",
+      },
+    ]);
+    const response = await createSerialEmailHandler(deps)(args);
+    expect(response.isError).not.toBe(true);
+    expect(response.structuredContent).toMatchObject({
+      ok: false,
+      sent: 1,
+      failed: 1,
+      unknown: 1,
+      deliveryUnknown: true,
+      results: [
+        { email: "confirmed@example.test", success: true },
+        { email: "refused@example.test", success: false },
+        { email: "unknown@example.test", success: false, deliveryUnknown: true },
+      ],
+    });
+    expect(response.content[0].text).toContain("Do not resend automatically");
+    expect(deps.smtpSend).toHaveBeenCalledOnce();
+    expect(deps.appleScriptSend).not.toHaveBeenCalled();
+  });
+
   it("returns an error without sending when selected SMTP credentials cannot be resolved", async () => {
     const deps = fixture();
     deps.smtpConfig.mockImplementation(() => {
@@ -228,6 +259,39 @@ describe("mail-merge transport selection", () => {
       failed: 1,
       transport: "smtp",
     });
+    expect(deps.appleScriptSend).not.toHaveBeenCalled();
+  });
+
+  it("preserves a partially accepted submission instead of reporting the whole batch complete", async () => {
+    const deps = fixture();
+    deps.smtpSend.mockResolvedValue([
+      {
+        email: recipients[0].email,
+        success: true,
+        partial: true,
+        accepted: [recipients[0].email],
+        rejected: ["refused@example.test"],
+      },
+    ]);
+    const response = await createSerialEmailHandler(deps)(args);
+    expect(response.isError).not.toBe(true);
+    expect(response.structuredContent).toMatchObject({
+      ok: false,
+      partial: true,
+      sent: 1,
+      failed: 0,
+      results: [
+        {
+          email: recipients[0].email,
+          partial: true,
+          accepted: [recipients[0].email],
+          rejected: ["refused@example.test"],
+        },
+      ],
+    });
+    expect(response.content[0].text).toContain("Partial SMTP submission");
+    expect(response.content[0].text).not.toContain("Successfully sent");
+    expect(deps.smtpSend).toHaveBeenCalledOnce();
     expect(deps.appleScriptSend).not.toHaveBeenCalled();
   });
 });

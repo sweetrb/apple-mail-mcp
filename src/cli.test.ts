@@ -7,6 +7,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { runCli, EX_USAGE, EX_NOINPUT, EX_CONFIG, type CliDeps } from "./cli.js";
 import type { SmtpConfig } from "./smtpMailer.js";
+import nodemailer from "nodemailer";
+import { sendViaSmtp } from "@/services/smtpMailer.js";
+import { withSmtpFixture } from "@/services/smtpMailer.testFixture.js";
 
 const FAKE_CONFIG: SmtpConfig = {
   host: "smtp.example.com",
@@ -51,6 +54,102 @@ const REQUIRED = [
 ];
 
 describe("runCli", () => {
+  it.each([
+    { name: "all accepted", refused: [], finalReply: "accept" as const, code: 0, count: 1 },
+    {
+      name: "partial",
+      refused: ["refused@example.test"],
+      finalReply: "accept" as const,
+      code: 2,
+      count: 1,
+    },
+    {
+      name: "all refused",
+      refused: ["accepted@example.test", "refused@example.test"],
+      finalReply: "accept" as const,
+      code: 1,
+      count: 0,
+    },
+    {
+      name: "lost final acknowledgment",
+      refused: [],
+      finalReply: "close-after-data" as const,
+      code: 3,
+      count: 1,
+    },
+  ])(
+    "propagates real loopback $name without retrying",
+    async ({ refused, finalReply, code, count }) => {
+      await withSmtpFixture(
+        refused,
+        async (config, submissions) => {
+          const sender = vi.fn((opts, cfg) =>
+            sendViaSmtp(opts, cfg, nodemailer.createTransport, async () => ({}))
+          );
+          const { deps, out, err } = makeDeps({ resolveConfig: () => config, send: sender });
+          const argv = [
+            "--from",
+            "fixture@example.test",
+            "--to",
+            "accepted@example.test",
+            "--to",
+            "refused@example.test",
+            "--subject",
+            "Fixture",
+            "--body-file",
+            "/tmp/body.txt",
+          ];
+          expect(await runCli(argv, deps)).toBe(code);
+          expect(submissions).toHaveLength(count);
+          expect(sender).toHaveBeenCalledOnce();
+          if (code === 2) expect(err.join("\n")).toContain("Do not resend to accepted recipients");
+          if (code === 3) {
+            expect(out).toEqual([]);
+            expect(err.join("\n")).toContain("outcome is unknown");
+          }
+        },
+        finalReply
+      );
+    }
+  );
+
+  it.each(["returned", "thrown"])(
+    "returns a distinct unknown status without a sent claim or retry after a %s lost acknowledgment",
+    async (mode) => {
+      const { deps, send, out, err } = makeDeps();
+      if (mode === "returned")
+        send.mockResolvedValue({
+          success: false,
+          deliveryUnknown: true,
+          error: "Connection closed",
+        });
+      else send.mockRejectedValue(new Error("Connection closed"));
+      expect(await runCli(REQUIRED, deps)).toBe(3);
+      expect(out).toEqual([]);
+      expect(err.join("\n")).toContain("outcome is unknown");
+      expect(err.join("\n")).toContain("Do not resend automatically");
+      expect(send).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("returns a distinct partial status and names accepted recipients without inviting a full resend", async () => {
+    const { deps, send, out, err } = makeDeps();
+    send.mockResolvedValue({
+      success: true,
+      partial: true,
+      accepted: ["you@example.com"],
+      rejected: ["refused@example.com"],
+    });
+    const code = await runCli([...REQUIRED, "--to", "refused@example.com"], deps);
+    expect(code).toBe(2);
+    expect(out.join("\n")).toContain("sent to you@example.com");
+    expect(out.join("\n")).not.toContain("refused@example.com");
+    expect(err.join("\n")).toContain("Partial SMTP submission");
+    expect(err.join("\n")).toContain("Rejected: refused@example.com");
+    expect(err.join("\n")).toContain("Do not resend to accepted recipients");
+    expect(send).toHaveBeenCalledOnce();
+  });
+
   it("sends a plain-text email and reports success (exit 0)", async () => {
     const { deps, send, out } = makeDeps();
     const code = await runCli(REQUIRED, deps);
