@@ -1,8 +1,8 @@
-# Release guard
+# Release guards
 
 Run the full offline Git fixture suite from the repository root:
 
-    node --test .github/scripts/version-guard.test.mjs
+    node --test .github/scripts/*.test.mjs
 
 The fixtures invoke the exact shell guard used by the required version check.
 They create temporary Git repositories and substitute an offline npm command;
@@ -23,3 +23,11 @@ changelog checks still apply. These scripts live outside the npm package.
 
 Every file under `build/` remains a shipped-byte detector, including files in
 directories named `__tests__` or `__mocks__`.
+
+`verify-publish-ci.mjs` checks GitHub Actions evidence before any publication.
+It requires the complete `ci.yml` workflow to have succeeded on the exact
+candidate SHA, from this repository's main branch, with a push or manual CI
+event. Missing evidence, API errors, fork runs and pull-request-only runs fail
+closed. This applies to workflow, release, manual and scheduled publication
+triggers. `publish-guard.test.mjs` verifies those decisions and the workflow's
+ordering: the verified standalone plugin archive must exist before npm publish.

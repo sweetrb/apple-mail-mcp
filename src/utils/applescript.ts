@@ -101,22 +101,20 @@ function escapeForShell(script: string): string {
 
 /**
  * Headroom (ms) between the in-AppleScript `with timeout` and the outer
- * osascript process timeout. The script-level timeout must fire *first* so
- * Mail.app aborts the operation from inside its own AppleScript dispatch —
- * cleanly releasing the event queue — before Node SIGKILLs the osascript
- * process. Killing osascript alone does not stop work already dispatched into
- * Mail.app, which is what wedges Mail.app for subsequent calls (issue #11).
+ * osascript process timeout. Let the script report its Apple event timeout
+ * before Node kills the child. Neither timeout proves that Mail cancelled an
+ * operation already dispatched to it; a timed-out mutation can have an
+ * uncertain outcome and must not be automatically repeated (issue #11).
  */
 const SCRIPT_TIMEOUT_HEADROOM_MS = 5000;
 
 /**
- * Wraps a script body in an AppleScript `with timeout` block so any Apple
- * Event that honors timeouts (most Mail.app operations do) aborts cleanly
- * rather than holding Mail.app's single-threaded AppleScript dispatch queue
- * open indefinitely.
+ * Bounds how long AppleScript waits for an application's response. Apple's
+ * documented behavior stops script execution on timeout; it does not cancel
+ * the application's operation or guarantee that its event queue is clear.
  *
  * The timeout is set a few seconds below the osascript process timeout so the
- * in-Mail abort wins the race against the outer process kill.
+ * script can report the timeout before the outer process kill.
  *
  * @param script - The AppleScript body
  * @param processTimeoutMs - The outer osascript process timeout
@@ -438,8 +436,7 @@ export function executeAppleScript(
   // Prepare the script:
   // 1. Trim leading/trailing whitespace (cosmetic)
   // 2. Preserve internal newlines (required for AppleScript syntax)
-  // 3. Wrap in `with timeout` so a stuck Mail.app operation aborts from
-  //    inside its own dispatch before the process timeout kills osascript (#11)
+  // 3. Bound the script's response wait before the outer process timeout (#11)
   // 4. Escape for shell execution
   const preparedScript = escapeForShell(wrapWithTimeout(script.trim(), timeoutMs));
 
@@ -461,8 +458,8 @@ export function executeAppleScript(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const attemptStart = Date.now();
     try {
-      // Execute synchronously - MCP tools are inherently synchronous
-      // and Apple Notes operations are fast enough that async isn't needed
+      // This runner blocks until osascript returns; the tool scheduler
+      // serializes calls that share Mail.app's AppleScript dispatch.
       const output = execSync(command, {
         encoding: "utf8",
         timeout: timeoutMs,

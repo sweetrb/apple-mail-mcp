@@ -30,11 +30,56 @@ Review the draft before a separately authorized send.
 
 ## Requirements and failure behavior
 
-Mail must run on an unlocked Mac. The runtime needs existing Accessibility
-permission and Automation permission for Mail and System Events. The bridge
-checks those grants without requesting them; it does not change privacy
-settings. System Events is started if needed. Keep Mail and the clipboard idle
-while composition runs.
+Mail must have an accessible editor in the runtime's active GUI session. The
+runtime needs existing Accessibility permission and Automation permission for
+Mail and System Events. The bridge checks those grants without requesting them;
+it does not change privacy settings. System Events is started if needed. Keep
+Mail and the clipboard idle while composition runs.
+
+Before checking permissions, the bridge queries the caller's Quartz session
+with Apple's documented
+[`CGSessionCopyCurrentDictionary`](<https://developer.apple.com/documentation/coregraphics/cgsessioncopycurrentdictionary()>)
+and [session properties](https://developer.apple.com/documentation/coregraphics/window-server-session-properties).
+A missing GUI session, an inactive console session, an incomplete login, or
+unreadable session information stops the operation with a distinct diagnostic.
+The session is checked again before native input and during insertion/readback.
+The console and login flags do **not** prove that the screen is unlocked or
+that an editor is usable. Exact window, focus, and content checks remain required.
+
+### Closed lid, Clamshell, and Codex
+
+Closing the lid is not itself a reason for this package to refuse native
+composition. The session and verified editor must remain available. Keeping the
+CPU awake alone does not establish that condition.
+
+[Clamshell's screen-access guide](https://clamshell.dev/guides/agents-use-screen-lid-closed)
+documents screen access during armed closed-lid sessions from version 1.4.19
+and the **Let agents use the screen while the lid is closed** setting from
+1.4.21. Its documentation also describes cases where the display is put to sleep
+instead. Those are Clamshell's documented capabilities, not a verified
+compatibility guarantee for this Mail bridge. The package does not toggle
+Clamshell settings or infer screen availability from whether Clamshell is running.
+
+Codex's [Locked use](https://learn.chatgpt.com/docs/computer-use#locked-use)
+belongs to its Computer Use integration. OpenAI documents that it does not give
+other applications or local processes a general unlock capability. This MCP
+server's `osascript` bridge is a separate local process; enabling Locked use
+does not establish that its native Mail editor is available.
+
+For native composition, unavailable sessions stop before permission/UI work.
+Later focus failures include a bounded reason such as `foreground`,
+`main-window`, `position`, or `size`, instead of implying that Automation
+permission was denied. No failure silently switches to SMTP, and a failed
+insertion is never followed by the manager's save/send step. For an explicitly
+chosen unattended SMTP operation, omit `composition: "native-editor"`; SMTP
+does not reproduce Mail's native signature and quotation layout.
+
+Tests execute session and focus failures against the generated program, and a
+macOS-only test queries the actual CoreGraphics bridge without opening Mail or
+touching the clipboard. These checks do not establish successful closed-lid
+composition, screen unlocking, or delivery on a particular Mac.
+
+### Clipboard and message verification
 
 Temporary clipboard content is marked as transient and app-generated using
 the [NSPasteboard conventions](https://nspasteboard.org/). This keeps compatible
@@ -49,6 +94,12 @@ that budget. An oversized or unreadable snapshot stops composition before the
 clipboard is changed; process-output and recovery-input limits include room
 for protocol metadata. Recovery data stays in memory and is not logged or
 written to a temporary file. A newer clipboard owner is never overwritten.
+
+If the clipboard already carries another native-composition operation's marker,
+the new operation stops with a `clipboard-busy` diagnostic before taking a
+snapshot. This prevents a second operation from treating the first operation's
+temporary prose as the user's original clipboard. It is an ownership check,
+not a cross-process queue; keep concurrent composition requests serialized.
 
 New messages require an explicit `account`. Replies use the parent message's
 account and matching recipient identity, refusing an ambiguous sender. Native

@@ -22,6 +22,22 @@ const input = {
   body: "Private prose — ã, ç, œ, 中文\n\nNext paragraph.",
 };
 
+const activeSession = { kCGSSessionOnConsoleKey: true, kCGSessionLoginDoneKey: true };
+const objc = {
+  import: () => undefined,
+  bindFunction: () => undefined,
+  castRefToObject: (value: unknown) => value,
+  deepUnwrap: (value: unknown) => value,
+  unwrap: (value: unknown) => value,
+};
+function sessionApi(session: unknown = activeSession) {
+  return {
+    CGSessionCopyCurrentDictionary: vi.fn(() => session),
+    // CGSession.h defines these keys as CFSTR macros, not JXA globals.
+    CFRelease: vi.fn(),
+  };
+}
+
 beforeEach(() => {
   h.run.mockReset();
   h.run.mockReturnValue({ status: 0, stdout: '{"success":true}', stderr: "" });
@@ -46,6 +62,129 @@ describe("native authored HTML", () => {
 });
 
 describe("native editor process contract (no live UI)", () => {
+  it("unwraps an absent Objective-C ownership marker before snapshotting", () => {
+    nativeEditorPreflight();
+    const script = h.run.mock.calls[0][1][3];
+    const helper = script.slice(
+      script.indexOf("function snapshotClipboard"),
+      script.indexOf("function main")
+    );
+    const absentMarker = {};
+    const clipboard = {
+      changeCount: 42,
+      stringForType: () => absentMarker,
+      pasteboardItems: { count: 0 },
+    };
+    const recovery = runInNewContext(helper + "\nsnapshotClipboard(clipboard, 'operation')", {
+      clipboard,
+      ObjC: { unwrap: (value: unknown) => (value === absentMarker ? null : value) },
+      $: Object.assign(
+        (text: string) => ({ lengthOfBytesUsingEncoding: () => Buffer.byteLength(text) }),
+        { NSUTF8StringEncoding: 4 }
+      ),
+      fail: (code: string) => {
+        throw new Error(code);
+      },
+    });
+    expect(recovery).toMatchObject({ originalCount: 42, token: "operation", items: [] });
+  });
+
+  it("refuses to snapshot another native operation's temporary clipboard", () => {
+    nativeEditorPreflight();
+    const script = h.run.mock.calls[0][1][3];
+    const helper = script.slice(
+      script.indexOf("function snapshotClipboard"),
+      script.indexOf("function main")
+    );
+    const token = "first-native-operation";
+    const contents = [
+      { type: "public.utf8-plain-text", text: "First operation's authored body" },
+      { type: "org.apple-mail-mcp.native-composition", text: token },
+    ];
+    const clipboard = {
+      changeCount: 42,
+      stringForType: vi.fn(() => token),
+      pasteboardItems: {
+        count: 1,
+        objectAtIndex: () => ({
+          types: { count: contents.length, objectAtIndex: (i: number) => contents[i].type },
+          dataForType: (type: string) => {
+            const text = contents.find((entry) => entry.type === type)!.text;
+            return {
+              length: Buffer.byteLength(text),
+              base64EncodedStringWithOptions: () => Buffer.from(text).toString("base64"),
+            };
+          },
+        }),
+      },
+    };
+    expect(() =>
+      runInNewContext(helper + "\nsnapshotClipboard(clipboard, 'second-native-operation')", {
+        clipboard,
+        ObjC: { unwrap: (value: unknown) => value },
+        $: Object.assign(
+          (text: string) => ({ lengthOfBytesUsingEncoding: () => Buffer.byteLength(text) }),
+          {
+            NSUTF8StringEncoding: 4,
+            NSPasteboardItem: { alloc: { init: { setDataForType: () => true } } },
+          }
+        ),
+        fail: (code: string) => {
+          throw new Error(code);
+        },
+      })
+    ).toThrow("clipboard-busy");
+  });
+
+  it.each([
+    { session: null, code: "session-unavailable" },
+    {
+      session: { kCGSSessionOnConsoleKey: false, kCGSessionLoginDoneKey: true },
+      code: "session-inactive",
+    },
+    {
+      session: { kCGSSessionOnConsoleKey: true, kCGSessionLoginDoneKey: false },
+      code: "session-login",
+    },
+    { session: {}, code: "session-unknown" },
+    {
+      session: { kCGSSessionOnConsoleKey: "true", kCGSessionLoginDoneKey: true },
+      code: "session-unknown",
+    },
+    { session: activeSession, code: undefined },
+  ])("checks the actual GUI session before permission checks: $code", ({ session, code }) => {
+    nativeEditorPreflight();
+    const script = h.run.mock.calls[0][1][3];
+    const api = sessionApi(session);
+    const permission = vi.fn(() => 0);
+    const application = vi.fn();
+    const output = runInNewContext(script, {
+      ObjC: objc,
+      $: {
+        ...api,
+        AXIsProcessTrusted: () => true,
+        AEDeterminePermissionToAutomateTarget: permission,
+        NSRunningApplication: { runningApplicationsWithBundleIdentifier: () => ({ count: 1 }) },
+        NSAppleEventDescriptor: {
+          descriptorWithBundleIdentifier: (id: string) => ({ aeDesc: id }),
+        },
+        NSFileHandle: { fileHandleWithStandardInput: { readDataToEndOfFile: "stdin" } },
+        NSString: {
+          alloc: { initWithDataEncoding: () => ({ js: '{"operation":"preflight"}' }) },
+        },
+        NSUTF8StringEncoding: 4,
+      },
+      Application: application,
+    });
+    expect(JSON.parse(output)).toEqual(
+      code ? { success: false, code, stage: "session" } : { success: true }
+    );
+    expect(api.CGSessionCopyCurrentDictionary).toHaveBeenCalledOnce();
+    expect(api.CFRelease).not.toHaveBeenCalled();
+    expect(application).not.toHaveBeenCalled();
+    expect(permission).toHaveBeenCalledTimes(code ? 0 : 2);
+  });
+
   it.each([false, true])(
     "starts stopped System Events without prompting and bounds startup (unavailable=%s)",
     (unavailable) => {
@@ -55,10 +194,11 @@ describe("native editor process contract (no live UI)", () => {
       const wait = vi.fn();
       let checks = 0;
       const output = runInNewContext(script, {
-        ObjC: { import: () => undefined, bindFunction: () => undefined },
+        ObjC: objc,
         Ref: () => "error-reference",
         delay: wait,
         $: {
+          ...sessionApi(),
           AXIsProcessTrusted: () => true,
           AEDeterminePermissionToAutomateTarget: (id: string) => {
             if (id === "com.apple.mail") return 0;
@@ -112,8 +252,9 @@ describe("native editor process contract (no live UI)", () => {
       });
       const permissionCheck = vi.fn(() => permission);
       const output = runInNewContext(script, {
-        ObjC: { import: () => undefined, bindFunction: () => undefined },
+        ObjC: objc,
         $: {
+          ...sessionApi(),
           AXIsProcessTrusted: () => trusted,
           AEDeterminePermissionToAutomateTarget: permissionCheck,
           NSRunningApplication: { runningApplicationsWithBundleIdentifier: () => ({ count: 1 }) },
@@ -336,6 +477,7 @@ describe("native editor process contract (no live UI)", () => {
       const point = runInNewContext(geometry + "\npoint;", {
         body: {},
         window: {},
+        checkSession: vi.fn(),
         process: { frontmost: () => true },
         attr: (_element: unknown, name: string) =>
           name === "AXPosition" ? fixture.position : name === "AXSize" ? fixture.size : true,
@@ -352,6 +494,131 @@ describe("native editor process contract (no live UI)", () => {
       expect(script.indexOf("events.keyCode(126, {using: ['command down']})")).toBeLessThan(
         script.indexOf("events.keyCode(9, {using: ['command down']})")
       );
+    }
+  );
+
+  it.each([
+    { foreground: false, main: true, position: [0, 0], size: [100, 100], reason: "foreground" },
+    { foreground: true, main: false, position: [0, 0], size: [100, 100], reason: "main-window" },
+    { foreground: true, main: true, position: [NaN, 0], size: [100, 100], reason: "position" },
+    { foreground: true, main: true, position: [0, 0], size: [Infinity, 100], reason: "size" },
+  ])("reports the precise reason before posting mouse input: $reason", (fixture) => {
+    nativeEditorPreflight();
+    const script = h.run.mock.calls[0][1][3];
+    const geometry = script.slice(
+      script.indexOf("  var position = attr(body, 'AXPosition')"),
+      script.indexOf("  var down = $.CGEventCreateMouseEvent")
+    );
+    const context = {
+      body: {},
+      window: {},
+      process: { frontmost: () => fixture.foreground },
+      attr: (_element: unknown, name: string) =>
+        name === "AXPosition" ? fixture.position : name === "AXSize" ? fixture.size : fixture.main,
+      fail: (code: string) => {
+        throw new Error(code);
+      },
+      focusFailure: null as string | null,
+      checkSession: vi.fn(),
+    };
+    expect(() => runInNewContext(geometry, context)).toThrow("focus");
+    expect(context.focusFailure).toBe(fixture.reason);
+  });
+
+  it.each([1, 2, 3])("stops native key input when the session disappears at gate %s", (lostAt) => {
+    nativeEditorPreflight();
+    const script = h.run.mock.calls[0][1][3];
+    const sessionHelpers = script.slice(
+      script.indexOf("function readSession"),
+      script.indexOf("function preflight")
+    );
+    const focusHelper = script.slice(
+      script.indexOf("  function checkFocus()"),
+      script.indexOf("  checkFocus();")
+    );
+    const insertion = script.slice(
+      script.indexOf("    stage('pre-cmd-up')"),
+      script.indexOf("  // The parent owns restoration")
+    );
+    const window = { name: () => input.markerSubject, AXMain: true, AXTitle: input.markerSubject };
+    const body = {
+      AXRole: "AXWebArea",
+      AXDescription: "message body",
+      AXPosition: [0, 0],
+      AXSize: [100, 100],
+      AXWindow: window,
+    };
+    const subject = { AXValue: input.markerSubject };
+    const process = { frontmost: () => true, AXFocusedUIElement: body };
+    const api = sessionApi();
+    let checks = 0;
+    api.CGSessionCopyCurrentDictionary.mockImplementation(() =>
+      ++checks >= lostAt ? null : activeSession
+    );
+    const keyCode = vi.fn();
+    const checkMessage = vi.fn();
+    expect(() =>
+      runInNewContext(`${sessionHelpers}\n${focusHelper}\n{${insertion}`, {
+        ObjC: objc,
+        $: api,
+        input,
+        window,
+        body,
+        subject,
+        process,
+        attr: (element: Record<string, unknown>, key: string) => element[key] ?? null,
+        fail: (code: string) => {
+          throw new Error(code);
+        },
+        checkMessage,
+        stage: vi.fn(),
+        delay: vi.fn(),
+        focusFailure: null,
+        events: { keyCode },
+        clipboard: { changeCount: 1 },
+        ownedCount: 1,
+        verifiedInsertion: () => true,
+        beforeText: "original",
+        bodyText: () => "original",
+      })
+    ).toThrow("session-unavailable");
+    expect(keyCode.mock.calls.map(([key]) => key)).toEqual(
+      lostAt === 1 ? [] : lostAt === 2 ? [126] : [126, 9]
+    );
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "reads documented session flags through the actual CoreGraphics bridge without accessing UI",
+    async () => {
+      nativeEditorPreflight();
+      const script = h.run.mock.calls[0][1][3];
+      const helper = script.slice(
+        script.indexOf("function readSession"),
+        script.indexOf("function checkSession")
+      );
+      const { execFileSync } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      // Exercise the repeated checks used during composition, including native
+      // wrapper cleanup at process exit. Only the two public flags leave JXA.
+      const output = execFileSync(
+        "/usr/bin/osascript",
+        [
+          "-l",
+          "JavaScript",
+          "-e",
+          `ObjC.import('CoreGraphics');\n${helper}\nvar states = []; for (var i = 0; i < 8; i++) states.push(readSession()); JSON.stringify(states);`,
+        ],
+        { encoding: "utf8", timeout: 10000 }
+      );
+      const states = JSON.parse(output);
+      expect(states).toHaveLength(8);
+      for (const state of states) {
+        expect(typeof state.available).toBe("boolean");
+        if (state.available) {
+          expect(typeof state.onConsole).toBe("boolean");
+          expect(typeof state.loginDone).toBe("boolean");
+        }
+      }
     }
   );
 
@@ -528,6 +795,7 @@ JSON.stringify({count: Number(items.count), types: ObjC.deepUnwrap(item.types).s
       };
       const clipboard = {
         changeCount: 2,
+        stringForType: () => null,
         pasteboardItems: {
           count: 1,
           objectAtIndex: () => ({
@@ -609,6 +877,10 @@ JSON.stringify({count: Number(items.count), types: ObjC.deepUnwrap(item.types).s
   });
 
   it.each([
+    "session-unavailable",
+    "session-inactive",
+    "session-login",
+    "session-unknown",
     "accessibility",
     "automation",
     "automation-unavailable",
@@ -616,6 +888,7 @@ JSON.stringify({count: Number(items.count), types: ObjC.deepUnwrap(item.types).s
     "target",
     "focus",
     "clipboard",
+    "clipboard-busy",
     "restore",
     "readback",
   ])("returns sanitized %s errors without fallback or retry", (code) => {

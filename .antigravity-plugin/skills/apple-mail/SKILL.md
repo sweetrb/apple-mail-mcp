@@ -204,6 +204,15 @@ matching configured identity or an allowed email-form `account` override;
 explicit SMTP rejects bare Mail.app labels such as `"Work"`. Missing SMTP
 credentials or an unapproved sender stops the batch before any message is sent.
 
+Read SMTP delivery status before taking another action. With `partial: true`,
+the message was submitted to the `accepted` recipients; do not resend to them.
+Review only the `rejected` recipients before another authorized send. With
+`deliveryUnknown: true`, the provider may already have accepted the message:
+do not describe it as unsent, retry automatically, or switch transports. Check
+provider-side evidence first. Treat Sent-copy filing separately from submission;
+a failed archive copy is not a reason to resend the message. Serial results
+report unknown outcomes separately from confirmed submissions and known failures.
+
 ### Optional: native-editor composition through MCP
 
 When the user wants Mail's native signature and HTML reply history, the four
@@ -219,7 +228,7 @@ stay in that mailbox; if it is missing, ambiguous, or the original Message-ID
 has changed, stop and re-list rather than substituting a similarly named
 mailbox. Omit both fields for an `imap:` ID, which already encodes its source.
 
-This mode operates Mail's visible editor on the local unlocked Mac and requires
+This mode needs a usable Mail editor in the runtime's active GUI session and
 existing Accessibility and Automation permissions for Mail and System Events.
 It checks permissions without requesting them. It does not require a separate
 computer-control plugin, does not change Mail preferences, and preserves the
@@ -227,6 +236,13 @@ clipboard unless another application changes it during the operation. Do not
 interact with Mail or the clipboard while it runs. The option selects Mail.app
 even when SMTP is configured; `transport: "smtp"` and caller-built threading
 headers are incompatible. Mail merge is unchanged.
+
+A closed lid alone does not establish whether the editor is available. An awake
+Mac or a host's computer-use capability alone does not establish access for this
+MCP process. Respect its session and focus diagnostics; do not infer that a host's
+Locked use capability unlocks this bridge. For an unattended send, use matching
+configured SMTP when that transport fits the authorized task; do not select
+native-editor solely because Codex can keep working with the lid closed.
 
 On failure, inspect the retained draft and clipboard. Never silently retry
 through the AppleScript body setter or SMTP. If final delivery is uncertain,

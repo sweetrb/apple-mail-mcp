@@ -55,7 +55,7 @@ export const BODY_INDEX_FILE_ENV = "APPLE_MAIL_MCP_BODY_INDEX_FILE";
 /** `PRAGMA application_id` of every body index file: "AMBI" (Apple Mail Body Index). */
 export const BODY_INDEX_APPLICATION_ID = 0x414d4249;
 /** Bumped whenever the layout changes; the writer rebuilds an older file. */
-export const BODY_INDEX_SCHEMA_VERSION = 3;
+export const BODY_INDEX_SCHEMA_VERSION = 5;
 
 /** `.emlx` files larger than this are never read (attachments stored inline). */
 export const MAX_EMLX_BYTES = 25 * 1024 * 1024;
@@ -82,6 +82,8 @@ export const DocState = {
   partial: 2,
   /** Larger than {@link MAX_EMLX_BYTES}; not read. */
   tooLarge: 3,
+  /** Only a bounded prefix was indexed; its remaining body was not searched. */
+  truncated: 5,
 } as const;
 
 /** Where the index lives: `APPLE_MAIL_MCP_BODY_INDEX_FILE`, else Application Support. */
@@ -116,7 +118,7 @@ export function parseEmlxBody(bytes: Buffer): string | null {
   if (source === null) return null;
   const text = extractTextBody(source) ?? htmlToText(extractHtmlBody(source) ?? "");
   const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized ? normalized.slice(0, MAX_BODY_CHARS) : null;
+  return normalized || null;
 }
 
 /** Quote user text as one FTS5 phrase so operators in it are taken literally. */
@@ -267,6 +269,8 @@ export interface IndexCounts {
   queued: number;
   partial: number;
   tooLarge: number;
+  /** Present when at least one message exceeded the body-text indexing cap. */
+  truncated?: number;
 }
 
 /** Writer-recorded facts about the index, kept in its `meta` table. */
@@ -305,6 +309,9 @@ export function readIndexState(
         break;
       case DocState.tooLarge:
         counts.tooLarge = n;
+        break;
+      case DocState.truncated:
+        counts.truncated = n;
         break;
     }
   }
@@ -345,6 +352,8 @@ export interface BodyScopeCoverage {
   partlyDownloaded: number;
   /** Over the size cap; not read. */
   tooLarge: number;
+  /** Only the first {@link MAX_BODY_CHARS} characters were indexed. */
+  truncated?: number;
 }
 
 /**
@@ -364,7 +373,8 @@ export function scopeCoverage(
          sum(d.id IS NULL) AS missing,
          sum(d.state = ${DocState.queued}) AS queued,
          sum(d.state = ${DocState.partial}) AS partial,
-         sum(d.state = ${DocState.tooLarge}) AS too_large
+         sum(d.state = ${DocState.tooLarge}) AS too_large,
+         sum(d.state = ${DocState.truncated}) AS truncated
        ${fromSql}
        LEFT JOIN ${ATTACH_ALIAS}.docs d ON d.id = m.ROWID
        WHERE ${where.join(" AND ")}`
@@ -375,12 +385,15 @@ export function scopeCoverage(
     notIndexedYet: Number(row?.queued ?? 0),
     partlyDownloaded: Number(row?.partial ?? 0),
     tooLarge: Number(row?.too_large ?? 0),
+    ...(Number(row?.truncated ?? 0) > 0 ? { truncated: Number(row!.truncated) } : {}),
   };
 }
 
 /** True when every message in scope was searched in full. */
 export function isScopeComplete(c: BodyScopeCoverage): boolean {
-  return c.notDownloaded + c.notIndexedYet + c.partlyDownloaded + c.tooLarge === 0;
+  return (
+    c.notDownloaded + c.notIndexedYet + c.partlyDownloaded + c.tooLarge + (c.truncated ?? 0) === 0
+  );
 }
 
 /** `1,234 messages not downloaded, 12 not indexed yet, …` — the non-zero parts only. */
@@ -391,6 +404,9 @@ export function describeScopeGap(c: BodyScopeCoverage): string {
   if (c.notIndexedYet) parts.push(`${fmt(c.notIndexedYet)} not indexed yet`);
   if (c.partlyDownloaded) parts.push(`${fmt(c.partlyDownloaded)} with no body downloaded yet`);
   if (c.tooLarge) parts.push(`${fmt(c.tooLarge)} over the 25 MB size cap`);
+  if (c.truncated) {
+    parts.push(`${fmt(c.truncated)} over the ${fmt(MAX_BODY_CHARS)}-character body cap`);
+  }
   return parts.join(", ");
 }
 
@@ -719,10 +735,16 @@ export class BodyIndexWriter {
             setState.run(DocState.tooLarge, id);
           } else {
             const text = read === null ? null : parseEmlxBody(read);
-            if (text) addBody.run(id, text);
+            if (text) addBody.run(id, text.slice(0, MAX_BODY_CHARS));
             // A partial download without its text was not really searched.
             const bodyMissing = !text && path.endsWith(".partial.emlx");
-            setState.run(bodyMissing ? DocState.partial : DocState.indexed, id);
+            const state =
+              text && text.length > MAX_BODY_CHARS
+                ? DocState.truncated
+                : bodyMissing
+                  ? DocState.partial
+                  : DocState.indexed;
+            setState.run(state, id);
           }
           done++;
         }

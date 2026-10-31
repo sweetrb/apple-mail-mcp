@@ -1,6 +1,6 @@
 {
   "name": "apple-mail-mcp",
-  "version": "2.20.46",
+  "version": "2.20.48",
   "packageManager": "pnpm@11.9.0",
   "description": "MCP server for Apple Mail - read, search, send, and manage emails via Claude and other AI assistants",
   "type": "module",
@@ -24,7 +24,7 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:imap": "vitest run --config vitest.imap.config.ts",
-    "test:all": "vitest run && vitest run --config vitest.integration.config.ts",
+    "test:all": "vitest run && vitest run --config vitest.integration.config.ts && node --test test/*.test.mjs .github/scripts/*.test.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src",

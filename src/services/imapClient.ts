@@ -908,8 +908,8 @@ function structuredRow(m: ImapMessage, account: string, path: string): Record<st
       : {}),
     // Message-ID (when the envelope carries it) is the strongest cross-/intra-
     // backend dedup key for the multi-account merge (imapMultiAccount.ts). The
-    // AppleScript path does not expose it, so cross-backend dedup falls back to
-    // the subject|sender|date composite key.
+    // AppleScript path does not expose it. Rows without it keep their source
+    // identity; matching subject/sender/date values do not prove duplication.
     ...(env.messageId ? { messageId: env.messageId } : {}),
   };
 }
@@ -925,6 +925,10 @@ export interface ImapListResult {
   messages: Record<string, unknown>[];
   count: number;
   partial: boolean;
+  /** Whether a wider prefix may reveal additional matches. Internal merge
+   * pagination uses this instead of assuming a deduplicated short page is
+   * exhausted. A partial read always leaves this possibility open. */
+  hasMore: boolean;
   /** Mailboxes omitted from an unscoped IMAP search because SELECT/SEARCH failed. */
   failedMailboxes: string[];
   /** The underlying error text for each entry in `failedMailboxes`, keyed by the
@@ -1649,6 +1653,7 @@ async function run(
       const omittedMessages: OmittedMessage[] = [];
       let totalMatched = 0;
       let totalExact = true;
+      let hasMore = false;
 
       const timedOutMailboxes: string[] = [];
       for (const [index, path] of paths.entries()) {
@@ -1677,6 +1682,7 @@ async function run(
           const result = outcome;
           totalMatched += result.total;
           totalExact &&= result.totalExact;
+          hasMore ||= !result.totalExact || result.total > page.skip + page.take;
           fetched.push(...result.messages.map((message) => ({ message, path })));
           for (const uid of result.omitted) {
             omittedMessages.push({
@@ -1716,6 +1722,7 @@ async function run(
           const key = messageIdentity(entry);
           if (!unique.has(key)) unique.set(key, entry);
         }
+        hasMore ||= unique.size > offset + limit;
         ordered = [...unique.values()].slice(offset, offset + limit);
       }
 
@@ -1756,6 +1763,7 @@ async function run(
           messages,
           count: 0,
           partial,
+          hasMore: hasMore || partial,
           failedMailboxes,
           failedMailboxReasons,
           omittedMessages,
@@ -1773,6 +1781,7 @@ async function run(
         messages,
         count: messages.length,
         partial,
+        hasMore: hasMore || partial,
         failedMailboxes,
         failedMailboxReasons,
         omittedMessages,
@@ -3632,7 +3641,8 @@ export async function imapListAttachments(
 export async function imapFetchAttachment(
   id: string,
   attachmentName: string,
-  deps: ImapDeps = {}
+  deps: ImapDeps = {},
+  maxBytes = MAX_IMAP_ATTACHMENT_BYTES
 ): Promise<{
   success: boolean;
   base64?: string;
@@ -3660,16 +3670,19 @@ export async function imapFetchAttachment(
     // is what streamToBuffer counts) — a base64 part's encoded size is ~4/3 of
     // it and would refuse files that fit. Estimate only; the stream cut-off
     // below stays the hard guard.
-    const expected = decodedSizeWithoutBody(match).size;
-    if (expected > MAX_IMAP_ATTACHMENT_BYTES) {
+    const estimate = decodedSizeWithoutBody(match);
+    // An estimate can exceed the decoded payload for wrapped base64 and
+    // quoted-printable. Only exact sizes may reject before streaming.
+    const expected = estimate.size;
+    if (estimate.exact && expected > maxBytes) {
       return {
         success: false,
-        error: `IMAP attachment "${attachmentName}" is ${expected} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`,
+        error: `IMAP attachment "${attachmentName}" is ${expected} bytes; the maximum is ${maxBytes} bytes (${maxBytes / 1024 / 1024} MiB).${maxBytes < MAX_IMAP_ATTACHMENT_BYTES ? " Use save-attachment for larger files." : ""}`,
       };
     }
     try {
       const dl = await client.download(String(ref.uid), match.part, { uid: true });
-      const buf = await streamToBuffer(dl.content, MAX_IMAP_ATTACHMENT_BYTES);
+      const buf = await streamToBuffer(dl.content, maxBytes);
       return {
         success: true,
         base64: buf.toString("base64"),
@@ -3677,7 +3690,10 @@ export async function imapFetchAttachment(
         mimeType: match.mimeType,
       };
     } catch (e) {
-      return { success: false, error: `IMAP attachment fetch failed: ${errText(e)}` };
+      return {
+        success: false,
+        error: `IMAP attachment fetch failed: ${errText(e)}${maxBytes < MAX_IMAP_ATTACHMENT_BYTES ? " Use save-attachment for larger files." : ""}`,
+      };
     }
   });
 }

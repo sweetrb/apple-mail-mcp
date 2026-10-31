@@ -136,10 +136,11 @@ export function bodyIndexCheck(
   if (s.counts) {
     const c = s.counts;
     parts.push(
-      `${fmt(c.indexed + c.partial)} messages indexed` +
+      `${fmt(c.indexed + c.partial + (c.truncated ?? 0))} messages indexed` +
         (c.queued ? `, ${fmt(c.queued)} not indexed yet` : "") +
         (c.partial ? `, ${fmt(c.partial)} with no body downloaded yet` : "") +
-        (c.tooLarge ? `, ${fmt(c.tooLarge)} over the 25 MB cap` : "")
+        (c.tooLarge ? `, ${fmt(c.tooLarge)} over the 25 MB cap` : "") +
+        (c.truncated ? `, ${fmt(c.truncated)} truncated at 100,000 body characters` : "")
     );
   }
   if (s.meta) {

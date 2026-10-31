@@ -96,6 +96,14 @@ describe("runDoctor (C3)", () => {
 });
 
 describe("body index check", () => {
+  it("distinguishes indexed prefixes from fully searched bodies", () => {
+    const c = bodyIndexCheck({
+      enabled: true,
+      counts: { indexed: 3, queued: 0, partial: 0, tooLarge: 0, truncated: 2 },
+    });
+    expect(c?.detail).toContain("5 messages indexed, 2 truncated at 100,000 body characters");
+  });
+
   it("says nothing when the body index was never asked for", () => {
     expect(bodyIndexCheck({ enabled: false }, {})).toBeNull();
   });

@@ -9,33 +9,19 @@
  *   - Automation permission granted to the terminal running the tests
  *   - At least one message in INBOX
  *
- * Run via: npm run test:integration
+ * Run live checks via: RUN_MAIL_IT=1 pnpm run test:integration
+ * The schema and path-validation checks run on every platform. Live checks
+ * require explicit opt-in so a machine without Mail accounts cannot masquerade
+ * as an integration-tested Mail environment.
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { z } from "zod";
-import { resolve } from "path";
-import { homedir } from "os";
 import { AppleMailManager } from "../src/services/appleMailManager.js";
+import { MESSAGE_ID_SCHEMA, BATCH_IDS_SCHEMA, DATE_FILTER_SCHEMA } from "../src/schemas.js";
 
-// ---------------------------------------------------------------------------
-// Shared schemas (mirrored from index.ts so we can test them directly)
-// ---------------------------------------------------------------------------
-
-const MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
-
-const BATCH_IDS_SCHEMA = z
-  .array(MESSAGE_ID_SCHEMA)
-  .min(1, "At least one message ID is required")
-  .max(100, "Cannot process more than 100 messages in a single batch");
-
-const DATE_FILTER_SCHEMA = z
-  .string()
-  .regex(
-    /^[a-zA-Z0-9 ,/\-:]+$/,
-    "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
-  )
-  .optional();
+if (process.env.RUN_MAIL_IT === "1" && process.platform !== "darwin") {
+  throw new Error("RUN_MAIL_IT=1 requires macOS with a configured Mail.app account.");
+}
 
 // ---------------------------------------------------------------------------
 // Test state shared across describe blocks
@@ -55,6 +41,11 @@ beforeAll(() => {
 
 describe("schema validation", () => {
   describe("MESSAGE_ID_SCHEMA", () => {
+    it("accepts the composite IMAP IDs returned by the production read path", () => {
+      const id = "imap:eyJhY2NvdW50IjoiV29yayIsInBhdGgiOiJJTkJPWCIsInVpZCI6MX0";
+      expect(MESSAGE_ID_SCHEMA.parse(id)).toBe(id);
+      expect(BATCH_IDS_SCHEMA.parse(["123", id])).toEqual(["123", id]);
+    });
     it.each(["12345", "0", "999999999"])("accepts valid numeric ID: %s", (id) => {
       expect(MESSAGE_ID_SCHEMA.parse(id)).toBe(id);
     });
@@ -97,7 +88,10 @@ describe("schema validation", () => {
   });
 
   describe("DATE_FILTER_SCHEMA", () => {
-    it.each(["January 1, 2026", "March 15, 2026", "2026-03-15", "3/15/2026", "12:30:00"])(
+    it.each(["not a date", "12:30:00", "2026-99-99"])("rejects invalid date %s", (date) => {
+      expect(() => DATE_FILTER_SCHEMA.parse(date)).toThrow();
+    });
+    it.each(["January 1, 2026", "March 15, 2026", "2026-03-15", "3/15/2026"])(
       "accepts valid date string: %s",
       (d) => {
         expect(DATE_FILTER_SCHEMA.parse(d)).toBe(d);
@@ -163,109 +157,104 @@ describe("saveAttachment path safety", () => {
     const result = mgr.saveAttachment(BOGUS_ID, "test.pdf", "/usr/local");
     expect(result).toBe(false);
   });
-
-  it("allows save path under home directory", () => {
-    // Will fail at "message not found" stage, but should pass path validation
-    // (returns false because the message doesn't exist, not because of path)
-    const result = mgr.saveAttachment(BOGUS_ID, "test.pdf", `${homedir()}/Downloads`);
-    // We can't distinguish path-fail from message-not-found via boolean alone,
-    // but this at least confirms it doesn't throw.
-    expect(typeof result).toBe("boolean");
-  });
 });
 
 // ===========================================================================
 // Live Mail.app operations (read-only)
 // ===========================================================================
 
-describe("live Mail.app operations", { timeout: 120_000 }, () => {
-  it("lists at least one account and finds one with INBOX", () => {
-    const accounts = mgr.listAccounts();
-    expect(accounts.length).toBeGreaterThan(0);
+describe.skipIf(process.env.RUN_MAIL_IT !== "1")(
+  "live Mail.app operations",
+  { timeout: 120_000 },
+  () => {
+    it("lists at least one account and finds one with INBOX", () => {
+      const accounts = mgr.listAccounts();
+      expect(accounts.length).toBeGreaterThan(0);
 
-    // Some accounts (e.g. iCloud) may not have a standard INBOX.
-    // Find the first account that has messages in INBOX.
-    for (const acct of accounts) {
-      const messages = mgr.listMessages("INBOX", acct.name, 1);
-      if (messages.length > 0) {
-        realAccount = acct.name;
-        break;
+      // Some accounts (e.g. iCloud) may not have a standard INBOX.
+      // Find the first account that has messages in INBOX.
+      for (const acct of accounts) {
+        const messages = mgr.listMessages("INBOX", acct.name, 1);
+        if (messages.length > 0) {
+          realAccount = acct.name;
+          break;
+        }
       }
-    }
 
-    expect(realAccount).not.toBeNull();
-  });
+      expect(realAccount).not.toBeNull();
+    });
 
-  it("lists messages from INBOX", () => {
-    expect(realAccount).not.toBeNull();
-    const messages = mgr.listMessages("INBOX", realAccount!, 5);
-    expect(messages.length).toBeGreaterThan(0);
+    it("lists messages from INBOX", () => {
+      expect(realAccount).not.toBeNull();
+      const messages = mgr.listMessages("INBOX", realAccount!, 5);
+      expect(messages.length).toBeGreaterThan(0);
 
-    // Capture a real message ID for subsequent tests
-    realMessageId = messages[0].id;
+      // Capture a real message ID for subsequent tests
+      realMessageId = messages[0].id;
 
-    // Verify the real ID is numeric (critical for Number(id) defense)
-    expect(realMessageId).toMatch(/^\d+$/);
-  });
+      // Verify the real ID is numeric (critical for Number(id) defense)
+      expect(realMessageId).toMatch(/^\d+$/);
+    });
 
-  it("retrieves a message by numeric ID", () => {
-    expect(realMessageId).not.toBeNull();
-    const msg = mgr.getMessageById(realMessageId!);
-    expect(msg).not.toBeNull();
-    expect(msg!.id).toBe(realMessageId);
-  });
+    it("retrieves a message by numeric ID", () => {
+      expect(realMessageId).not.toBeNull();
+      const msg = mgr.getMessageById(realMessageId!);
+      expect(msg).not.toBeNull();
+      expect(msg!.id).toBe(realMessageId);
+    });
 
-  it("gets message content by ID", () => {
-    expect(realMessageId).not.toBeNull();
-    const content = mgr.getMessageContent(realMessageId!);
-    expect(content).not.toBeNull();
-    expect(content!.subject).toBeDefined();
-  });
+    it("gets message content by ID", () => {
+      expect(realMessageId).not.toBeNull();
+      const content = mgr.getMessageContent(realMessageId!);
+      expect(content).not.toBeNull();
+      expect(content!.subject).toBeDefined();
+    });
 
-  it("lists attachments for a message (may be empty)", () => {
-    expect(realMessageId).not.toBeNull();
-    const attachments = mgr.listAttachments(realMessageId!);
-    expect(Array.isArray(attachments)).toBe(true);
-  });
+    it("lists attachments for a message (may be empty)", () => {
+      expect(realMessageId).not.toBeNull();
+      const attachments = mgr.listAttachments(realMessageId!);
+      expect(Array.isArray(attachments)).toBe(true);
+    });
 
-  it("searches messages with date range filter", () => {
-    // This exercises the DATE_FILTER_SCHEMA → AppleScript date literal path
-    const messages = mgr.searchMessages(
-      undefined,
-      "INBOX",
-      realAccount ?? undefined,
-      5,
-      "January 1, 2025",
-      "December 31, 2026"
-    );
-    // May find 0 messages but should not error
-    expect(Array.isArray(messages)).toBe(true);
-  });
+    it("searches messages with date range filter", () => {
+      // This exercises the DATE_FILTER_SCHEMA → AppleScript date literal path
+      const messages = mgr.searchMessages(
+        undefined,
+        "INBOX",
+        realAccount ?? undefined,
+        5,
+        "January 1, 2025",
+        "December 31, 2026"
+      );
+      // May find 0 messages but should not error
+      expect(Array.isArray(messages)).toBe(true);
+    });
 
-  it("lists mailboxes for an account", () => {
-    expect(realAccount).not.toBeNull();
-    const mailboxes = mgr.listMailboxes(realAccount!);
-    expect(mailboxes.length).toBeGreaterThan(0);
-  });
+    it("lists mailboxes for an account", () => {
+      expect(realAccount).not.toBeNull();
+      const mailboxes = mgr.listMailboxes(realAccount!);
+      expect(mailboxes.length).toBeGreaterThan(0);
+    });
 
-  it("gets unread count without error", () => {
-    const count = mgr.getUnreadCount(undefined, realAccount ?? undefined);
-    expect(typeof count).toBe("number");
-    expect(count).toBeGreaterThanOrEqual(0);
-  });
+    it("gets unread count without error", () => {
+      const count = mgr.getUnreadCount(undefined, realAccount ?? undefined);
+      expect(typeof count).toBe("number");
+      expect(count).toBeGreaterThanOrEqual(0);
+    });
 
-  it("runs health check", () => {
-    const result = mgr.healthCheck();
-    expect(result).toBeDefined();
-    expect(typeof result.healthy).toBe("boolean");
-    expect(Array.isArray(result.checks)).toBe(true);
-  });
+    it("runs health check", () => {
+      const result = mgr.healthCheck();
+      expect(result).toBeDefined();
+      expect(typeof result.healthy).toBe("boolean");
+      expect(Array.isArray(result.checks)).toBe(true);
+    });
 
-  it("confirms real message IDs are safe for Number() cast", () => {
-    expect(realMessageId).not.toBeNull();
-    const num = Number(realMessageId);
-    expect(Number.isNaN(num)).toBe(false);
-    expect(Number.isFinite(num)).toBe(true);
-    expect(num).toBeGreaterThan(0);
-  });
-});
+    it("confirms real message IDs are safe for Number() cast", () => {
+      expect(realMessageId).not.toBeNull();
+      const num = Number(realMessageId);
+      expect(Number.isNaN(num)).toBe(false);
+      expect(Number.isFinite(num)).toBe(true);
+      expect(num).toBeGreaterThan(0);
+    });
+  }
+);

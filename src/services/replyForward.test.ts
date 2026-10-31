@@ -41,6 +41,36 @@ describe("extractAddresses", () => {
     expect(extractAddresses("   ")).toEqual([]);
     expect(extractAddresses("undisclosed-recipients")).toEqual([]);
   });
+
+  it.each([
+    {
+      name: "a quoted display name containing an address and comma",
+      value: '"other@example.net, Sales team" <actual@example.com>',
+      expected: ["actual@example.com"],
+    },
+    {
+      name: "a comment containing an address and comma",
+      value: "actual@example.com (Sales team, other@example.net)",
+      expected: ["actual@example.com"],
+    },
+    {
+      name: "a quoted comma in a mailbox local part",
+      value: '"last,first"@example.com',
+      expected: ['"last,first"@example.com'],
+    },
+    {
+      name: "named groups and an empty group",
+      value: "Team: Alice <alice@example.com>, bob@example.com;, undisclosed-recipients:;",
+      expected: ["alice@example.com", "bob@example.com"],
+    },
+    {
+      name: "quoted and encoded display names",
+      value: '"Last, First" <first@example.com>, =?UTF-8?Q?Jos=C3=A9?= <jose@example.com>',
+      expected: ["first@example.com", "jose@example.com"],
+    },
+  ])("extracts only mailbox addresses from $name", ({ value, expected }) => {
+    expect(extractAddresses(value)).toEqual(expected);
+  });
 });
 
 describe("parseOriginalHeaders", () => {

@@ -3,7 +3,16 @@
  * a synthetic mail store with an injected watcher and clock.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  watch as fsWatch,
+} from "fs";
+import { EventEmitter } from "events";
 import { tmpdir } from "os";
 import { spawn } from "child_process";
 import { join } from "path";
@@ -33,6 +42,13 @@ import {
   writeEmlx,
   type FixtureMessage,
 } from "@/utils/envelopeIndex.testFixture.js";
+
+// Keep the real filesystem behavior by default, including the macOS FSEvents
+// integration below. One boundary test supplies the native callback explicitly.
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return { ...actual, watch: vi.fn(actual.watch) };
+});
 
 const describeIfSqlite = sqlite ? describe : describe.skip;
 
@@ -467,6 +483,66 @@ describeIfSqlite("keeping the index current", () => {
       counts: { indexed: 1, queued: 0, partial: 0, tooLarge: 0 },
       meta: { lastWalkFiles: 1, lastFullWalk: expect.any(String) },
     });
+  });
+
+  it("adapts native filename events and watcher errors into real index updates", () => {
+    class ControlledWatcher extends EventEmitter {
+      close = vi.fn();
+      ref(): this {
+        return this;
+      }
+      unref(): this {
+        return this;
+      }
+    }
+    const native = new ControlledWatcher();
+    vi.mocked(fsWatch).mockClear();
+    vi.mocked(fsWatch).mockImplementationOnce((...args) => {
+      const listener = args.at(-1);
+      if (typeof listener !== "function") throw new Error("Missing native watch callback");
+      native.on("change", listener);
+      return native;
+    });
+    vi.useFakeTimers();
+    // Exercise fsEventsWatch itself, not the higher-level injected WatchFn.
+    resetBodyIndexForTests();
+    startBackgroundIndexing();
+    runToIdle();
+    expect(fsWatch).toHaveBeenCalledExactlyOnceWith(
+      v10,
+      { recursive: true, persistent: false },
+      expect.any(Function)
+    );
+    expect(find("harbour")).toEqual({ ids: [1], partial: false });
+
+    const added = writeEmlx(v10, "ACC", "INBOX", 2, plainMessage("b", "buffer filename"));
+    native.emit("change", "rename", Buffer.from(rel(added)));
+    expect(find("buffer filename")).toEqual({ ids: [2], partial: false });
+
+    const changed = writeEmlx(v10, "ACC", "INBOX", 2, plainMessage("b", "string filename changed"));
+    native.emit("change", "change", rel(changed));
+    expect(find("string filename changed")).toEqual({ ids: [2], partial: false });
+    expect(find("buffer filename")).toEqual({ ids: [], partial: false });
+
+    writeEmlx(v10, "ACC", "INBOX", 3, plainMessage("c", "unnamed event recovery"));
+    native.emit("change", "rename", null);
+    runToIdle();
+    expect(find("unnamed event recovery")).toEqual({ ids: [3], partial: false });
+
+    writeEmlx(v10, "ACC", "INBOX", 4, plainMessage("d", "watcher failure recovery"));
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      native.emit("error", new Error("synthetic native watcher failure"));
+    } finally {
+      errorLog.mockRestore();
+    }
+    expect(native.close).toHaveBeenCalledOnce();
+    expect(isBodyIndexWatching()).toBe(false);
+    runToIdle();
+    expect(find("watcher failure recovery")).toEqual({ ids: [4], partial: false });
+    expect(bodyIndexStatus().lastError).toContain("synthetic native watcher failure");
+    stopBodyIndexing();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   // Real FSEvents, not a fake: proves the default watcher sees Mail-style writes.

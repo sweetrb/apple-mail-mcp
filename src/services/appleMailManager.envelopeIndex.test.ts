@@ -437,6 +437,41 @@ describeIfSqlite("searchMessagesWithDiagnostics — Envelope Index backend", () 
     expect(h.calls.some((script) => script.includes("whose id is"))).toBe(false);
   });
 
+  it("reads a scoped label member from its physical file without a message scan", () => {
+    process.env.APPLE_MAIL_MCP_ENVELOPE_INDEX = "1";
+    const result = mgr.getMessageContent("11", false, { account: "Google", mailbox: "INBOX" });
+    expect(result?.plainText).toContain("Booking ref QX7Z");
+    expect(h.calls.some((script) => script.includes("whose id is"))).toBe(false);
+  });
+
+  it("keeps the disk fast path for a matching account-only scope", () => {
+    process.env.APPLE_MAIL_MCP_ENVELOPE_INDEX = "1";
+    expect(mgr.getMessageContent("11", false, { account: "Google" })?.plainText).toContain(
+      "Booking ref QX7Z"
+    );
+    expect(h.calls.some((script) => script.includes("whose id is"))).toBe(false);
+  });
+
+  it.each([
+    { account: "Work", mailbox: "Inbox" },
+    { account: "Google", mailbox: "Unknown mailbox" },
+  ])("does not return an indexed body outside ordinary explicit scope %j", (scope) => {
+    process.env.APPLE_MAIL_MCP_ENVELOPE_INDEX = "1";
+    const result = mgr.getMessageContent("11", false, scope);
+    expect(result).toBeNull();
+    expect(h.calls.some((script) => script.includes("whose id is"))).toBe(true);
+    expect(mgr.consumeLastMessageLookupError()).toContain(scope.account);
+  });
+
+  it("uses only the scoped AppleScript lookup when the index account id is unavailable", () => {
+    process.env.APPLE_MAIL_MCP_ENVELOPE_INDEX = "1";
+    h.idLookupFails = true;
+    expect(mgr.getMessageContent("11", false, { account: "Google", mailbox: "INBOX" })).toBeNull();
+    const lookup = h.calls.find((script) => script.includes("whose id is"));
+    expect(lookup).toContain('if (name of _scopeAccount) is "Google"');
+    expect(lookup).not.toContain("repeat with acct in every account");
+  });
+
   it("does not use an index match from another mailbox for a strict compose read", () => {
     process.env.APPLE_MAIL_MCP_ENVELOPE_INDEX = "1";
     const result = mgr.getMessageContent(

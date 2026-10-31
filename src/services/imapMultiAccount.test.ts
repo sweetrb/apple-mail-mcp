@@ -87,28 +87,67 @@ describe("dedupKey", () => {
     expect(dedupKey(row({ messageId: "<ABC@host>" }))).toBe("mid:abc@host");
   });
 
-  it("falls back to subject|sender|dateEpoch when no Message-ID", () => {
-    const k = dedupKey(row());
-    expect(k.startsWith("k:")).toBe(true);
-    // Re/Fwd prefixes are normalized away → same key.
-    expect(dedupKey(row({ subject: "Re: Hello" }))).toBe(k);
-    expect(dedupKey(row({ subject: "FWD: Hello" }))).toBe(k);
+  it("uses the source id when no Message-ID is available", () => {
+    expect(dedupKey(row())).toBe("id:imap:abc");
+    expect(dedupKey(row({ id: "42", account: "Work", mailbox: "Inbox" }))).toBe(
+      'id:["Work","Inbox","42"]'
+    );
   });
 
-  it("differs when sender or date differs", () => {
-    expect(dedupKey(row({ sender: "Bob <bob@x.com>" }))).not.toBe(dedupKey(row()));
-    expect(dedupKey(row({ dateReceived: "2026-06-02T00:00:00.000Z" }))).not.toBe(dedupKey(row()));
+  it("preserves source identity across metadata changes", () => {
+    expect(dedupKey(row({ sender: "Bob <bob@x.com>" }))).toBe(dedupKey(row()));
+    expect(dedupKey(row({ dateReceived: "2026-06-02T00:00:00.000Z" }))).toBe(dedupKey(row()));
+  });
+
+  it("keeps numeric ids scoped to their exact account and mailbox", () => {
+    const source = row({ id: "42", account: "Work", mailbox: "Inbox" });
+    expect(dedupKey(source)).not.toBe(dedupKey({ ...source, account: "Personal" }));
+    expect(dedupKey(source)).not.toBe(dedupKey({ ...source, mailbox: "Archive" }));
+  });
+
+  it("keeps unidentifiable rows distinct rather than guessing from their text", () => {
+    const first = row({ id: undefined });
+    const second = { ...first };
+    expect(dedupKey(first)).not.toBe(dedupKey(second));
+    const unscoped = row({ id: "42" });
+    expect(dedupKey(unscoped)).not.toBe(dedupKey({ ...unscoped }));
   });
 });
 
 describe("mergeMessages", () => {
-  it("dedups a message present in BOTH IMAP and AppleScript, preferring the IMAP copy", () => {
-    // Same subject/sender/date in both backends, but distinct ids: IMAP id wins.
-    const imapRow = row({ id: "imap:WIN" });
-    const appleRow = row({ id: "12345" });
+  it("prefers the IMAP copy when both backends provide the same Message-ID", () => {
+    const imapRow = row({ id: "imap:WIN", messageId: "<same@host>" });
+    const appleRow = row({ id: "12345", messageId: "<same@host>" });
     const merged = mergeMessages([imapRow], [appleRow], 50);
     expect(merged).toHaveLength(1);
     expect(merged[0].id).toBe("imap:WIN");
+  });
+
+  it("preserves different source ids despite identical subjects, senders and timestamps", () => {
+    const first = row({ id: "41", account: "Work", mailbox: "Inbox" });
+    const second = { ...first, id: "42" };
+    const reply = { ...first, id: "43", subject: "Re: Hello" };
+    expect(mergeMessages([], [first, second, reply], 50)).toEqual([first, second, reply]);
+    expect(mergeMessages([], [first, second, reply], 1, 1)).toEqual([second]);
+  });
+
+  it("deduplicates repeated observations of a scoped source id", () => {
+    const first = row({ id: "41", account: "Work", mailbox: "Inbox" });
+    const retry = { ...first, isRead: true };
+    const other = { ...first, id: "42" };
+    expect(mergeMessages([retry, other], [first], 50)).toEqual([retry, other]);
+  });
+
+  it("retains cross-backend rows when only one side supplies Message-ID", () => {
+    const imapRow = row({ id: "imap:WIN", messageId: "<same@host>" });
+    const appleRow = row({ id: "12345", account: "Work", mailbox: "Inbox" });
+    expect(mergeMessages([imapRow], [appleRow], 50)).toEqual([imapRow, appleRow]);
+  });
+
+  it("keeps anonymous rows without inventing a shared identity", () => {
+    const first = row({ id: undefined });
+    const second = { ...first };
+    expect(mergeMessages([], [first, second], 50)).toEqual([first, second]);
   });
 
   it("keeps distinct messages and sorts newest-first, applying the limit", () => {
@@ -125,6 +164,15 @@ describe("mergeMessages", () => {
     const merged = mergeMessages([fromA, fromB], [], 50);
     expect(merged).toHaveLength(1);
     expect(merged[0].id).toBe("imap:A");
+  });
+
+  it("applies the global offset after deduplication and chronological sorting", () => {
+    const newest = row({ id: "imap:new", messageId: "<same@host>", dateReceived: "2026-06-03" });
+    const duplicate = row({ ...newest, id: "imap:duplicate" });
+    const middle = row({ id: "10", subject: "Middle", dateReceived: "2026-06-02" });
+    const oldest = row({ id: "imap:old", subject: "Old", dateReceived: "2026-06-01" });
+    expect(mergeMessages([oldest, duplicate, newest], [middle], 1, 1)).toEqual([middle]);
+    expect(mergeMessages([oldest, duplicate, newest], [middle], 1, 2)).toEqual([oldest]);
   });
 });
 
@@ -279,7 +327,7 @@ describe("isAccountCoveredByImap / partitionAccountsForCounts (no double-count)"
     // The maintainer's worst case: every Mail account is IMAP-configured. The
     // message-list sites iterate appleScriptOnly to drive the AppleScript scan,
     // so an empty partition here means ZERO AppleScript work and no reliance on
-    // the composite dedup.
+    // cross-backend dedup.
     const allImap: Account[] = [accounts[0], accounts[1]]; // Personal + Work, both covered
     const { imapCovered, appleScriptOnly } = partitionAccountsForCounts(allImap, [cfgA, cfgB]);
     expect(appleScriptOnly).toEqual([]);

@@ -22,7 +22,7 @@ export interface IdleClient {
   logout(): Promise<void>;
 }
 
-export type IdleConnect = (cfg: ImapConfig) => Promise<IdleClient>;
+export type IdleConnect = (cfg: ImapConfig, signal: AbortSignal) => Promise<IdleClient>;
 
 export interface NewMailEvent {
   account: string;
@@ -30,7 +30,8 @@ export interface NewMailEvent {
   prevCount: number;
 }
 
-const defaultIdleConnect: IdleConnect = async (cfg) => {
+const defaultIdleConnect: IdleConnect = async (cfg, signal) => {
+  signal.throwIfAborted();
   const client = new ImapFlow(buildImapConnectionOptions(cfg));
   // ImapFlow is an EventEmitter: an 'error' with no listener (e.g. a socket
   // ETIMEOUT during connect, before watch() attaches its handler) is an
@@ -38,9 +39,24 @@ const defaultIdleConnect: IdleConnect = async (cfg) => {
   // before connect() so a connection error rejects the promise instead — the
   // caller (watch) catches that and schedules a reconnect.
   client.on("error", () => {});
+  // A connection waiting for a greeting/authentication has not reached the
+  // watcher's client map yet. Stop it explicitly when its lifecycle ends.
+  let abortConnect!: () => void;
+  const aborted = new Promise<never>((_, reject) => {
+    abortConnect = () => {
+      client.close();
+      // close() can run before ImapFlow installs its connect rejection
+      // handler. Settle our wait even when its connect promise stays pending.
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abortConnect, { once: true });
+  });
   try {
-    await client.connect();
+    await Promise.race([client.connect(), aborted]);
+    signal.throwIfAborted();
   } catch (error) {
+    client.close();
+    if (signal.aborted) throw error;
     if (!cfg.secure && !cfg.allowPlaintext) {
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -49,6 +65,8 @@ const defaultIdleConnect: IdleConnect = async (cfg) => {
       );
     }
     throw error;
+  } finally {
+    signal.removeEventListener("abort", abortConnect);
   }
   return client as unknown as IdleClient;
 };
@@ -63,7 +81,7 @@ export class ImapIdleWatcher {
   private readonly polls = new Map<string, NodeJS.Timeout>();
   // Per-account baseline message count; growth past it = new mail.
   private readonly lastCount = new Map<string, number>();
-  private stopped = false;
+  private lifecycle: AbortController | undefined;
 
   constructor(
     private readonly opts: {
@@ -84,8 +102,14 @@ export class ImapIdleWatcher {
 
   /** Begin watching every configured account. Resolves once watches are kicked off. */
   async start(): Promise<void> {
-    this.stopped = false;
-    await Promise.all(this.opts.configs.map((cfg) => this.watch(cfg)));
+    if (this.lifecycle) return;
+    const lifecycle = new AbortController();
+    this.lifecycle = lifecycle;
+    await Promise.all(this.opts.configs.map((cfg) => this.watch(cfg, lifecycle.signal)));
+  }
+
+  private isCurrent(label: string, client: IdleClient, signal: AbortSignal): boolean {
+    return !signal.aborted && this.clients.get(label) === client;
   }
 
   /**
@@ -102,47 +126,60 @@ export class ImapIdleWatcher {
     this.lastCount.set(label, count);
   }
 
-  private async watch(cfg: ImapConfig): Promise<void> {
-    if (this.stopped) return;
+  private async watch(cfg: ImapConfig, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
     const label = cfg.accountLabel;
+    let client: IdleClient | undefined;
     try {
-      const client = await this.connect(cfg);
+      client = await this.connect(cfg, signal);
+      if (signal.aborted) {
+        await client.logout().catch(() => undefined);
+        return;
+      }
       this.clients.set(label, client);
+      const current = client;
       // Real-time path: ImapFlow emits `exists` while idling (where the server
-      // pushes it). `count` is the new total.
+      // pushes it). Ignore late events from a stopped or replaced connection.
       client.on("exists", (d) => {
-        if (d) this.observe(label, d.count);
+        if (d && this.isCurrent(label, current, signal)) this.observe(label, d.count);
       });
-      client.on("error", () => this.scheduleReconnect(cfg));
-      client.on("close", () => this.scheduleReconnect(cfg));
+      const reconnect = () => {
+        if (this.isCurrent(label, current, signal)) this.scheduleReconnect(cfg, signal);
+      };
+      client.on("error", reconnect);
+      client.on("close", reconnect);
       const mb = await client.mailboxOpen(this.mailbox); // keeps mailbox open / idling
+      if (!this.isCurrent(label, client, signal)) return;
       this.lastCount.set(label, mb.exists); // baseline at start of watch
-      this.startPoll(cfg);
+      this.startPoll(cfg, client, signal);
     } catch {
-      this.scheduleReconnect(cfg);
+      if (!client || this.isCurrent(label, client, signal)) this.scheduleReconnect(cfg, signal);
     }
   }
 
   /** Polling fallback: re-check the count for servers that don't push EXISTS. */
-  private startPoll(cfg: ImapConfig): void {
+  private startPoll(cfg: ImapConfig, client: IdleClient, signal: AbortSignal): void {
     if (this.pollMs <= 0) return;
     const label = cfg.accountLabel;
     const existing = this.polls.get(label);
     if (existing) clearInterval(existing);
     const p = setInterval(() => {
-      const client = this.clients.get(label);
-      if (!client) return;
+      if (!this.isCurrent(label, client, signal)) return;
       void client
         .mailboxOpen(this.mailbox)
-        .then((mb) => this.observe(label, mb.exists))
-        .catch(() => this.scheduleReconnect(cfg));
+        .then((mb) => {
+          if (this.isCurrent(label, client, signal)) this.observe(label, mb.exists);
+        })
+        .catch(() => {
+          if (this.isCurrent(label, client, signal)) this.scheduleReconnect(cfg, signal);
+        });
     }, this.pollMs);
     p.unref?.();
     this.polls.set(label, p);
   }
 
-  private scheduleReconnect(cfg: ImapConfig): void {
-    if (this.stopped) return;
+  private scheduleReconnect(cfg: ImapConfig, signal: AbortSignal): void {
+    if (signal.aborted) return;
     const label = cfg.accountLabel;
     if (this.timers.has(label)) return; // a reconnect is already pending
     const poll = this.polls.get(label);
@@ -155,7 +192,7 @@ export class ImapIdleWatcher {
     if (old) void old.logout().catch(() => undefined);
     const t = setTimeout(() => {
       this.timers.delete(label);
-      void this.watch(cfg);
+      void this.watch(cfg, signal);
     }, this.reconnectMs);
     t.unref?.();
     this.timers.set(label, t);
@@ -163,11 +200,14 @@ export class ImapIdleWatcher {
 
   /** Stop all watches and close connections. */
   async stop(): Promise<void> {
-    this.stopped = true;
+    const lifecycle = this.lifecycle;
+    this.lifecycle = undefined;
+    lifecycle?.abort();
     for (const t of this.timers.values()) clearTimeout(t);
     for (const p of this.polls.values()) clearInterval(p);
     this.timers.clear();
     this.polls.clear();
+    this.lastCount.clear();
     const clients = [...this.clients.values()];
     this.clients.clear();
     await Promise.all(clients.map((c) => c.logout().catch(() => undefined)));

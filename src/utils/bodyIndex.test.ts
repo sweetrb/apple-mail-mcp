@@ -590,6 +590,55 @@ describeIfSqlite("body search through the Envelope Index (attached read-only)", 
     expect(r.ok && r.rows.map((m) => m.id)).toEqual([2, 1, 3]);
   });
 
+  it("reports incomplete coverage when a bounded body prefix omits the search term", () => {
+    writeEmlx(
+      store,
+      "ACC",
+      "Archive",
+      3,
+      plainMessage("Old", "parcel ".repeat(15_000) + " uniquelyfindabletail")
+    );
+    buildAll(w);
+    const r = search({
+      mailbox: "Archive",
+      body: { text: "uniquelyfindabletail", indexFile: path },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.rows).toEqual([]);
+    expect(isScopeComplete(r.bodyCoverage!)).toBe(false);
+    expect(describeScopeGap(r.bodyCoverage!)).toContain("1 over the 100,000-character body cap");
+    expect(w.state().counts).toMatchObject({ truncated: 1 });
+    // Prefix matches remain useful, but never imply that the tail was searched.
+    const prefix = search({ mailbox: "Archive" });
+    expect(prefix.ok && prefix.rows.map((m) => m.id)).toEqual([3]);
+    expect(prefix.ok && isScopeComplete(prefix.bodyCoverage!)).toBe(false);
+    const other = search({ from: "shop@", mailbox: "INBOX" });
+    expect(other.ok && isScopeComplete(other.bodyCoverage!)).toBe(true);
+  });
+
+  it("rebuilds old complete markers before reindexing truncated bodies", () => {
+    writeEmlx(
+      store,
+      "ACC",
+      "Archive",
+      3,
+      plainMessage("Old", "parcel ".repeat(15_000) + " uniquelyfindabletail")
+    );
+    buildAll(w);
+    // Old schema v3 called a silently truncated prefix fully indexed.
+    w.db.exec("UPDATE docs SET state = 1 WHERE id = 3; PRAGMA user_version = 3");
+    w.close();
+    w = openWriter(store, path);
+    expect(w.rebuilt).toMatch(/schema v3/);
+    const during = search({ mailbox: "Archive" });
+    expect(during.ok && isScopeComplete(during.bodyCoverage!)).toBe(false);
+    buildAll(w);
+    const after = search({ mailbox: "Archive" });
+    expect(after.ok && isScopeComplete(after.bodyCoverage!)).toBe(false);
+    expect(w.state().counts).toMatchObject({ truncated: 1 });
+  });
+
   it("combines the body match with header filters", () => {
     buildAll(w);
     const r = search({ from: "shop@", mailbox: "INBOX" });

@@ -61,6 +61,7 @@ jobs:
     # `release` job below, which runs no dependency code.
     permissions:
       contents: read
+      actions: read
       id-token: write
     outputs:
       sha: ${{ steps.pin.outputs.sha }}
@@ -90,11 +91,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
-            if ! git merge-base --is-ancestor "$HEAD_SHA" origin/main; then
-              echo "::error::CI-validated commit ${HEAD_SHA} is not on origin/main; refusing to publish it."
-              exit 1
-            fi
             git checkout --quiet --detach "$HEAD_SHA"
+          fi
+          CANDIDATE_SHA=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main; then
+            echo "::error::Candidate ${CANDIDATE_SHA} is not on origin/main; refusing to publish it."
+            exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -107,6 +109,12 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
           cache: "pnpm"
+
+      - name: Verify full CI for the pinned commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.pin.outputs.sha }}
+        run: node .github/scripts/verify-publish-ci.mjs
 
       - name: Check if this exact version is already published
         id: check
@@ -143,6 +151,14 @@ jobs:
       - name: Build
         if: steps.check.outputs.skip == 'false'
         run: pnpm run build
+
+      # Validate the exact archive before publishing any npm bytes, including
+      # manual/recovery paths. The release job consumes this same artifact.
+      - name: Verify and package the standalone Codex plugin
+        run: |
+          node --test test/package-codex-plugin.test.mjs
+          VERSION=$(node -p "require('./package.json').version")
+          node scripts/package-codex-plugin.mjs "$RUNNER_TEMP/apple-mail-codex-plugin-v$VERSION.tar.gz"
 
       - name: Publish to npm (pnpm + OIDC trusted publishing)
         if: steps.check.outputs.skip == 'false'
@@ -188,14 +204,6 @@ jobs:
       - name: Skip publish (version already published)
         if: steps.check.outputs.skip == 'true'
         run: echo "Version ${{ steps.check.outputs.local }} is already published. Skipping."
-
-      # Package only in this read-only job, at the same pinned commit used for
-      # npm. The write-token job consumes this run's immutable SHA-named artifact.
-      - name: Verify and package the standalone Codex plugin
-        run: |
-          node --test test/package-codex-plugin.test.mjs
-          VERSION=$(node -p "require('./package.json').version")
-          node scripts/package-codex-plugin.mjs "$RUNNER_TEMP/apple-mail-codex-plugin-v$VERSION.tar.gz"
 
       - name: Upload the release plugin artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

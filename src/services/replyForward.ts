@@ -11,6 +11,7 @@
  * subject-prefix, and quoting rules are unit-testable without a live SMTP server.
  */
 import type { SmtpSendOptions } from "@/services/smtpMailer.js";
+import addressparser from "nodemailer/lib/addressparser/index.js";
 
 /** The subset of an original message's headers we need to reply/forward. */
 export interface OriginalHeaders {
@@ -34,18 +35,15 @@ export interface OriginalHeaders {
 
 /**
  * Pull bare email addresses out of a header value such as
- * `"Alice <a@x.com>, bob@y.com"` → `["a@x.com", "bob@y.com"]`. Splits on commas
- * (address lists are comma-separated) and unwraps `<...>` when present. Anything
- * without an `@` is dropped, so group syntax / junk is ignored.
+ * `"Alice <a@x.com>, bob@y.com"` → `["a@x.com", "bob@y.com"]`. Parse the full
+ * address list so commas inside quoted names, comments, or mailbox local parts
+ * cannot become recipient separators. Flatten groups to their member mailboxes;
+ * names, comments, and empty groups never become recipients.
  */
 export function extractAddresses(headerValue: string): string[] {
   if (!headerValue.trim()) return [];
-  return headerValue
-    .split(",")
-    .map((part) => {
-      const angle = part.match(/<([^>]+)>/);
-      return (angle ? angle[1] : part).trim();
-    })
+  return addressparser(headerValue, { flatten: true })
+    .map(({ address }) => address.trim())
     .filter((addr) => addr.includes("@"));
 }
 
@@ -159,6 +157,17 @@ export function buildReplyOptions(args: {
       )
     );
     cc = extra.length ? extra : undefined;
+  }
+
+  // Nodemailer's MIME composer replaces these characters with spaces, even
+  // inside a quoted local part. Refuse before submission instead of changing
+  // the recipient's mailbox. Check only actual delivery recipients: a forward's
+  // attribution and participants omitted from a reply are not being addressed.
+  // eslint-disable-next-line no-control-regex -- intentionally reject characters the composer rewrites
+  if ([...to, ...(cc ?? [])].some((address) => /[\x00-\x1F\x7F<>]/.test(address))) {
+    throw new Error(
+      "The original message contains a reply recipient that SMTP composition cannot preserve. Reply composition was stopped to avoid changing its address."
+    );
   }
 
   const references = dedupe(

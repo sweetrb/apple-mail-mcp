@@ -18,6 +18,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createInterface } from "node:readline";
+import { createServer } from "node:net";
+import { once } from "node:events";
 import { deflateSync } from "node:zlib";
 import { packageCodexPlugin } from "../scripts/package-codex-plugin.mjs";
 
@@ -156,6 +158,53 @@ test("produces a deterministic, self-contained archive with unchanged source lau
     first.version
   );
   assert.equal(responses.find((response) => response.id === 2).result.tools.length, 52);
+});
+
+test("packaged server stops pending IDLE connections when its MCP client disconnects", async (t) => {
+  const dir = fixture(t);
+  const archive = packageCodexPlugin({ root, output: join(dir, "idle.tar.gz") });
+  const extract = join(dir, "extracted");
+  mkdirSync(extract);
+  const untar = spawnSync("tar", ["-xzf", archive.output, "-C", extract], { encoding: "utf8" });
+  assert.equal(untar.status, 0, untar.stderr);
+
+  // This local fixture deliberately withholds the IMAP greeting. It creates no
+  // mailbox, reads no mail, and needs neither provider credentials nor macOS.
+  const sockets = new Set();
+  const provider = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  let child;
+  t.after(async () => {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => provider.close(resolve));
+  });
+  provider.listen(0, "127.0.0.1");
+  await once(provider, "listening");
+  const connected = once(provider, "connection", { signal: AbortSignal.timeout(10000) });
+  child = spawn(process.execPath, [join(extract, "server/index.js")], {
+    cwd: extract,
+    env: {
+      PATH: process.env.PATH,
+      APPLE_MAIL_MCP_CONFIG_FILE: join(dir, "no-config.json"),
+      APPLE_MAIL_MCP_IMAP_IDLE: "1",
+      APPLE_MAIL_MCP_IMAP_HOST: "127.0.0.1",
+      APPLE_MAIL_MCP_IMAP_PORT: String(provider.address().port),
+      APPLE_MAIL_MCP_IMAP_USER: "fixture@example.test",
+      APPLE_MAIL_MCP_IMAP_PASSWORD: "synthetic",
+    },
+  });
+  child.stdout.resume();
+  child.stderr.resume();
+  const [socket] = await connected;
+  const closed = once(socket, "close", { signal: AbortSignal.timeout(5000) });
+  const exited = once(child, "exit", { signal: AbortSignal.timeout(5000) });
+  child.stdin.end();
+  const [[code, signal]] = await Promise.all([exited, closed]);
+  assert.equal(signal, null, "MCP server must terminate on EOF without being killed");
+  assert.equal(code, 0, "MCP server must exit cleanly while IDLE is still connecting");
 });
 
 test("optionally bundles local artwork and changes only generated manifest icon fields", (t) => {

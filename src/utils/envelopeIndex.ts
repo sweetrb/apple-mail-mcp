@@ -536,6 +536,8 @@ export function readMessageFromStore(
   id: number,
   opts: {
     includeHtml?: boolean;
+    /** Explicit account and optional mailbox/label membership to verify before reading a file. */
+    scope?: { accountId: string; mailbox?: string };
     store?: { versionDir: string; indexPath: string } | null;
     sqlite?: SqliteModule | null;
   } = {}
@@ -558,6 +560,22 @@ export function readMessageFromStore(
     if ("mismatch" in checked)
       return { reason: `unexpected Envelope Index schema: ${checked.mismatch}` };
     features = checked;
+    let membership = "";
+    const parameters: (number | string)[] = [id];
+    if (opts.scope?.mailbox) {
+      const mailboxes = resolveMailboxIds(db, opts.scope.accountId, opts.scope.mailbox);
+      if ("reason" in mailboxes) return mailboxes;
+      const placeholders = mailboxes.ids.map(() => "?").join(", ");
+      const clauses = [`m.mailbox IN (${placeholders})`];
+      parameters.push(...mailboxes.ids);
+      if (features.labels) {
+        clauses.push(
+          `EXISTS (SELECT 1 FROM labels l WHERE l.message_id = m.ROWID AND l.mailbox_id IN (${placeholders}))`
+        );
+        parameters.push(...mailboxes.ids);
+      }
+      membership = ` AND (${clauses.join(" OR ")})`;
+    }
     row = db
       .prepare(
         `SELECT ${features.subjectPrefix ? "COALESCE(m.subject_prefix, '') || " : ""}COALESCE(s.subject, '') AS subject,
@@ -567,9 +585,9 @@ export function readMessageFromStore(
          FROM messages m
          LEFT JOIN subjects s ON m.subject = s.ROWID
          LEFT JOIN mailboxes mb ON m.mailbox = mb.ROWID
-         WHERE m.ROWID = ?`
+         WHERE m.ROWID = ?${membership}`
       )
-      .get(id);
+      .get(...parameters);
   } catch (err) {
     return {
       reason: `Envelope Index query failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -581,10 +599,19 @@ export function readMessageFromStore(
       /* ignore close errors */
     }
   }
-  if (!row) return { reason: `message ${id} not in the Envelope Index` };
+  if (!row) {
+    return {
+      reason: opts.scope
+        ? `message ${id} not in requested index scope ${opts.scope.accountId} / ${opts.scope.mailbox ?? "*"}`
+        : `message ${id} not in the Envelope Index`,
+    };
+  }
   if (Number(row.deleted) === 1) return { reason: `message ${id} is deleted` };
   const location = parseMailboxUrl(String(row.url ?? ""));
   if (!location) return { reason: `message ${id} has no mailbox URL` };
+  if (opts.scope && location.accountId !== opts.scope.accountId) {
+    return { reason: `message ${id} belongs to a different indexed account` };
+  }
 
   for (const path of emlxCandidates(store.versionDir, location.accountId, location.path, id)) {
     let bytes: Buffer;

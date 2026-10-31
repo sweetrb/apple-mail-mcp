@@ -143,74 +143,86 @@ describe("smart mailbox — pure logic", () => {
   });
 });
 
-describe("smart mailbox — real plist round-trips (preserve date/data, backup, atomic)", () => {
-  let dir: string;
-  let plist: string;
-  let mgr: AppleMailManager;
+// These fixtures execute Apple's actual plist tools. Keep them mandatory on
+// macOS CI, and explicitly unavailable elsewhere rather than failing before
+// the code under test can run. The pure-logic cases above run on every OS.
+describe.skipIf(process.platform !== "darwin")(
+  "smart mailbox — real plist round-trips (preserve date/data, backup, atomic)",
+  () => {
+    let dir: string;
+    let plist: string;
+    let mgr: AppleMailManager;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "smartmbox-"));
-    plist = makeFixture(dir);
-    mgr = new AppleMailManager();
-  });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "smartmbox-"));
+      plist = makeFixture(dir);
+      mgr = new AppleMailManager();
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
 
-  it("reads a date/data plist via the PlistBuddy fallback (json converter can't)", () => {
-    // The json fast-path fails on this fixture...
-    const j = spawnSync("plutil", ["-convert", "json", "-o", "-", plist], { encoding: "utf8" });
-    expect(j.status).not.toBe(0);
-    // ...but the manager still enumerates the entry structurally.
-    const entries = (mgr as any).readSmartMailboxEntries(plist);
-    expect(entries).toHaveLength(1);
-    expect(entries[0].name).toBe("Existing Date Rule");
-  });
+    it("reads a date/data plist via the PlistBuddy fallback (json converter can't)", () => {
+      // The json fast-path fails on this fixture...
+      const j = spawnSync("plutil", ["-convert", "json", "-o", "-", plist], { encoding: "utf8" });
+      expect(j.status).not.toBe(0);
+      // ...but the manager still enumerates the entry structurally.
+      const entries = (mgr as any).readSmartMailboxEntries(plist);
+      expect(entries).toHaveLength(1);
+      expect(entries[0].name).toBe("Existing Date Rule");
+    });
 
-  it("createSmartMailboxAtPath appends without touching the existing date/data entry", () => {
-    const r = (mgr as any).createSmartMailboxAtPath(plist, "NL: Acme", "news@acme.com", "", "");
-    expect(r).toEqual({ created: true, alreadyExisted: false });
+    it("createSmartMailboxAtPath appends without touching the existing date/data entry", () => {
+      const r = (mgr as any).createSmartMailboxAtPath(plist, "NL: Acme", "news@acme.com", "", "");
+      expect(r).toEqual({ created: true, alreadyExisted: false });
 
-    // Existing entry's <date> and <data> survived verbatim.
-    const out = xml1(plist);
-    expect(out).toContain("<date>2024-01-15T00:00:00Z</date>");
-    expect(out).toContain("SGVsbG8gV29ybGQ=");
-    expect(out).toContain("Existing Date Rule");
+      // Existing entry's <date> and <data> survived verbatim.
+      const out = xml1(plist);
+      expect(out).toContain("<date>2024-01-15T00:00:00Z</date>");
+      expect(out).toContain("SGVsbG8gV29ybGQ=");
+      expect(out).toContain("Existing Date Rule");
 
-    // Both entries present, still a valid plist, and a backup was written.
-    const names = (mgr as any).readSmartMailboxEntries(plist).map((e: any) => e.name);
-    expect(names).toEqual(["Existing Date Rule", "NL: Acme"]);
-    expect(spawnSync("plutil", ["-lint", plist], { encoding: "utf8" }).status).toBe(0);
-    expect(existsSync(`${plist}.bak`)).toBe(true);
-    // Backup holds the pre-write state (single original entry).
-    expect(readFileSync(`${plist}.bak`)).not.toBeNull();
-    expect((mgr as any).readSmartMailboxEntries(`${plist}.bak`)).toHaveLength(1);
-  });
+      // Both entries present, still a valid plist, and a backup was written.
+      const names = (mgr as any).readSmartMailboxEntries(plist).map((e: any) => e.name);
+      expect(names).toEqual(["Existing Date Rule", "NL: Acme"]);
+      expect(spawnSync("plutil", ["-lint", plist], { encoding: "utf8" }).status).toBe(0);
+      expect(existsSync(`${plist}.bak`)).toBe(true);
+      // Backup holds the pre-write state (single original entry).
+      expect(readFileSync(`${plist}.bak`)).not.toBeNull();
+      expect((mgr as any).readSmartMailboxEntries(`${plist}.bak`)).toHaveLength(1);
+    });
 
-  it("createSmartMailboxAtPath is idempotent on an existing name", () => {
-    (mgr as any).createSmartMailboxAtPath(plist, "NL: Acme", "news@acme.com", "", "");
-    const again = (mgr as any).createSmartMailboxAtPath(plist, "NL: Acme", "news@acme.com", "", "");
-    expect(again).toEqual({ created: false, alreadyExisted: true });
-    expect((mgr as any).readSmartMailboxEntries(plist)).toHaveLength(2);
-  });
+    it("createSmartMailboxAtPath is idempotent on an existing name", () => {
+      (mgr as any).createSmartMailboxAtPath(plist, "NL: Acme", "news@acme.com", "", "");
+      const again = (mgr as any).createSmartMailboxAtPath(
+        plist,
+        "NL: Acme",
+        "news@acme.com",
+        "",
+        ""
+      );
+      expect(again).toEqual({ created: false, alreadyExisted: true });
+      expect((mgr as any).readSmartMailboxEntries(plist)).toHaveLength(2);
+    });
 
-  it("deleteSmartMailboxAtPath removes only the named entry and preserves the rest", () => {
-    (mgr as any).createSmartMailboxAtPath(plist, "NL: Acme", "news@acme.com", "", "");
-    const del = (mgr as any).deleteSmartMailboxAtPath(plist, "NL: Acme");
-    expect(del).toEqual({ deleted: true });
+    it("deleteSmartMailboxAtPath removes only the named entry and preserves the rest", () => {
+      (mgr as any).createSmartMailboxAtPath(plist, "NL: Acme", "news@acme.com", "", "");
+      const del = (mgr as any).deleteSmartMailboxAtPath(plist, "NL: Acme");
+      expect(del).toEqual({ deleted: true });
 
-    const names = (mgr as any).readSmartMailboxEntries(plist).map((e: any) => e.name);
-    expect(names).toEqual(["Existing Date Rule"]);
-    // The surviving entry still has its date/data intact.
-    const out = xml1(plist);
-    expect(out).toContain("<date>2024-01-15T00:00:00Z</date>");
-    expect(out).toContain("SGVsbG8gV29ybGQ=");
-  });
+      const names = (mgr as any).readSmartMailboxEntries(plist).map((e: any) => e.name);
+      expect(names).toEqual(["Existing Date Rule"]);
+      // The surviving entry still has its date/data intact.
+      const out = xml1(plist);
+      expect(out).toContain("<date>2024-01-15T00:00:00Z</date>");
+      expect(out).toContain("SGVsbG8gV29ybGQ=");
+    });
 
-  it("deleteSmartMailboxAtPath reports not-found without mutating the file", () => {
-    const before = xml1(plist);
-    const del = (mgr as any).deleteSmartMailboxAtPath(plist, "Does Not Exist");
-    expect(del.deleted).toBe(false);
-    expect(xml1(plist)).toBe(before);
-  });
-});
+    it("deleteSmartMailboxAtPath reports not-found without mutating the file", () => {
+      const before = xml1(plist);
+      const del = (mgr as any).deleteSmartMailboxAtPath(plist, "Does Not Exist");
+      expect(del.deleted).toBe(false);
+      expect(xml1(plist)).toBe(before);
+    });
+  }
+);

@@ -44,6 +44,7 @@ export function renderNativeAuthoredBody(body: string): string {
 const NATIVE_EDITOR_SCRIPT = String.raw`
 ObjC.import('AppKit');
 ObjC.import('ApplicationServices');
+ObjC.import('CoreGraphics');
 ObjC.import('CoreServices');
 ObjC.bindFunction('AEDeterminePermissionToAutomateTarget', ['int', ['void *', 'unsigned int', 'unsigned int', 'bool']]);
 var currentStage = 'startup', focusFailure = null, targetFailure = null;
@@ -53,6 +54,27 @@ function emit(record) {
   $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
 }
 function fail(code) { throw new Error(code); }
+function readSession() {
+  var reference = $.CGSessionCopyCurrentDictionary();
+  var dictionary = ObjC.deepUnwrap(ObjC.castRefToObject(reference));
+  if (dictionary === null || dictionary === undefined) return {available: false};
+  // Keep the copied value alive for this bounded osascript process: manually
+  // releasing it while JXA wrappers still refer to it crashes the native bridge.
+  // CGSession.h defines these public keys as CFSTR macros, not exported globals.
+  // They are not screen-lock flags: an on-console session can still be locked.
+  return {available: true,
+    onConsole: dictionary.kCGSSessionOnConsoleKey,
+    loginDone: dictionary.kCGSessionLoginDoneKey};
+}
+function checkSession() {
+  var session;
+  try { session = readSession(); } catch (_) { fail('session-unknown'); }
+  if (!session.available) fail('session-unavailable');
+  if (typeof session.onConsole !== 'boolean' || typeof session.loginDone !== 'boolean')
+    fail('session-unknown');
+  if (!session.onConsole) fail('session-inactive');
+  if (!session.loginDone) fail('session-login');
+}
 function preflight() {
   if (!$.AXIsProcessTrusted()) fail('accessibility');
   ['com.apple.mail', 'com.apple.systemevents'].forEach(function (id) {
@@ -162,6 +184,10 @@ function snapshotClipboard(clipboard, token) {
   var limit = ${MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES};
   function bytes(value) { return Number($(JSON.stringify(value)).lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)); }
   var originalCount = Number(clipboard.changeCount);
+  // Separate host conversations can run separate MCP processes. Never capture
+  // another composition's temporary clipboard as the user's original: nested
+  // restoration would strand that authored body after its owner has exited.
+  if (ObjC.unwrap(clipboard.stringForType('org.apple-mail-mcp.native-composition'))) fail('clipboard-busy');
   var recovery = {kind: 'clipboard-recovery', items: [], originalCount: originalCount, token: token};
   var size = bytes(recovery), items = clipboard.pasteboardItems;
   for (var i = 0; i < Number(items.count); i++) {
@@ -187,6 +213,8 @@ function snapshotClipboard(clipboard, token) {
   return recovery;
 }
 function main(input) {
+  stage('session');
+  checkSession();
   stage('preflight');
   preflight();
   if (input.operation === 'preflight') return;
@@ -205,6 +233,7 @@ function main(input) {
   var target = findMarkedComposer(process, input, checkMessage);
   var window = target.window, subject = target.subject, body = target.body;
   stage('focus');
+  checkSession();
   process.frontmost = true;
   window.attributes.byName('AXMain').value = true;
   for (var ready = 0; ready < 20; ready++) {
@@ -218,14 +247,19 @@ function main(input) {
   // Empty composers can place a floating Siri writing control at the body's
   // top-left corner. Focus at the center; Cmd+Up below sets insertion to start.
   var position = attr(body, 'AXPosition'), size = attr(body, 'AXSize');
-  if (!position || !size || size[0] < 20 || size[1] < 20 ||
-      !process.frontmost() || attr(window, 'AXMain') !== true) fail('focus');
+  focusFailure = !process.frontmost() ? 'foreground'
+    : attr(window, 'AXMain') !== true ? 'main-window'
+    : !position || !Number.isFinite(position[0]) || !Number.isFinite(position[1]) ? 'position'
+    : !size || !Number.isFinite(size[0]) || !Number.isFinite(size[1]) || size[0] < 20 || size[1] < 20 ? 'size' : null;
+  if (focusFailure) fail('focus');
   var point = {x: position[0] + size[0] / 2, y: position[1] + size[1] / 2};
+  checkSession();
   var down = $.CGEventCreateMouseEvent(null, 1, point, 0);
   var up = $.CGEventCreateMouseEvent(null, 2, point, 0);
   $.CGEventPost(0, down);
   $.CGEventPost(0, up);
   function checkFocus() {
+    checkSession();
     checkMessage();
     // AX updates are asynchronous. Retry the read-only coherent snapshot, not
     // clicks, key events, clipboard writes, or insertion.
@@ -259,6 +293,7 @@ function main(input) {
   var ownedCount = null;
   {
     stage('clipboard-write');
+    checkSession();
     var authored = $.NSPasteboardItem.alloc.init;
     if (!authored.setStringForType(input.html, $.NSPasteboardTypeHTML) ||
         !authored.setStringForType(input.body, $.NSPasteboardTypeString) ||
@@ -299,7 +334,7 @@ try {
   main(JSON.parse(text));
   JSON.stringify({success: true});
 } catch (error) {
-  var allowed = ['accessibility', 'automation', 'automation-unavailable', 'identity', 'target', 'focus', 'clipboard', 'restore', 'readback', 'paste-unavailable'];
+  var allowed = ['session-unavailable', 'session-inactive', 'session-login', 'session-unknown', 'accessibility', 'automation', 'automation-unavailable', 'identity', 'target', 'focus', 'clipboard', 'clipboard-busy', 'restore', 'readback', 'paste-unavailable'];
   JSON.stringify({success: false, code: allowed.indexOf(error.message) >= 0 ? error.message : 'bridge',
     stage: currentStage, focus: focusFailure || undefined, target: targetFailure || undefined,
     runtime: typeof error.errorNumber === 'number' ? error.errorNumber : undefined});
@@ -307,6 +342,14 @@ try {
 `;
 
 const ERRORS: Record<string, string> = {
+  "session-unavailable":
+    "Native Mail composition requires a Quartz GUI session; macOS reported none for this runtime. Keeping the Mac awake alone does not provide editor access. Nothing was sent.",
+  "session-inactive":
+    "Native Mail composition stopped because this runtime's user session is not the active console session. Nothing was sent.",
+  "session-login":
+    "Native Mail composition stopped because the GUI session has not completed login. Nothing was sent.",
+  "session-unknown":
+    "Native Mail composition could not verify the runtime's GUI session. This does not establish that the Mac is locked or that permission was denied. Nothing was sent.",
   accessibility:
     "Native Mail composition requires existing Accessibility permission for this runtime; no permission was requested.",
   automation:
@@ -316,9 +359,12 @@ const ERRORS: Record<string, string> = {
   identity: "Native Mail composition refused an unexpected message, subject, or sender.",
   target:
     "Native Mail composition could not identify exactly one marked composer and message body.",
-  focus: "Native Mail composition lost the verified composer or body focus; nothing was sent.",
+  focus:
+    "Native Mail composition could not verify the foreground composer and body focus. An awake Mac still needs an accessible editor; another app or an unavailable screen session can prevent focus. Nothing was sent.",
   clipboard:
     "Native Mail composition stopped because the clipboard could not be preserved or changed unexpectedly.",
+  "clipboard-busy":
+    "Native Mail composition found a clipboard owned by another composition. Nothing was pasted or sent. Let that operation finish before retrying; if its process has already exited, copy fresh clipboard content first.",
   restore: "Native Mail composition could not restore the previous clipboard; nothing was sent.",
   "paste-unavailable":
     "Mail's Paste command is unavailable for the verified editor; nothing was sent.",
@@ -370,6 +416,7 @@ function runNativeEditor(payload: Record<string, unknown>): NativeEditorResult {
 function diagnostic(stage: unknown, runtime: unknown, focus?: unknown, target?: unknown): string {
   const stages = [
     "startup",
+    "session",
     "preflight",
     "identity",
     "target-window",

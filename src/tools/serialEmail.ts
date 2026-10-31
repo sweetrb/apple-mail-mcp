@@ -3,6 +3,8 @@ import type { AppleMailManager } from "@/services/appleMailManager.js";
 import {
   shouldUseSmtp,
   resolveSmtpFrom,
+  smtpDeliveryFields,
+  smtpDeliveryNotice,
   type SmtpConfig,
   type sendSerialViaSmtp,
 } from "@/services/smtpMailer.js";
@@ -52,21 +54,43 @@ export function createSerialEmailHandler(deps: SerialEmailDeps) {
       } else {
         results = deps.appleScriptSend(recipients, subject, body, account, delayMs);
       }
-      const successCount = results.filter((r) => r.success).length;
-      const failCount = results.length - successCount;
+      const successCount = results.filter((r) => r.success && !r.deliveryUnknown).length;
+      const unknownCount = results.filter((r) => r.deliveryUnknown).length;
+      const failCount = results.length - successCount - unknownCount;
+      const partialCount = results.filter((r) => r.partial && !r.deliveryUnknown).length;
 
       const details = results
-        .map((r) => `  - ${r.email}: ${r.success ? "sent" : `FAILED (${r.error})`}`)
+        .map(
+          (r) =>
+            `  - ${r.email}: ${r.deliveryUnknown || r.partial ? smtpDeliveryNotice(r) : r.success ? "sent" : `FAILED (${r.error})`}`
+        )
         .join("\n");
       const structured = {
-        ok: failCount === 0,
+        ok: failCount === 0 && partialCount === 0 && unknownCount === 0,
         sent: successCount,
         failed: failCount,
+        partial: partialCount > 0 || (successCount > 0 && failCount + unknownCount > 0),
+        ...(unknownCount ? { unknown: unknownCount, deliveryUnknown: true } : {}),
         transport: useSmtp ? "smtp" : "applescript",
-        results: results.map((r) => ({ email: r.email, success: r.success, error: r.error })),
+        results: results.map((r) => ({
+          email: r.email,
+          success: r.success,
+          error: r.error,
+          ...smtpDeliveryFields(r),
+        })),
       };
 
-      if (failCount === 0) {
+      if (unknownCount > 0) {
+        return successResponse(
+          `SMTP confirmed ${successCount} submission(s), ${failCount} known failure(s), and ${unknownCount} unknown outcome(s):\n${details}`,
+          structured
+        );
+      } else if (partialCount > 0) {
+        return successResponse(
+          `SMTP accepted ${successCount} submission(s), including ${partialCount} with rejected recipients; ${failCount} submission(s) failed:\n${details}`,
+          structured
+        );
+      } else if (failCount === 0) {
         return successResponse(
           `Successfully sent ${successCount} email(s):\n${details}`,
           structured

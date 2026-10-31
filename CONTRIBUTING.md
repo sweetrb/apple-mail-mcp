@@ -27,8 +27,9 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 4. **Run tests**
    ```bash
-   pnpm test                 # unit tests (fast, no Mail.app needed)
-   pnpm run test:integration # live Mail.app interaction (requires a configured macOS Mail.app)
+   pnpm test                        # unit tests (no Mail.app account needed)
+   pnpm run test:integration         # production schema and stdio contracts
+   RUN_MAIL_IT=1 pnpm run test:integration # live, read-only Mail.app checks on a configured Mac
    ```
 
 ## Code Style
@@ -53,31 +54,43 @@ pnpm test
 # Run tests in watch mode
 pnpm run test:watch
 
-# Run integration tests (requires macOS with Mail.app configured)
+# Run cross-platform integration contracts (live suites are explicitly skipped)
 pnpm run test:integration
 
-# Run all tests (unit + integration)
+# Run all offline suites, including release guards and the packaged plugin
 pnpm run test:all
+
+# Include real IMAP tests against the configured disposable GreenMail server
+RUN_IMAP_IT=1 pnpm run test:all
+
+# Include read-only live Mail.app tests on a configured Mac
+RUN_MAIL_IT=1 pnpm run test:all
 ```
 
 ### Test File Locations
 
 - **Unit tests:** `src/services/appleMailManager.test.ts` (core logic), `src/security.test.ts` (input validation and security schemas)
-- **Integration tests:** `test/integration.test.ts` (live Mail.app interaction)
+- **Integration contracts:** `test/integration.test.ts` (imports production schemas; live Mail.app checks require `RUN_MAIL_IT=1`), `test/output-schema.test.ts` (built server over stdio)
+- **Live IMAP:** `test/imap.integration.test.ts` (`RUN_IMAP_IT=1`, disposable GreenMail server)
+- **Standalone artifacts and release guards:** `test/*.test.mjs`, `.github/scripts/*.test.mjs`
 
 ### Before cutting a release
 
-CI runs only the **unit** tests — the integration suite needs a live, configured
-Mail.app and so cannot run on the GitHub runners. The AppleScript paths (search,
-list, get-message, attachments, batch ops, rename) are therefore **only**
-covered by the local integration suite. Before bumping the version and pushing a
-`chore(release)` commit, run the full suite locally on a configured Mac:
+CI runs macOS unit/coverage checks on Node 22 and 24, production integration
+contracts, real GreenMail IMAP integration, and standalone plugin checks on Node 20. macOS-only plist and JXA checks remain enabled on those runners. Linux skips
+only the tests that require macOS APIs; a skipped test is not a verified behavior.
+
+GitHub runners have no configured Mail.app account. End-to-end Mail operations
+still require the read-only live suite on a configured Mac:
 
 ```bash
-pnpm run test:all   # unit + integration against real Mail.app
+RUN_MAIL_IT=1 pnpm run test:all
 ```
 
 A green CI run alone does not exercise the live Mail.app behavior.
+Publishing requires successful full CI for the exact commit on main on every
+trigger, including manual and scheduled recovery. The standalone plugin archive
+is validated before npm publication.
 
 ### Testing Guidelines
 

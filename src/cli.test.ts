@@ -51,6 +51,43 @@ const REQUIRED = [
 ];
 
 describe("runCli", () => {
+  it.each(["returned", "thrown"])(
+    "returns a distinct unknown status without a sent claim or retry after a %s lost acknowledgment",
+    async (mode) => {
+      const { deps, send, out, err } = makeDeps();
+      if (mode === "returned")
+        send.mockResolvedValue({
+          success: false,
+          deliveryUnknown: true,
+          error: "Connection closed",
+        });
+      else send.mockRejectedValue(new Error("Connection closed"));
+      expect(await runCli(REQUIRED, deps)).toBe(3);
+      expect(out).toEqual([]);
+      expect(err.join("\n")).toContain("outcome is unknown");
+      expect(err.join("\n")).toContain("Do not resend automatically");
+      expect(send).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("returns a distinct partial status and names accepted recipients without inviting a full resend", async () => {
+    const { deps, send, out, err } = makeDeps();
+    send.mockResolvedValue({
+      success: true,
+      partial: true,
+      accepted: ["you@example.com"],
+      rejected: ["refused@example.com"],
+    });
+    const code = await runCli([...REQUIRED, "--to", "refused@example.com"], deps);
+    expect(code).toBe(2);
+    expect(out.join("\n")).toContain("sent to you@example.com");
+    expect(out.join("\n")).not.toContain("refused@example.com");
+    expect(err.join("\n")).toContain("Partial SMTP submission");
+    expect(err.join("\n")).toContain("Rejected: refused@example.com");
+    expect(err.join("\n")).toContain("Do not resend to accepted recipients");
+    expect(send).toHaveBeenCalledOnce();
+  });
+
   it("sends a plain-text email and reports success (exit 0)", async () => {
     const { deps, send, out } = makeDeps();
     const code = await runCli(REQUIRED, deps);

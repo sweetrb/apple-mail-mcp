@@ -9,6 +9,7 @@
  * @module tools/resourcesAndPrompts
  */
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { AppleMailManager } from "@/services/appleMailManager.js";
 
@@ -32,7 +33,16 @@ export function registerResourcesAndPrompts(
       description: "All configured Mail accounts (name, email, enabled state).",
       mimeType: "application/json",
     },
-    (uri) => jsonResource(uri.href, mailManager.listAccounts())
+    (uri) => {
+      const result = mailManager.listAccountsChecked();
+      if (result.failed) {
+        throw new McpError(
+          ErrorCode.InternalError,
+          `Could not read Mail accounts: ${result.error ?? "Mail declined the request"}`
+        );
+      }
+      return jsonResource(uri.href, result.accounts);
+    }
   );
 
   server.registerResource(
@@ -60,7 +70,14 @@ export function registerResourcesAndPrompts(
     },
     (uri, variables) => {
       const account = decodeURIComponent(String(variables.account));
-      return jsonResource(uri.href, mailManager.listMailboxes(account));
+      const result = mailManager.listMailboxesChecked(account);
+      if (result.failed) {
+        throw new McpError(
+          ErrorCode.InternalError,
+          `Could not read mailboxes for "${account}": ${result.error ?? "Mail declined the request"}`
+        );
+      }
+      return jsonResource(uri.href, result.mailboxes);
     }
   );
 

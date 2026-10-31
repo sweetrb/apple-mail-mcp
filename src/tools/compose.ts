@@ -1,14 +1,20 @@
 /** Reply/forward routing, kept separate from server startup for regression tests. */
 import { decodeImapId, type ImapMessageSource } from "@/services/imapClient.js";
 import type { AppleMailManager } from "@/services/appleMailManager.js";
-import type { SmtpConfig, SmtpSendOptions, SmtpSendResult } from "@/services/smtpMailer.js";
+import {
+  smtpDeliveryFields,
+  smtpDeliveryNotice,
+  unknownSmtpResult,
+  type SmtpConfig,
+  type SmtpSendOptions,
+  type SmtpSendResult,
+} from "@/services/smtpMailer.js";
 import {
   buildReplyOptions,
   buildForwardOptions,
   buildReplyBody,
   buildForwardBody,
   parseOriginalHeaders,
-  type OriginalHeaders,
 } from "@/services/replyForward.js";
 import { extractTextBody } from "@/utils/mimeParse.js";
 import { preflightAttachments } from "@/utils/attachmentMaterialize.js";
@@ -21,7 +27,12 @@ export interface ComposeDeps {
     "getRawSource" | "getMessageContent" | "replyToMessage" | "forwardMessage"
   > &
     // Optional so test doubles needn't stub it; the real manager always has it.
-    Partial<Pick<AppleMailManager, "consumeLastMessageLookupError" | "listAccountsChecked">>;
+    Partial<
+      Pick<
+        AppleMailManager,
+        "consumeLastMessageLookupError" | "listAccountsChecked" | "getRawSourceWithLocation"
+      >
+    >;
   imapSource: (id: string) => Promise<ImapMessageSource>;
   numericId: (id: string) => Promise<{ numericId?: string; error?: string }>;
   smtpConfigured: () => boolean;
@@ -59,13 +70,7 @@ type ComposeArgs = (ReplyArgs & { kind: "reply" }) | (ForwardArgs & { kind: "for
 type SourceScope = { account: string; mailbox: string };
 
 /** Read composite IDs over IMAP; never pass them to a numeric AppleScript lookup. */
-async function readOriginal(
-  deps: ComposeDeps,
-  id: string,
-  cfg?: SmtpConfig,
-  recoverReplyText = false,
-  scope?: SourceScope
-) {
+async function readOriginal(deps: ComposeDeps, id: string, cfg?: SmtpConfig, scope?: SourceScope) {
   if (decodeImapId(id)) {
     const source = await deps.imapSource(id);
     // SMTP is a single configured identity. Do not activate the newly working
@@ -82,9 +87,28 @@ async function readOriginal(
     if (source.subject !== undefined) original.subject = source.subject;
     return { original, plainText: extractTextBody(source.raw) };
   }
-  const raw = scope
-    ? deps.mail.getRawSource(id, scope, { requireScopedLocation: true })
-    : deps.mail.getRawSource(id);
+  let sourceScope = scope;
+  let raw: string | null;
+  if (cfg && !sourceScope) {
+    // A numeric id does not carry its account. Read source + location together
+    // through the strict resolver, then apply the same actual-From check as an
+    // explicit scope. Never infer ownership from To/From headers or pick the
+    // first metadata hit before the ambiguity check has run.
+    const source = deps.mail.getRawSourceWithLocation?.(id);
+    if (!source) {
+      const why = deps.mail.consumeLastMessageLookupError?.();
+      throw new Error(
+        `Cannot read the original message source${why ? ` (${why})` : ""}. Its account and mailbox must be verified before SMTP composition. Re-list the intended mailbox or supply its account and mailbox.`
+      );
+    }
+    sourceScope = { account: source.account, mailbox: source.mailbox };
+    requireScopedSmtpIdentity(deps, sourceScope, cfg);
+    raw = source.raw;
+  } else {
+    raw = sourceScope
+      ? deps.mail.getRawSource(id, sourceScope, { requireScopedLocation: true })
+      : deps.mail.getRawSource(id);
+  }
   if (!raw) {
     // Say WHY when the lookup knows (#270): a bounded scan that skipped a large
     // mailbox, an ambiguous id, a timeout — each has its own remedy.
@@ -93,11 +117,11 @@ async function readOriginal(
       `Cannot read the original message source${why ? ` (${why})` : ""}. Re-list the intended mailbox and retry with its message id.`
     );
   }
-  const content = scope
-    ? deps.mail.getMessageContent(id, false, scope, { requireScopedLocation: true })
+  const content = sourceScope
+    ? deps.mail.getMessageContent(id, false, sourceScope, { requireScopedLocation: true })
     : deps.mail.getMessageContent(id);
   const original = parseOriginalHeaders(raw);
-  if (scope) {
+  if (sourceScope) {
     // The source and Mail's plain-text property are read separately. If the
     // numeric id was reused between reads, never combine different messages.
     const sourceId = original.messageId?.trim().replace(/^<|>$/g, "");
@@ -105,12 +129,15 @@ async function readOriginal(
     const sameMessage = !!sourceId && sourceId === contentId;
     return {
       original,
-      plainText: (sameMessage ? content?.plainText : null) ?? extractTextBody(raw),
+      plainText:
+        sameMessage && content?.plainText?.trim() ? content.plainText : extractTextBody(raw),
     };
   }
   return {
     original,
-    plainText: content?.plainText ?? (recoverReplyText ? extractTextBody(raw) : null),
+    // A blank native property can mean an undownloaded/unconverted HTML body.
+    // Let actual MIME establish either readable text or a genuinely empty part.
+    plainText: content?.plainText?.trim() ? content.plainText : extractTextBody(raw),
   };
 }
 
@@ -130,37 +157,9 @@ function requireForwardText(plainText: string | null): string {
   return plainText;
 }
 
-/**
- * Fetch the original message's headers + plain text for the existing
- * AppleScript forward path — same sources as {@link readOriginal}, but
- * without the SMTP-identity check: nothing is being sent from an identity
- * here, the quote is just content inside a message Mail.app itself submits.
- * Returns null when the source can't be read, so the caller falls back to
- * the un-quoted body rather than failing an operation that used to succeed.
- */
-async function readOriginalForForward(
-  deps: ComposeDeps,
-  id: string
-): Promise<{ original: OriginalHeaders; plainText: string } | null> {
-  if (decodeImapId(id)) {
-    try {
-      const source = await deps.imapSource(id);
-      const original = parseOriginalHeaders(source.raw);
-      if (source.subject !== undefined) original.subject = source.subject;
-      return { original, plainText: extractTextBody(source.raw) ?? "" };
-    } catch {
-      return null;
-    }
-  }
-  const raw = deps.mail.getRawSource(id);
-  if (!raw) return null;
-  const content = deps.mail.getMessageContent(id);
-  return { original: parseOriginalHeaders(raw), plainText: content?.plainText ?? "" };
-}
-
 /** Never replace Mail's reply content when the original quote cannot be read. */
 async function replyComposeBody(deps: ComposeDeps, id: string, body: string): Promise<string> {
-  const source = await readOriginal(deps, id, undefined, true);
+  const source = await readOriginal(deps, id);
   return buildReplyBody(body, source.original, requireReplyText(source.plainText));
 }
 
@@ -200,8 +199,8 @@ async function forwardComposeBody(
   hasAttachments = false
 ): Promise<string | undefined> {
   if (!body && !hasAttachments) return body;
-  const source = await readOriginalForForward(deps, id);
-  return source ? buildForwardBody(source.original, source.plainText, body) : body;
+  const source = await readOriginal(deps, id);
+  return buildForwardBody(source.original, requireForwardText(source.plainText), body);
 }
 
 async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolResponse> {
@@ -251,7 +250,7 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
   let scopedOriginal: Awaited<ReturnType<typeof readOriginal>> | undefined;
   if (scope) {
     try {
-      scopedOriginal = await readOriginal(deps, id, undefined, true, scope);
+      scopedOriginal = await readOriginal(deps, id, undefined, scope);
     } catch (error) {
       return errorResponse(
         `Failed to ${verb} message "${id}": ${error instanceof Error ? error.message : String(error)}`
@@ -276,8 +275,7 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
     try {
       const cfg = deps.smtpConfig();
       if (scope) requireScopedSmtpIdentity(deps, scope, cfg);
-      const { original, plainText } =
-        scopedOriginal ?? (await readOriginal(deps, id, cfg, args.kind === "reply"));
+      const { original, plainText } = scopedOriginal ?? (await readOriginal(deps, id, cfg));
       if (args.kind === "forward" && plainText === null)
         throw new Error(
           "The original message has no readable plain-text body. SMTP forwarding would omit its content; explicitly select transport=applescript to forward it with Mail.app."
@@ -311,22 +309,36 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
       // Same attachment path as send-email: sendViaSmtp's builder, so the wire
       // message and the Sent-folder copy both carry the files (#267).
       if (attachmentCount) opts.attachments = attachments;
-      const result = await deps.smtpSend(opts, cfg);
+      const result = await Promise.resolve()
+        .then(() => deps.smtpSend(opts, cfg))
+        .catch(unknownSmtpResult);
+      if (result.deliveryUnknown) {
+        return successResponse(smtpDeliveryNotice(result), {
+          ok: false,
+          id,
+          transport: "smtp",
+          ...smtpDeliveryFields(result),
+        });
+      }
       if (!result.success)
         return errorResponse(
-          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`
+          `Failed to ${verb} message "${id}" via SMTP: ${result.error ?? "unknown SMTP error"}`,
+          { ok: false, sent: false, transport: "smtp", ...smtpDeliveryFields(result) }
         );
       return successResponse(
-        args.kind === "reply"
-          ? `Reply sent via SMTP${withFiles}`
-          : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
+        result.partial
+          ? smtpDeliveryNotice(result)
+          : args.kind === "reply"
+            ? `Reply sent via SMTP${withFiles}`
+            : `Message forwarded via SMTP to ${args.to.join(", ")}${withFiles}`,
         {
-          ok: true,
+          ok: !result.partial,
           sent: true,
           id,
           transport: "smtp",
           messageId: result.messageId,
           attachmentCount,
+          ...smtpDeliveryFields(result),
           ...(args.kind === "forward" ? { recipients: args.to } : {}),
           // Best-effort Sent-folder copy (issue #220) — same field shape as
           // send-email, since it's the same sendViaSmtp underneath.
@@ -357,7 +369,7 @@ async function runCompose(deps: ComposeDeps, args: ComposeArgs): Promise<ToolRes
     }
     // Mail retains the original HTML and reply headers in native-editor mode.
     // Read the source first, but never replace its body with reconstructed text.
-    if (nativeEditor && !scopedOriginal) await readOriginal(deps, id, undefined, true);
+    if (nativeEditor && !scopedOriginal) await readOriginal(deps, id);
     let outcome: { success: boolean; error?: string };
     if (nativeEditor && args.kind === "reply") {
       outcome = mutationScope

@@ -275,6 +275,13 @@ package common workflows: `triage-inbox`, `compose-reply`, `weekly-summary`.
 
 This section documents all available tools. AI agents should use these tool names and parameters exactly as specified.
 
+All 52 tools declare their read-only, destructive, idempotent, and external-effect
+annotations. The hints cover every supported mode: a tool that can save a file
+or send mail remains write-capable even when a particular call only previews or
+returns inline data. Private mailbox reads are scoped to the configured accounts;
+sends can reach external recipients. These hints help hosts classify calls. They
+do not grant access or replace host authorization or macOS privacy permissions.
+
 ### Message Operations
 
 #### `search-messages`
@@ -497,7 +504,7 @@ Acquire a message's **complete original RFC 822 bytes exactly as the IMAP server
 
 **Read-only by construction.** The mailbox is opened with `EXAMINE` and the body fetched with `BODY.PEEK[]`, so `\Seen` is not set and no `STORE`, `COPY`, `MOVE`, `APPEND` or `EXPUNGE` is issued. No Mail.app, AppleScript or osascript is involved. The only side effect is the optional file, created with `wx` (an existing file or symlink is refused, never overwritten) and mode `0600`, and only inside the allowed roots — the same policy as `save-attachment`.
 
-**Sizes.** The inline ceiling exists because the MCP stdio transport drops any single message over 10 MB with no error text: 6 MiB of raw bytes is 8 MiB of base64. `maxBytes` is a ceiling, not a cut — an oversize message is refused with its `RFC822.SIZE`, so you can choose between raising `maxBytes` (inline, up to 6 MiB) and `savePath` (up to 25 MiB). `warnings[]` reports an `RFC822.SIZE` that disagrees with the byte count actually received (the hash still covers what was received) and a server that reported no `UIDVALIDITY`.
+**Sizes.** The MCP SDK's default stdio read buffer is 10 MiB: 6 MiB of raw bytes is 8 MiB of base64, leaving room for the response metadata. `maxBytes` is a ceiling, not a cut — an oversize message is refused with its `RFC822.SIZE`, so you can choose between raising `maxBytes` (inline, up to 6 MiB) and `savePath` (up to 25 MiB). `warnings[]` reports an `RFC822.SIZE` that disagrees with the byte count actually received (the hash still covers what was received) and a server that reported no `UIDVALIDITY`.
 
 **Verifying a derivative.** `shasum -a 256 file.eml` must equal `sha256`. `account` + `mailbox` + `uidValidity` + `uid` is the durable pointer back to the source message — a UID on its own is meaningful only for one `UIDVALIDITY`, which the server may change (typically on a mailbox rebuild).
 
@@ -626,6 +633,22 @@ Two differences to know when SMTP is auto-preferred:
 Both plain-text and HTML bodies are supported — over SMTP an HTML body (CLI
 `--html-body-file`) is sent as `multipart/alternative` with the plain-text
 fallback.
+
+SMTP results distinguish server acceptance from complete recipient acceptance.
+When some recipients are rejected, tools return `sent: true`, `ok: false`,
+`partial: true`, and the actual `accepted` and `rejected` addresses. This is a
+completed submission for the accepted recipients: do not resend the whole
+message. Review only rejected addresses before another send. Acceptance is not
+a delivery receipt. The CLI returns exit status `2` for this partial outcome;
+complete rejection remains an error. Sent-copy results are reported separately.
+
+If the SMTP connection fails before a final acknowledgment can establish the
+outcome, the provider may already have accepted the message. The tools return
+`deliveryUnknown: true`, `ok: false`, and omit `sent`; the CLI returns exit status
+`3`. Check provider-side evidence before sending again. The server does not
+retry automatically or switch transports after that uncertain result. Serial
+results count unknown outcomes separately from confirmed submissions and known
+failures.
 
 Configure SMTP via environment variables on the MCP server. The password is
 read from the macOS **Keychain** by default, so no secret goes in config:
@@ -995,6 +1018,13 @@ Return an attachment's bytes as base64 (the read counterpart to inline-base64 se
 
 **Returns:** The attachment bytes, base64-encoded (also in `structuredContent.contentBase64`).
 
+**Inline limit:** 3 MiB of decoded bytes on either backend. This preserves both
+existing base64 representations while keeping their combined size within the
+MCP SDK's default 10 MiB stdio buffer. The complete serialized result is also
+bounded, including filenames and MIME metadata. Oversized attachments return an
+error directing you to `save-attachment`; saving over IMAP retains its separate
+25 MiB limit. A successful zero-byte attachment returns an empty base64 string.
+
 ---
 
 #### `resolve-message-id`
@@ -1088,10 +1118,14 @@ encodes its source: omit both fields for that form. Supplying only one field, or
 supplying either with an `imap:` ID, returns an error. Without explicit scope,
 numeric IDs retain the remembered-location and bounded-scan strategy described
 under [numeric IDs](#get-message), but an ambiguous remembered account or mailbox
-now stops instead of falling back to a scan. For scoped SMTP, the configured From
-address must belong to the selected enabled Mail account; an SMTP login can be a separate
-service username. A local "On My Mac" source has no Mail account whose SMTP From
-can be verified, so scoped SMTP stops rather than selecting an identity.
+now stops instead of falling back to a scan. For SMTP with any numeric source,
+the original bytes and actual account/mailbox are resolved together. The configured
+From address must belong to that enabled Mail account, including when the source
+scope was omitted; an SMTP login can be a separate service username. A local
+"On My Mac" source has no Mail account whose SMTP From can be verified, so this
+SMTP path stops rather than selecting an identity. If a separate Mail.app
+plaintext read is needed, its Message-ID must match the acquired original before
+its body can be quoted.
 
 **AppleScript transport quoting (v2.19.12):** every draft (`send: false`) and any send that falls back to AppleScript (SMTP not configured) also gets the original quoted — an "On \<date\>, \<sender\> wrote:" attribution line followed by the `> `-prefixed original body, built the same way as the SMTP path. Mail's own `reply`/`forward` AppleScript commands generate this quote internally but expose no way to read it back, so it's built here instead of relying on Mail's (unreadable) copy. Unlike SMTP, this path has no sending-identity restriction — it's read-only source lookup, not sending.
 
@@ -1127,7 +1161,7 @@ Forward a message to new recipients.
 
 **Attachments (2.20.0, #267):** `attachments` adds new files to the forward, with or without a prepended `body`, under the same rules, validation and per-transport mechanics as `reply-to-message`'s attachments. They are independent of the original's attachments (which the SMTP path still does not reattach).
 
-SMTP forwarding requires a readable plain-text original. Scoped AppleScript-content forwards that add a body or attachments also stop if the original text is unreadable; without added content, Mail retains its own forward history. Native-editor mode preserves Mail's native history. An intentionally empty plain-text message is still valid.
+SMTP forwarding requires a readable plain-text original. AppleScript-content forwards that add a body or attachments also stop if the original text is unreadable, with or without explicit source scope. Numeric sources can recover readable plaintext from raw MIME. Without added content, Mail retains its own forward history. Native-editor mode preserves Mail's native history. An intentionally empty plain-text message is still valid.
 
 **⚠️ Safety:** With the default `send: true`, sends real mail immediately and cannot be unsent. Confirm the recipients, subject, and body with the user before calling (or pass `send: false` to save a draft for review).
 
@@ -1165,7 +1199,9 @@ carries the raw 0-6 `flagColorIndex` for back-compat.
 
 #### `delete-message`
 
-Delete a message (move to trash).
+Delete a message. Ordinary messages move to Trash. On the IMAP route, a message
+already in the account's resolved Trash mailbox is **permanently expunged**.
+This existing behavior also applies to `batch-delete-messages`.
 
 | Parameter | Type   | Required | Description |
 | --------- | ------ | -------- | ----------- |
@@ -1282,6 +1318,10 @@ so it is operated on once, and the batch returns **one result per distinct id**.
 therefore a count of messages, not of list positions.
 
 #### `batch-delete-messages`
+
+Moves messages to Trash; IMAP messages already in the resolved Trash mailbox
+are **permanently expunged**. The batch can therefore contain both recoverable
+trash moves and permanent deletions.
 
 | Parameter       | Type     | Required | Description                                                                                                      |
 | --------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -1744,11 +1784,18 @@ prefer `get-unread-count` when a single number will do.
 
 #### `get-sync-status`
 
-Check Mail.app sync activity.
+Observe whether Mail.app is running and, when accessible, its account and
+mailbox counts. This check does not start Mail.app.
 
 **Parameters:** None
 
-**Returns:** Whether sync is detected, pending uploads, recent activity, and seconds since last change.
+**Returns:** `mailRunning`, observed `accountCount` / `mailboxCount`, and
+`syncState`. A running app returns `syncState: "unknown"`: these observations
+cannot establish synchronization activity, queued uploads, or the time of the
+last change. Those unmeasured fields are omitted. A stopped app returns
+`syncState: "not-running"`; an inaccessible or malformed observation returns
+an error with `syncState: "unavailable"`. This tool cannot prove that a draft
+has reached the provider or that an Outbox is empty.
 
 ---
 
@@ -2229,7 +2276,7 @@ The entrypoint is written as:
 | Date filter format                                                           | Date filters must be valid parseable dates (e.g., "January 1, 2026" or "2026-03-15"); bare numbers or non-date strings are rejected                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Attachment save path restrictions                                            | `save-attachment` only allows saving to home directory, `/tmp`, `/private/tmp`, and `/Volumes`; path traversal is blocked                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Attachment count limit                                                       | `send-email` and `create-draft` accept a maximum of 20 file attachments                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| IMAP attachment fetch size                                                   | `fetch-attachment` / `save-attachment` over IMAP refuse a part larger than 25 MiB — rejected before download when the server declares the size, and the stream is cut off at the limit when it does not                                                                                                                                                                                                                                                                                                                                                                                              |
+| IMAP attachment fetch size                                                   | `fetch-attachment` refuses more than 3 MiB of decoded bytes on either backend and bounds the complete inline response. `save-attachment` over IMAP retains a 25 MiB limit. IMAP prechecks the declared size and also bounds the actual download stream                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ### Mail.app `<blockquote>` wrapping on macOS 15+ (workaround in v1.6.0)
 

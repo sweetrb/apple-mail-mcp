@@ -7,12 +7,11 @@
  *
  *   1. fan the IMAP query out over every configured IMAP account
  *      (`resolveImapConfigs()`), and
- *   2. ALSO run the existing AppleScript all-accounts path,
+ *   2. run AppleScript only for accounts no IMAP config covers,
  *
- * then merge the two, de-duplicating any message that appears in both backends
- * (e.g. a Gmail account that is both IMAP-configured AND visible to Mail.app's
- * AppleScript scan) and preferring the IMAP copy (it carries the round-trippable
- * `imap:` id that the mutation tools need).
+ * then merge the two, de-duplicating only when message/source identity agrees
+ * and preferring the IMAP copy when both rows carry the same RFC Message-ID.
+ * Matching subjects, senders and timestamps alone cannot establish identity.
  *
  * This module holds the backend-agnostic merge/dedup/sort + the per-account IMAP
  * fan-out so the three message-list sites (search-messages, get-thread,
@@ -24,8 +23,10 @@ import {
   imapSearchMessages,
   imapListMessages,
   resolveImapConfigs,
+  MAX_UNSCOPED_SEARCH_DEPTH,
   type ImapSearchArgs,
   type ImapConfig,
+  type ImapListResult,
   type ImapDeps,
   type OmittedMessage,
 } from "@/services/imapClient.js";
@@ -45,21 +46,6 @@ function normalizeMessageId(row: MessageRow): string | undefined {
   return inner ? inner.toLowerCase() : undefined;
 }
 
-/**
- * Normalize a subject the same way the thread tool does for grouping: drop
- * leading Re:/Fwd: prefixes, collapse whitespace, lowercase. Kept local (and
- * deliberately simple) so the merge has no dependency cycle with the thread
- * module; exactness isn't required — this only feeds the fallback dedup key.
- */
-function normalizeSubjectForKey(subject: unknown): string {
-  const s = typeof subject === "string" ? subject : "";
-  return s
-    .replace(/^(\s*(re|fwd|fw|aw|sv|antw)\s*:\s*)+/i, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
 /** Epoch ms of the row's dateReceived (ISO string or Date), or 0 when absent. */
 function dateEpoch(row: MessageRow): number {
   const d = row.dateReceived;
@@ -72,43 +58,47 @@ function dateEpoch(row: MessageRow): number {
 }
 
 /**
- * Cross-backend dedup key for a message row.
+ * Identity-based dedup key for a message row.
  *
- *   - PREFER the normalized Message-ID when present (`mid:<id>`). It's the only
- *     globally-unique identity, so two IMAP accounts that both hold the very
- *     same message (rare, but possible with multi-delivery) collapse to one.
- *   - FALL BACK to `normalizedSubject|sender|dateReceivedEpoch` when no
- *     Message-ID is available. The AppleScript backend never exposes a
- *     Message-ID, so this composite is what actually dedups the common case: a
- *     Gmail account surfaced by BOTH the IMAP fan-out and the AppleScript
- *     all-accounts scan. The IMAP and AppleScript copies of one message share
- *     the same subject, sender, and received timestamp, so they collide here.
+ *   - Prefer the normalized RFC Message-ID when present (`mid:<id>`), retaining
+ *     the existing cross-account/cross-mailbox Message-ID dedup behavior.
+ *   - Otherwise use the full IMAP id, or an AppleScript id together with its
+ *     exact account and mailbox. Numeric ids alone are not globally unique.
+ *   - Without either identity, retain the row object as a unique key instead
+ *     of discarding a possibly distinct message based on matching metadata.
  *
- * Limitation (note for live testing): the composite key assumes the two backends
- * report the SAME received timestamp to the second. If Mail.app and the IMAP
- * server disagree on `dateReceived` (timezone/rounding), a message could escape
- * dedup and appear twice. Message-ID dedup (IMAP-vs-IMAP) is exact; the
- * composite is best-effort.
+ * Cross-backend copies with an RFC Message-ID on only one side remain separate:
+ * subject/sender/date similarities cannot prove they are the same message.
  */
-export function dedupKey(row: MessageRow): string {
+export function dedupKey(row: MessageRow): string | MessageRow {
   const mid = normalizeMessageId(row);
   if (mid) return `mid:${mid}`;
-  const subject = normalizeSubjectForKey(row.subject);
-  const sender = (typeof row.sender === "string" ? row.sender : "").trim().toLowerCase();
-  return `k:${subject}|${sender}|${dateEpoch(row)}`;
+  const id = typeof row.id === "string" ? row.id.trim() : "";
+  if (id.startsWith("imap:")) return `id:${id}`;
+  if (
+    /^\d+$/.test(id) &&
+    typeof row.account === "string" &&
+    row.account.length > 0 &&
+    typeof row.mailbox === "string" &&
+    row.mailbox.length > 0
+  ) {
+    return `id:${JSON.stringify([row.account, row.mailbox, id])}`;
+  }
+  return row;
 }
 
 /**
  * Merge IMAP rows with AppleScript rows: concatenate, de-dup by {@link dedupKey}
  * preferring the IMAP copy (IMAP rows are passed first and win on collision),
- * sort newest-first by dateReceived, then apply `limit`.
+ * sort newest-first by dateReceived, then apply the global `offset` and `limit`.
  */
 export function mergeMessages(
   imapRows: MessageRow[],
   appleRows: MessageRow[],
-  limit: number
+  limit: number,
+  offset = 0
 ): MessageRow[] {
-  const byKey = new Map<string, MessageRow>();
+  const byKey = new Map<string | MessageRow, MessageRow>();
   // IMAP first so its copy wins; AppleScript only fills keys IMAP didn't supply.
   for (const r of imapRows) {
     const k = dedupKey(r);
@@ -120,13 +110,16 @@ export function mergeMessages(
   }
   const merged = [...byKey.values()];
   merged.sort((a, b) => dateEpoch(b) - dateEpoch(a)); // newest first
-  return limit >= 0 ? merged.slice(0, limit) : merged;
+  return limit >= 0 ? merged.slice(offset, offset + limit) : merged.slice(offset);
 }
 
 /**
  * Fan an IMAP message query out over EVERY configured IMAP account and return
  * the concatenated structured rows (not yet merged with AppleScript, not yet
- * limited — the caller merges + limits). `kind` picks the underlying query so
+ * limited — the caller merges + pages). Each source contributes its newest
+ * offset+limit unique rows; duplicate-heavy prefixes are widened until that
+ * depth is reached, the source is exhausted, or bounded work must stop.
+ * `kind` picks the underlying query so
  * the mailbox-default and unreadOnly semantics match the single-account path.
  *
  * Per-account failures are swallowed (logged) so one unreachable account doesn't
@@ -149,6 +142,17 @@ export async function fanOutImapMessages(
    *  account the fan-out never reached is listed as "<account> / *". */
   timedOutMailboxes: string[];
 }> {
+  const offset = args.offset ?? 0;
+  const depth = offset + (args.limit ?? 50);
+  // A global page needs a prefix from every source, unlike a single mailbox's
+  // efficient sequence window. Keep that work bounded rather than turning a
+  // deep page into a huge fetch from every configured account.
+  if (offset > 0 && depth > MAX_UNSCOPED_SEARCH_DEPTH) {
+    throw new Error(
+      `Merged account pagination supports offset + limit up to ${MAX_UNSCOPED_SEARCH_DEPTH.toLocaleString("en-US")}. ` +
+        `Pass an explicit account and mailbox to page deeper.`
+    );
+  }
   const rows: MessageRow[] = [];
   const timedOutMailboxes: string[] = [];
   const accountsQueried: string[] = [];
@@ -167,12 +171,58 @@ export async function fanOutImapMessages(
     // 6154 `\\All` mailbox when available (Gmail), otherwise it searches every
     // selectable mailbox (iCloud/generic IMAP). Hostname heuristics cannot tell
     // us what a server actually exposes.
-    const perAccountArgs: ImapSearchArgs = { ...args, account: undefined };
+    let res: ImapListResult | undefined;
     try {
-      const res =
-        kind === "search"
-          ? await imapSearchMessages(perAccountArgs, { ...deps, config })
-          : await imapListMessages(perAccountArgs, { ...deps, config });
+      let prefixDepth = depth;
+      for (;;) {
+        const perAccountArgs: ImapSearchArgs = {
+          ...args,
+          account: undefined,
+          offset: 0,
+          limit: prefixDepth,
+        };
+        const next =
+          kind === "search"
+            ? await imapSearchMessages(perAccountArgs, { ...deps, config })
+            : await imapListMessages(perAccountArgs, { ...deps, config });
+        res =
+          res && next.partial
+            ? { ...next, messages: mergeMessages(next.messages, res.messages, -1) }
+            : next;
+        const uniqueCount = new Set(res.messages.map(dedupKey)).size;
+        if (uniqueCount >= depth || !res.hasMore || res.partial) break;
+        if (prefixDepth >= MAX_UNSCOPED_SEARCH_DEPTH) {
+          const scope = `${config.accountLabel} / ${args.mailbox || "*"}`;
+          failedMailboxes.push(scope);
+          failedMailboxReasons[scope] =
+            `Merged pagination reached the ${MAX_UNSCOPED_SEARCH_DEPTH.toLocaleString("en-US")}-message prefix cap ` +
+            `before finding ${depth} unique messages. Scope the account and mailbox to page deeper.`;
+          break;
+        }
+        if (deps.signal?.aborted) {
+          timedOutMailboxes.push(`${config.accountLabel} / ${args.mailbox || "*"}`);
+          break;
+        }
+        // Geometric growth limits the number of round trips and bounds the
+        // cumulative fetched prefix to less than three times the 5,000 cap.
+        prefixDepth = Math.min(
+          MAX_UNSCOPED_SEARCH_DEPTH,
+          Math.max(prefixDepth + 1, prefixDepth * 2)
+        );
+      }
+    } catch (e) {
+      if (res) {
+        const scope = `${config.accountLabel} / ${args.mailbox || "*"}`;
+        failedMailboxes.push(scope);
+        failedMailboxReasons[scope] = `Could not refill merged pagination: ${String(e)}`;
+      } else {
+        accountsFailed.push(config.accountLabel);
+      }
+      console.error(`IMAP fan-out failed for account "${config.accountLabel}": ${String(e)}`);
+    }
+    // Keep a previously read prefix if a later refill fails; coverage names
+    // the unfinished scope instead of claiming the whole account returned none.
+    if (res) {
       rows.push(...res.messages);
       accountsQueried.push(config.accountLabel);
       failedMailboxes.push(
@@ -192,9 +242,6 @@ export async function fanOutImapMessages(
           mailbox: `${config.accountLabel} / ${o.mailbox}`,
         }))
       );
-    } catch (e) {
-      accountsFailed.push(config.accountLabel);
-      console.error(`IMAP fan-out failed for account "${config.accountLabel}": ${String(e)}`);
     }
   }
   return {
@@ -214,7 +261,7 @@ export async function fanOutImapMessages(
 // Coverage is decided per (config, Mail-account) PAIR by configMatchesAccount.
 // - Message-list reads use partitionAccountsForCounts to run AppleScript ONLY
 //   for accounts no IMAP config covers (IMAP fans out over the configs), so an
-//   all-IMAP user runs zero AppleScript and never depends on composite dedup.
+//   all-IMAP user runs zero AppleScript and needs no cross-backend dedup.
 // - Count tools use planCountSources, which assigns each account EXACTLY ONE
 //   source (its matching config, else AppleScript) and adds any config that
 //   matched no account once — so even a heuristic MISS can't double-count.

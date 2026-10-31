@@ -27,6 +27,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { resolve } from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { MAIL_TOOL_ANNOTATIONS } from "../src/utils/toolAnnotations.js";
 // ajv's 2020-12 entrypoint is CommonJS with `module.exports = Ajv2020` AND an
 // `exports.default` alias, so the ESM default import lands on the namespace-ish
 // object under some loaders and on the class under others — unwrap `.default`
@@ -90,6 +91,89 @@ describe("outputSchema contract (real server over stdio)", () => {
     expect(tools.length).toBeGreaterThan(0);
     const missing = tools.filter((t) => !t.outputSchema).map((t) => t.name);
     expect(missing, `tools missing an outputSchema: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("advertises reviewed effect annotations for every tool over the real transport", async () => {
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name).sort()).toEqual(
+      Object.keys(MAIL_TOOL_ANNOTATIONS).sort()
+    );
+    for (const tool of tools) {
+      for (const hint of [
+        "readOnlyHint",
+        "destructiveHint",
+        "idempotentHint",
+        "openWorldHint",
+      ] as const) {
+        expect(typeof tool.annotations?.[hint], `${tool.name}.${hint}`).toBe("boolean");
+      }
+    }
+
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    for (const name of [
+      "search-messages",
+      "get-message",
+      "list-accounts",
+      "get-template",
+      "doctor",
+    ]) {
+      expect(byName.get(name)?.annotations, name).toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      });
+    }
+    for (const name of ["send-email", "send-serial-email", "reply-to-message", "forward-message"]) {
+      expect(byName.get(name)?.annotations, name).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      });
+    }
+    // Conditional writes must not inherit the harmless default/inline mode.
+    for (const name of [
+      "get-message-rfc822",
+      "create-newsletter-smart-mailboxes",
+      "create-draft",
+    ]) {
+      expect(byName.get(name)?.annotations, name).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      });
+    }
+    for (const name of [
+      "delete-message",
+      "batch-delete-messages",
+      "save-template",
+      "create-rule",
+    ]) {
+      expect(byName.get(name)?.annotations, name).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+      });
+    }
+    expect(byName.get("enable-rule")?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+    });
+    expect(byName.get("mark-as-read")?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+  });
+
+  it("discloses permanent deletion for IMAP messages already in Trash", async () => {
+    const { tools } = await client.listTools();
+    for (const name of ["delete-message", "batch-delete-messages"]) {
+      const description = tools.find((tool) => tool.name === name)?.description;
+      expect(description, name).toContain("permanently expunged");
+      expect(description, name).toContain("Numeric ids use Mail.app's delete behavior");
+    }
   });
 
   it("every outputSchema is permissive — no required fields", async () => {

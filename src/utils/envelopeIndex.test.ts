@@ -524,6 +524,27 @@ describeIfSqlite("readMessageFromStore", () => {
     expect(html).toMatchObject({ htmlContent: "<p>Please <b>approve</b></p>" });
   });
 
+  it.each(["[Gmail]/All Mail", "INBOX"])(
+    "reads a scoped message from its physical mailbox or label %s",
+    (mailbox) => {
+      expect(
+        readMessageFromStore(101, { store, scope: { accountId: GMAIL, mailbox } })
+      ).toMatchObject({
+        rfcMessageId: "inv-101@acme.com",
+        plainText: expect.stringContaining("Amount due: $40."),
+      });
+    }
+  );
+
+  it.each([
+    { accountId: WORK, mailbox: "Inbox" },
+    { accountId: GMAIL, mailbox: "Sent" },
+  ])("does not read a file outside requested index scope %j", (scope) => {
+    expect(readMessageFromStore(101, { store, scope })).toMatchObject({
+      reason: expect.any(String),
+    });
+  });
+
   it("reads a partially downloaded message and says so", () => {
     expect(readMessageFromStore(102, { store })).toMatchObject({
       subject: "Re: Your receipt",

@@ -420,6 +420,18 @@ export interface SerialEmailResult {
 
   /** Error message if sending failed */
   error?: string;
+
+  /** SMTP returned no definitive submission result; verify before retrying. */
+  deliveryUnknown?: boolean;
+
+  /** SMTP accepted this submission for some recipients but rejected others. */
+  partial?: boolean;
+
+  /** SMTP envelope recipients accepted for the submitted message. */
+  accepted?: string[];
+
+  /** SMTP envelope recipients refused by the server. */
+  rejected?: string[];
 }
 
 // =============================================================================
@@ -648,17 +660,25 @@ export interface EmailTemplate {
  * Status of Mail.app sync activity.
  */
 export interface SyncStatus {
-  /** Whether sync activity was detected */
-  syncDetected: boolean;
+  /** Observed application state; absent when the status read failed. */
+  mailRunning?: boolean;
+  accountCount?: number;
+  mailboxCount?: number;
+  /** A running app does not establish whether it is synchronizing. */
+  syncState: "unknown" | "not-running" | "unavailable";
+  reason?: string;
+
+  /** Omitted unless the check can establish a sync observation. */
+  syncDetected?: boolean;
 
   /** Number of items pending upload */
-  pendingUpload: number;
+  pendingUpload?: number;
 
   /** Whether there was recent database activity */
-  recentActivity: boolean;
+  recentActivity?: boolean;
 
   /** Seconds since last database change */
-  secondsSinceLastChange: number;
+  secondsSinceLastChange?: number;
 
   /** Error message if status check failed */
   error?: string;

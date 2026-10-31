@@ -64,6 +64,9 @@ jobs:
       - name: Type check
         run: pnpm run typecheck
 
+      - name: Test release and version guards
+        run: node --test .github/scripts/*.test.mjs
+
       - name: Run tests with coverage
         run: pnpm run test:coverage
 
@@ -109,9 +112,9 @@ jobs:
           path: ${{ runner.temp }}/apple-mail-codex-plugin.tar.gz
           if-no-files-found: error
 
-      - name: outputSchema contract (boots the built server over stdio)
+      - name: Integration contracts (boots the built server over stdio)
         if: matrix.node-version == 22
-        run: pnpm exec vitest run --config vitest.integration.config.ts test/output-schema.test.ts
+        run: pnpm run test:integration
 
   # The committed bundle must run with ONLY Node — no node_modules, and on the
   # oldest supported runtime (engines.node >= 20). This is exactly how a

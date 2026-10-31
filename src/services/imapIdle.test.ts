@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { ImapFlow } from "imapflow";
 import { ImapIdleWatcher, type IdleClient } from "@/services/imapIdle.js";
 import type { ImapConfig } from "@/services/imapClient.js";
 
@@ -42,6 +43,31 @@ function fakeClient(initialExists = 0) {
 }
 
 describe("ImapIdleWatcher (B5)", () => {
+  it("settles startup when closing a pending connector does not reject connect", async () => {
+    // ImapFlow can close before its socket-connect callback installs the
+    // rejection handler. The socket closes, but connect() remains pending.
+    const connect = vi
+      .spyOn(ImapFlow.prototype, "connect")
+      .mockReturnValue(new Promise<void>(() => {}));
+    const close = vi.spyOn(ImapFlow.prototype, "close");
+    const w = new ImapIdleWatcher({
+      configs: [cfg("A")],
+      onNewMail: vi.fn(),
+      pollMs: 0,
+    });
+    try {
+      const starting = w.start();
+      await w.stop();
+      expect(close).toHaveBeenCalled();
+      await starting;
+      expect(w.watchedAccounts()).toEqual([]);
+    } finally {
+      await w.stop();
+      connect.mockRestore();
+      close.mockRestore();
+    }
+  }, 1000);
+
   it("opens INBOX per account and fires onNewMail on count growth (deduped)", async () => {
     const events: { account: string; count: number }[] = [];
     const clients: Record<string, ReturnType<typeof fakeClient>> = {};
@@ -153,5 +179,143 @@ describe("ImapIdleWatcher (B5)", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(connects).toBe(1);
     vi.useRealTimers();
+  });
+
+  it("closes a connection that finishes after stop instead of watching it", async () => {
+    let connected!: (client: IdleClient) => void;
+    const pending = new Promise<IdleClient>((resolve) => (connected = resolve));
+    const client = fakeClient();
+    const w = new ImapIdleWatcher({
+      configs: [cfg("A")],
+      onNewMail: vi.fn(),
+      connect: () => pending,
+      pollMs: 0,
+    });
+    const starting = w.start();
+    await w.stop();
+    connected(client);
+    await starting;
+    try {
+      expect(w.watchedAccounts()).toEqual([]);
+      expect(client.loggedOut).toBe(true);
+      expect(client.opened).toEqual([]);
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("does not let an old pending connection replace a restarted watch", async () => {
+    let connected!: (client: IdleClient) => void;
+    const pending = new Promise<IdleClient>((resolve) => (connected = resolve));
+    const old = fakeClient(0);
+    const current = fakeClient(10);
+    const events: unknown[] = [];
+    let connects = 0;
+    const w = new ImapIdleWatcher({
+      configs: [cfg("A")],
+      onNewMail: (e) => events.push(e),
+      connect: () => (++connects === 1 ? pending : Promise.resolve(current)),
+      pollMs: 0,
+    });
+    const starting = w.start();
+    await w.stop();
+    await w.start();
+    connected(old);
+    await starting;
+    try {
+      expect(old.loggedOut).toBe(true);
+      expect(old.opened).toEqual([]);
+      current.emit("exists", { count: 11 });
+      expect(events).toEqual([{ account: "A", count: 11, prevCount: 10 }]);
+    } finally {
+      await w.stop();
+    }
+    expect(current.loggedOut).toBe(true);
+  });
+
+  it("ignores an old connection's events after reconnecting", async () => {
+    vi.useFakeTimers();
+    const old = fakeClient();
+    const current = fakeClient(10);
+    const onNewMail = vi.fn();
+    let connects = 0;
+    const w = new ImapIdleWatcher({
+      configs: [cfg("A")],
+      onNewMail,
+      connect: async () => (++connects === 1 ? old : current),
+      reconnectMs: 100,
+      pollMs: 0,
+    });
+    try {
+      await w.start();
+      old.emit("close");
+      await vi.advanceTimersByTimeAsync(100);
+      old.emit("exists", { count: 100 });
+      old.emit("error");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(connects).toBe(2);
+      expect(current.loggedOut).toBe(false);
+      expect(onNewMail).not.toHaveBeenCalled();
+      current.emit("exists", { count: 11 });
+      expect(onNewMail).toHaveBeenCalledWith({ account: "A", count: 11, prevCount: 10 });
+    } finally {
+      await w.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores an old mailbox selection that completes after restart", async () => {
+    let selected!: (mailbox: { exists: number }) => void;
+    const selection = new Promise<{ exists: number }>((resolve) => (selected = resolve));
+    const old = fakeClient();
+    vi.spyOn(old, "mailboxOpen").mockReturnValue(selection);
+    const current = fakeClient(50);
+    const onNewMail = vi.fn();
+    let connects = 0;
+    const w = new ImapIdleWatcher({
+      configs: [cfg("A")],
+      onNewMail,
+      connect: async () => (++connects === 1 ? old : current),
+      pollMs: 0,
+    });
+    const starting = w.start();
+    await Promise.resolve(); // the first connection is waiting for mailboxOpen
+    await w.stop();
+    await w.start();
+    selected({ exists: 0 });
+    await starting;
+    try {
+      current.emit("exists", { count: 10 }); // expunge, not new mail
+      expect(onNewMail).not.toHaveBeenCalled();
+    } finally {
+      await w.stop();
+    }
+  });
+
+  it("ignores new-mail events and in-flight poll results after stop", async () => {
+    vi.useFakeTimers();
+    let polled!: (mailbox: { exists: number }) => void;
+    const poll = new Promise<{ exists: number }>((resolve) => (polled = resolve));
+    const client = fakeClient();
+    vi.spyOn(client, "mailboxOpen").mockResolvedValueOnce({ exists: 0 }).mockReturnValueOnce(poll);
+    const onNewMail = vi.fn();
+    const w = new ImapIdleWatcher({
+      configs: [cfg("A")],
+      onNewMail,
+      connect: async () => client,
+      pollMs: 100,
+    });
+    try {
+      await w.start();
+      await vi.advanceTimersByTimeAsync(100);
+      await w.stop();
+      polled({ exists: 1 });
+      await Promise.resolve();
+      client.emit("exists", { count: 2 });
+      expect(onNewMail).not.toHaveBeenCalled();
+    } finally {
+      await w.stop();
+      vi.useRealTimers();
+    }
   });
 });

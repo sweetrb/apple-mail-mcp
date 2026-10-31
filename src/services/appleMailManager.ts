@@ -19,7 +19,6 @@ import {
   chmodSync,
   existsSync,
   writeFileSync,
-  readFileSync,
   readdirSync,
   unlinkSync,
   copyFileSync,
@@ -28,12 +27,16 @@ import {
   rmSync,
   realpathSync,
   lstatSync,
+  openSync,
+  fstatSync,
+  readSync,
+  closeSync,
 } from "fs";
 import { resolve, sep, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
-import { flagColorName, isGmailHost } from "@/services/imapClient.js";
+import { flagColorName, isGmailHost, MAX_UNSCOPED_SEARCH_DEPTH } from "@/services/imapClient.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { plausibleDateSent } from "@/utils/headers.js";
@@ -45,6 +48,10 @@ import {
   STALLED_MAILBOX_TTL_MS,
 } from "@/services/stalledMailboxStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
+import {
+  MAX_FETCH_ATTACHMENT_BYTES,
+  FETCH_ATTACHMENT_TOO_LARGE,
+} from "@/utils/attachmentLimits.js";
 import { extractAddress, pickSenderAddress, senderGuardScript } from "@/utils/senderAccount.js";
 import { nativeEditorPreflight, insertNativeAuthoredBody } from "@/services/nativeMailComposer.js";
 import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
@@ -4091,9 +4098,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    *   source can be MB-sized (it includes base64 attachments) and the plain-text
    *   path doesn't need it; fetching it unconditionally was both slow and, worse,
    *   returned the entire raw MIME blob mislabeled as HTML (#32).
-   * @param hint - Explicit account + mailbox (both required to take effect):
-   *   the read opens that one mailbox and, on a miss, reports "not found in
-   *   <account> / <mailbox>" without scanning anywhere else (#270).
+   * @param hint - An account narrows the read to that account. Paired with a
+   *   mailbox, the read opens only that mailbox and reports a scoped miss
+   *   without scanning anywhere else (#270).
    */
   getMessageContent(
     id: string,
@@ -4108,11 +4115,20 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     }
     // Opt-in disk read (Envelope Index → .emlx): no `whose id is` lookup, which
     // times out on very large mailboxes. Any miss falls through to AppleScript.
-    // Compose explicitly requires a scoped read: the local envelope index
-    // resolves by numeric id alone and cannot prove that it belongs there.
-    // Other reads retain the existing opt-in index behavior.
+    // Ordinary scoped reads verify the account id and mailbox/label membership
+    // before opening the file. If the index can't establish scope, only the
+    // caller's scoped AppleScript lookup may answer. Composition still requires
+    // its live scoped lookup so a stale index cannot choose a compose target.
     if (isEnvelopeIndexEnabled() && /^\d+$/.test(id) && !options?.requireScopedLocation) {
-      const stored = readMessageFromStore(Number(id), { includeHtml });
+      const requestedAccount = hint?.account;
+      const accountId = requestedAccount ? this.getAccountId(requestedAccount) : null;
+      const stored =
+        requestedAccount && !accountId
+          ? { reason: "requested account id unavailable" }
+          : readMessageFromStore(Number(id), {
+              includeHtml,
+              ...(accountId ? { scope: { accountId, mailbox: hint?.mailbox } } : {}),
+            });
       if ("reason" in stored) {
         console.error(`[envelopeIndex] get ${id}: falling back to AppleScript — ${stored.reason}`);
       } else {
@@ -4262,6 +4278,39 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
   }
 
   /**
+   * Read a numeric message's source and owning location in the same lookup.
+   * SMTP replies/forwards need this binding before choosing their sender; a
+   * separate metadata lookup could resolve a different reused numeric id.
+   * Preserve the strict resolver's ambiguity checks and remembered-location
+   * behavior. An On My Mac result has its explicit local-store label, never an
+   * inferred sender account from the message's untrusted address headers.
+   */
+  getRawSourceWithLocation(id: string): { raw: string; account: string; mailbox: string } | null {
+    this.lastMessageLookupError = undefined;
+    const output = this.resolveById(
+      id,
+      `set _sourceMailbox to ""
+       ${mailboxPathFragment("_hitMb", "_sourceMailbox")}
+       if _hitAcct contains "${FIELD_SEP}" or _sourceMailbox contains "${FIELD_SEP}" then return "invalid-source-scope"
+       return _hitAcct & "${FIELD_SEP}" & _sourceMailbox & "${FIELD_SEP}" & (source of msg)`,
+      undefined
+    );
+    if (output === null) return null;
+    const first = output.indexOf(FIELD_SEP);
+    const second = output.indexOf(FIELD_SEP, first + 1);
+    if (first < 1 || second <= first + 1 || !output.slice(second + 1).trim()) {
+      this.lastMessageLookupError =
+        "Mail could not return a readable source with its account and mailbox.";
+      return null;
+    }
+    return {
+      account: output.slice(0, first),
+      mailbox: output.slice(first + 1, second),
+      raw: output.slice(second + 1),
+    };
+  }
+
+  /**
    * List messages in a mailbox.
    *
    * @param mailbox - Mailbox to list from (default: INBOX)
@@ -4274,9 +4323,11 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     account?: string,
     limit = 50,
     from?: string,
-    offset = 0
+    offset = 0,
+    unreadOnly = false
   ): Message[] {
-    return this.listMessagesWithDiagnostics(mailbox, account, limit, from, offset).messages;
+    return this.listMessagesWithDiagnostics(mailbox, account, limit, from, offset, unreadOnly)
+      .messages;
   }
 
   /**
@@ -4296,10 +4347,20 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     account?: string,
     limit = 50,
     from?: string,
-    offset = 0
+    offset = 0,
+    unreadOnly = false
   ): SearchResult {
-    // If no account specified, list across all accounts and merge diagnostics.
+    // Each account supplies a prefix; offset belongs to the combined chronology.
+    // Applying it independently, or stopping after the first account fills the
+    // page, can skip newer messages in a later account entirely.
     if (!account) {
+      const depth = offset + limit;
+      if (offset > 0 && depth > MAX_UNSCOPED_SEARCH_DEPTH) {
+        throw new Error(
+          "Merged account pagination supports offset + limit up to 5,000. " +
+            "Pass an explicit account and mailbox to page deeper."
+        );
+      }
       const { accounts, failed, error } = this.listAccountsChecked();
       const allMessages: Message[] = [];
       const diagnostics: SearchDiagnostics = {
@@ -4310,13 +4371,18 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       };
       if (failed) noteAccountListFailure(diagnostics, error); // #346
       for (const acct of accounts) {
-        if (allMessages.length >= limit) break;
-        const remaining = limit - allMessages.length;
         // See the identical guard in searchMessagesWithDiagnostics: an
         // ambiguous-leaf throw from resolveMailbox must degrade like every
         // other per-account failure, not discard accounts already gathered.
         try {
-          const res = this.listMessagesWithDiagnostics(mailbox, acct.name, remaining, from, offset);
+          const res = this.listMessagesWithDiagnostics(
+            mailbox,
+            acct.name,
+            depth,
+            from,
+            0,
+            unreadOnly
+          );
           allMessages.push(...res.messages);
           mergeSearchDiagnostics(diagnostics, res.diagnostics);
         } catch (err) {
@@ -4325,7 +4391,8 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           diagnostics.notSearchedMailboxes.push(`${acct.name} / ${mailbox ?? "*"}: ${message}`);
         }
       }
-      return { messages: allMessages.slice(0, limit), diagnostics };
+      allMessages.sort((a, b) => (b.dateReceived.getTime() || 0) - (a.dateReceived.getTime() || 0));
+      return { messages: allMessages.slice(offset, offset + limit), diagnostics };
     }
 
     // #183: the local store is addressed by its synthetic label and has no
@@ -4334,8 +4401,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const local = isLocalStoreLabel(account);
     const targetAccount = local ? LOCAL_STORE_LABEL : this.resolveAccount(account);
 
-    const safeFrom = from ? escapeForAppleScript(from) : "";
-    const fromFilter = from ? `whose sender contains "${safeFrom}"` : "";
+    const fromFilter = buildSearchCondition({ from, isRead: unreadOnly ? false : undefined });
     const scanThreshold = getMailboxScanThreshold();
     // What the "every mailbox" loops iterate. Inside `tell account` the bare
     // `mailboxes` binds to the account's; at application level the local branch
@@ -6458,7 +6524,10 @@ ${this.errorEmit("              ")}
   ): { success: boolean; base64?: string; bytes?: number; error?: string } {
     let dir: string | null = null;
     try {
-      dir = mkdtempSync("/private/tmp/amcp-fetch-");
+      // /tmp is an allowed root on every supported test host; resolving it
+      // retains macOS's /private/tmp identity without requiring that alias on
+      // other platforms. Never use an arbitrary TMPDIR outside the save roots.
+      dir = mkdtempSync(join(realpathSync("/tmp"), "amcp-fetch-"));
       const dest = join(dir, attachmentName.replace(/[/\\]/g, "_"));
       const ok = this.saveAttachment(id, attachmentName, dir);
       if (!ok) {
@@ -6467,8 +6536,38 @@ ${this.errorEmit("              ")}
           error: `Attachment "${attachmentName}" not found on message ${id}`,
         };
       }
-      const buf = readFileSync(dest);
-      return { success: true, base64: buf.toString("base64"), bytes: buf.length };
+      // Open once, without following a symlink, and validate the opened object.
+      // A pathname can be swapped between lstat and readFile; reading through
+      // the same descriptor also prevents a growing file from bypassing the cap.
+      const fd = openSync(
+        dest,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK
+      );
+      try {
+        const stat = fstatSync(fd);
+        if (!stat.isFile()) return { success: false, error: "Attachment is not a regular file." };
+        if (stat.size > MAX_FETCH_ATTACHMENT_BYTES) {
+          return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+        }
+        const chunks: Buffer[] = [];
+        let total = 0;
+        while (total <= MAX_FETCH_ATTACHMENT_BYTES) {
+          const chunk = Buffer.allocUnsafe(
+            Math.min(64 * 1024, MAX_FETCH_ATTACHMENT_BYTES + 1 - total)
+          );
+          const count = readSync(fd, chunk, 0, chunk.length, null);
+          if (count === 0) break;
+          total += count;
+          if (total > MAX_FETCH_ATTACHMENT_BYTES) {
+            return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+          }
+          chunks.push(chunk.subarray(0, count));
+        }
+        const buf = Buffer.concat(chunks, total);
+        return { success: true, base64: buf.toString("base64"), bytes: buf.length };
+      } finally {
+        closeSync(fd);
+      }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) };
     } finally {
@@ -8013,33 +8112,17 @@ ${actionStmts.join("\n")}
   }
 
   /**
-   * Get sync status for Mail.app.
-   *
-   * Checks for sync activity indicators like:
-   * - Activity monitor status
-   * - Network activity status
-   * - Background refresh indicators
+   * Observe whether Mail.app is running and its configured account/mailbox
+   * counts. These are not evidence of synchronization, pending uploads, or a
+   * recent database change: the AppleScript interface exposes none of those
+   * measurements here. Preserve that uncertainty instead of inventing zeros.
    *
    * @returns Sync status information
    */
   getSyncStatus(): SyncStatus {
-    // Check for Mail.app background activity and sync status
-    // Mail.app doesn't expose sync status directly through AppleScript,
-    // so we check for recent changes and activity indicators
-    const script = buildAppLevelScript(`
-      set syncInfo to ""
-
-      -- Check if Mail.app is running
-      tell application "System Events"
-        set mailRunning to (name of processes) contains "Mail"
-      end tell
-
-      if not mailRunning then
-        return "not_running"
-      end if
-
-      -- Check for background activity by looking at message counts changing
-      -- This is a proxy for sync activity since Mail doesn't expose sync status
+    // Reuse the non-launching guard. A status query must not start Mail or
+    // require System Events permission merely to inspect its running state.
+    const script = buildAppLevelScriptIfRunning(`
       set accountCount to count of accounts
       set totalMailboxes to 0
       repeat with acct in accounts
@@ -8055,36 +8138,40 @@ ${actionStmts.join("\n")}
 
     if (!result.success) {
       return {
-        syncDetected: false,
-        pendingUpload: 0,
-        recentActivity: false,
-        secondsSinceLastChange: -1,
-        error: result.error,
+        syncState: "unavailable",
+        error: result.error || "Could not read Mail.app status",
       };
     }
 
-    if (result.output === "not_running") {
+    if (result.output.startsWith(MAIL_NOT_RUNNING_MARKER)) {
       return {
+        mailRunning: false,
+        syncState: "not-running",
         syncDetected: false,
-        pendingUpload: 0,
-        recentActivity: false,
-        secondsSinceLastChange: -1,
-        error: "Mail.app is not running",
+        reason: "Mail.app is not running; provider synchronization was not checked.",
       };
     }
 
-    // Parse the response
     const parts = result.output.split(FIELD_SEP);
-    const isRunning = parts[0] === "running";
-    const accountCount = parseInt(parts[1]) || 0;
+    if (
+      parts.length !== 3 ||
+      parts[0] !== "running" ||
+      !/^\d+$/.test(parts[1]) ||
+      !/^\d+$/.test(parts[2]) ||
+      !Number.isSafeInteger(Number(parts[1])) ||
+      !Number.isSafeInteger(Number(parts[2]))
+    ) {
+      return { syncState: "unavailable", error: "Mail.app returned an invalid status observation" };
+    }
 
-    // Mail.app is running with accounts configured - assume sync is active
-    // (Mail.app syncs automatically when running)
     return {
-      syncDetected: isRunning && accountCount > 0,
-      pendingUpload: 0, // Not exposed by Mail.app
-      recentActivity: isRunning,
-      secondsSinceLastChange: 0,
+      mailRunning: true,
+      accountCount: Number(parts[1]),
+      mailboxCount: Number(parts[2]),
+      syncState: "unknown",
+      reason:
+        "Running state and account counts do not establish sync activity. " +
+        "Mail.app does not expose pending uploads or last-change timing through this check.",
     };
   }
 }

@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 
@@ -83,6 +91,7 @@ describe("attachment path boundaries", () => {
   it("uses a temporary directory when fetching attachment bytes", () => {
     const mgr = new AppleMailManager();
     const save = vi.spyOn(mgr, "saveAttachment").mockImplementation((_id, name, directory) => {
+      expect(statSync(directory).mode & 0o777).toBe(0o700);
       writeFileSync(join(directory, name), "payload");
       return true;
     });
@@ -92,6 +101,21 @@ describe("attachment path boundaries", () => {
     expect(result.success).toBe(true);
     expect(Buffer.from(result.base64 as string, "base64").toString()).toBe("payload");
     expect(save.mock.calls[0][2]).not.toMatch(/report\.txt$/);
+    expect(existsSync(save.mock.calls[0][2])).toBe(false);
+  });
+
+  it("refuses an oversized native inline attachment and cleans up the staged file", () => {
+    const mgr = new AppleMailManager();
+    const save = vi.spyOn(mgr, "saveAttachment").mockImplementation((_id, name, directory) => {
+      writeFileSync(join(directory, name), Buffer.alloc(3 * 1024 * 1024 + 1));
+      return true;
+    });
+    const result = mgr.getAttachmentBase64("1", "large.bin");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("3 MiB");
+    expect(result.error).toContain("save-attachment");
+    expect(result.base64).toBeUndefined();
+    expect(existsSync(save.mock.calls[0][2])).toBe(false);
   });
 
   it("creates MIME fallback files with owner-only permissions", () => {
