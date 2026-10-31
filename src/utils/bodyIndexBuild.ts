@@ -28,14 +28,15 @@
  *    comes first, closing its connection on the way out.
  *  - **Says it is alive** every {@link HEARTBEAT_MS}, so the server can tell a
  *    build that stopped responding from one that is busy.
- *  - **Same version as its server, or nothing.** The server's bundle can be
- *    replaced on disk while it runs (an update); a build process started from
- *    the new files refuses work from the old server instead of guessing.
+ *  - **Same code as its server, or nothing.** The server's bundle can be
+ *    replaced on disk while it runs (an update). The `start` message carries
+ *    the bundle file's identity as the server loaded it, and a protocol and
+ *    schema number; a build process started from other files refuses to run.
  *
  * @module utils/bodyIndexBuild
  */
 
-import { readdirSync } from "fs";
+import { readdirSync, statSync } from "fs";
 import { BODY_INDEX_SCHEMA_VERSION, BodyIndexWriter, type Clock } from "@/utils/bodyIndex.js";
 import type { SqliteModule } from "@/utils/envelopeIndex.js";
 import { isOrphaned } from "@/utils/orphan.js";
@@ -60,10 +61,36 @@ export interface BuilderInit {
   schemaVersion: number;
 }
 
+/** What a file is on disk, to tell whether it was replaced: device, inode, size and mtime. */
+export interface FileIdentity {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+}
+
+/** The identity of the file at `path`, or null when it can't be read. */
+export function fileIdentity(path: string): FileIdentity | null {
+  try {
+    const st = statSync(path);
+    return { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+function sameFile(a: FileIdentity, b: FileIdentity | null): boolean {
+  return (
+    b !== null && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs
+  );
+}
+
 /** Server → build process, first message: what to open. */
 export interface BuilderStart {
   type: "start";
   init: BuilderInit;
+  /** The bundle as the server loaded it; the build process checks its own entry against it. */
+  entry?: FileIdentity | null;
 }
 
 /**
@@ -220,6 +247,8 @@ export interface BuilderProcess {
   onDisconnect(fn: () => void): void;
   /** The live parent pid (1 once the parent has died). */
   ppid(): number;
+  /** The identity of the bundle this process was started from, now. */
+  entry(): FileIdentity | null;
   exit(code: number): void;
 }
 
@@ -252,7 +281,23 @@ export function runBuilderProcess(
   proc.onMessage((msg) => {
     if (done) return;
     if (msg.type === "start") {
-      loop ??= runBuilder(
+      if (loop) return;
+      // An update replaced the bundle after the server loaded it: this process
+      // runs other code than the server, which builds with its own instead.
+      if (msg.entry && !sameFile(msg.entry, proc.entry())) {
+        try {
+          proc.send({
+            type: "failed",
+            where: "version",
+            message:
+              "the server's files were replaced on disk after it started (an update), so a build process would run other code than the server",
+          });
+        } catch {
+          quit();
+        }
+        return;
+      }
+      loop = runBuilder(
         {
           postMessage: (m) => {
             try {

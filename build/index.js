@@ -99857,11 +99857,12 @@ function searchContactsDb(query, opts) {
 
 // src/utils/envelopeIndex.ts
 init_mimeParse();
-import { existsSync as existsSync5, readFileSync as readFileSync3, readdirSync as readdirSync4 } from "fs";
+import { closeSync as closeSync2, existsSync as existsSync5, openSync as openSync2, readFileSync as readFileSync3, readSync as readSync2, readdirSync as readdirSync4 } from "fs";
 import { join as join8 } from "path";
 import { homedir as homedir6 } from "os";
 
 // src/utils/emlx.ts
+init_mimeParse();
 import { existsSync as existsSync3, readdirSync as readdirSync2 } from "fs";
 import { join as join6 } from "path";
 function dataSubdirs(id) {
@@ -99892,12 +99893,76 @@ function emlxSource(bytes) {
   if (!Number.isInteger(count) || count <= 0) return null;
   return bytes.subarray(nl + 1, nl + 1 + count).toString("latin1");
 }
+function asciiWordAt(s, at, word) {
+  for (let k = 0; k < word.length; k++) {
+    const c = s.charCodeAt(at + k);
+    if (c !== word.charCodeAt(k) && !(c >= 65 && c <= 90 && (c | 32) === word.charCodeAt(k))) {
+      return false;
+    }
+  }
+  return true;
+}
+function closingTagAt(html, tag, from) {
+  for (let i = html.indexOf("</", from); i !== -1; i = html.indexOf("</", i + 2)) {
+    if (asciiWordAt(html, i + 2, tag) && html.charCodeAt(i + 2 + tag.length) === 62) return i;
+  }
+  return -1;
+}
+function dropScriptsAndStyles(html) {
+  const noCloseFrom = { script: Infinity, style: Infinity };
+  let out = "";
+  let kept = 0;
+  let gt = -1;
+  let at = html.indexOf("<");
+  while (at !== -1) {
+    const tag = asciiWordAt(html, at + 1, "script") ? "script" : asciiWordAt(html, at + 1, "style") ? "style" : null;
+    if (tag) {
+      const from = at + 1 + tag.length;
+      if (gt < from) gt = html.indexOf(">", from);
+      if (gt === -1) break;
+      if (gt < noCloseFrom[tag]) {
+        const close = closingTagAt(html, tag, gt + 1);
+        if (close !== -1) {
+          out += html.slice(kept, at) + " ";
+          kept = close + tag.length + 3;
+          at = html.indexOf("<", kept);
+          continue;
+        }
+        noCloseFrom[tag] = gt;
+      }
+    }
+    at = html.indexOf("<", at + 1);
+  }
+  return kept === 0 ? html : out + html.slice(kept);
+}
+function replaceTags(s) {
+  let out = "";
+  let kept = 0;
+  let at = s.indexOf("<");
+  while (at !== -1) {
+    const gt = s.indexOf(">", at + 1);
+    if (gt === -1) break;
+    if (gt > at + 1) {
+      out += s.slice(kept, at) + " ";
+      kept = gt + 1;
+      at = s.indexOf("<", kept);
+    } else {
+      at = s.indexOf("<", at + 1);
+    }
+  }
+  return kept === 0 ? s : out + s.slice(kept);
+}
 function htmlToText(html) {
-  return html.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>|<\/(p|div|tr|li|h[1-6])>/gi, "\n").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&amp;/gi, "&").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
+  return replaceTags(dropScriptsAndStyles(html).replace(/<br\s*\/?>|<\/(p|div|tr|li|h[1-6])>/gi, "\n")).replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&amp;/gi, "&").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
+}
+function messageText(source, html) {
+  const plain = extractTextBody(source);
+  if (plain !== null && plain.trim() !== "") return plain;
+  const part = html === void 0 ? extractHtmlBody(source) : html;
+  return part !== null ? htmlToText(part) : plain ?? "";
 }
 
 // src/utils/bodyIndex.ts
-init_mimeParse();
 import {
   chmodSync,
   closeSync,
@@ -99914,7 +99979,8 @@ import { basename, dirname as dirname3, join as join7 } from "path";
 import { homedir as homedir5 } from "os";
 var BODY_INDEX_FILE_ENV = "APPLE_MAIL_MCP_BODY_INDEX_FILE";
 var BODY_INDEX_APPLICATION_ID = 1095582281;
-var BODY_INDEX_SCHEMA_VERSION = 3;
+var BODY_INDEX_SCHEMA_VERSION = 4;
+var UPGRADE_IN_PLACE_FROM = 3;
 var MAX_EMLX_BYTES = 25 * 1024 * 1024;
 var MAX_BODY_CHARS = 1e5;
 var INDEX_BATCH = 200;
@@ -99930,7 +99996,12 @@ var DocState = {
    */
   partial: 2,
   /** Larger than {@link MAX_EMLX_BYTES}; not read. */
-  tooLarge: 3
+  tooLarge: 3,
+  /**
+   * Reading or parsing it failed (no permission, an I/O error, a parser
+   * exception). Not searched; queued again by the next full walk.
+   */
+  unreadable: 4
 };
 function bodyIndexPath(env = process.env) {
   const override = env[BODY_INDEX_FILE_ENV];
@@ -99944,15 +100015,32 @@ function messageIdFromFilename(name2) {
   const m = /^(\d+)(\.partial)?\.emlx$/.exec(name2);
   return m ? Number(m[1]) : null;
 }
+function inMessagesFolder(dir) {
+  return basename(dir) === "Messages";
+}
 function parseEmlxBody(bytes) {
   const source = emlxSource(bytes);
   if (source === null) return null;
-  const text = extractTextBody(source) ?? htmlToText(extractHtmlBody(source) ?? "");
-  const normalized2 = text.replace(/\s+/g, " ").trim();
+  const normalized2 = messageText(source).replace(/\s+/g, " ").trim();
   return normalized2 ? normalized2.slice(0, MAX_BODY_CHARS) : null;
 }
 function ftsPhrase(text) {
   return `"${text.replace(/"/g, '""')}"`;
+}
+var WORD_CHAR = /[\p{L}\p{N}\p{Co}]/u;
+var UNSPACED_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+var WORD_END = /[\p{L}\p{N}\p{Co}\p{M}]$/u;
+function bodyMatchQuery(text) {
+  if (text.includes("\0")) return { reason: "the body text contains a NUL character" };
+  if (!WORD_CHAR.test(text)) {
+    return { reason: "the body index matches words, and the body text has no letters or digits" };
+  }
+  if (UNSPACED_SCRIPT.test(text)) {
+    return {
+      reason: "the body index matches words, and Chinese, Japanese, Thai, Lao, Khmer and Burmese text has no spaces to split it into words"
+    };
+  }
+  return { query: WORD_END.test(text) ? `${ftsPhrase(text)}*` : ftsPhrase(text) };
 }
 var fts5Checked = null;
 function fts5Unsupported(sqlite) {
@@ -100023,7 +100111,7 @@ function stampMismatch(db, schema = "main") {
   }
   const version4 = Number(db.prepare(`PRAGMA ${schema}.user_version`).get()?.user_version ?? 0);
   if (version4 !== BODY_INDEX_SCHEMA_VERSION) {
-    return `body index is being rebuilt (schema v${version4}, this server expects v${BODY_INDEX_SCHEMA_VERSION})`;
+    return `body index is being rebuilt, or kept by another version of apple-mail-mcp (schema v${version4}, this server expects v${BODY_INDEX_SCHEMA_VERSION})`;
   }
   return null;
 }
@@ -100042,7 +100130,7 @@ var SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 function readIndexState(db, schema = "main") {
-  const counts = { indexed: 0, queued: 0, partial: 0, tooLarge: 0 };
+  const counts = { indexed: 0, queued: 0, partial: 0, tooLarge: 0, unreadable: 0 };
   for (const r of db.prepare(`SELECT state, count(*) AS n FROM ${schema}.docs GROUP BY state`).all()) {
     const n = Number(r.n);
     switch (Number(r.state)) {
@@ -100057,6 +100145,9 @@ function readIndexState(db, schema = "main") {
         break;
       case DocState.tooLarge:
         counts.tooLarge = n;
+        break;
+      case DocState.unreadable:
+        counts.unreadable = n;
         break;
     }
   }
@@ -100073,9 +100164,11 @@ function readIndexState(db, schema = "main") {
 }
 var ATTACH_ALIAS = "bi";
 function bodyMatchClause(text) {
+  const match = bodyMatchQuery(text);
+  if ("reason" in match) return match;
   return {
     sql: `m.ROWID IN (SELECT rowid FROM ${ATTACH_ALIAS}.bodies WHERE bodies MATCH ?)`,
-    args: [ftsPhrase(text)]
+    args: [match.query]
   };
 }
 function scopeCoverage(db, fromSql, where, args) {
@@ -100084,20 +100177,24 @@ function scopeCoverage(db, fromSql, where, args) {
          sum(d.id IS NULL) AS missing,
          sum(d.state = ${DocState.queued}) AS queued,
          sum(d.state = ${DocState.partial}) AS partial,
-         sum(d.state = ${DocState.tooLarge}) AS too_large
+         sum(d.state = ${DocState.tooLarge}) AS too_large,
+         sum(d.state = ${DocState.unreadable}) AS unreadable
        ${fromSql}
        LEFT JOIN ${ATTACH_ALIAS}.docs d ON d.id = m.ROWID
        WHERE ${where.join(" AND ")}`
   ).get(...args);
+  const walked = db.prepare(`SELECT 1 AS x FROM ${ATTACH_ALIAS}.meta WHERE key = 'lastFullWalk'`).get() !== void 0;
+  const missing = Number(row?.missing ?? 0);
   return {
-    notDownloaded: Number(row?.missing ?? 0),
-    notIndexedYet: Number(row?.queued ?? 0),
+    notDownloaded: walked ? missing : 0,
+    notIndexedYet: Number(row?.queued ?? 0) + (walked ? 0 : missing),
     partlyDownloaded: Number(row?.partial ?? 0),
-    tooLarge: Number(row?.too_large ?? 0)
+    tooLarge: Number(row?.too_large ?? 0),
+    unreadable: Number(row?.unreadable ?? 0)
   };
 }
 function isScopeComplete(c) {
-  return c.notDownloaded + c.notIndexedYet + c.partlyDownloaded + c.tooLarge === 0;
+  return c.notDownloaded + c.notIndexedYet + c.partlyDownloaded + c.tooLarge + c.unreadable === 0;
 }
 function describeScopeGap(c) {
   const fmt = (n) => n.toLocaleString("en-US");
@@ -100106,6 +100203,7 @@ function describeScopeGap(c) {
   if (c.notIndexedYet) parts.push(`${fmt(c.notIndexedYet)} not indexed yet`);
   if (c.partlyDownloaded) parts.push(`${fmt(c.partlyDownloaded)} with no body downloaded yet`);
   if (c.tooLarge) parts.push(`${fmt(c.tooLarge)} over the 25 MB size cap`);
+  if (c.unreadable) parts.push(`${fmt(c.unreadable)} that couldn't be read`);
   return parts.join(", ");
 }
 var realClock = { now: () => Date.now(), monotonic: () => performance.now() };
@@ -100138,12 +100236,14 @@ var StoreWalk = class {
         continue;
       }
       const names = new Set(entries.map((e) => e.name));
+      const messages = inMessagesFolder(dir);
       for (const e of entries) {
         const full = join7(dir, e.name);
         if (e.isDirectory()) {
           if (!(dir === this.versionDir && e.name === "MailData")) this.stack.push(full);
           continue;
         }
+        if (!messages) continue;
         const id = messageIdFromFilename(e.name);
         if (id === null || this.seen.has(id)) continue;
         if (e.name.endsWith(".partial.emlx") && names.has(`${id}.emlx`)) continue;
@@ -100167,6 +100267,10 @@ var StoreWalk = class {
 var WRITER_BUSY_TIMEOUT_MS = 5e3;
 function writerPragmas(db) {
   db.exec(`PRAGMA busy_timeout = ${WRITER_BUSY_TIMEOUT_MS}; PRAGMA temp_store = MEMORY`);
+}
+function rowIsCurrent(known, path3, mtime, size) {
+  return known !== void 0 && String(known.path) === path3 && Number(known.mtime) === mtime && Number(known.size) === size && // An unreadable file is tried again whenever it is seen.
+  Number(known.state) !== DocState.unreadable;
 }
 var BodyIndexWriter = class _BodyIndexWriter {
   constructor(versionDir, path3, db, rebuilt, clock2) {
@@ -100229,7 +100333,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
     }
     try {
       const version4 = Number(db.prepare(`PRAGMA user_version`).get()?.user_version ?? 0);
-      if (what === "ours" && version4 !== BODY_INDEX_SCHEMA_VERSION) {
+      if (what === "ours" && version4 !== BODY_INDEX_SCHEMA_VERSION && version4 !== UPGRADE_IN_PLACE_FROM) {
         rebuilt ??= `schema v${version4} \u2192 v${BODY_INDEX_SCHEMA_VERSION}`;
         db.exec(
           `DROP TABLE IF EXISTS docs; DROP TABLE IF EXISTS bodies; DROP TABLE IF EXISTS meta;`
@@ -100239,7 +100343,13 @@ var BodyIndexWriter = class _BodyIndexWriter {
         PRAGMA journal_mode = WAL;
         PRAGMA application_id = ${BODY_INDEX_APPLICATION_ID};
         ${SCHEMA_SQL}
+      `);
+      const upgrading = what === "ours" && version4 === UPGRADE_IN_PLACE_FROM;
+      db.exec(`
+        BEGIN IMMEDIATE;
+        ${upgrading ? `UPDATE docs SET state = ${DocState.queued} WHERE state = ${DocState.indexed} AND id NOT IN (SELECT rowid FROM bodies);` : ""}
         PRAGMA user_version = ${BODY_INDEX_SCHEMA_VERSION};
+        COMMIT;
       `);
       privateSidecars(path3);
       const w = new _BodyIndexWriter(versionDir, path3, db, rebuilt, clock2);
@@ -100305,7 +100415,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
     const walk = this.walk;
     if (!walk) return false;
     const t0 = this.clock.monotonic();
-    const get = this.prep(`SELECT path, mtime, size FROM docs WHERE id = ?`);
+    const get = this.prep(`SELECT path, mtime, size, state FROM docs WHERE id = ?`);
     const queue = this.prep(
       `INSERT INTO docs (id, path, mtime, size, state) VALUES (?, ?, ?, ?, ${DocState.queued})
        ON CONFLICT(id) DO UPDATE SET path = excluded.path, mtime = excluded.mtime,
@@ -100315,10 +100425,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       finished3 = walk.step(t0 + budgetMs, this.clock, (id, path3, mtime, size) => {
-        const known = get.get(id);
-        if (!known || String(known.path) !== path3 || Number(known.mtime) !== mtime || Number(known.size) !== size) {
-          queue.run(id, path3, mtime, size);
-        }
+        if (!rowIsCurrent(get.get(id), path3, mtime, size)) queue.run(id, path3, mtime, size);
       });
       if (finished3) this.dropMissing(walk);
       this.db.exec("COMMIT");
@@ -100370,20 +100477,28 @@ var BodyIndexWriter = class _BodyIndexWriter {
   }
   /**
    * Index queued messages, newest id first, until `budgetMs` has passed.
-   * Returns how many were processed. A file that can't be read or carries no
-   * text is still marked done, so it isn't retried on every step. Each batch
-   * is picked inside its own write transaction, so two connections indexing
-   * at once never parse the same message twice.
+   * Returns how many were processed. Each message ends in a state: indexed
+   * (with or without text), partial, too large, or unreadable when reading or
+   * parsing it failed — never left to fail the whole batch again, so one bad
+   * file can't stall the index. A file that vanished drops its row: it is no
+   * longer the message's file. Each batch is picked inside its own write
+   * transaction, so two connections indexing at once never parse the same
+   * message twice. `maxBytes` leaves larger files for later (a search's
+   * catch-up uses it, so it never waits on a big parse).
    */
-  indexStep(budgetMs) {
+  indexStep(budgetMs, opts = {}) {
     const deadline = this.clock.monotonic() + budgetMs;
     const next = this.prep(
-      `SELECT id, path FROM docs WHERE state = ${DocState.queued} ORDER BY id DESC LIMIT ${INDEX_BATCH}`
+      `SELECT id, path FROM docs WHERE state = ${DocState.queued}
+       ${opts.maxBytes === void 0 ? "" : `AND size <= ${Math.floor(opts.maxBytes)}`}
+       ORDER BY id DESC LIMIT ${INDEX_BATCH}`
     );
     const setState = this.prep(`UPDATE docs SET state = ? WHERE id = ?`);
+    const delDoc = this.prep(`DELETE FROM docs WHERE id = ?`);
     const delBody = this.deleteBodyStatement();
     const addBody = this.prep(`INSERT INTO bodies (rowid, body) VALUES (?, ?)`);
     let done = 0;
+    const failures = /* @__PURE__ */ new Set();
     let more = true;
     while (more && this.clock.monotonic() < deadline) {
       this.db.exec("BEGIN IMMEDIATE");
@@ -100394,17 +100509,23 @@ var BodyIndexWriter = class _BodyIndexWriter {
           if (done > 0 && this.clock.monotonic() >= deadline) break;
           const id = Number(r.id);
           const path3 = String(r.path);
-          const read = readEmlxCapped(path3);
+          const outcome = readAndParse(path3);
           delBody.run(id);
-          if (read === "tooLarge") {
-            setState.run(DocState.tooLarge, id);
+          if (outcome.state === "gone") {
+            delDoc.run(id);
           } else {
-            const text = read === null ? null : parseEmlxBody(read);
-            if (text) addBody.run(id, text);
-            const bodyMissing = !text && path3.endsWith(".partial.emlx");
-            setState.run(bodyMissing ? DocState.partial : DocState.indexed, id);
+            if (outcome.text) addBody.run(id, outcome.text);
+            setState.run(outcome.state, id);
+            if (outcome.failure) failures.add(outcome.failure);
           }
           done++;
+        }
+        if (failures.size > 0) {
+          this.setMeta(
+            "lastError",
+            `${new Date(this.clock.now()).toISOString()} some message files couldn't be read (${[...failures].join(", ")}); they are tried again on the next full walk`
+          );
+          failures.clear();
         }
         this.db.exec("COMMIT");
       } catch (err) {
@@ -100423,7 +100544,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
    * the full file for the same id exists.
    */
   applyChanges(paths) {
-    const get = this.prep(`SELECT path, mtime, size FROM docs WHERE id = ?`);
+    const get = this.prep(`SELECT path, mtime, size, state FROM docs WHERE id = ?`);
     const queue = this.prep(
       `INSERT INTO docs (id, path, mtime, size, state) VALUES (?, ?, ?, ?, ${DocState.queued})
        ON CONFLICT(id) DO UPDATE SET path = excluded.path, mtime = excluded.mtime,
@@ -100436,7 +100557,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
       for (const path3 of paths) {
         const name2 = basename(path3);
         const id = messageIdFromFilename(name2);
-        if (id === null) continue;
+        if (id === null || !inMessagesFolder(dirname3(path3))) continue;
         let st;
         try {
           st = statSync2(path3);
@@ -100455,9 +100576,7 @@ var BodyIndexWriter = class _BodyIndexWriter {
           continue;
         }
         const mtime = Math.floor(st.mtimeMs);
-        if (known && String(known.path) === path3 && Number(known.mtime) === mtime && Number(known.size) === st.size) {
-          continue;
-        }
+        if (rowIsCurrent(known, path3, mtime, st.size)) continue;
         queue.run(id, path3, mtime, st.size);
       }
       this.db.exec("COMMIT");
@@ -100479,12 +100598,28 @@ var BodyIndexWriter = class _BodyIndexWriter {
 };
 var READ_BUFFER_BYTES = 1024 * 1024;
 var readBuffer = Buffer.allocUnsafe(0);
+function readAndParse(path3) {
+  const read = readEmlxCapped(path3);
+  if (read === "tooLarge") return { state: DocState.tooLarge };
+  if (!Buffer.isBuffer(read)) {
+    return read.code === "ENOENT" || read.code === "ENOTDIR" ? { state: "gone" } : { state: DocState.unreadable, failure: read.code };
+  }
+  let text;
+  try {
+    text = parseEmlxBody(read);
+  } catch {
+    return { state: DocState.unreadable, failure: "parse error" };
+  }
+  if (!text && path3.endsWith(".partial.emlx")) return { state: DocState.partial };
+  return { state: DocState.indexed, text };
+}
 function readEmlxCapped(path3) {
+  const failed = (err) => ({ code: err.code ?? "EIO" });
   let fd;
   try {
     fd = openSync(path3, "r");
-  } catch {
-    return null;
+  } catch (err) {
+    return failed(err);
   }
   try {
     const size = fstatSync(fd).size;
@@ -100501,8 +100636,8 @@ function readEmlxCapped(path3) {
       off += n;
     }
     return buf.subarray(0, off);
-  } catch {
-    return null;
+  } catch (err) {
+    return failed(err);
   } finally {
     closeSync(fd);
   }
@@ -100600,6 +100735,55 @@ function checkSchema(db) {
 function likePattern(text) {
   return `%${text.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 }
+function foldKey(ch) {
+  if (ch === "\u0130") return "i";
+  const upper = ch.toUpperCase();
+  const lower = ([...upper].length === 1 ? upper : ch).toLowerCase();
+  return [...lower].length === 1 ? lower : ch;
+}
+var caseClasses = null;
+function buildCaseClasses() {
+  const byKey = /* @__PURE__ */ new Map();
+  for (let cp = 0; cp <= 131071; cp++) {
+    if (cp >= 55296 && cp <= 57343) continue;
+    const c = String.fromCodePoint(cp);
+    if (c.toUpperCase() === c && c.toLowerCase() === c) continue;
+    const key = foldKey(c);
+    const members2 = byKey.get(key);
+    if (members2) members2.push(c);
+    else byKey.set(key, [c]);
+  }
+  const classes = /* @__PURE__ */ new Map();
+  for (const [key, members2] of byKey) {
+    if (!members2.includes(key)) members2.push(key);
+    if (members2.length > 1) for (const m of members2) classes.set(m, members2);
+  }
+  return classes;
+}
+function caseClass(ch) {
+  if (ch.charCodeAt(0) < 128) {
+    const other = ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase();
+    return other === ch ? [ch] : [ch, other];
+  }
+  caseClasses ??= buildCaseClasses();
+  const members2 = caseClasses.get(ch);
+  return members2 ? [ch, ...members2.filter((m) => m !== ch)] : [ch];
+}
+function needsUnicodeCaseFold(text) {
+  for (const ch of text) {
+    if (ch.charCodeAt(0) >= 128 && caseClass(ch).length > 1) return true;
+  }
+  return false;
+}
+function containsGlob(text) {
+  let pattern = "*";
+  for (const ch of text) {
+    const forms = caseClass(ch);
+    if (forms.length > 1) pattern += `[${forms.join("")}]`;
+    else pattern += ch === "*" || ch === "?" || ch === "[" ? `[${ch}]` : ch;
+  }
+  return `${pattern}*`;
+}
 function parseFilterDate(value) {
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
   return iso ? new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])) : new Date(value);
@@ -100611,14 +100795,15 @@ function upperBound(dateTo) {
 }
 function resolveMailboxIds(db, accountId, mailbox) {
   const rows = db.prepare(`SELECT ROWID AS id, url FROM mailboxes WHERE url LIKE ?`).all(`%://${accountId}/%`);
-  const wanted = mailbox.replace(/\/+$/, "").toLowerCase();
+  const fold = (p) => p.normalize("NFC").toLowerCase();
+  const wanted = fold(mailbox.replace(/\/+$/, ""));
   const exact = [];
   const leaf = [];
   for (const r of rows) {
     const parsed = parseMailboxUrl(String(r.url ?? ""));
     if (!parsed || parsed.accountId !== accountId) continue;
     const path3 = parsed.path;
-    const lower = path3.toLowerCase();
+    const lower = fold(path3);
     if (lower === wanted) exact.push({ id: Number(r.id), path: path3 });
     else if (lower.split("/").pop() === wanted) leaf.push({ id: Number(r.id), path: path3 });
   }
@@ -100636,6 +100821,14 @@ function toDate(seconds) {
   return Number.isFinite(n) && n > 0 ? new Date(n * 1e3) : void 0;
 }
 function searchOpenIndex(db, features, params) {
+  if ([params.query, params.subject, params.from].some((t) => t?.includes("\0"))) {
+    return { ok: false, reason: "a text filter contains a NUL character" };
+  }
+  const dateFrom = params.dateFrom ? parseFilterDate(params.dateFrom).getTime() : void 0;
+  const dateTo = params.dateTo ? upperBound(params.dateTo).getTime() : void 0;
+  if ([dateFrom, dateTo].some((t) => t !== void 0 && !Number.isFinite(t))) {
+    return { ok: false, reason: "unreadable date filter" };
+  }
   const where = ["m.deleted = 0"];
   const args = [];
   let scopedPath;
@@ -100659,20 +100852,19 @@ function searchOpenIndex(db, features, params) {
   }
   const subjectExpr = features.subjectPrefix ? `COALESCE(m.subject_prefix, '') || COALESCE(s.subject, '')` : `COALESCE(s.subject, '')`;
   const senderExpr = `COALESCE(a.comment, '') || ' <' || COALESCE(a.address, '') || '>'`;
+  const contains = (expr, text) => {
+    if (needsUnicodeCaseFold(text)) {
+      args.push(containsGlob(text));
+      return `${expr} GLOB ?`;
+    }
+    args.push(likePattern(text));
+    return `lower(${expr}) LIKE ? ESCAPE '\\'`;
+  };
   if (params.query) {
-    where.push(
-      `(lower(${subjectExpr}) LIKE ? ESCAPE '\\' OR lower(${senderExpr}) LIKE ? ESCAPE '\\')`
-    );
-    args.push(likePattern(params.query), likePattern(params.query));
+    where.push(`(${contains(subjectExpr, params.query)} OR ${contains(senderExpr, params.query)})`);
   }
-  if (params.subject) {
-    where.push(`lower(${subjectExpr}) LIKE ? ESCAPE '\\'`);
-    args.push(likePattern(params.subject));
-  }
-  if (params.from) {
-    where.push(`lower(${senderExpr}) LIKE ? ESCAPE '\\'`);
-    args.push(likePattern(params.from));
-  }
+  if (params.subject) where.push(contains(subjectExpr, params.subject));
+  if (params.from) where.push(contains(senderExpr, params.from));
   if (params.isRead !== void 0) {
     where.push(`m.read = ?`);
     args.push(params.isRead ? 1 : 0);
@@ -100681,13 +100873,13 @@ function searchOpenIndex(db, features, params) {
     where.push(`m.flagged = ?`);
     args.push(params.isFlagged ? 1 : 0);
   }
-  if (params.dateFrom) {
+  if (dateFrom !== void 0) {
     where.push(`m.date_received >= ?`);
-    args.push(Math.floor(parseFilterDate(params.dateFrom).getTime() / 1e3));
+    args.push(Math.floor(dateFrom / 1e3));
   }
-  if (params.dateTo) {
+  if (dateTo !== void 0) {
     where.push(`m.date_received <= ?`);
-    args.push(Math.floor(upperBound(params.dateTo).getTime() / 1e3));
+    args.push(Math.floor(dateTo / 1e3));
   }
   if (params.rowIds) {
     where.push(`m.ROWID IN (SELECT value FROM json_each(?))`);
@@ -100698,11 +100890,12 @@ function searchOpenIndex(db, features, params) {
     LEFT JOIN subjects s ON m.subject = s.ROWID
     LEFT JOIN addresses a ON m.sender = a.ROWID
     LEFT JOIN mailboxes mb ON m.mailbox = mb.ROWID`;
-  const bodyCoverage = params.body ? scopeCoverage(db, fromSql, where, args) : void 0;
+  const clause = params.body ? bodyMatchClause(params.body.text) : void 0;
+  if (clause && "reason" in clause) return { ok: false, reason: clause.reason };
+  const bodyCoverage = clause ? scopeCoverage(db, fromSql, where, args) : void 0;
   const filterWhere = [...where];
   const filterArgs = [...args];
-  if (params.body) {
-    const clause = bodyMatchClause(params.body.text);
+  if (clause) {
     filterWhere.push(clause.sql);
     filterArgs.push(...clause.args);
   }
@@ -100747,6 +100940,21 @@ function searchOpenIndex(db, features, params) {
     })
   };
 }
+function envelopeIndexClosed(indexPath) {
+  let fd;
+  let wal;
+  try {
+    fd = openSync2(indexPath, "r");
+    const header = Buffer.alloc(20);
+    wal = readSync2(fd, header, 0, 20, 0) === 20 && (header[18] === 2 || header[19] === 2);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== void 0) closeSync2(fd);
+  }
+  if (!wal || existsSync5(`${indexPath}-wal`) && existsSync5(`${indexPath}-shm`)) return null;
+  return "Mail isn't running: the Envelope Index has no -wal/-shm files, and reading it would create them in the mail store";
+}
 function searchEnvelopeIndex(params, opts = {}) {
   const sqlite = opts.sqlite === void 0 ? loadSqlite2() : opts.sqlite;
   if (!sqlite) return { ok: false, reason: "node:sqlite unavailable (requires Node >= 22.5)" };
@@ -100757,6 +100965,8 @@ function searchEnvelopeIndex(params, opts = {}) {
       reason: FULL_DISK_ACCESS_REASON
     };
   }
+  const closed = envelopeIndexClosed(indexPath);
+  if (closed) return { ok: false, reason: closed };
   let db = null;
   try {
     db = new sqlite.DatabaseSync(indexPath, { readOnly: true });
@@ -100798,6 +101008,8 @@ function readMessageFromStore(id, opts = {}) {
       reason: FULL_DISK_ACCESS_REASON
     };
   }
+  const closed = envelopeIndexClosed(store.indexPath);
+  if (closed) return { reason: closed };
   let db = null;
   let row;
   let features;
@@ -100841,7 +101053,11 @@ function readMessageFromStore(id, opts = {}) {
     const source = emlxSource(bytes);
     if (source === null) continue;
     const html = extractHtmlBody(source);
-    const text = extractTextBody(source) ?? (html !== null ? htmlToText(html) : "");
+    const text = messageText(source, html);
+    const partial2 = path3.endsWith(".partial.emlx");
+    if (partial2 && html === null && text.trim() === "") {
+      return { reason: `message ${id} is only partly downloaded (no body on disk yet)` };
+    }
     return {
       subject: typeof row.subject === "string" ? row.subject : "",
       plainText: text,
@@ -100849,7 +101065,7 @@ function readMessageFromStore(id, opts = {}) {
       rfcMessageId: extractRfcMessageIdFromSource(source),
       ...toDate(row.date_sent) ? { dateSent: toDate(row.date_sent) } : {},
       ...toDate(row.date_received) ? { dateReceived: toDate(row.date_received) } : {},
-      partial: path3.endsWith(".partial.emlx")
+      partial: partial2
     };
   }
   return { reason: `no readable .emlx for message ${id} under ${location.path}` };
@@ -100862,7 +101078,7 @@ import { fork } from "child_process";
 import { fileURLToPath } from "url";
 
 // src/utils/bodyIndexBuild.ts
-import { readdirSync as readdirSync5 } from "fs";
+import { readdirSync as readdirSync5, statSync as statSync3 } from "fs";
 
 // src/utils/orphan.ts
 function isOrphaned(ppid = process.ppid) {
@@ -100874,6 +101090,17 @@ var BODY_INDEX_BUILDER_ARG = "--body-index-builder";
 var ORPHAN_CHECK_MS = 2e3;
 var HEARTBEAT_MS = 5e3;
 var BUILDER_PROTOCOL = 1;
+function fileIdentity(path3) {
+  try {
+    const st = statSync3(path3);
+    return { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+function sameFile(a, b) {
+  return b !== null && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+}
 function errText3(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -100988,7 +101215,20 @@ function runBuilderProcess(proc, deps) {
   proc.onMessage((msg) => {
     if (done) return;
     if (msg.type === "start") {
-      loop ??= runBuilder(
+      if (loop) return;
+      if (msg.entry && !sameFile(msg.entry, proc.entry())) {
+        try {
+          proc.send({
+            type: "failed",
+            where: "version",
+            message: "the server's files were replaced on disk after it started (an update), so a build process would run other code than the server"
+          });
+        } catch {
+          quit();
+        }
+        return;
+      }
+      loop = runBuilder(
         {
           postMessage: (m) => {
             try {
@@ -101019,6 +101259,7 @@ var WRITER_RETRY_MS = 3e4;
 var SLICE_MS = 50;
 var PAUSE_MS = 100;
 var SEARCH_CATCHUP_MS = 50;
+var SEARCH_CATCHUP_MAX_BYTES = 1024 * 1024;
 var BUILD_RESTART_MS = 5e3;
 var BUILD_STALL_MS = 6e4;
 var FALLBACK_RETRY_MS = 60 * 6e4;
@@ -101037,9 +101278,11 @@ var fsEventsWatch = (dir, onEvent, onError) => {
 var STOP_GRACE_MS = 2e3;
 function builderExecArgv(execArgv = process.execArgv, nodeOptions = process.env.NODE_OPTIONS) {
   const flag = "--experimental-sqlite";
-  return execArgv.includes(flag) || (nodeOptions ?? "").split(/\s+/).includes(flag) ? [flag] : [];
+  const sqlite = execArgv.includes(flag) || (nodeOptions ?? "").split(/\s+/).includes(flag) ? [flag] : [];
+  return [...sqlite, "--disable-warning=ExperimentalWarning"];
 }
 function childProcessRunner(entry, opts = {}) {
+  const loaded = fileIdentity(entry);
   return {
     runsOn: "child process",
     start(init, events) {
@@ -101075,7 +101318,7 @@ function childProcessRunner(entry, opts = {}) {
         if (child.connected) child.send(msg, () => {
         });
       };
-      send({ type: "start", init });
+      send({ type: "start", init, entry: loaded });
       return {
         post: (work) => send(work),
         stop: async () => {
@@ -101141,6 +101384,7 @@ var lastError = null;
 var build = null;
 var buildReady = false;
 var buildSeq = 0;
+var buildDoneSeq = 0;
 var buildFailures = 0;
 var buildFallback = null;
 var lastBuildReport = 0;
@@ -101288,8 +101532,11 @@ function handToBuild(w, walk, paths) {
   if (walk) walkInFlight = true;
   b.post({ type: "work", seq: ++buildSeq, walk, paths });
 }
+function forkUnavailable() {
+  return process.versions.electron !== void 0 ? "the server runs on Electron's Node, where a forked process would start the app instead of Node; building on the main thread" : null;
+}
 function onMainThread() {
-  return buildFallback !== null && clock.now() - buildFallback.since < FALLBACK_RETRY_MS;
+  return forkUnavailable() !== null || buildFallback !== null && clock.now() - buildFallback.since < FALLBACK_RETRY_MS;
 }
 function startBuild(w) {
   const init = {
@@ -101332,7 +101579,7 @@ function stopBuild() {
   buildReady = false;
   if (watchdog) clearInterval(watchdog);
   watchdog = null;
-  if (walkInFlight) walkRequested = true;
+  if (walkInFlight || b !== null && buildDoneSeq !== buildSeq) walkRequested = true;
   walkInFlight = false;
   if (b) buildStopped = b.stop();
 }
@@ -101347,6 +101594,7 @@ function onBuildReport(msg) {
       return;
     case "idle":
       if (msg.seq !== buildSeq) return;
+      buildDoneSeq = msg.seq;
       buildFailures = 0;
       stopBuild();
       wake(0);
@@ -101433,12 +101681,22 @@ function tick() {
     wake(WRITER_RETRY_MS);
     return;
   }
+  let failed = false;
   try {
     if (dispatch(w)) return;
   } catch (err) {
     noteError("indexing step failed", err);
+    failed = true;
   }
-  wake(lastWalkDone === 0 ? rescanInterval() : lastWalkDone + rescanInterval() - clock.now());
+  wake(
+    nextTickDelay(
+      lastWalkDone === 0 ? rescanInterval() : lastWalkDone + rescanInterval() - clock.now(),
+      failed
+    )
+  );
+}
+function nextTickDelay(untilWalk, failed) {
+  return Math.max(failed ? BUILD_RESTART_MS : PAUSE_MS, untilWalk);
 }
 function startBackgroundIndexing() {
   if (running) return;
@@ -101468,6 +101726,7 @@ function stopBodyIndexing() {
   walkRequested = false;
   walkInFlight = false;
   buildSeq = 0;
+  buildDoneSeq = 0;
   buildFailures = 0;
   lastWalkDone = 0;
   writer?.close();
@@ -101497,7 +101756,7 @@ function catchUp(w) {
     walkRequested = true;
   } else {
     if (paths.length > 0) w.applyChanges(paths);
-    if (w.hasQueued()) w.indexStep(SEARCH_CATCHUP_MS);
+    if (w.hasQueued()) w.indexStep(SEARCH_CATCHUP_MS, { maxBytes: SEARCH_CATCHUP_MAX_BYTES });
   }
   if (walkRequested || w.hasQueued()) wake(0);
 }
@@ -101515,7 +101774,7 @@ function bodyIndexStatus() {
       build: {
         runsOn: onMainThread() ? "main thread" : runner.runsOn,
         running: build !== null,
-        ...onMainThread() ? { fallback: buildFallback.why } : {}
+        ...onMainThread() ? { fallback: forkUnavailable() ?? buildFallback.why } : {}
       }
     } : {},
     ...lastError ? { lastError } : {}
@@ -108265,7 +108524,7 @@ function bodyIndexCheck(s, env = process.env) {
   if (s.counts) {
     const c = s.counts;
     parts.push(
-      `${fmt(c.indexed + c.partial)} messages indexed` + (c.queued ? `, ${fmt(c.queued)} not indexed yet` : "") + (c.partial ? `, ${fmt(c.partial)} with no body downloaded yet` : "") + (c.tooLarge ? `, ${fmt(c.tooLarge)} over the 25 MB cap` : "")
+      `${fmt(c.indexed + c.partial)} messages indexed` + (c.queued ? `, ${fmt(c.queued)} not indexed yet` : "") + (c.partial ? `, ${fmt(c.partial)} with no body downloaded yet` : "") + (c.tooLarge ? `, ${fmt(c.tooLarge)} over the 25 MB cap` : "") + (c.unreadable ? `, ${fmt(c.unreadable)} that couldn't be read` : "")
     );
   }
   if (s.meta) {
@@ -108737,6 +108996,7 @@ if (process.argv.includes(BODY_INDEX_BUILDER_ARG) && process.send) {
       onMessage: (fn) => process.on("message", fn),
       onDisconnect: (fn) => process.on("disconnect", fn),
       ppid: () => process.ppid,
+      entry: () => fileIdentity(process.argv[1]),
       exit: (code) => process.exit(code)
     },
     { sqlite: loadSqlite2(), clock: realClock }
@@ -108952,7 +109212,7 @@ registerTool(
     inputSchema: {
       query: external_exports.string().optional().describe("Text to search for in subject or sender"),
       body: external_exports.string().optional().describe(
-        "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched, or the opt-in local body index (APPLE_MAIL_MCP_BODY_INDEX); otherwise AppleScript-only accounts cannot search bodies and are reported as not searched."
+        "Text to search for in the message body (server-side IMAP BODY search). Requires the IMAP backend for the account searched, or the opt-in local body index (APPLE_MAIL_MCP_BODY_INDEX); otherwise AppleScript-only accounts cannot search bodies and are reported as not searched. The local index matches words and word beginnings ('invoice' finds 'invoices', not 'reinvoice'); text with no letters or digits, or in Chinese, Japanese or Thai, is reported as not searched rather than as no match."
       ),
       from: external_exports.string().optional().describe(
         "Filter by sender (substring match against the full sender string, i.e. display name + address \u2014 not an exact address match)"

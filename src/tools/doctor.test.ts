@@ -113,7 +113,7 @@ describe("body index check", () => {
       role: "writer",
       watching: true,
       build: { runsOn: "child process", running: true },
-      counts: { indexed: 68000, queued: 12, partial: 3, tooLarge: 1 },
+      counts: { indexed: 68000, queued: 12, partial: 3, tooLarge: 1, unreadable: 2 },
       meta: {
         lastFullWalk: "2026-10-30T15:00:00.000Z",
         lastWalkMs: 900,
@@ -127,7 +127,7 @@ describe("body index check", () => {
     expect(c?.detail).toContain("this instance is the writer (watching the mail store)");
     expect(c?.detail).toContain("build running in a child process");
     expect(c?.detail).toContain(
-      "68,003 messages indexed, 12 not indexed yet, 3 with no body downloaded yet, 1 over the 25 MB cap"
+      "68,003 messages indexed, 12 not indexed yet, 3 with no body downloaded yet, 1 over the 25 MB cap, 2 that couldn't be read"
     );
     expect(c?.detail).toContain("last full walk 2026-10-30T15:00:00.000Z (68,016 files, 900 ms)");
     expect(c?.detail).toContain("rebuilt 2026-10-29T10:00:00.000Z (schema v2 → v3)");

@@ -33,15 +33,11 @@
  * @module utils/envelopeIndex
  */
 
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import {
-  extractHtmlBody,
-  extractRfcMessageIdFromSource,
-  extractTextBody,
-} from "@/utils/mimeParse.js";
-import { emlxCandidates, emlxSource, htmlToText } from "@/utils/emlx.js";
+import { extractHtmlBody, extractRfcMessageIdFromSource } from "@/utils/mimeParse.js";
+import { emlxCandidates, emlxSource, messageText } from "@/utils/emlx.js";
 import {
   ATTACH_ALIAS,
   bodyMatchClause,
@@ -270,6 +266,82 @@ export function likePattern(text: string): string {
 }
 
 /**
+ * The key every case form of a letter shares: its upper case's lower case, so
+ * `ẞ` and `ß` share `ß`, and `Σ`, `σ` and `ς` share `σ`. `İ` lowers to `i` plus
+ * a combining dot, which no one-character class can hold; it keys as `i`, as
+ * Turkish pairs them.
+ */
+function foldKey(ch: string): string {
+  if (ch === "\u0130") return "i";
+  const upper = ch.toUpperCase();
+  const lower = ([...upper].length === 1 ? upper : ch).toLowerCase();
+  return [...lower].length === 1 ? lower : ch;
+}
+
+/** Each cased character outside ASCII → every character with its fold key. Built once, on first use. */
+let caseClasses: Map<string, string[]> | null = null;
+
+function buildCaseClasses(): Map<string, string[]> {
+  const byKey = new Map<string, string[]>();
+  // The Basic and Supplementary Multilingual Planes hold every cased letter.
+  for (let cp = 0; cp <= 0x1ffff; cp++) {
+    if (cp >= 0xd800 && cp <= 0xdfff) continue; // lone surrogates
+    const c = String.fromCodePoint(cp);
+    if (c.toUpperCase() === c && c.toLowerCase() === c) continue; // no case
+    const key = foldKey(c);
+    const members = byKey.get(key);
+    if (members) members.push(c);
+    else byKey.set(key, [c]);
+  }
+  const classes = new Map<string, string[]>();
+  for (const [key, members] of byKey) {
+    if (!members.includes(key)) members.push(key);
+    if (members.length > 1) for (const m of members) classes.set(m, members);
+  }
+  return classes;
+}
+
+/**
+ * `ch` and every other character that is the same letter in another case
+ * (`ü`, `Ü`; `ß`, `ẞ`; `ς`, `σ`, `Σ`). An ASCII letter pairs with its other
+ * ASCII case only, as SQLite's `LIKE` does, so a letter matches the same way
+ * whether or not the rest of the text needs a class.
+ */
+function caseClass(ch: string): string[] {
+  if (ch.charCodeAt(0) < 0x80) {
+    const other = ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase();
+    return other === ch ? [ch] : [ch, other];
+  }
+  caseClasses ??= buildCaseClasses();
+  const members = caseClasses.get(ch);
+  return members ? [ch, ...members.filter((m) => m !== ch)] : [ch];
+}
+
+/** Whether `text` has a letter outside ASCII with another case form, which SQLite's `LIKE` can't fold. */
+export function needsUnicodeCaseFold(text: string): boolean {
+  for (const ch of text) {
+    if (ch.charCodeAt(0) >= 0x80 && caseClass(ch).length > 1) return true;
+  }
+  return false;
+}
+
+/**
+ * A GLOB pattern for "contains `text`, ignoring case". SQLite's `lower()` and
+ * `LIKE` fold ASCII letters only, so `über` would miss `Über` and `café` miss
+ * `CAFÉ`; here every character that has case forms becomes a class of them
+ * (`[Üü]`), and GLOB's own wildcards (`*`, `?`, `[`) are matched literally.
+ */
+export function containsGlob(text: string): string {
+  let pattern = "*";
+  for (const ch of text) {
+    const forms = caseClass(ch);
+    if (forms.length > 1) pattern += `[${forms.join("")}]`;
+    else pattern += ch === "*" || ch === "?" || ch === "[" ? `[${ch}]` : ch;
+  }
+  return `${pattern}*`;
+}
+
+/**
  * Parse a filter date. `new Date("2026-03-15")` is UTC midnight, which west of
  * Greenwich is the evening before — so an ISO date-only string is read as local
  * midnight, the same as "March 15, 2026" already is.
@@ -300,14 +372,17 @@ function resolveMailboxIds(
   const rows = db
     .prepare(`SELECT ROWID AS id, url FROM mailboxes WHERE url LIKE ?`)
     .all(`%://${accountId}/%`);
-  const wanted = mailbox.replace(/\/+$/, "").toLowerCase();
+  // Unicode-normalized, like the AppleScript resolver (#253): an NFD-stored
+  // "é" is the same mailbox as the NFC "é" a caller types.
+  const fold = (p: string) => p.normalize("NFC").toLowerCase();
+  const wanted = fold(mailbox.replace(/\/+$/, ""));
   const exact: { id: number; path: string }[] = [];
   const leaf: { id: number; path: string }[] = [];
   for (const r of rows) {
     const parsed = parseMailboxUrl(String(r.url ?? ""));
     if (!parsed || parsed.accountId !== accountId) continue;
     const path = parsed.path;
-    const lower = path.toLowerCase();
+    const lower = fold(path);
     if (lower === wanted) exact.push({ id: Number(r.id), path });
     else if (lower.split("/").pop() === wanted) leaf.push({ id: Number(r.id), path });
   }
@@ -335,6 +410,16 @@ export function searchOpenIndex(
   features: SchemaFeatures,
   params: EnvelopeSearchParams
 ): EnvelopeSearchOutcome {
+  // SQLite ends a pattern at a NUL, which would quietly match something else.
+  if ([params.query, params.subject, params.from].some((t) => t?.includes("\0"))) {
+    return { ok: false, reason: "a text filter contains a NUL character" };
+  }
+  const dateFrom = params.dateFrom ? parseFilterDate(params.dateFrom).getTime() : undefined;
+  const dateTo = params.dateTo ? upperBound(params.dateTo).getTime() : undefined;
+  // An unreadable date would bind as NULL and match nothing: a false empty.
+  if ([dateFrom, dateTo].some((t) => t !== undefined && !Number.isFinite(t))) {
+    return { ok: false, reason: "unreadable date filter" };
+  }
   const where: string[] = ["m.deleted = 0"];
   const args: unknown[] = [];
   let scopedPath: string | undefined;
@@ -363,21 +448,22 @@ export function searchOpenIndex(
     ? `COALESCE(m.subject_prefix, '') || COALESCE(s.subject, '')`
     : `COALESCE(s.subject, '')`;
   const senderExpr = `COALESCE(a.comment, '') || ' <' || COALESCE(a.address, '') || '>'`;
+  // "Contains, ignoring case": `LIKE` (about twice as fast) when the text has
+  // no letters outside ASCII with case forms, else a GLOB of case classes.
+  const contains = (expr: string, text: string): string => {
+    if (needsUnicodeCaseFold(text)) {
+      args.push(containsGlob(text));
+      return `${expr} GLOB ?`;
+    }
+    args.push(likePattern(text));
+    return `lower(${expr}) LIKE ? ESCAPE '\\'`;
+  };
 
   if (params.query) {
-    where.push(
-      `(lower(${subjectExpr}) LIKE ? ESCAPE '\\' OR lower(${senderExpr}) LIKE ? ESCAPE '\\')`
-    );
-    args.push(likePattern(params.query), likePattern(params.query));
+    where.push(`(${contains(subjectExpr, params.query)} OR ${contains(senderExpr, params.query)})`);
   }
-  if (params.subject) {
-    where.push(`lower(${subjectExpr}) LIKE ? ESCAPE '\\'`);
-    args.push(likePattern(params.subject));
-  }
-  if (params.from) {
-    where.push(`lower(${senderExpr}) LIKE ? ESCAPE '\\'`);
-    args.push(likePattern(params.from));
-  }
+  if (params.subject) where.push(contains(subjectExpr, params.subject));
+  if (params.from) where.push(contains(senderExpr, params.from));
   if (params.isRead !== undefined) {
     where.push(`m.read = ?`);
     args.push(params.isRead ? 1 : 0);
@@ -386,13 +472,13 @@ export function searchOpenIndex(
     where.push(`m.flagged = ?`);
     args.push(params.isFlagged ? 1 : 0);
   }
-  if (params.dateFrom) {
+  if (dateFrom !== undefined) {
     where.push(`m.date_received >= ?`);
-    args.push(Math.floor(parseFilterDate(params.dateFrom).getTime() / 1000));
+    args.push(Math.floor(dateFrom / 1000));
   }
-  if (params.dateTo) {
+  if (dateTo !== undefined) {
     where.push(`m.date_received <= ?`);
-    args.push(Math.floor(upperBound(params.dateTo).getTime() / 1000));
+    args.push(Math.floor(dateTo / 1000));
   }
   if (params.rowIds) {
     where.push(`m.ROWID IN (SELECT value FROM json_each(?))`);
@@ -404,13 +490,15 @@ export function searchOpenIndex(
     LEFT JOIN subjects s ON m.subject = s.ROWID
     LEFT JOIN addresses a ON m.sender = a.ROWID
     LEFT JOIN mailboxes mb ON m.mailbox = mb.ROWID`;
+  // Text the body index can't match faithfully is refused before anything runs.
+  const clause = params.body ? bodyMatchClause(params.body.text) : undefined;
+  if (clause && "reason" in clause) return { ok: false, reason: clause.reason };
   // Coverage is counted over the header filters alone: every message the body
   // match had to look at, whether or not it matched.
-  const bodyCoverage = params.body ? scopeCoverage(db, fromSql, where, args) : undefined;
+  const bodyCoverage = clause ? scopeCoverage(db, fromSql, where, args) : undefined;
   const filterWhere = [...where];
   const filterArgs = [...args];
-  if (params.body) {
-    const clause = bodyMatchClause(params.body.text);
+  if (clause) {
     filterWhere.push(clause.sql);
     filterArgs.push(...clause.args);
   }
@@ -459,6 +547,34 @@ export function searchOpenIndex(
 }
 
 /**
+ * Why opening Mail's Envelope Index read-only now would write to the mail
+ * store, or null when it wouldn't. On a WAL database SQLite creates the `-wal`
+ * and `-shm` files when they are missing, read-only connection or not. Mail
+ * keeps them while it runs; when it has quit and they are gone, the index is
+ * left alone and AppleScript answers instead (which starts Mail). Judged from
+ * the file header (bytes 18–19 are 2 in WAL mode), read without SQLite.
+ *
+ * It sees whether the files exist, not whether Mail holds them: after a Mail
+ * crash leaves them behind, a read can still update `-shm`, the shared-memory
+ * index SQLite rebuilds from the `-wal` when Mail next opens the database.
+ */
+export function envelopeIndexClosed(indexPath: string): string | null {
+  let fd: number | undefined;
+  let wal: boolean;
+  try {
+    fd = openSync(indexPath, "r");
+    const header = Buffer.alloc(20);
+    wal = readSync(fd, header, 0, 20, 0) === 20 && (header[18] === 2 || header[19] === 2);
+  } catch {
+    return null; // the open reports whatever is wrong with the file
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  if (!wal || (existsSync(`${indexPath}-wal`) && existsSync(`${indexPath}-shm`))) return null;
+  return "Mail isn't running: the Envelope Index has no -wal/-shm files, and reading it would create them in the mail store";
+}
+
+/**
  * Search one account via the Envelope Index on disk. Opens the database
  * read-only, verifies the schema, runs the query, and closes it.
  */
@@ -476,6 +592,9 @@ export function searchEnvelopeIndex(
       reason: FULL_DISK_ACCESS_REASON,
     };
   }
+
+  const closed = envelopeIndexClosed(indexPath);
+  if (closed) return { ok: false, reason: closed };
 
   let db: SqliteDatabase | null = null;
   try {
@@ -549,6 +668,9 @@ export function readMessageFromStore(
     };
   }
 
+  const closed = envelopeIndexClosed(store.indexPath);
+  if (closed) return { reason: closed };
+
   let db: SqliteDatabase | null = null;
   let row: Record<string, unknown> | undefined;
   let features: SchemaFeatures;
@@ -596,7 +718,13 @@ export function readMessageFromStore(
     const source = emlxSource(bytes);
     if (source === null) continue;
     const html = extractHtmlBody(source);
-    const text = extractTextBody(source) ?? (html !== null ? htmlToText(html) : "");
+    const text = messageText(source, html);
+    const partial = path.endsWith(".partial.emlx");
+    // Only the headers are on disk: AppleScript asks Mail, which downloads the
+    // body, where this would return an empty one.
+    if (partial && html === null && text.trim() === "") {
+      return { reason: `message ${id} is only partly downloaded (no body on disk yet)` };
+    }
     return {
       subject: typeof row.subject === "string" ? row.subject : "",
       plainText: text,
@@ -604,7 +732,7 @@ export function readMessageFromStore(
       rfcMessageId: extractRfcMessageIdFromSource(source),
       ...(toDate(row.date_sent) ? { dateSent: toDate(row.date_sent) } : {}),
       ...(toDate(row.date_received) ? { dateReceived: toDate(row.date_received) } : {}),
-      partial: path.endsWith(".partial.emlx"),
+      partial,
     };
   }
   return { reason: `no readable .emlx for message ${id} under ${location.path}` };
