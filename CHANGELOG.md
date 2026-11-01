@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [2.20.51] - 2026-11-01
+
+### Changed
+
+- `fetch-attachment` now refuses inline results over 3 MiB of decoded bytes
+  on both backends. A 4 MiB attachment that previously returned inline must be
+  saved with `save-attachment` to an allowed directory instead. IMAP saves keep
+  their separate 25 MiB limit; allowed roots are unchanged. Oversized or
+  unverifiable inline results return an error rather than truncated content.
+
 ## [2.20.50] - 2026-10-31
 
 ### Changed

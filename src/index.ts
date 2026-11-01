@@ -127,6 +127,12 @@ import {
 } from "@/services/imapMultiAccount.js";
 import type { Account, SearchDiagnostics, SearchResult } from "@/types.js";
 import { routeMessage } from "@/services/messageRouter.js";
+import {
+  FETCH_ATTACHMENT_TOO_LARGE,
+  MAX_FETCH_ATTACHMENT_BASE64_CHARS,
+  MAX_FETCH_ATTACHMENT_BYTES,
+  MAX_FETCH_ATTACHMENT_RESPONSE_BYTES,
+} from "@/utils/attachmentLimits.js";
 import { runDoctor, formatDoctorReport } from "@/tools/doctor.js";
 import { registerResourcesAndPrompts } from "@/tools/resourcesAndPrompts.js";
 import {
@@ -2577,7 +2583,7 @@ registerTool(
         return errorResponse(error instanceof Error ? error.message : String(error));
       }
       const r = await imapFetchAttachment(id, attachmentName);
-      if (!r.success || !r.base64) {
+      if (!r.success || typeof r.base64 !== "string") {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
       writeFileSync(target.savedPath, Buffer.from(r.base64, "base64"), { flag: "wx", mode: 0o600 });
@@ -2608,7 +2614,7 @@ registerTool(
   "fetch-attachment",
   {
     description:
-      "Use when: retrieving an attachment's raw bytes inline as base64 (by message id and attachmentName), e.g. to process its contents without keeping a file.\nReturns: the attachment's bytes base64-encoded, with its size and (for IMAP) MIME type.\nDo not use when: you don't know the attachment name (use list-attachments first) or you just want it saved to disk (use save-attachment).\nSafety: leaves no file behind, but the AppleScript path is not disk-free — Mail writes the attachment into a private temp directory, which is read back and then deleted. Needs no Full Disk Access either way: Mail performs that write under the Automation grant, and this server never reads the mail store itself.",
+      "Use when: retrieving an attachment's raw bytes inline as base64 (by message id and attachmentName), e.g. to process its contents without keeping a file.\nReturns: up to 3 MiB of decoded attachment bytes, base64-encoded, with its size and (for IMAP) MIME type. Larger attachments are refused; use save-attachment instead.\nDo not use when: you don't know the attachment name (use list-attachments first) or you just want it saved to disk (use save-attachment).\nSafety: leaves no file behind, but the AppleScript path is not disk-free — Mail writes the attachment into a private temp directory, which is read back and then deleted. Needs no Full Disk Access either way: Mail performs that write under the Automation grant, and this server never reads the mail store itself.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       attachmentName: z.string().min(1, "Attachment name is required"),
@@ -2624,24 +2630,34 @@ registerTool(
     // Returns the attachment bytes as base64 (B4) — the read counterpart to
     // sending inline base64 content. IMAP (I1) fetches the part directly; numeric
     // ids fall back to the AppleScript/MIME path.
-    if (id.startsWith("imap:")) {
-      const r = await imapFetchAttachment(id, attachmentName);
-      if (!r.success || !r.base64) {
-        return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
+    const r = id.startsWith("imap:")
+      ? await imapFetchAttachment(id, attachmentName, {}, "inline")
+      : mailManager.getAttachmentBase64(id, attachmentName);
+    if (!r.success || typeof r.base64 !== "string") {
+      const error = r.error || `Failed to fetch attachment "${attachmentName}"`;
+      return errorResponse(error.length > 8192 ? `${error.slice(0, 8192)}… (truncated)` : error);
+    }
+    if (
+      (r.bytes ?? 0) > MAX_FETCH_ATTACHMENT_BYTES ||
+      r.base64.length > MAX_FETCH_ATTACHMENT_BASE64_CHARS
+    ) {
+      return errorResponse(FETCH_ATTACHMENT_TOO_LARGE);
+    }
+    const response = successResponse(
+      `Fetched "${attachmentName}" (${r.bytes} bytes, base64-encoded below).\n\n${r.base64}`,
+      {
+        attachmentName,
+        bytes: r.bytes,
+        ...("mimeType" in r ? { mimeType: r.mimeType } : {}),
+        contentBase64: r.base64,
       }
-      return successResponse(
-        `Fetched "${attachmentName}" (${r.bytes} bytes, base64-encoded below).\n\n${r.base64}`,
-        { attachmentName, bytes: r.bytes, mimeType: r.mimeType, contentBase64: r.base64 }
+    );
+    if (Buffer.byteLength(JSON.stringify(response), "utf8") > MAX_FETCH_ATTACHMENT_RESPONSE_BYTES) {
+      return errorResponse(
+        "Attachment metadata exceeds the inline response budget. Use save-attachment instead."
       );
     }
-    const r = mailManager.getAttachmentBase64(id, attachmentName);
-    if (!r.success) {
-      return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
-    }
-    return successResponse(
-      `Fetched "${attachmentName}" (${r.bytes} bytes, base64-encoded below).\n\n${r.base64}`,
-      { attachmentName, bytes: r.bytes, contentBase64: r.base64 }
-    );
+    return response;
   }, "Error fetching attachment")
 );
 

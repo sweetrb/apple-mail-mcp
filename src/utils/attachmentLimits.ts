@@ -4,6 +4,15 @@ export const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 /** Maximum size fetched from IMAP for one attachment (25 MiB). */
 export const MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
 
+/** Maximum decoded attachment returned inline by fetch-attachment (3 MiB). */
+export const MAX_FETCH_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+export const MAX_FETCH_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_FETCH_ATTACHMENT_BYTES / 3) * 4;
+// The result contains the base64 twice. Leave one MiB for JSON-RPC framing
+// under the MCP SDK's default 10 MiB stdio read buffer.
+export const MAX_FETCH_ATTACHMENT_RESPONSE_BYTES = 9 * 1024 * 1024;
+export const FETCH_ATTACHMENT_TOO_LARGE =
+  "Attachment exceeds the 3 MiB inline limit. Use save-attachment to write it to an allowed directory instead.";
+
 /** Maximum base64 length capable of representing the decoded byte limit. */
 export const MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
 

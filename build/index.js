@@ -65761,12 +65761,16 @@ function decodeInlineAttachment(contentBase64) {
   }
   return content;
 }
-var MAX_INLINE_ATTACHMENT_BYTES, MAX_IMAP_ATTACHMENT_BYTES, MAX_INLINE_ATTACHMENT_BASE64_CHARS, MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS;
+var MAX_INLINE_ATTACHMENT_BYTES, MAX_IMAP_ATTACHMENT_BYTES, MAX_FETCH_ATTACHMENT_BYTES, MAX_FETCH_ATTACHMENT_BASE64_CHARS, MAX_FETCH_ATTACHMENT_RESPONSE_BYTES, FETCH_ATTACHMENT_TOO_LARGE, MAX_INLINE_ATTACHMENT_BASE64_CHARS, MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS;
 var init_attachmentLimits = __esm({
   "src/utils/attachmentLimits.ts"() {
     "use strict";
     MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
     MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
+    MAX_FETCH_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+    MAX_FETCH_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_FETCH_ATTACHMENT_BYTES / 3) * 4;
+    MAX_FETCH_ATTACHMENT_RESPONSE_BYTES = 9 * 1024 * 1024;
+    FETCH_ATTACHMENT_TOO_LARGE = "Attachment exceeds the 3 MiB inline limit. Use save-attachment to write it to an allowed directory instead.";
     MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
     MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
   }
@@ -68729,7 +68733,9 @@ async function streamToBuffer(content, maxBytes) {
   for await (const chunk of content) {
     total += chunk.byteLength;
     if (total > maxBytes) {
-      throw new Error(`IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`);
+      throw new AttachmentSizeLimitError(
+        `IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`
+      );
     }
     chunks.push(Buffer.from(chunk));
   }
@@ -68804,7 +68810,7 @@ async function imapListAttachments(id, deps = {}) {
     return { success: true, attachments };
   });
 }
-async function imapFetchAttachment(id, attachmentName, deps = {}) {
+async function imapFetchAttachment(id, attachmentName, deps = {}, mode = "save") {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
@@ -68821,16 +68827,46 @@ async function imapFetchAttachment(id, attachmentName, deps = {}) {
         error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`
       };
     }
-    const expected = decodedSizeWithoutBody(match).size;
-    if (expected > MAX_IMAP_ATTACHMENT_BYTES) {
-      return {
-        success: false,
-        error: `IMAP attachment "${attachmentName}" is ${expected} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`
-      };
+    const maxBytes = mode === "inline" ? MAX_FETCH_ATTACHMENT_BYTES : MAX_IMAP_ATTACHMENT_BYTES;
+    if (mode === "save") {
+      const expected = decodedSizeWithoutBody(match);
+      if (expected.size > maxBytes) {
+        return {
+          success: false,
+          error: `IMAP attachment "${attachmentName}" is ${expected.size} bytes; the maximum is ${maxBytes} bytes (25 MiB).`
+        };
+      }
     }
     try {
-      const dl = await client.download(String(ref.uid), match.part, { uid: true });
-      const buf = await streamToBuffer(dl.content, MAX_IMAP_ATTACHMENT_BYTES);
+      if (mode === "inline") {
+        const encoded = match.encodedSize;
+        if (!Number.isSafeInteger(encoded) || encoded < 0 || encoded > MAX_IMAP_ATTACHMENT_BYTES) {
+          return {
+            success: false,
+            error: "Attachment is too large to verify inline. Use save-attachment instead."
+          };
+        }
+        const probePart = match.part === "1" && !msg.bodyStructure.childNodes ? "text" : match.part;
+        const probeStart = Math.max(0, encoded - 1);
+        const probe = await client.fetchOne(
+          String(ref.uid),
+          { bodyParts: [{ key: probePart, start: probeStart, maxLength: encoded > 0 ? 2 : 1 }] },
+          { uid: true }
+        );
+        const tail = probe && probe.bodyParts?.get(probePart.toLowerCase());
+        if (!tail || tail.length !== (encoded > 0 ? 1 : 0)) {
+          return {
+            success: false,
+            error: "Could not verify the complete attachment inline. Use save-attachment instead."
+          };
+        }
+      }
+      const dl = await client.download(
+        String(ref.uid),
+        match.part,
+        mode === "inline" ? { uid: true, maxBytes: MAX_IMAP_ATTACHMENT_BYTES + 1 } : { uid: true }
+      );
+      const buf = await streamToBuffer(dl.content, maxBytes);
       return {
         success: true,
         base64: buf.toString("base64"),
@@ -68838,6 +68874,9 @@ async function imapFetchAttachment(id, attachmentName, deps = {}) {
         mimeType: match.mimeType
       };
     } catch (e) {
+      if (mode === "inline" && e instanceof AttachmentSizeLimitError) {
+        return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+      }
       return { success: false, error: `IMAP attachment fetch failed: ${errText2(e)}` };
     }
   });
@@ -69016,7 +69055,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, COLOR_FETCH_CHUNK, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, SENT_COPY_GMAIL_POLL_MS, SENT_COPY_GMAIL_POLL_INTERVAL_MS, GMAIL_HOST, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, COLOR_FETCH_CHUNK, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, SENT_COPY_GMAIL_POLL_MS, SENT_COPY_GMAIL_POLL_INTERVAL_MS, GMAIL_HOST, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, AttachmentSizeLimitError, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -69138,6 +69177,8 @@ var init_imapClient = __esm({
     FALLBACK_TRASH_PATH = "Trash";
     BASE64_TAIL_WINDOW = 1024;
     QP_EXACT_MAX_BYTES = 64 * 1024;
+    AttachmentSizeLimitError = class extends Error {
+    };
     imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
       assertMutated(
         await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true }),
@@ -98868,7 +98909,6 @@ import {
   chmodSync as chmodSync2,
   existsSync as existsSync6,
   writeFileSync as writeFileSync4,
-  readFileSync as readFileSync4,
   readdirSync as readdirSync7,
   unlinkSync as unlinkSync3,
   copyFileSync,
@@ -98876,7 +98916,11 @@ import {
   mkdtempSync as mkdtempSync2,
   rmSync as rmSync2,
   realpathSync as realpathSync2,
-  lstatSync
+  lstatSync,
+  openSync as openSync3,
+  fstatSync as fstatSync2,
+  readSync as readSync3,
+  closeSync as closeSync3
 } from "fs";
 import { resolve as resolve4, sep as sep2, join as join10 } from "path";
 import { homedir as homedir7 } from "os";
@@ -99373,6 +99417,9 @@ function preflightAttachments(attachments) {
     decodeInlineAttachment(a.contentBase64);
   }
 }
+
+// src/services/appleMailManager.ts
+init_attachmentLimits();
 
 // src/utils/senderAccount.ts
 function extractAddress(sender) {
@@ -106364,8 +106411,35 @@ ${this.errorEmit("              ")}
           error: `Attachment "${attachmentName}" not found on message ${id}`
         };
       }
-      const buf = readFileSync4(dest);
-      return { success: true, base64: buf.toString("base64"), bytes: buf.length };
+      const fd = openSync3(
+        dest,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK
+      );
+      try {
+        const stat = fstatSync2(fd);
+        if (!stat.isFile()) return { success: false, error: "Attachment is not a regular file." };
+        if (stat.size > MAX_FETCH_ATTACHMENT_BYTES) {
+          return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+        }
+        const chunks = [];
+        let total = 0;
+        while (total <= MAX_FETCH_ATTACHMENT_BYTES) {
+          const chunk = Buffer.allocUnsafe(
+            Math.min(64 * 1024, MAX_FETCH_ATTACHMENT_BYTES + 1 - total)
+          );
+          const count = readSync3(fd, chunk, 0, chunk.length, null);
+          if (count === 0) break;
+          total += count;
+          if (total > MAX_FETCH_ATTACHMENT_BYTES) {
+            return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+          }
+          chunks.push(chunk.subarray(0, count));
+        }
+        const buf = Buffer.concat(chunks, total);
+        return { success: true, base64: buf.toString("base64"), bytes: buf.length };
+      } finally {
+        closeSync3(fd);
+      }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) };
     } finally {
@@ -108671,6 +108745,9 @@ async function routeMessage(id, opts) {
   return opts.apple();
 }
 
+// src/index.ts
+init_attachmentLimits();
+
 // src/tools/doctor.ts
 init_imapClient();
 init_smtpMailer();
@@ -109085,7 +109162,7 @@ var ImapIdleWatcher = class {
 };
 
 // src/services/fileConfig.ts
-import { existsSync as existsSync7, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync4 } from "fs";
 import { join as join11 } from "path";
 import { homedir as homedir8 } from "os";
 function fileConfigPath(env = process.env) {
@@ -109097,7 +109174,7 @@ function loadFileConfig(env = process.env, path3 = fileConfigPath(env)) {
   const applied = [];
   try {
     if (!existsSync7(path3)) return applied;
-    const parsed = JSON.parse(readFileSync5(path3, "utf8"));
+    const parsed = JSON.parse(readFileSync4(path3, "utf8"));
     if (!parsed || typeof parsed !== "object") return applied;
     for (const [k, v] of Object.entries(parsed)) {
       if (typeof v !== "string") continue;
@@ -110889,7 +110966,7 @@ registerTool(
         return errorResponse(error63 instanceof Error ? error63.message : String(error63));
       }
       const r = await imapFetchAttachment(id, attachmentName);
-      if (!r.success || !r.base64) {
+      if (!r.success || typeof r.base64 !== "string") {
         return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
       }
       writeFileSync5(target.savedPath, Buffer.from(r.base64, "base64"), { flag: "wx", mode: 384 });
@@ -110913,7 +110990,7 @@ registerTool(
 registerTool(
   "fetch-attachment",
   {
-    description: "Use when: retrieving an attachment's raw bytes inline as base64 (by message id and attachmentName), e.g. to process its contents without keeping a file.\nReturns: the attachment's bytes base64-encoded, with its size and (for IMAP) MIME type.\nDo not use when: you don't know the attachment name (use list-attachments first) or you just want it saved to disk (use save-attachment).\nSafety: leaves no file behind, but the AppleScript path is not disk-free \u2014 Mail writes the attachment into a private temp directory, which is read back and then deleted. Needs no Full Disk Access either way: Mail performs that write under the Automation grant, and this server never reads the mail store itself.",
+    description: "Use when: retrieving an attachment's raw bytes inline as base64 (by message id and attachmentName), e.g. to process its contents without keeping a file.\nReturns: up to 3 MiB of decoded attachment bytes, base64-encoded, with its size and (for IMAP) MIME type. Larger attachments are refused; use save-attachment instead.\nDo not use when: you don't know the attachment name (use list-attachments first) or you just want it saved to disk (use save-attachment).\nSafety: leaves no file behind, but the AppleScript path is not disk-free \u2014 Mail writes the attachment into a private temp directory, which is read back and then deleted. Needs no Full Disk Access either way: Mail performs that write under the Automation grant, and this server never reads the mail store itself.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       attachmentName: external_exports.string().min(1, "Attachment name is required")
@@ -110926,28 +111003,31 @@ registerTool(
     }
   },
   withErrorHandling(async ({ id, attachmentName }) => {
-    if (id.startsWith("imap:")) {
-      const r2 = await imapFetchAttachment(id, attachmentName);
-      if (!r2.success || !r2.base64) {
-        return errorResponse(r2.error || `Failed to fetch attachment "${attachmentName}"`);
-      }
-      return successResponse(
-        `Fetched "${attachmentName}" (${r2.bytes} bytes, base64-encoded below).
-
-${r2.base64}`,
-        { attachmentName, bytes: r2.bytes, mimeType: r2.mimeType, contentBase64: r2.base64 }
-      );
+    const r = id.startsWith("imap:") ? await imapFetchAttachment(id, attachmentName, {}, "inline") : mailManager.getAttachmentBase64(id, attachmentName);
+    if (!r.success || typeof r.base64 !== "string") {
+      const error63 = r.error || `Failed to fetch attachment "${attachmentName}"`;
+      return errorResponse(error63.length > 8192 ? `${error63.slice(0, 8192)}\u2026 (truncated)` : error63);
     }
-    const r = mailManager.getAttachmentBase64(id, attachmentName);
-    if (!r.success) {
-      return errorResponse(r.error || `Failed to fetch attachment "${attachmentName}"`);
+    if ((r.bytes ?? 0) > MAX_FETCH_ATTACHMENT_BYTES || r.base64.length > MAX_FETCH_ATTACHMENT_BASE64_CHARS) {
+      return errorResponse(FETCH_ATTACHMENT_TOO_LARGE);
     }
-    return successResponse(
+    const response = successResponse(
       `Fetched "${attachmentName}" (${r.bytes} bytes, base64-encoded below).
 
 ${r.base64}`,
-      { attachmentName, bytes: r.bytes, contentBase64: r.base64 }
+      {
+        attachmentName,
+        bytes: r.bytes,
+        ..."mimeType" in r ? { mimeType: r.mimeType } : {},
+        contentBase64: r.base64
+      }
     );
+    if (Buffer.byteLength(JSON.stringify(response), "utf8") > MAX_FETCH_ATTACHMENT_RESPONSE_BYTES) {
+      return errorResponse(
+        "Attachment metadata exceeds the inline response budget. Use save-attachment instead."
+      );
+    }
+    return response;
   }, "Error fetching attachment")
 );
 function appendLocalStoreRows(rows, failedAccounts) {

@@ -13136,12 +13136,16 @@ function decodeInlineAttachment(contentBase64) {
   }
   return content;
 }
-var MAX_INLINE_ATTACHMENT_BYTES, MAX_IMAP_ATTACHMENT_BYTES, MAX_INLINE_ATTACHMENT_BASE64_CHARS, MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS;
+var MAX_INLINE_ATTACHMENT_BYTES, MAX_IMAP_ATTACHMENT_BYTES, MAX_FETCH_ATTACHMENT_BYTES, MAX_FETCH_ATTACHMENT_BASE64_CHARS, MAX_FETCH_ATTACHMENT_RESPONSE_BYTES, FETCH_ATTACHMENT_TOO_LARGE, MAX_INLINE_ATTACHMENT_BASE64_CHARS, MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS;
 var init_attachmentLimits = __esm({
   "src/utils/attachmentLimits.ts"() {
     "use strict";
     MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
     MAX_IMAP_ATTACHMENT_BYTES = MAX_INLINE_ATTACHMENT_BYTES;
+    MAX_FETCH_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+    MAX_FETCH_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_FETCH_ATTACHMENT_BYTES / 3) * 4;
+    MAX_FETCH_ATTACHMENT_RESPONSE_BYTES = 9 * 1024 * 1024;
+    FETCH_ATTACHMENT_TOO_LARGE = "Attachment exceeds the 3 MiB inline limit. Use save-attachment to write it to an allowed directory instead.";
     MAX_INLINE_ATTACHMENT_BASE64_CHARS = Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4;
     MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS = MAX_INLINE_ATTACHMENT_BASE64_CHARS * 2;
   }
@@ -60863,7 +60867,9 @@ async function streamToBuffer(content, maxBytes) {
   for await (const chunk of content) {
     total += chunk.byteLength;
     if (total > maxBytes) {
-      throw new Error(`IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`);
+      throw new AttachmentSizeLimitError(
+        `IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`
+      );
     }
     chunks.push(Buffer.from(chunk));
   }
@@ -60938,7 +60944,7 @@ async function imapListAttachments(id, deps = {}) {
     return { success: true, attachments };
   });
 }
-async function imapFetchAttachment(id, attachmentName, deps = {}) {
+async function imapFetchAttachment(id, attachmentName, deps = {}, mode = "save") {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
@@ -60955,16 +60961,46 @@ async function imapFetchAttachment(id, attachmentName, deps = {}) {
         error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`
       };
     }
-    const expected = decodedSizeWithoutBody(match).size;
-    if (expected > MAX_IMAP_ATTACHMENT_BYTES) {
-      return {
-        success: false,
-        error: `IMAP attachment "${attachmentName}" is ${expected} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`
-      };
+    const maxBytes = mode === "inline" ? MAX_FETCH_ATTACHMENT_BYTES : MAX_IMAP_ATTACHMENT_BYTES;
+    if (mode === "save") {
+      const expected = decodedSizeWithoutBody(match);
+      if (expected.size > maxBytes) {
+        return {
+          success: false,
+          error: `IMAP attachment "${attachmentName}" is ${expected.size} bytes; the maximum is ${maxBytes} bytes (25 MiB).`
+        };
+      }
     }
     try {
-      const dl = await client.download(String(ref.uid), match.part, { uid: true });
-      const buf = await streamToBuffer(dl.content, MAX_IMAP_ATTACHMENT_BYTES);
+      if (mode === "inline") {
+        const encoded = match.encodedSize;
+        if (!Number.isSafeInteger(encoded) || encoded < 0 || encoded > MAX_IMAP_ATTACHMENT_BYTES) {
+          return {
+            success: false,
+            error: "Attachment is too large to verify inline. Use save-attachment instead."
+          };
+        }
+        const probePart = match.part === "1" && !msg.bodyStructure.childNodes ? "text" : match.part;
+        const probeStart = Math.max(0, encoded - 1);
+        const probe = await client.fetchOne(
+          String(ref.uid),
+          { bodyParts: [{ key: probePart, start: probeStart, maxLength: encoded > 0 ? 2 : 1 }] },
+          { uid: true }
+        );
+        const tail = probe && probe.bodyParts?.get(probePart.toLowerCase());
+        if (!tail || tail.length !== (encoded > 0 ? 1 : 0)) {
+          return {
+            success: false,
+            error: "Could not verify the complete attachment inline. Use save-attachment instead."
+          };
+        }
+      }
+      const dl = await client.download(
+        String(ref.uid),
+        match.part,
+        mode === "inline" ? { uid: true, maxBytes: MAX_IMAP_ATTACHMENT_BYTES + 1 } : { uid: true }
+      );
+      const buf = await streamToBuffer(dl.content, maxBytes);
       return {
         success: true,
         base64: buf.toString("base64"),
@@ -60972,6 +61008,9 @@ async function imapFetchAttachment(id, attachmentName, deps = {}) {
         mimeType: match.mimeType
       };
     } catch (e) {
+      if (mode === "inline" && e instanceof AttachmentSizeLimitError) {
+        return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+      }
       return { success: false, error: `IMAP attachment fetch failed: ${errText(e)}` };
     }
   });
@@ -61150,7 +61189,7 @@ async function imapThread(id, deps = {}, limit = 50) {
     true
   );
 }
-var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, COLOR_FETCH_CHUNK, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, SENT_COPY_GMAIL_POLL_MS, SENT_COPY_GMAIL_POLL_INTERVAL_MS, GMAIL_HOST, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
+var import_imapflow, IMAP_ENV, defaultConnect, SPECIAL_USE_ALIASES, NOT_DELETED, LARGE_MAILBOX_MESSAGES, FIRST_SEARCH_WINDOW, MAX_WINDOW, MAX_UNSCOPED_SEARCH_DEPTH, COLOR_FETCH_CHUNK, ROW_QUERY, ROW_QUERY_NO_STRUCTURE, ROW_QUERY_HEADERS_ONLY, DELETED_MARGIN, poolConnect, pools, connecting, SENT_COPY_GMAIL_POLL_MS, SENT_COPY_GMAIL_POLL_INTERVAL_MS, GMAIL_HOST, MAX_COMPOSE_SOURCE_BYTES, MAX_RFC822_INLINE_BYTES, MAX_RFC822_FILE_BYTES, HEADER_WINDOW_BYTES, MAIL_FLAG_BITS, FLAG_COLOR_NAMES, imapMarkRead, imapMarkUnread, FALLBACK_TRASH_PATH, BASE64_TAIL_WINDOW, QP_EXACT_MAX_BYTES, AttachmentSizeLimitError, imapBatchMarkRead, imapBatchMarkUnread, imapBatchFlag, imapBatchUnflag, imapBatchDelete;
 var init_imapClient = __esm({
   "src/services/imapClient.ts"() {
     "use strict";
@@ -61272,6 +61311,8 @@ var init_imapClient = __esm({
     FALLBACK_TRASH_PATH = "Trash";
     BASE64_TAIL_WINDOW = 1024;
     QP_EXACT_MAX_BYTES = 64 * 1024;
+    AttachmentSizeLimitError = class extends Error {
+    };
     imapBatchMarkRead = (ids, deps = {}) => imapBatch(ids, deps, async (c, uids) => {
       assertMutated(
         await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true }),
