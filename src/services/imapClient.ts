@@ -50,7 +50,11 @@ import {
   type ParsedHeaders,
 } from "@/utils/headers.js";
 import { classifyCountStatus, type CountDelta } from "@/services/auditLog.js";
-import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
+import {
+  FETCH_ATTACHMENT_TOO_LARGE,
+  MAX_FETCH_ATTACHMENT_BYTES,
+  MAX_IMAP_ATTACHMENT_BYTES,
+} from "@/utils/attachmentLimits.js";
 
 export const IMAP_ENV = {
   user: "APPLE_MAIL_MCP_IMAP_USER",
@@ -206,7 +210,11 @@ export interface ImapClientLike {
     path: string,
     query: { messages?: boolean; unseen?: boolean; recent?: boolean }
   ): Promise<{ path: string; messages?: number; unseen?: number; recent?: number }>;
-  download(range: string, part: string, opts: { uid: true }): Promise<ImapDownload>;
+  download(
+    range: string,
+    part: string,
+    opts: { uid: true; maxBytes?: number }
+  ): Promise<ImapDownload>;
   mailboxCreate(path: string): Promise<{ path: string; created: boolean }>;
   mailboxRename(path: string, newPath: string): Promise<{ path: string; newPath: string }>;
   mailboxDelete(path: string): Promise<{ path: string }>;
@@ -3526,6 +3534,8 @@ export function bodyStructureHasAttachments(node?: ImapBodyStructure): boolean {
   return !!node && collectAttachments(node).length > 0;
 }
 
+class AttachmentSizeLimitError extends Error {}
+
 async function streamToBuffer(
   content: AsyncIterable<Uint8Array>,
   maxBytes: number
@@ -3535,7 +3545,9 @@ async function streamToBuffer(
   for await (const chunk of content) {
     total += chunk.byteLength;
     if (total > maxBytes) {
-      throw new Error(`IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`);
+      throw new AttachmentSizeLimitError(
+        `IMAP attachment exceeds the ${maxBytes / 1024 / 1024} MiB size limit.`
+      );
     }
     chunks.push(Buffer.from(chunk));
   }
@@ -3640,7 +3652,8 @@ export async function imapListAttachments(
 export async function imapFetchAttachment(
   id: string,
   attachmentName: string,
-  deps: ImapDeps = {}
+  deps: ImapDeps = {},
+  mode: "inline" | "save" = "save"
 ): Promise<{
   success: boolean;
   base64?: string;
@@ -3664,20 +3677,56 @@ export async function imapFetchAttachment(
         error: `Attachment "${attachmentName}" not found on UID ${ref.uid}. Available: ${names}.`,
       };
     }
-    // Pre-check on the decoded size (the limit applies to decoded bytes, which
-    // is what streamToBuffer counts) — a base64 part's encoded size is ~4/3 of
-    // it and would refuse files that fit. Estimate only; the stream cut-off
-    // below stays the hard guard.
-    const expected = decodedSizeWithoutBody(match).size;
-    if (expected > MAX_IMAP_ATTACHMENT_BYTES) {
-      return {
-        success: false,
-        error: `IMAP attachment "${attachmentName}" is ${expected} bytes; the maximum is ${MAX_IMAP_ATTACHMENT_BYTES} bytes (25 MiB).`,
-      };
+    const maxBytes = mode === "inline" ? MAX_FETCH_ATTACHMENT_BYTES : MAX_IMAP_ATTACHMENT_BYTES;
+    // Preserve the existing save precheck. Inline output may be smaller than
+    // either the advisory size or the encoded input after text transforms.
+    if (mode === "save") {
+      const expected = decodedSizeWithoutBody(match);
+      if (expected.size > maxBytes) {
+        return {
+          success: false,
+          error: `IMAP attachment "${attachmentName}" is ${expected.size} bytes; the maximum is ${maxBytes} bytes (25 MiB).`,
+        };
+      }
     }
     try {
-      const dl = await client.download(String(ref.uid), match.part, { uid: true });
-      const buf = await streamToBuffer(dl.content, MAX_IMAP_ATTACHMENT_BYTES);
+      if (mode === "inline") {
+        // ImapFlow can buffer decoded text before yielding it (for example,
+        // format=flowed). Its internal maxBytes can truncate that input before
+        // the output reaches our limit, so first bound and verify the encoded
+        // part's reported length. Bound raw bytes without trusting the transfer
+        // encoding: the separately fetched MIME headers select the decoder.
+        const encoded = match.encodedSize;
+        if (!Number.isSafeInteger(encoded) || encoded < 0 || encoded > MAX_IMAP_ATTACHMENT_BYTES) {
+          return {
+            success: false,
+            error: "Attachment is too large to verify inline. Use save-attachment instead.",
+          };
+        }
+        // Probe the last reported byte and one beyond it. This also detects a
+        // length that overstates the body, and handles single-part messages as
+        // TEXT, matching ImapFlow's own download path.
+        const probePart = match.part === "1" && !msg.bodyStructure.childNodes ? "text" : match.part;
+        const probeStart = Math.max(0, encoded - 1);
+        const probe = await client.fetchOne(
+          String(ref.uid),
+          { bodyParts: [{ key: probePart, start: probeStart, maxLength: encoded > 0 ? 2 : 1 }] },
+          { uid: true }
+        );
+        const tail = probe && probe.bodyParts?.get(probePart.toLowerCase());
+        if (!tail || tail.length !== (encoded > 0 ? 1 : 0)) {
+          return {
+            success: false,
+            error: "Could not verify the complete attachment inline. Use save-attachment instead.",
+          };
+        }
+      }
+      const dl = await client.download(
+        String(ref.uid),
+        match.part,
+        mode === "inline" ? { uid: true, maxBytes: MAX_IMAP_ATTACHMENT_BYTES + 1 } : { uid: true }
+      );
+      const buf = await streamToBuffer(dl.content, maxBytes);
       return {
         success: true,
         base64: buf.toString("base64"),
@@ -3685,6 +3734,9 @@ export async function imapFetchAttachment(
         mimeType: match.mimeType,
       };
     } catch (e) {
+      if (mode === "inline" && e instanceof AttachmentSizeLimitError) {
+        return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+      }
       return { success: false, error: `IMAP attachment fetch failed: ${errText(e)}` };
     }
   });
