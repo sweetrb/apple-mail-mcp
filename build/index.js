@@ -102084,6 +102084,7 @@ var senderFragment = (compose, verb) => `set _rsAddrs to {}
           repeat with _rsR in ((to recipients of msg) & (cc recipients of msg))
             set end of _rsCands to (address of _rsR) as text
           end repeat
+          set _rsNrc to count of _rsCands
           try
             set end of _rsCands to (extract address from (sender of msg)) as text
           end try
@@ -102099,6 +102100,25 @@ var senderFragment = (compose, verb) => `set _rsAddrs to {}
               end repeat
             end if
           end repeat
+          if _rsOwn and not _rsDone then
+            repeat with _rsAc in (every account whose enabled is true)
+              if not _rsDone then
+                try
+                  set _rsOther to email addresses of _rsAc
+                  repeat with _rsI from 1 to _rsNrc
+                    repeat with _rsA in _rsOther
+                      if not _rsDone then
+                        if ((item _rsI of _rsCands) as text) is (_rsA as text) then
+                          set _rsFrom to (_rsA as text)
+                          set _rsDone to true
+                        end if
+                      end if
+                    end repeat
+                  end repeat
+                end try
+              end if
+            end repeat
+          end if
           if _rsFrom is not "" then
             set sender of ${compose} to _rsFrom
             set _rsGot to sender of ${compose} as text

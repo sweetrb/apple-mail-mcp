@@ -486,7 +486,11 @@ const AMBIGUOUS_ID_BATCH = "This message id is present in more than one mailbox 
  * Fixes the sender of `compose` (the reply or forward just created) to the
  * address the original message was sent to: the address of its recipients
  * (to/cc) that belongs to the account the message sits in — or, for a message
- * the user sent, its own From address — else that account's first address. Without it Mail answers from its default sending account, so
+ * the user sent, its own From address. When none of its to/cc recipients belongs to that account (a
+ * message another account forwarded in, e.g. Elcine delivered to Nopuedomas), the to/cc recipients
+ * are matched against every other enabled account, so the reply leaves from the address the sender
+ * wrote to. Only then does it fall back to that account's first address. Without it Mail answers
+ * from its default sending account, so
  * a mail received in one account was answered from another. Runs inside
  * `findMessageScript`, where `msg` is the original. It fails loudly (the
  * script's own `error:` path) instead of falling back to Mail's default, and
@@ -520,6 +524,7 @@ const senderFragment = (compose: "theReply" | "theForward", verb: "reply" | "for
           repeat with _rsR in ((to recipients of msg) & (cc recipients of msg))
             set end of _rsCands to (address of _rsR) as text
           end repeat
+          set _rsNrc to count of _rsCands
           try
             set end of _rsCands to (extract address from (sender of msg)) as text
           end try
@@ -535,6 +540,25 @@ const senderFragment = (compose: "theReply" | "theForward", verb: "reply" | "for
               end repeat
             end if
           end repeat
+          if _rsOwn and not _rsDone then
+            repeat with _rsAc in (every account whose enabled is true)
+              if not _rsDone then
+                try
+                  set _rsOther to email addresses of _rsAc
+                  repeat with _rsI from 1 to _rsNrc
+                    repeat with _rsA in _rsOther
+                      if not _rsDone then
+                        if ((item _rsI of _rsCands) as text) is (_rsA as text) then
+                          set _rsFrom to (_rsA as text)
+                          set _rsDone to true
+                        end if
+                      end if
+                    end repeat
+                  end repeat
+                end try
+              end if
+            end repeat
+          end if
           if _rsFrom is not "" then
             set sender of ${compose} to _rsFrom
             set _rsGot to sender of ${compose} as text
