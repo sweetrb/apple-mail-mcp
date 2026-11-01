@@ -582,9 +582,12 @@ describeIfSqlite("BodyIndexWriter: walking and indexing", () => {
   // behind. That breaks every later run() on the connection, not only the
   // statement that caused it, so every write path must survive it.
   it("keeps writing when the connection's last-insert rowid is past 2^53", () => {
+    // One fixed rowid, replaced on each call: every call still sets the
+    // connection's last-insert rowid, and none can collide with an earlier
+    // call's row the way a random one did (about 1 run in 70).
     const poison = () =>
       w.db.exec(
-        "CREATE TEMP TABLE IF NOT EXISTS big (x); INSERT INTO big (rowid, x) VALUES (1152921504606846976 + abs(random() % 1000), 1)"
+        "CREATE TEMP TABLE IF NOT EXISTS big (x); INSERT OR REPLACE INTO big (rowid, x) VALUES (1152921504606846976, 1)"
       );
     poison();
     w.startWalk();
