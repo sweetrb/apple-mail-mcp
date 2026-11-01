@@ -204,6 +204,17 @@ matching configured identity or an allowed email-form `account` override;
 explicit SMTP rejects bare Mail.app labels such as `"Work"`. Missing SMTP
 credentials or an unapproved sender stops the batch before any message is sent.
 
+### SMTP submission outcomes
+
+After an SMTP call, read `accepted`, `rejected`, `partial`, and
+`deliveryUnknown` when returned, including each item in `send-serial-email`'s
+`results`. SMTP acceptance is not final delivery. If submission was partial,
+do not resend to accepted recipients; reconsider only rejected recipients. If
+`deliveryUnknown` is true, the provider may already have accepted the message:
+verify with the provider or recipients before considering a retry, and do not
+retry automatically. A `sentCopy: false` result reports failed Sent-folder
+filing, not a failed SMTP submission; it is not a reason to resend.
+
 ### Optional: native-editor composition through MCP
 
 When the user wants Mail's native signature and HTML reply history, the four
@@ -213,22 +224,21 @@ with the actual original ID, not a new message with a `Re:` subject. Use
 `send: false` when review is requested. New messages require an explicit
 `account`; the server refuses ambiguous reply identities.
 
-For a numeric reply or forward ID, pass the source `account` and full `mailbox`
-path from the search or listing together. The read and compose target must
-stay in that mailbox; if it is missing, ambiguous, or the original Message-ID
-has changed, stop and re-list rather than substituting a similarly named
-mailbox. Omit both fields for an `imap:` ID, which already encodes its source.
+This mode operates Mail's visible editor on the local unlocked Mac. It requires
+a usable editor in the MCP process's active GUI session and existing
+Accessibility and Automation permissions for Mail and System Events. An awake
+Mac, a closed lid, or computer-control features in the host do not establish
+that the MCP process can operate the editor. It checks permissions without
+requesting them. It does not require a separate computer-control plugin, does
+not change Mail preferences, and preserves the clipboard unless another
+application changes it during the operation. Do not interact with Mail or the
+clipboard while it runs. The option selects Mail.app even when SMTP is
+configured; `transport: "smtp"` and caller-built threading headers are
+incompatible. Mail merge is unchanged.
 
-This mode operates Mail's visible editor on the local unlocked Mac and requires
-existing Accessibility and Automation permissions for Mail and System Events.
-It checks permissions without requesting them. It does not require a separate
-computer-control plugin, does not change Mail preferences, and preserves the
-clipboard unless another application changes it during the operation. Do not
-interact with Mail or the clipboard while it runs. The option selects Mail.app
-even when SMTP is configured; `transport: "smtp"` and caller-built threading
-headers are incompatible. Mail merge is unchanged.
-
-On failure, inspect the retained draft and clipboard. Never silently retry
+On failure or an uncertain native action, inspect any retained draft, including
+the marked draft if present, and the clipboard before considering a retry.
+Never silently retry
 through the AppleScript body setter or SMTP. If final delivery is uncertain,
 read Sent and Outbox before considering a retry. Apply the recipient, MIME,
 ancestry, and rendering verification below; a successful tool result alone
@@ -304,6 +314,15 @@ User: "Reply all and attach the PDF they asked for"
 Action: Use reply-to-message with replyAll=true and attachments=["/abs/path/file.pdf"]
 ```
 
+For a numeric reply or forward ID, pass the source `account` and full `mailbox`
+path from the search or listing together. The read and compose target must
+stay in that mailbox; if it is missing, ambiguous, or the original Message-ID
+has changed, stop and re-list rather than substituting a similarly named
+mailbox. Omit both fields for an `imap:` ID, which already encodes its source.
+For scoped SMTP replies and forwards, the actual From address must belong to
+the source Mail account; an SMTP login or allowed-sender entry alone does not
+establish that relationship.
+
 ### Organizing Email
 
 When the user wants to organize:
@@ -333,7 +352,7 @@ Action: Use delete-message with the message ID
 - **"Message not found"**: The message ID may be invalid or the message was deleted. Use search-messages to find it again.
 - **"Permission denied"**: User needs to grant automation permission in System Settings > Privacy & Security > Automation. Run the `doctor` tool for a full diagnosis.
 - **"Account not found"**: Account names are case-sensitive. Use list-accounts to see exact names.
-- **"Failed to send"**: Check network connection and Mail.app configuration.
+- **"Failed to send"**: Check network connection and Mail.app configuration. For SMTP, check the submission outcomes above before considering a retry.
 
 ## Examples
 
