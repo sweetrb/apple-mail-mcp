@@ -1050,6 +1050,12 @@ Return an attachment's bytes as base64 (the read counterpart to inline-base64 se
 
 **Returns:** The attachment bytes, base64-encoded (also in `structuredContent.contentBase64`).
 
+**Inline limit:** 3 MiB of decoded bytes on either backend. The result keeps
+both base64 representations; its total serialized size is also bounded to
+leave room under the MCP SDK's default 10 MiB stdio read buffer. Larger or
+unverifiable inline results return an error directing you to `save-attachment`.
+IMAP saves retain their separate 25 MiB limit and the existing allowed roots.
+
 ---
 
 #### `resolve-message-id`
@@ -2294,7 +2300,7 @@ The entrypoint is written as:
 | Date filter format                                                           | Date filters must be valid parseable dates (e.g., "January 1, 2026" or "2026-03-15"); bare numbers or non-date strings are rejected                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Attachment save path restrictions                                            | `save-attachment` only allows saving to home directory, `/tmp`, `/private/tmp`, and `/Volumes`; path traversal is blocked                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Attachment count limit                                                       | `send-email` and `create-draft` accept a maximum of 20 file attachments                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| IMAP attachment fetch size                                                   | `fetch-attachment` / `save-attachment` over IMAP refuse a part larger than 25 MiB — rejected before download when the server declares the size, and the stream is cut off at the limit when it does not                                                                                                                                                                                                                                                                                                                                                                                              |
+| Attachment fetch size                                                        | `fetch-attachment` refuses inline results over 3 MiB on either backend. IMAP `save-attachment` retains its separate 25 MiB download limit.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ### Mail.app `<blockquote>` wrapping on macOS 15+ (workaround in v1.6.0)
 

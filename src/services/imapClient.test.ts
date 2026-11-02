@@ -54,7 +54,8 @@ import {
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
-import { MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
+import { MAX_FETCH_ATTACHMENT_BYTES, MAX_IMAP_ATTACHMENT_BYTES } from "@/utils/attachmentLimits.js";
+import { ImapFlow } from "imapflow";
 import { createHash } from "node:crypto";
 
 const cfg: ImapConfig = {
@@ -1956,6 +1957,296 @@ describe("attachments via BODYSTRUCTURE (I1)", () => {
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/25 MiB/i);
   });
+
+  it("preserves a 4 MiB IMAP save while refusing it inline", async () => {
+    const payload = Buffer.alloc(4 * 1024 * 1024, 0x42);
+    const download = vi.fn(async () => ({
+      content: (async function* () {
+        yield payload;
+      })(),
+    }));
+    const client: ImapClientLike = {
+      ...attClient(),
+      fetchOne: async (_range, query) =>
+        query.bodyParts
+          ? { uid: 9, bodyParts: new Map([["2", Buffer.from("x")]]) }
+          : {
+              uid: 9,
+              bodyStructure: {
+                part: "2",
+                disposition: "attachment",
+                dispositionParameters: { filename: "report.pdf" },
+                size: payload.length,
+              },
+            },
+      download,
+    };
+    const deps = { config: cfg, connect: async () => client };
+    const inline = await imapFetchAttachment(MID, "report.pdf", deps, "inline");
+    expect(inline).toMatchObject({
+      success: false,
+      error: expect.stringContaining("save-attachment"),
+    });
+    expect(download).toHaveBeenCalledWith("9", "2", {
+      uid: true,
+      maxBytes: MAX_IMAP_ATTACHMENT_BYTES + 1,
+    });
+    const saved = await imapFetchAttachment(MID, "report.pdf", deps);
+    expect(saved.success).toBe(true);
+    expect(Buffer.from(saved.base64!, "base64").equals(payload)).toBe(true);
+    expect(download).toHaveBeenCalledWith("9", "2", { uid: true });
+  });
+
+  it("accepts an overestimated encoded part at 3 MiB and bounds its provider download", async () => {
+    const payload = Buffer.alloc(MAX_FETCH_ATTACHMENT_BYTES, 0x61);
+    const download = vi.fn(async () => ({
+      content: (async function* () {
+        yield payload;
+      })(),
+    }));
+    const client: ImapClientLike = {
+      ...attClient(),
+      fetchOne: async (_range, query) =>
+        query.bodyParts
+          ? { uid: 9, bodyParts: new Map([["2", Buffer.from("x")]]) }
+          : {
+              uid: 9,
+              bodyStructure: {
+                part: "2",
+                disposition: "attachment",
+                dispositionParameters: { filename: "report.pdf" },
+                encoding: "quoted-printable",
+                size: MAX_FETCH_ATTACHMENT_BYTES + 4096,
+              },
+            },
+      download,
+    };
+    const result = await imapFetchAttachment(
+      MID,
+      "report.pdf",
+      { config: cfg, connect: async () => client },
+      "inline"
+    );
+    expect(result).toMatchObject({ success: true, bytes: MAX_FETCH_ATTACHMENT_BYTES });
+    expect(download).toHaveBeenCalledWith("9", "2", {
+      uid: true,
+      maxBytes: MAX_IMAP_ATTACHMENT_BYTES + 1,
+    });
+  });
+
+  it.each(["base64", "7bit"])(
+    "accepts a small inline %s part when Content-Disposition overstates its size",
+    async (encoding) => {
+      const payload = Buffer.from("small attachment");
+      const download = vi.fn(async () => ({
+        content: (async function* () {
+          yield payload;
+        })(),
+      }));
+      const client: ImapClientLike = {
+        ...attClient(),
+        fetchOne: async (_range, query) =>
+          query.bodyParts
+            ? { uid: 9, bodyParts: new Map([["2", Buffer.from("x")]]) }
+            : {
+                uid: 9,
+                bodyStructure: {
+                  part: "2",
+                  disposition: "attachment",
+                  dispositionParameters: {
+                    filename: "report.pdf",
+                    size: String(MAX_IMAP_ATTACHMENT_BYTES + 1),
+                  },
+                  encoding,
+                  size: payload.length,
+                },
+              },
+        download,
+      };
+      const deps = { config: cfg, connect: async () => client };
+      const inline = await imapFetchAttachment(MID, "report.pdf", deps, "inline");
+      expect(inline).toMatchObject({ success: true, bytes: payload.length });
+      expect(Buffer.from(inline.base64!, "base64").equals(payload)).toBe(true);
+      // Preserve the existing, separate save-mode precheck.
+      const saved = await imapFetchAttachment(MID, "report.pdf", deps);
+      expect(saved).toMatchObject({ success: false, error: expect.stringContaining("25 MiB") });
+      expect(download).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("cuts off an inline stream one byte over the decoded limit", async () => {
+    const client: ImapClientLike = {
+      ...attClient(),
+      fetchOne: async (_range, query) =>
+        query.bodyParts
+          ? { uid: 9, bodyParts: new Map([["2", Buffer.from("x")]]) }
+          : {
+              uid: 9,
+              bodyStructure: {
+                part: "2",
+                disposition: "attachment",
+                dispositionParameters: { filename: "report.pdf" },
+                encoding: "base64",
+                size: 1024,
+              },
+            },
+      download: async () => ({
+        content: (async function* () {
+          yield Buffer.alloc(MAX_FETCH_ATTACHMENT_BYTES);
+          yield Buffer.from([1]);
+        })(),
+      }),
+    };
+    const result = await imapFetchAttachment(
+      MID,
+      "report.pdf",
+      { config: cfg, connect: async () => client },
+      "inline"
+    );
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining("save-attachment"),
+    });
+    expect(result.base64).toBeUndefined();
+  });
+
+  it("refuses understated or unverifiable encoded lengths before download", async () => {
+    for (const probe of [
+      new Map([["2", Buffer.from("xx")]]),
+      new Map([["2", Buffer.alloc(0)]]),
+      undefined,
+    ]) {
+      const download = vi.fn();
+      const client: ImapClientLike = {
+        ...attClient(),
+        fetchOne: async (_range, query) =>
+          query.bodyParts
+            ? { uid: 9, bodyParts: probe }
+            : {
+                uid: 9,
+                bodyStructure: {
+                  part: "2",
+                  disposition: "attachment",
+                  dispositionParameters: { filename: "report.pdf" },
+                  encoding: "base64",
+                  size: 64,
+                },
+              },
+        download,
+      };
+      const result = await imapFetchAttachment(
+        MID,
+        "report.pdf",
+        { config: cfg, connect: async () => client },
+        "inline"
+      );
+      expect(result).toMatchObject({
+        success: false,
+        error: expect.stringContaining("save-attachment"),
+      });
+      expect(download).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses oversized raw input even if BODYSTRUCTURE claims base64 and MIME differs", async () => {
+    const download = vi.fn(async () => ({
+      meta: { contentType: "text/plain" },
+      content: (async function* () {
+        yield Buffer.from("clipped");
+      })(),
+    }));
+    const client: ImapClientLike = {
+      ...attClient(),
+      fetchOne: async (_range, query) =>
+        query.bodyParts
+          ? { uid: 9, bodyParts: new Map([["2", Buffer.from("x")]]) }
+          : {
+              uid: 9,
+              bodyStructure: {
+                part: "2",
+                type: "text/plain",
+                disposition: "inline",
+                dispositionParameters: { filename: "report.pdf" },
+                encoding: "base64",
+                size: MAX_IMAP_ATTACHMENT_BYTES + 1,
+              },
+            },
+      download,
+    };
+    const result = await imapFetchAttachment(
+      MID,
+      "report.pdf",
+      { config: cfg, connect: async () => client },
+      "inline"
+    );
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining("save-attachment"),
+    });
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it.each(["base64", "7bit"])(
+    "does not silently truncate ImapFlow's %s flowed-text decoder",
+    async (encoding) => {
+      const decoded = Buffer.from(`${"a".repeat(1020)} \r\n`.repeat(3078));
+      expect(decoded.length).toBeGreaterThan(MAX_FETCH_ATTACHMENT_BYTES);
+      const encoded = encoding === "base64" ? Buffer.from(decoded.toString("base64")) : decoded;
+      const mime = Buffer.from(
+        `Content-Type: text/plain; format=flowed; delsp=yes\r\nContent-Disposition: inline; filename=report.pdf\r\nContent-Transfer-Encoding: ${encoding}\r\n\r\n`
+      );
+      const flow = new ImapFlow({
+        host: "127.0.0.1",
+        port: 993,
+        logger: false,
+        auth: { user: "fixture", pass: "fixture" },
+      });
+      Object.assign(flow, {
+        mailbox: { path: "INBOX" },
+        autoidle: () => {},
+        fetchOne: async (
+          _range: string,
+          query: { size?: boolean; bodyParts: Array<string | { start: number; maxLength: number }> }
+        ) => {
+          const part = query.bodyParts.find((p) => typeof p !== "string") as {
+            start: number;
+            maxLength: number;
+          };
+          const parts = new Map<string, Buffer>([
+            ["2", encoded.subarray(part.start, part.start + part.maxLength)],
+          ]);
+          if (query.size) parts.set("2.mime", mime);
+          return { uid: 9, size: encoded.length, bodyParts: parts };
+        },
+      });
+      const client: ImapClientLike = {
+        ...attClient(),
+        fetchOne: async (_range, query) =>
+          query.bodyParts
+            ? { uid: 9, bodyParts: new Map([["2", Buffer.from("x")]]) }
+            : {
+                uid: 9,
+                bodyStructure: {
+                  part: "2",
+                  type: "text/plain",
+                  disposition: "inline",
+                  dispositionParameters: { filename: "report.pdf" },
+                  encoding,
+                  size: encoded.length,
+                },
+              },
+        download: async (range, part, options) => flow.download(range, part, options),
+      };
+      const result = await imapFetchAttachment(
+        MID,
+        "report.pdf",
+        { config: cfg, connect: async () => client },
+        "inline"
+      );
+      expect(result.success).toBe(true);
+      expect(Buffer.from(result.base64!, "base64").toString()).toBe("a".repeat(1020 * 3078));
+    }
+  );
 
   it("errors clearly when the attachment name isn't found", async () => {
     const r = await imapFetchAttachment(MID, "missing.txt", {

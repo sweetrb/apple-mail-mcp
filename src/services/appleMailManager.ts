@@ -19,7 +19,6 @@ import {
   chmodSync,
   existsSync,
   writeFileSync,
-  readFileSync,
   readdirSync,
   unlinkSync,
   copyFileSync,
@@ -28,6 +27,10 @@ import {
   rmSync,
   realpathSync,
   lstatSync,
+  openSync,
+  fstatSync,
+  readSync,
+  closeSync,
 } from "fs";
 import { resolve, sep, join } from "path";
 import { homedir } from "os";
@@ -45,6 +48,10 @@ import {
   STALLED_MAILBOX_TTL_MS,
 } from "@/services/stalledMailboxStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
+import {
+  FETCH_ATTACHMENT_TOO_LARGE,
+  MAX_FETCH_ATTACHMENT_BYTES,
+} from "@/utils/attachmentLimits.js";
 import { extractAddress, pickSenderAddress, senderGuardScript } from "@/utils/senderAccount.js";
 import { nativeEditorPreflight, insertNativeAuthoredBody } from "@/services/nativeMailComposer.js";
 import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
@@ -6520,8 +6527,36 @@ ${this.errorEmit("              ")}
           error: `Attachment "${attachmentName}" not found on message ${id}`,
         };
       }
-      const buf = readFileSync(dest);
-      return { success: true, base64: buf.toString("base64"), bytes: buf.length };
+      // Read the same object we validate; do not follow a replaced pathname.
+      const fd = openSync(
+        dest,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK
+      );
+      try {
+        const stat = fstatSync(fd);
+        if (!stat.isFile()) return { success: false, error: "Attachment is not a regular file." };
+        if (stat.size > MAX_FETCH_ATTACHMENT_BYTES) {
+          return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+        }
+        const chunks: Buffer[] = [];
+        let total = 0;
+        while (total <= MAX_FETCH_ATTACHMENT_BYTES) {
+          const chunk = Buffer.allocUnsafe(
+            Math.min(64 * 1024, MAX_FETCH_ATTACHMENT_BYTES + 1 - total)
+          );
+          const count = readSync(fd, chunk, 0, chunk.length, null);
+          if (count === 0) break;
+          total += count;
+          if (total > MAX_FETCH_ATTACHMENT_BYTES) {
+            return { success: false, error: FETCH_ATTACHMENT_TOO_LARGE };
+          }
+          chunks.push(chunk.subarray(0, count));
+        }
+        const buf = Buffer.concat(chunks, total);
+        return { success: true, base64: buf.toString("base64"), bytes: buf.length };
+      } finally {
+        closeSync(fd);
+      }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) };
     } finally {
