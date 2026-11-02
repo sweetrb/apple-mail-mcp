@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "apple-mail",
-      "version": "2.20.51",
+      "version": "2.20.52",
       "source": {
         "source": "local",
         "path": "./codex"
