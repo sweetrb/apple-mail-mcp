@@ -54,6 +54,21 @@ describe("reply sender", () => {
     expect(script).toContain("if (_rsC as text) is (_rsA as text)");
   });
 
+  it("a forwarded-in message is answered from the other account its recipient belongs to", () => {
+    mgr.replyToMessage("42", "Reply body", false, false);
+    const script = lastScript();
+    // Only to/cc candidates (the first _rsNrc items), never the original's sender.
+    expect(script).toContain("set _rsNrc to count of _rsCands");
+    expect(script).toContain("repeat with _rsI from 1 to _rsNrc");
+    // The own-account pass runs first; the cross-account pass only when it found nothing.
+    const own = script.indexOf("repeat with _rsA in _rsAddrs");
+    const cross = script.indexOf("set _rsOther to email addresses of _rsAc");
+    expect(own).toBeGreaterThanOrEqual(0);
+    expect(cross).toBeGreaterThan(own);
+    expect(script).toContain("if _rsOwn and not _rsDone then");
+    expect(script.indexOf("set sender of theReply")).toBeGreaterThan(cross);
+  });
+
   it("a reply to the user's own sent message keeps its From address", () => {
     mgr.replyToMessage("42", "Reply body", false, false);
     const script = lastScript();

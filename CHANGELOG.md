@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [2.20.52] - 2026-11-02
+
+### Fixed
+
+- **`reply-to-message` and `forward-message` (AppleScript path) answered a forwarded-in message from the wrong address.** A mail sent to `a@work.example` and forwarded by the server into a mailbox of another account (`b@home.example`) sits in an account none of whose addresses appear in its to/cc. The sender fell back to that account's first address, so the reply left from `b@home.example` although the sender had written to `a@work.example`. When the account the message sits in has no matching to/cc address, the to/cc addresses are now matched against every other enabled account before that fallback, so the reply leaves from the address the sender wrote to. The original's own sender is not used in this second pass, and the existing read-back of `sender` still refuses a mismatch.
+- Removed two stray `|||||||` merge-conflict marker lines that #357 and #359 had left in this changelog (documentation only).
+
 ## [2.20.51] - 2026-11-01
 
 ### Changed
@@ -33,7 +40,6 @@
     names them. Over IMAP, a search names them when it covers more than one
     mailbox; its `imap:` ids encode the mailbox, but not readably.
 
-||||||| fd18dcf
 ## [2.20.49] - 2026-10-31
 
 ### Fixed
@@ -64,7 +70,6 @@
   truncate the quotation. Existing AppleScript composition and IMAP account
   matching are unchanged.
 
-||||||| fd18dcf
 ## [2.20.48] - 2026-10-31
 
 ### Fixed
