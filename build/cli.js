@@ -58806,6 +58806,17 @@ var require_imap_flow = __commonJS({
   }
 });
 
+// src/utils/attachmentName.ts
+function sameAttachmentName(stored, requested) {
+  if (stored == null || requested == null) return false;
+  return stored.normalize("NFC") === requested.normalize("NFC");
+}
+var init_attachmentName = __esm({
+  "src/utils/attachmentName.ts"() {
+    "use strict";
+  }
+});
+
 // src/utils/mailboxName.ts
 function mailboxNameKey(name2) {
   return name2.trim().normalize("NFC").toLowerCase();
@@ -59038,6 +59049,7 @@ var MAX_MIME_DEPTH;
 var init_mimeParse = __esm({
   "src/utils/mimeParse.ts"() {
     "use strict";
+    init_attachmentName();
     MAX_MIME_DEPTH = 20;
   }
 });
@@ -61092,7 +61104,7 @@ async function imapFetchAttachment(id, attachmentName, deps = {}, mode = "save")
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
     }
     const atts = collectAttachments(msg.bodyStructure);
-    const match = atts.find((a) => a.filename === attachmentName);
+    const match = atts.find((a) => sameAttachmentName(a.filename, attachmentName));
     if (!match) {
       const names = atts.map((a) => a.filename).join(", ") || "none";
       return {
@@ -61336,6 +61348,7 @@ var init_imapClient = __esm({
     import_imapflow = __toESM(require_imap_flow(), 1);
     init_smtpMailer();
     init_docsUrls();
+    init_attachmentName();
     init_mailboxName();
     init_messageLocation();
     init_mimeParse();

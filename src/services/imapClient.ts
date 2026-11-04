@@ -37,6 +37,7 @@ import { createHash } from "node:crypto";
 import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
+import { sameAttachmentName } from "@/utils/attachmentName.js";
 import { mailboxNameKey, nfc } from "@/utils/mailboxName.js";
 import { locationSuffix } from "@/utils/messageLocation.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
@@ -3669,7 +3670,8 @@ export async function imapFetchAttachment(
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
     }
     const atts = collectAttachments(msg.bodyStructure);
-    const match = atts.find((a) => a.filename === attachmentName);
+    // NFC on both sides (#370): Mail.app stores non-ASCII names NFD, callers pass NFC.
+    const match = atts.find((a) => sameAttachmentName(a.filename, attachmentName));
     if (!match) {
       const names = atts.map((a) => a.filename).join(", ") || "none";
       return {
