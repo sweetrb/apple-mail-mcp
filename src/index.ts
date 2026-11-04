@@ -30,6 +30,7 @@ import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { integerNumber, registerToolWithContracts } from "@/utils/toolRegistration.js";
+import { annotationsFor } from "@/tools/toolAnnotations.js";
 import {
   AppleMailManager,
   resolveAttachmentSaveTarget,
@@ -561,7 +562,12 @@ function registerTool<
     const token = REFERENCES_SCHEMA.unwrap().element;
     z.globalRegistry.add(token, { ...token.meta(), description: IN_REPLY_TO_SCHEMA.description });
   }
-  return registerToolWithContracts(server, name, config, cb);
+  return registerToolWithContracts(
+    server,
+    name,
+    { ...config, annotations: annotationsFor(name, config.annotations) },
+    cb
+  );
 }
 
 /**
@@ -2556,7 +2562,7 @@ registerTool(
   "save-attachment",
   {
     description:
-      "Use when: writing one of a message's attachments to disk, by message id and attachmentName, into the savePath directory (saved as savePath/attachmentName).\nReturns: a confirmation of the saved file path.\nDo not use when: you don't know the attachment name (use list-attachments first) or want the bytes inline rather than on disk (use fetch-attachment).\nSafety: writes a file to disk — savePath must be a directory inside the configured allowed roots, and attachmentName may not contain path separators or '..'; calls outside those constraints are rejected.",
+      "Use when: writing one of a message's attachments to disk, by message id and attachmentName, into the savePath directory (saved as savePath/attachmentName).\nReturns: a confirmation of the saved file path.\nDo not use when: you don't know the attachment name (use list-attachments first) or want the bytes inline rather than on disk (use fetch-attachment).\nSafety: writes a new file to disk and never overwrites — savePath must be an existing directory under ~/Downloads, ~/Desktop, ~/Documents, iCloud Drive, CloudStorage, a temporary directory, or a root named in APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS. Hidden files and folders, credential stores and other ~/Library folders are refused, and attachmentName may not contain path separators or '..'.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       attachmentName: z.string().min(1, "Attachment name is required"),

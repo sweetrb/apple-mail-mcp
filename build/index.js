@@ -9856,7 +9856,7 @@ var require_transport = __commonJS({
     var { createRequire: createRequire2 } = __require("module");
     var { existsSync: existsSync8 } = __require("node:fs");
     var getCallers = require_caller();
-    var { join: join12, isAbsolute: isAbsolute2, sep: sep3 } = __require("node:path");
+    var { join: join12, isAbsolute: isAbsolute2, sep: sep2 } = __require("node:path");
     var { fileURLToPath: fileURLToPath2 } = __require("node:url");
     var sleep2 = require_atomic_sleep();
     var onExit = require_on_exit_leak_free();
@@ -10055,7 +10055,7 @@ var require_transport = __commonJS({
         let fixTarget2;
         for (const filePath of callers) {
           try {
-            const context = filePath === "node:repl" ? process.cwd() + sep3 : filePath;
+            const context = filePath === "node:repl" ? process.cwd() + sep2 : filePath;
             fixTarget2 = createRequire2(context).resolve(origin);
             break;
           } catch (err) {
@@ -65919,6 +65919,19 @@ var init_attachmentLimits = __esm({
 import { realpathSync, statSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { delimiter as delimiter2, isAbsolute, join, resolve as resolve3, sep } from "path";
+function defaultAttachmentSaveRoots() {
+  const home = homedir();
+  return [
+    join(home, "Downloads"),
+    join(home, "Desktop"),
+    join(home, "Documents"),
+    join(home, "Library", "Mobile Documents", "com~apple~CloudDocs"),
+    join(home, "Library", "CloudStorage"),
+    tmpdir(),
+    "/tmp",
+    "/private/tmp"
+  ];
+}
 function canonicalize(path3) {
   return realpathSync.native(path3);
 }
@@ -65992,12 +66005,12 @@ function canonicalRoots(requested) {
   }
   return resolved;
 }
-function explicitRoots(env) {
-  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
+function explicitRoots(env, variable = ATTACHMENT_READ_ROOTS_ENV) {
+  const raw = env[variable];
   const extraRoots = raw === void 0 ? [] : raw.split(delimiter2).map((root) => root.trim()).filter(Boolean);
   for (const root of extraRoots) {
     if (!isAbsolute(root)) {
-      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
+      throw new Error(`${variable} entries must be absolute paths.`);
     }
   }
   return canonicalRoots(extraRoots);
@@ -66035,11 +66048,27 @@ function resolveAttachmentReadPath(filePath, env = process.env) {
   }
   return canonical;
 }
-var ATTACHMENT_READ_ROOTS_ENV, DEFAULT_ATTACHMENT_READ_ROOTS, SENSITIVE_HOME_ROOTS, LIBRARY_DOCUMENT_FOLDERS;
+function attachmentSaveRoots(env = process.env) {
+  return [
+    ...canonicalRoots(defaultAttachmentSaveRoots()),
+    ...explicitRoots(env, ATTACHMENT_SAVE_ROOTS_ENV)
+  ];
+}
+function isWithinSaveRoots(candidate, env = process.env) {
+  return attachmentSaveRoots(env).some((root) => isWithinRoot(candidate, root));
+}
+function isProtectedSaveTarget(candidate, env = process.env) {
+  return isProtectedPath(candidate, [
+    ...explicitRoots(env, ATTACHMENT_SAVE_ROOTS_ENV),
+    ...canonicalTmpdir()
+  ]);
+}
+var ATTACHMENT_READ_ROOTS_ENV, ATTACHMENT_SAVE_ROOTS_ENV, DEFAULT_ATTACHMENT_READ_ROOTS, SENSITIVE_HOME_ROOTS, LIBRARY_DOCUMENT_FOLDERS;
 var init_attachmentReadPolicy = __esm({
   "src/utils/attachmentReadPolicy.ts"() {
     "use strict";
     ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
+    ATTACHMENT_SAVE_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS";
     DEFAULT_ATTACHMENT_READ_ROOTS = [homedir(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
     SENSITIVE_HOME_ROOTS = [
       join(homedir(), ".ssh"),
@@ -99050,6 +99079,95 @@ function integerNumber() {
   return external_exports.number().refine(Number.isInteger, { message: "Expected integer" }).meta({ type: "integer" });
 }
 
+// src/tools/toolAnnotations.ts
+var READ = { readOnlyHint: true, openWorldHint: false };
+var WRITE = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  openWorldHint: false
+};
+var IDEMPOTENT_WRITE = { ...WRITE, idempotentHint: true };
+var DESTRUCTIVE = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  openWorldHint: false
+};
+var SEND = { readOnlyHint: false, destructiveHint: true, openWorldHint: true };
+var TOOL_ANNOTATIONS = {
+  // Reads
+  "search-messages": READ,
+  "get-message": READ,
+  "get-message-headers": READ,
+  "get-thread": READ,
+  "list-messages": READ,
+  "resolve-message-id": READ,
+  "list-attachments": READ,
+  "fetch-attachment": READ,
+  "list-mailboxes": READ,
+  "get-unread-count": READ,
+  "list-smart-mailboxes": READ,
+  "list-accounts": READ,
+  "list-rules": READ,
+  "search-contacts": READ,
+  "list-templates": READ,
+  "get-template": READ,
+  "health-check": READ,
+  doctor: READ,
+  "get-mail-stats": READ,
+  "get-sync-status": READ,
+  // Writes that add, or that can be undone
+  "get-message-rfc822": WRITE,
+  // optional savePath creates a file
+  "save-attachment": WRITE,
+  // creates a new file; never overwrites
+  "create-draft": WRITE,
+  "use-template": WRITE,
+  // creates a draft
+  "move-message": WRITE,
+  "batch-move-messages": WRITE,
+  "mark-as-read": IDEMPOTENT_WRITE,
+  "mark-as-unread": IDEMPOTENT_WRITE,
+  "flag-message": IDEMPOTENT_WRITE,
+  "unflag-message": IDEMPOTENT_WRITE,
+  "batch-mark-as-read": IDEMPOTENT_WRITE,
+  "batch-mark-as-unread": IDEMPOTENT_WRITE,
+  "batch-flag-messages": IDEMPOTENT_WRITE,
+  "batch-unflag-messages": IDEMPOTENT_WRITE,
+  "create-mailbox": WRITE,
+  "rename-mailbox": WRITE,
+  "create-smart-mailbox": WRITE,
+  "create-newsletter-smart-mailboxes": WRITE,
+  "disable-rule": IDEMPOTENT_WRITE,
+  // Destructive or irreversible
+  "delete-message": DESTRUCTIVE,
+  "batch-delete-messages": DESTRUCTIVE,
+  "delete-mailbox": DESTRUCTIVE,
+  "delete-smart-mailbox": DESTRUCTIVE,
+  "delete-rule": DESTRUCTIVE,
+  "delete-template": DESTRUCTIVE,
+  "save-template": DESTRUCTIVE,
+  // passing an existing id overwrites that template
+  "create-rule": { ...SEND, idempotentHint: false },
+  // a rule can delete or forward mail
+  "enable-rule": { ...SEND, idempotentHint: true },
+  // Outbound mail: leaves the machine and cannot be recalled
+  "send-email": SEND,
+  "send-serial-email": SEND,
+  "reply-to-message": SEND,
+  // sends by default (send: true)
+  "forward-message": SEND
+  // sends by default (send: true)
+};
+function annotationsFor(name2, own2) {
+  const base2 = TOOL_ANNOTATIONS[name2];
+  if (!base2) {
+    throw new Error(
+      `Tool "${name2}" has no entry in src/tools/toolAnnotations.ts; classify it before registering.`
+    );
+  }
+  return { ...base2, ...own2 };
+}
+
 // src/services/appleMailManager.ts
 import { spawnSync as spawnSync4 } from "child_process";
 import {
@@ -99070,7 +99188,7 @@ import {
   readSync as readSync3,
   closeSync as closeSync3
 } from "fs";
-import { resolve as resolve4, sep as sep2, join as join10 } from "path";
+import { resolve as resolve4, join as join10 } from "path";
 import { homedir as homedir7 } from "os";
 import { randomUUID as randomUUID2 } from "crypto";
 
@@ -102427,26 +102545,33 @@ function splitSearchDiagnostics(output2, account) {
   }
   return { payload, diagnostics };
 }
-var ALLOWED_SAVE_ROOTS = [homedir7(), "/tmp", "/private/tmp", "/Volumes"];
-function isPathWithinAllowedRoots(resolvedPath) {
-  return ALLOWED_SAVE_ROOTS.some((root) => {
-    const base2 = root.endsWith(sep2) ? root.slice(0, -1) : root;
-    return resolvedPath === base2 || resolvedPath.startsWith(base2 + sep2);
-  });
+function isPathWithinAllowedRoots(resolvedPath, env = process.env) {
+  return isWithinSaveRoots(resolvedPath, env);
 }
-function resolveAttachmentSaveTarget(savePath, attachmentName) {
+var SAVE_ROOTS_HINT = `Save into Downloads, Desktop, Documents, iCloud Drive or a temporary directory, or name another root in ${ATTACHMENT_SAVE_ROOTS_ENV}.`;
+function resolveAttachmentSaveTarget(savePath, attachmentName, env = process.env) {
   let saveDirectory;
   try {
-    saveDirectory = realpathSync2(resolve4(savePath));
+    saveDirectory = realpathSync2.native(resolve4(savePath));
   } catch {
     throw new Error(`Save directory "${savePath}" does not exist`);
   }
-  if (!isPathWithinAllowedRoots(saveDirectory)) {
-    throw new Error(`Save path "${savePath}" is outside allowed directories`);
+  if (isProtectedSaveTarget(saveDirectory, env) || isProtectedSaveTarget(resolve4(savePath), env)) {
+    throw new Error(
+      `Save path "${savePath}" is in a protected location (hidden folders, credential stores and Library folders other than iCloud Drive are never written). ${SAVE_ROOTS_HINT}`
+    );
+  }
+  if (!isPathWithinAllowedRoots(saveDirectory, env)) {
+    throw new Error(`Save path "${savePath}" is outside allowed directories. ${SAVE_ROOTS_HINT}`);
   }
   const savedPath = resolve4(saveDirectory, attachmentName);
-  if (!isPathWithinAllowedRoots(savedPath)) {
-    throw new Error(`Output path "${savedPath}" is outside allowed directories`);
+  if (!isPathWithinAllowedRoots(savedPath, env)) {
+    throw new Error(
+      `Output path "${savedPath}" is outside allowed directories. ${SAVE_ROOTS_HINT}`
+    );
+  }
+  if (isProtectedSaveTarget(savedPath, env)) {
+    throw new Error(`Output path "${savedPath}" is a protected location (hidden file or folder).`);
   }
   if (existsSync6(savedPath)) {
     if (lstatSync(savedPath).isSymbolicLink()) {
@@ -109673,7 +109798,12 @@ function registerTool(name2, config2, cb) {
     const token = REFERENCES_SCHEMA.unwrap().element;
     external_exports.globalRegistry.add(token, { ...token.meta(), description: IN_REPLY_TO_SCHEMA.description });
   }
-  return registerToolWithContracts(server, name2, config2, cb);
+  return registerToolWithContracts(
+    server,
+    name2,
+    { ...config2, annotations: annotationsFor(name2, config2.annotations) },
+    cb
+  );
 }
 var mailManager = new AppleMailManager();
 registerResourcesAndPrompts(server, mailManager);
@@ -109926,11 +110056,11 @@ Do not use when: you don't yet have an id (use search-messages or list-messages 
       // structuredContent matches the AppleScript branch's shape.
       structuredFromResult: (r) => {
         if (!r.info) return void 0;
-        const sep3 = r.info.indexOf("\n\n");
+        const sep2 = r.info.indexOf("\n\n");
         return {
           id,
           subject: subjectFromGetMessage(r.info),
-          body: sep3 >= 0 ? r.info.slice(sep3 + 2) : r.info,
+          body: sep2 >= 0 ? r.info.slice(sep2 + 2) : r.info,
           // What the IMAP read actually extracted (#234): with no text/plain
           // part it returns the HTML part, which must not claim to be text.
           isHtml: typeof r.meta?.isHtml === "boolean" ? r.meta.isHtml : preferHtml === true,
@@ -111110,7 +111240,7 @@ ${attachmentList}`,
 registerTool(
   "save-attachment",
   {
-    description: "Use when: writing one of a message's attachments to disk, by message id and attachmentName, into the savePath directory (saved as savePath/attachmentName).\nReturns: a confirmation of the saved file path.\nDo not use when: you don't know the attachment name (use list-attachments first) or want the bytes inline rather than on disk (use fetch-attachment).\nSafety: writes a file to disk \u2014 savePath must be a directory inside the configured allowed roots, and attachmentName may not contain path separators or '..'; calls outside those constraints are rejected.",
+    description: "Use when: writing one of a message's attachments to disk, by message id and attachmentName, into the savePath directory (saved as savePath/attachmentName).\nReturns: a confirmation of the saved file path.\nDo not use when: you don't know the attachment name (use list-attachments first) or want the bytes inline rather than on disk (use fetch-attachment).\nSafety: writes a new file to disk and never overwrites \u2014 savePath must be an existing directory under ~/Downloads, ~/Desktop, ~/Documents, iCloud Drive, CloudStorage, a temporary directory, or a root named in APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS. Hidden files and folders, credential stores and other ~/Library folders are refused, and attachmentName may not contain path separators or '..'.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       attachmentName: external_exports.string().min(1, "Attachment name is required"),

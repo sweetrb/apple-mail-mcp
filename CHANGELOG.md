@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [2.20.54] - 2026-11-04
+
+### Security
+
+- **`save-attachment` could create files anywhere under the home folder.** The protected-path rules (hidden segments, credential roots, `~/Library` outside iCloud Drive and CloudStorage) were applied only to outbound attachment *reads*; the save side checked nothing but "under `$HOME`, `/tmp` or `/Volumes`" plus no-overwrite. An instruction smuggled into an email could therefore lead the model to write a new `~/Library/LaunchAgents/*.plist`, a `~/.zshenv`, or this server's own `~/Library/Application Support/apple-mail-mcp/config.json` (whose keys, including the SMTP settings, are merged into the environment). Every save target (`save-attachment` on both backends and `get-message-rfc822`'s `savePath`) is now checked against those rules on both the typed and the resolved path, and saves are limited to `~/Downloads`, `~/Desktop`, `~/Documents`, iCloud Drive, `~/Library/CloudStorage` and the temporary directories. Reported privately by Alejandro San Martin Lamas — thank you.
+- **Every tool now declares MCP annotations.** Only one tool carried a hint before, so clients could not auto-approve reads while still asking before a send. Reads are `readOnlyHint: true`; deletes, overwrites (`save-template`) and rule creation/enabling are `destructiveHint: true`; `send-email`, `send-serial-email`, `reply-to-message` and `forward-message` are destructive and `openWorldHint: true`. A new tool cannot register without a classification (`src/tools/toolAnnotations.ts`).
+
+### Changed
+
+- **Saving to other folders now needs `APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS`.** The home folder as a whole and `/Volumes` are no longer default save roots. To keep saving somewhere else (an external disk, a project folder), set `APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS` to a colon-separated list of absolute paths, in the environment or `config.json`. Hidden and credential locations stay refused even inside a configured root, and a root containing the whole home folder does not lift the `~/Library` rule.
+
 ## [2.20.53] - 2026-11-04
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)

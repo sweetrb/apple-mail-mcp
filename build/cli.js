@@ -13367,12 +13367,12 @@ function canonicalRoots(requested) {
   }
   return resolved;
 }
-function explicitRoots(env) {
-  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
+function explicitRoots(env, variable = ATTACHMENT_READ_ROOTS_ENV) {
+  const raw = env[variable];
   const extraRoots = raw === void 0 ? [] : raw.split(delimiter2).map((root) => root.trim()).filter(Boolean);
   for (const root of extraRoots) {
     if (!isAbsolute(root)) {
-      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
+      throw new Error(`${variable} entries must be absolute paths.`);
     }
   }
   return canonicalRoots(extraRoots);

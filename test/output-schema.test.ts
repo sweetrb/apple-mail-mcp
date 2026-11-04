@@ -92,6 +92,20 @@ describe("outputSchema contract (real server over stdio)", () => {
     expect(missing, `tools missing an outputSchema: ${missing.join(", ")}`).toEqual([]);
   });
 
+  it("every tool advertises readOnlyHint, and every sending tool is destructive + open-world", async () => {
+    const { tools } = await client.listTools();
+    const unhinted = tools
+      .filter((t) => typeof t.annotations?.readOnlyHint !== "boolean")
+      .map((t) => t.name);
+    expect(unhinted, `tools missing readOnlyHint: ${unhinted.join(", ")}`).toEqual([]);
+    for (const name of ["send-email", "send-serial-email", "reply-to-message", "forward-message"]) {
+      const a = tools.find((t) => t.name === name)?.annotations;
+      expect(a, name).toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: true });
+    }
+    const deletes = tools.filter((t) => t.name.includes("delete"));
+    expect(deletes.every((t) => t.annotations?.destructiveHint === true)).toBe(true);
+  });
+
   it("every outputSchema is permissive — no required fields", async () => {
     const { tools } = await client.listTools();
     const offenders = tools

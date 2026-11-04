@@ -32,12 +32,13 @@ import {
   readSync,
   closeSync,
 } from "fs";
-import { resolve, sep, join } from "path";
+import { resolve, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
 import { flagColorName, isGmailHost } from "@/services/imapClient.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
+
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { plausibleDateSent } from "@/utils/headers.js";
 import { mailboxNameKey } from "@/utils/mailboxName.js";
@@ -54,7 +55,12 @@ import {
 } from "@/utils/attachmentLimits.js";
 import { extractAddress, pickSenderAddress, senderGuardScript } from "@/utils/senderAccount.js";
 import { nativeEditorPreflight, insertNativeAuthoredBody } from "@/services/nativeMailComposer.js";
-import { resolveAttachmentReadPath } from "@/utils/attachmentReadPolicy.js";
+import {
+  ATTACHMENT_SAVE_ROOTS_ENV,
+  isProtectedSaveTarget,
+  isWithinSaveRoots,
+  resolveAttachmentReadPath,
+} from "@/utils/attachmentReadPolicy.js";
 import { searchContactsDb } from "@/utils/contactsDb.js";
 import {
   isEnvelopeIndexEnabled,
@@ -760,45 +766,61 @@ export function splitSearchDiagnostics(
  * @returns Text safe for AppleScript string embedding
  */
 /**
- * Roots under which `save-attachment` is permitted to write.
- */
-const ALLOWED_SAVE_ROOTS = [homedir(), "/tmp", "/private/tmp", "/Volumes"];
-
-/**
- * True if `resolvedPath` is one of the allowed roots or strictly inside one.
+ * True if `resolvedPath` is one of the save roots or strictly inside one.
  *
- * Uses a path-segment boundary check rather than a bare `startsWith`, which
- * would let a sibling whose name merely shares the prefix slip through —
- * `/Volumes-evil` startsWith `/Volumes`, `/Users/robother` startsWith
- * `/Users/rob` (audit finding #12). `resolvedPath` must already be absolute
- * (caller passes `resolve(...)` output).
+ * The roots are the ordinary document folders (Downloads, Desktop, Documents,
+ * iCloud Drive, CloudStorage), the temporary directories, and any root named in
+ * APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS — see `attachmentSaveRoots`. Uses a
+ * path-segment boundary check rather than a bare `startsWith`, which would let a
+ * sibling whose name merely shares the prefix slip through (`/tmpevil` vs `/tmp`,
+ * audit finding #12). `resolvedPath` must already be absolute.
  */
-export function isPathWithinAllowedRoots(resolvedPath: string): boolean {
-  return ALLOWED_SAVE_ROOTS.some((root) => {
-    const base = root.endsWith(sep) ? root.slice(0, -1) : root;
-    return resolvedPath === base || resolvedPath.startsWith(base + sep);
-  });
+export function isPathWithinAllowedRoots(
+  resolvedPath: string,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return isWithinSaveRoots(resolvedPath, env);
 }
+
+const SAVE_ROOTS_HINT =
+  "Save into Downloads, Desktop, Documents, iCloud Drive or a temporary directory, " +
+  `or name another root in ${ATTACHMENT_SAVE_ROOTS_ENV}.`;
 
 /** Resolve and validate an attachment save directory and its final output path. */
 export function resolveAttachmentSaveTarget(
   savePath: string,
-  attachmentName: string
+  attachmentName: string,
+  env: NodeJS.ProcessEnv = process.env
 ): { saveDirectory: string; savedPath: string } {
   let saveDirectory: string;
   try {
-    saveDirectory = realpathSync(resolve(savePath));
+    // .native returns the on-disk casing, so `~/library/launchagents` cannot
+    // dodge the Library rule by respelling a segment on case-insensitive APFS.
+    saveDirectory = realpathSync.native(resolve(savePath));
   } catch {
     throw new Error(`Save directory "${savePath}" does not exist`);
   }
 
-  if (!isPathWithinAllowedRoots(saveDirectory)) {
-    throw new Error(`Save path "${savePath}" is outside allowed directories`);
+  // Both spellings are judged, as on the read side: the path the caller typed
+  // and the directory it resolves to.
+  if (isProtectedSaveTarget(saveDirectory, env) || isProtectedSaveTarget(resolve(savePath), env)) {
+    throw new Error(
+      `Save path "${savePath}" is in a protected location (hidden folders, credential stores ` +
+        `and Library folders other than iCloud Drive are never written). ${SAVE_ROOTS_HINT}`
+    );
+  }
+  if (!isPathWithinAllowedRoots(saveDirectory, env)) {
+    throw new Error(`Save path "${savePath}" is outside allowed directories. ${SAVE_ROOTS_HINT}`);
   }
 
   const savedPath = resolve(saveDirectory, attachmentName);
-  if (!isPathWithinAllowedRoots(savedPath)) {
-    throw new Error(`Output path "${savedPath}" is outside allowed directories`);
+  if (!isPathWithinAllowedRoots(savedPath, env)) {
+    throw new Error(
+      `Output path "${savedPath}" is outside allowed directories. ${SAVE_ROOTS_HINT}`
+    );
+  }
+  if (isProtectedSaveTarget(savedPath, env)) {
+    throw new Error(`Output path "${savedPath}" is a protected location (hidden file or folder).`);
   }
   if (existsSync(savedPath)) {
     if (lstatSync(savedPath).isSymbolicLink()) {
