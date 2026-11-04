@@ -10,7 +10,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "fs";
-import { homedir } from "os";
+import { tmpdir } from "os";
 import { join } from "path";
 
 const h = vi.hoisted(() => ({ scripts: [] as string[], output: "" }));
@@ -53,7 +53,7 @@ function manager(): AppleMailManager {
 
 function saveInto(mgr: AppleMailManager): boolean {
   // Any visible save root will do; the home keeps the test inside a sandboxed run.
-  const dir = mkdtempSync(join(homedir(), "amcp-save-"));
+  const dir = mkdtempSync(join(tmpdir(), "amcp-save-"));
   try {
     return mgr.saveAttachment("538208", "a.pdf", dir);
   } finally {

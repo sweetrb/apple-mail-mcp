@@ -14,6 +14,31 @@ import { delimiter, isAbsolute, join, resolve, sep } from "path";
 
 export const ATTACHMENT_READ_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_READ_ROOTS";
 
+/**
+ * Inbound side of the same boundary: where `save-attachment` (and every other
+ * `savePath` caller) may CREATE files. Email content is attacker-authored input
+ * to the model, so a save path is untrusted too. Until 2.20.54 any directory
+ * under the home folder was accepted and the protected-path rules below were
+ * applied to reads only, so an injected call could plant a new
+ * ~/Library/LaunchAgents plist, a ~/.zshenv, or this server's own config.json.
+ * Saves now go only to ordinary document folders plus roots the user names.
+ */
+export const ATTACHMENT_SAVE_ROOTS_ENV = "APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS";
+
+function defaultAttachmentSaveRoots(): string[] {
+  const home = homedir();
+  return [
+    join(home, "Downloads"),
+    join(home, "Desktop"),
+    join(home, "Documents"),
+    join(home, "Library", "Mobile Documents", "com~apple~CloudDocs"),
+    join(home, "Library", "CloudStorage"),
+    tmpdir(),
+    "/tmp",
+    "/private/tmp",
+  ];
+}
+
 const DEFAULT_ATTACHMENT_READ_ROOTS = [homedir(), "/Volumes", tmpdir(), "/tmp", "/private/tmp"];
 
 const SENSITIVE_HOME_ROOTS = [
@@ -156,8 +181,8 @@ export function canonicalRoots(requested: string[]): string[] {
   return resolved;
 }
 
-function explicitRoots(env: NodeJS.ProcessEnv): string[] {
-  const raw = env[ATTACHMENT_READ_ROOTS_ENV];
+function explicitRoots(env: NodeJS.ProcessEnv, variable = ATTACHMENT_READ_ROOTS_ENV): string[] {
+  const raw = env[variable];
   const extraRoots =
     raw === undefined
       ? []
@@ -167,7 +192,7 @@ function explicitRoots(env: NodeJS.ProcessEnv): string[] {
           .filter(Boolean);
   for (const root of extraRoots) {
     if (!isAbsolute(root)) {
-      throw new Error(`${ATTACHMENT_READ_ROOTS_ENV} entries must be absolute paths.`);
+      throw new Error(`${variable} entries must be absolute paths.`);
     }
   }
   return canonicalRoots(extraRoots);
@@ -229,4 +254,36 @@ export function resolveAttachmentReadPath(
   }
 
   return canonical;
+}
+
+/** Canonical roots a save may write under: the document-folder defaults plus explicit ones. */
+export function attachmentSaveRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+  return [
+    ...canonicalRoots(defaultAttachmentSaveRoots()),
+    ...explicitRoots(env, ATTACHMENT_SAVE_ROOTS_ENV),
+  ];
+}
+
+/** True when `candidate` is one of the save roots or strictly inside one. */
+export function isWithinSaveRoots(
+  candidate: string,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return attachmentSaveRoots(env).some((root) => isWithinRoot(candidate, root));
+}
+
+/**
+ * True when a save to `candidate` must be refused by the protected-path rules:
+ * hidden segments, credential roots, and user Library folders other than
+ * iCloud Drive / CloudStorage. Explicit save roots lift only the Library rule,
+ * exactly as explicit read roots do, and never one that contains the home folder.
+ */
+export function isProtectedSaveTarget(
+  candidate: string,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return isProtectedPath(candidate, [
+    ...explicitRoots(env, ATTACHMENT_SAVE_ROOTS_ENV),
+    ...canonicalTmpdir(),
+  ]);
 }
