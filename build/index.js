@@ -66421,6 +66421,20 @@ var init_smtpMailer = __esm({
   }
 });
 
+// src/utils/attachmentName.ts
+function sameAttachmentName(stored, requested) {
+  if (stored == null || requested == null) return false;
+  return stored.normalize("NFC") === requested.normalize("NFC");
+}
+function attachmentNameForms(name2) {
+  return [.../* @__PURE__ */ new Set([name2, name2.normalize("NFC"), name2.normalize("NFD")])];
+}
+var init_attachmentName = __esm({
+  "src/utils/attachmentName.ts"() {
+    "use strict";
+  }
+});
+
 // src/utils/mailboxName.ts
 function mailboxNameKey(name2) {
   return name2.trim().normalize("NFC").toLowerCase();
@@ -66823,7 +66837,7 @@ function extractMimeAttachment(source, attachmentName) {
   const parts = walkLeafParts(source, boundary);
   for (const part of parts) {
     const filename = extractFilename(part.headers);
-    if (filename !== attachmentName) continue;
+    if (filename === null || !sameAttachmentName(filename, attachmentName)) continue;
     const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
     const data = decodeBody(part.body, encoding);
     return {
@@ -66839,6 +66853,7 @@ var MAX_MIME_DEPTH;
 var init_mimeParse = __esm({
   "src/utils/mimeParse.ts"() {
     "use strict";
+    init_attachmentName();
     MAX_MIME_DEPTH = 20;
   }
 });
@@ -68987,7 +69002,7 @@ async function imapFetchAttachment(id, attachmentName, deps = {}, mode = "save")
       return { success: false, error: `IMAP message UID ${ref.uid} not found in "${ref.path}".` };
     }
     const atts = collectAttachments(msg.bodyStructure);
-    const match = atts.find((a) => a.filename === attachmentName);
+    const match = atts.find((a) => sameAttachmentName(a.filename, attachmentName));
     if (!match) {
       const names = atts.map((a) => a.filename).join(", ") || "none";
       return {
@@ -69231,6 +69246,7 @@ var init_imapClient = __esm({
     import_imapflow = __toESM(require_imap_flow(), 1);
     init_smtpMailer();
     init_docsUrls();
+    init_attachmentName();
     init_mailboxName();
     init_messageLocation();
     init_mimeParse();
@@ -99451,6 +99467,7 @@ function executeAppleScript(script, options = {}) {
 init_imapClient();
 init_docsUrls();
 init_mimeParse();
+init_attachmentName();
 init_headers();
 init_mailboxName();
 
@@ -106578,7 +106595,7 @@ ${this.errorEmit("              ")}
       console.error(error63 instanceof Error ? error63.message : String(error63));
       return false;
     }
-    const safeName = escapeForAppleScript(attachmentName);
+    const nameTest = attachmentNameForms(attachmentName).map((form) => `_attName is "${escapeForAppleScript(form)}"`).join(" or ");
     let temporaryDirectory;
     try {
       temporaryDirectory = mkdtempSync2(join10(target.saveDirectory, ".apple-mail-mcp-"));
@@ -106618,7 +106635,8 @@ ${this.errorEmit("              ")}
       this.rememberLocation(String(id), holderAccount, holderMailbox);
     const saveAction = `
                 repeat with att in mail attachments of msg
-                  if name of att is "${safeName}" then
+                  set _attName to name of att
+                  if ${nameTest} then
                     set savePath to POSIX file "${safeTemporaryPath}"
                     save att in savePath
                     return "ok"

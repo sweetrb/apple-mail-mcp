@@ -40,6 +40,7 @@ import { flagColorName, isGmailHost } from "@/services/imapClient.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
+import { attachmentNameForms } from "@/utils/attachmentName.js";
 import { plausibleDateSent } from "@/utils/headers.js";
 import { mailboxNameKey } from "@/utils/mailboxName.js";
 import { TemplateStore } from "@/services/templateStore.js";
@@ -6411,7 +6412,12 @@ ${this.errorEmit("              ")}
       return false;
     }
 
-    const safeName = escapeForAppleScript(attachmentName);
+    // AppleScript cannot normalize, so match Mail's stored name against every
+    // spelling of the caller's (#370): Mail.app stores non-ASCII names NFD,
+    // callers pass NFC. The file is still saved under the caller's name.
+    const nameTest = attachmentNameForms(attachmentName)
+      .map((form) => `_attName is "${escapeForAppleScript(form)}"`)
+      .join(" or ");
     let temporaryDirectory: string;
     try {
       // Mail.app writes the attachment into a private directory created with
@@ -6460,7 +6466,8 @@ ${this.errorEmit("              ")}
 
     const saveAction = `
                 repeat with att in mail attachments of msg
-                  if name of att is "${safeName}" then
+                  set _attName to name of att
+                  if ${nameTest} then
                     set savePath to POSIX file "${safeTemporaryPath}"
                     save att in savePath
                     return "ok"

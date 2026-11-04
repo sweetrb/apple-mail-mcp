@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.55] - 2026-11-04
+
+### Fixed
+
+- **`save-attachment` and `fetch-attachment` could not find attachments whose names contain non-ASCII characters (#370).** Mail.app stores those filenames decomposed (NFD — `ä` as `a` + U+0308) for messages sent from a Mac, while clients pass them precomposed (NFC), so the exact comparisons failed with "Attachment … not found … Available: <the same-looking name>". Attachment names are now compared NFC on both sides on every path: the IMAP backend (`imapFetchAttachment`), the MIME-source fallback (`extractMimeAttachment`), and the AppleScript save, which now tests Mail's stored name against the caller's spelling and its NFC and NFD forms. Case is still significant, and the saved file keeps the caller's name. Same class as #253 (mailbox names). Reported, with both comparisons pinpointed, by @SandroK — thank you.
+
 ## [2.20.54] - 2026-11-04
 
 ### Security
