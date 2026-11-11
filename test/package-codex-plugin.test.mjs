@@ -155,7 +155,9 @@ test("produces a deterministic, self-contained archive with unchanged source lau
     responses.find((response) => response.id === 1).result.serverInfo.version,
     first.version
   );
-  assert.equal(responses.find((response) => response.id === 2).result.tools.length, 52);
+  const tools = responses.find((response) => response.id === 2).result.tools;
+  assert.equal(tools.length, 53);
+  assert.ok(tools.some((tool) => tool.name === "update-saved-draft"));
 });
 
 test("optionally bundles local artwork and changes only generated manifest icon fields", (t) => {
