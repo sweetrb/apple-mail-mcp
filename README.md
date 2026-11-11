@@ -221,6 +221,7 @@ tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 | **Send Email**        | Compose and send new emails (attach by file path or inline base64 content; optional `inReplyTo`/`references` threading over SMTP)        |
 | **Send Serial Email** | Mail merge — send personalized emails to a list of recipients with {{placeholder}} support                                               |
 | **Create Draft**      | Save emails to Drafts folder (attach by file path or inline base64 content; threaded drafts filed over IMAP)                             |
+| **Update Saved Draft** | Preview and partially edit a stored IMAP draft, retaining unchanged MIME and returning the new UID and revision |
 | **Reply**             | Reply to messages (with reply-all support and attachments)                                                                               |
 | **Forward**           | Forward messages to new recipients (with extra attachments)                                                                              |
 | **Get Thread**        | Group a conversation by normalized subject (across AppleScript or IMAP)                                                                  |
@@ -1023,6 +1024,68 @@ accounts and no way to choose — the call **fails and files nothing**; it never
 to an unthreaded Mail.app draft. The result names the Drafts `mailbox`, the `account` and
 the draft's `messageId`. Without threading headers, `create-draft` is unchanged
 (AppleScript).
+
+#### `update-saved-draft`
+
+Preview or edit an existing **stored** draft (#372). Requires a configured IMAP
+account and exactly one selectable SPECIAL-USE `\Drafts` mailbox; there is no
+AppleScript or SMTP fallback. The message itself must carry `\Draft` and must
+not be marked `\Deleted`. Editing requires UIDPLUS, so removal uses **UID
+EXPUNGE**, never a global EXPUNGE that could remove unrelated messages.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `draftId` | string | Yes | Fresh `imap:` ID from `list-messages` on Drafts. Numeric IDs are refused. |
+| `dryRun` | boolean | No | Defaults to `true`: only read and preview, including proposed changes when supplied. |
+| `approvedSha256` | string | For an update | `preview.sha256` of the current stored source. |
+| `approvedUidValidity` | string | For an update | `preview.uidValidity` of the current source mailbox. The UID is encoded in `draftId` and also returned in the preview. |
+| `changes` | object | For an update | Partial patch; omitted fields remain unchanged. |
+
+`changes` accepts `subject`, `to`, `cc`, `bcc`, `body`, `htmlBody`,
+`addAttachments` and `removeAttachments`. An explicit `[]` clears a recipient
+field. `body` replaces an existing text/plain part and `htmlBody` an existing
+text/html part. When both alternatives exist, **supply both** to avoid leaving
+a stale rendering. Missing or ambiguous body alternatives, signed/encrypted
+content, malformed MIME and unreadable bodies are refused before writing.
+
+Unchanged envelope/threading headers, native signatures and encoded MIME parts
+are retained. A changed body is the complete replacement for that body,
+including any signature it contains. `addAttachments` uses the same allowlisted
+file paths / inline `{filename, contentBase64}` inputs as `create-draft` (up to
+20 additions). `removeAttachments` takes the current preview's **partId** values,
+so duplicate filenames are not ambiguous; embedded CID images cannot be removed.
+The source and resulting stored MIME are each capped at 25 MiB, and each body
+representation in the preview at 100,000 characters.
+
+**Workflow:** list Drafts, call with `dryRun: true`, review `preview` and any
+`proposed` changes with the user, then call with `dryRun: false`, the same
+`draftId`, the current preview's approval tokens and the approved `changes`.
+The tokens identify the **source**; a proposed preview is not yet a stored
+revision. A changed UIDVALIDITY or source SHA-256 refuses the edit. The format
+matches the UIDVALIDITY/UID/MIME-SHA-256 revision used in the proposed
+[`send-saved-draft` work (#241)](https://github.com/sweetrb/apple-mail-mcp/pull/241).
+That send feature is separate and is not introduced here.
+
+**Returns:** `status: preview`, `updated` or `unchanged`, `sourceDraftId`,
+`draftId`, the stored `preview` (From, To/Cc/Bcc, subject, bodies, attachment
+metadata and revision), and optionally `proposed`. On update, the replacement
+is APPENDed and its UID and stored bytes verified **before** the old UID is
+removed. Use the **new** `draftId` and revision afterwards.
+
+Failures are separate outcomes: `append_failed` leaves the source untouched;
+`append_unknown` preserves it and reports any known replacement ID;
+`cleanup_failed` reports the saved replacement preview and both IDs. Inspect
+Drafts before retrying: neither APPEND nor cleanup is retried automatically.
+`sourceRemoved` is true only after confirmation; it is omitted when a cleanup
+connection failure leaves the outcome uncertain.
+IMAP does not provide an atomic cross-client compare-and-replace. The source is
+checked again before APPEND and cleanup; a concurrently created UID is never
+deleted, but a racing edit or connection failure may leave multiple versions.
+
+**⚠️ Safety:** This overwrites a draft only and never sends mail. Confirm the
+patch with the user before `dryRun: false`. A successful edit removes the old
+revision after confirming its replacement; a cleanup failure is not a reason
+to repeat the already saved edit.
 
 #### `get-thread`
 

@@ -675,3 +675,62 @@ export interface SyncStatus {
   /** Error message if status check failed */
   error?: string;
 }
+/** Partial stored-draft edits. Omitted fields and MIME parts stay unchanged. */
+export interface SavedDraftChanges {
+  subject?: string;
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  /** Replace the existing text/plain body; paired HTML must be changed too. */
+  body?: string;
+  /** Replace the existing text/html body; paired plain text must be changed too. */
+  htmlBody?: string;
+  addAttachments?: AttachmentInput[];
+  /** MIME part IDs returned by the current preview, never ambiguous filenames. */
+  removeAttachments?: string[];
+}
+
+export interface SavedDraftContent {
+  from: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body: string;
+  isHtml: boolean;
+  htmlBody?: string;
+  attachments: {
+    partId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    removable: boolean;
+  }[];
+}
+
+export interface SavedDraftPreview extends SavedDraftContent {
+  draftId: string;
+  uid: number;
+  uidValidity: string;
+  sha256: string;
+}
+
+export interface UpdateSavedDraftInput {
+  draftId: string;
+  dryRun: boolean;
+  approvedSha256?: string;
+  approvedUidValidity?: string;
+  changes?: SavedDraftChanges;
+}
+
+export interface UpdateSavedDraftResult {
+  ok: boolean;
+  status:
+    "preview" | "updated" | "unchanged" | "append_failed" | "append_unknown" | "cleanup_failed";
+  sourceDraftId: string;
+  draftId?: string;
+  preview?: SavedDraftPreview;
+  proposed?: SavedDraftContent;
+  sourceRemoved?: boolean;
+  error?: string;
+}

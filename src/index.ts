@@ -100,6 +100,7 @@ import {
   imapFetchMessageId,
   decodeImapId,
   imapAppendDraft,
+  imapUpdateSavedDraft,
   resolveDraftImapAccount,
   FLAG_COLOR_NAMES,
 } from "@/services/imapClient.js";
@@ -115,6 +116,11 @@ import {
   formatMessageLines,
 } from "@/tools/respond.js";
 import { unlistableStoreError } from "@/tools/mailboxListing.js";
+import {
+  UPDATE_SAVED_DRAFT_INPUT,
+  UPDATE_SAVED_DRAFT_OUTPUT,
+  runUpdateSavedDraft,
+} from "@/tools/savedDraft.js";
 import { createCallStop, searchDeadlineMs, stoppedByDeadline } from "@/utils/callStop.js";
 import { hybridBatchCounts, batchResponse } from "@/tools/batchResults.js";
 import { runBatchDelete, runBatchMove } from "@/tools/batchMutations.js";
@@ -1803,6 +1809,22 @@ registerTool(
     smtpSend: sendSerialViaSmtp,
     appleScriptSend: (...args) => mailManager.sendSerialEmail(...args),
   })
+);
+
+// --- update-saved-draft ---
+
+registerTool(
+  "update-saved-draft",
+  {
+    description:
+      "Use when: editing an existing stored draft's subject, body, recipients or attachments after reviewing its current revision. IMAP-only: use an imap: id from the configured account's SPECIAL-USE Drafts mailbox. dryRun defaults to true and can show proposed changes.\nReturns: the current preview and UIDVALIDITY/UID/MIME SHA-256; after an update the new draftId and preview, with the old-revision cleanup result reported separately.\nDo not use when: creating a new message (use create-draft), editing a non-draft or an AppleScript-only account, or sending mail. Signed/encrypted, ambiguous or unpreviewable MIME is refused.\nSafety: changes a stored draft only; never calls SMTP or sends mail. Obtain approval for the changes and pass the current preview's approvedSha256 and approvedUidValidity with dryRun=false. APPEND is confirmed before targeted removal of the old UID. UIDPLUS is required to avoid global EXPUNGE. Unknown APPEND and cleanup failures must be inspected, never blindly retried.",
+    inputSchema: UPDATE_SAVED_DRAFT_INPUT,
+    outputSchema: UPDATE_SAVED_DRAFT_OUTPUT,
+  },
+  withErrorHandling(
+    (input) => runUpdateSavedDraft(input, imapUpdateSavedDraft),
+    "Error updating saved draft"
+  )
 );
 
 // --- create-draft ---
