@@ -171,6 +171,26 @@ describe("stored-draft editing over IMAP (#372)", () => {
       vi.unstubAllEnvs();
     }
   });
+  it("tolerates Gmail's RFC822.SIZE drift but refuses a gross size mismatch", async () => {
+    // Live-found 2026-11-11: Gmail reported 483 for a 485-byte draft.
+    const skew = (f: ReturnType<typeof fixture>, delta: number) => {
+      const real = f.fetchOne.getMockImplementation()!;
+      f.fetchOne.mockImplementation(async (uid: string, query: Record<string, unknown>) => {
+        const r = await real(uid, query);
+        return r && { ...r, size: r.size + delta };
+      });
+    };
+    const near = fixture();
+    skew(near, -2);
+    await expect(
+      imapUpdateSavedDraft({ draftId: id, dryRun: true }, near.deps)
+    ).resolves.toMatchObject({ ok: true, status: "preview" });
+    const far = fixture();
+    skew(far, 100_000);
+    await expect(imapUpdateSavedDraft({ draftId: id, dryRun: true }, far.deps)).rejects.toThrow(
+      /oversized or incomplete/
+    );
+  });
   it("refuses a non-draft UID in Drafts", async () => {
     const f = fixture();
     f.messages.get(7)!.flags.delete("\\Draft");

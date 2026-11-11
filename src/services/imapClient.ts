@@ -2786,9 +2786,13 @@ export async function imapUpdateSavedDraft(
           throw new Error(`UID ${uid} is not an active draft; editing refused.`);
         if (!m.source?.length) throw new Error("IMAP returned no stored draft MIME.");
         const bytes = asBuffer(m.source);
+        // RFC822.SIZE is advisory: Gmail reports it after its own line-ending
+        // normalisation, so it differs from the fetched bytes by a few bytes on a
+        // perfectly good draft (live-found 2026-11-11). Refuse only a gross
+        // shortfall/excess, which is what a truncated fetch would look like.
         if (
           bytes.length > MAX_RFC822_FILE_BYTES ||
-          (m.size !== undefined && m.size !== bytes.length)
+          (m.size !== undefined && Math.abs(m.size - bytes.length) > 1024 + m.size * 0.02)
         )
           throw new Error("Draft source is oversized or incomplete; editing refused.");
         return {

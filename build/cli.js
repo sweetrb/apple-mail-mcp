@@ -61118,7 +61118,7 @@ async function imapUpdateSavedDraft(input, deps = {}) {
           throw new Error(`UID ${uid} is not an active draft; editing refused.`);
         if (!m.source?.length) throw new Error("IMAP returned no stored draft MIME.");
         const bytes = asBuffer(m.source);
-        if (bytes.length > MAX_RFC822_FILE_BYTES || m.size !== void 0 && m.size !== bytes.length)
+        if (bytes.length > MAX_RFC822_FILE_BYTES || m.size !== void 0 && Math.abs(m.size - bytes.length) > 1024 + m.size * 0.02)
           throw new Error("Draft source is oversized or incomplete; editing refused.");
         return {
           bytes,
