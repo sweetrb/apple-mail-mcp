@@ -39,6 +39,7 @@ Use this skill when the user:
 | `send-email`          | Send a new email immediately (`attachments`; `inReplyTo`/`references` threading, SMTP only)                                                                                                                                                                                             |
 | `send-serial-email`   | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders)                                                                                                                                                                                                    |
 | `create-draft`        | Save an email to Drafts for review (`attachments`; with `inReplyTo`/`references` a threaded draft is filed over IMAP)                                                                                                                                                                   |
+| `update-saved-draft` | Preview and partially edit a stored IMAP draft; approval pins its revision, returns the new ID, never sends |
 | `reply-to-message`    | Reply to a message (`replyAll`, `send`, `transport`, `attachments`)                                                                                                                                                                                                                     |
 | `forward-message`     | Forward a message to new recipients (`body`, `send`, `transport`, `attachments`)                                                                                                                                                                                                        |
 | `mark-as-read`        | Mark a message as read                                                                                                                                                                                                                                                                  |
@@ -51,6 +52,21 @@ Use this skill when the user:
 | `list-attachments`    | List a message's attachments (name, MIME type, size)                                                                                                                                                                                                                                    |
 | `save-attachment`     | Save an attachment to disk                                                                                                                                                                                                                                                              |
 | `fetch-attachment`    | Fetch an attachment's bytes inline as base64                                                                                                                                                                                                                                            |
+
+### Editing stored drafts
+
+Stored drafts can also be edited with `update-saved-draft` (IMAP-only). List the
+account's Drafts mailbox first. Preview with `dryRun: true`, review the current
+and proposed content, then apply the approved partial patch with `dryRun: false`,
+`approvedSha256: preview.sha256` and
+`approvedUidValidity: preview.uidValidity`. Omitted fields are retained; `[]`
+clears To/Cc/Bcc. Supply both `body` and `htmlBody` when both MIME alternatives
+exist. Attachments are retained unless explicitly added or removed by preview
+part ID. This tool never sends. It returns a new stored draft ID after editing;
+use that ID for subsequent operations. APPEND is confirmed before removing the
+old UID; `append_unknown` and `cleanup_failed` require inspection, not a blind
+retry. Numeric IDs, non-drafts and accounts without IMAP are refused.
+
 
 ### Batch Operations (1-100 ids per call)
 

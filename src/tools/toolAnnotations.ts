@@ -79,6 +79,7 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, ToolAnnotations>> = {
   "disable-rule": IDEMPOTENT_WRITE,
 
   // Destructive or irreversible
+  "update-saved-draft": DESTRUCTIVE, // overwrites a stored draft by APPEND + targeted removal
   "delete-message": DESTRUCTIVE,
   "batch-delete-messages": DESTRUCTIVE,
   "delete-mailbox": DESTRUCTIVE,

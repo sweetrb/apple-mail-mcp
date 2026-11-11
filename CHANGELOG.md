@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.57] - 2026-11-11
+
+### Added
+
+- **`update-saved-draft` (#372):** preview and partially edit stored IMAP drafts, including subject, To/Cc/Bcc, existing plain/HTML bodies and explicit attachment additions/removals. Unchanged headers, native formatting, signatures, threading and encoded attachments are retained. The current UIDVALIDITY, UID and MIME SHA-256 pin the source revision. The tool never sends mail or uses SMTP/AppleScript. A replacement is APPENDed and verified before targeted UID EXPUNGE removes the old revision; UIDPLUS is required, uncertain APPENDs preserve the source, and cleanup failures return both IDs and the saved replacement preview without retrying. Includes stale-revision, non-draft, ambiguous-account/mailbox and failure-path tests. Verified live against a Gmail Drafts mailbox (preview, apply, UID replacement, stale-revision refusal); that run found Gmail's `RFC822.SIZE` differs from the fetched bytes by a few bytes, so the size cross-check now tolerates drift (1 KiB + 2%) instead of requiring equality.
+
 ## [2.20.56] - 2026-11-11
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)

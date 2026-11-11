@@ -41,6 +41,8 @@ import { sameAttachmentName } from "@/utils/attachmentName.js";
 import { mailboxNameKey, nfc } from "@/utils/mailboxName.js";
 import { locationSuffix } from "@/utils/messageLocation.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
+import { patchSavedDraftMime, previewSavedDraftMime } from "@/services/savedDraftMime.js";
+import type { SavedDraftPreview, UpdateSavedDraftInput, UpdateSavedDraftResult } from "@/types.js";
 import {
   decodeHeaderBytes,
   headerBlockBytes,
@@ -180,6 +182,8 @@ export interface ImapMoveResult {
 }
 export interface ImapClientLike {
   connect(): Promise<void>;
+  /** UIDPLUS is required before saved-draft replacement: never global EXPUNGE. */
+  capabilities?: ReadonlyMap<string, unknown>;
   /** `readOnly: true` opens the mailbox with EXAMINE instead of SELECT. Test
    *  mocks may ignore the options argument. */
   getMailboxLock(path: string, options?: { readOnly?: boolean }): Promise<MailboxLock>;
@@ -225,7 +229,7 @@ export interface ImapClientLike {
     path: string,
     content: string | Buffer,
     flags?: string[]
-  ): Promise<{ destination: string } | false>;
+  ): Promise<{ destination: string; uid?: number; uidValidity?: bigint } | false>;
   messageFlagsAdd(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
   messageFlagsRemove(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
   /** `false` on failure — see `assertMutated`. Typed as a union deliberately:
@@ -2694,6 +2698,264 @@ export async function imapAppendDraft(
     const res = await client.append(path, raw, ["\\Draft", "\\Seen"]);
     if (!res) throw new Error(`server rejected the APPEND to "${path}" (IMAP NO/BAD)`);
     return { mailbox: path, account: cfg.accountLabel };
+  });
+}
+
+/**
+ * Preview or replace one stored draft (#372). One connection/lock, no retries,
+ * no SMTP and no AppleScript fallback. APPEND and cleanup have separate outcomes.
+ * IMAP UIDs identify immutable messages; another client's edit gets a new UID,
+ * which this operation never deletes. External edits racing the final snapshot
+ * can leave both versions, rather than overwriting a concurrent user's revision.
+ */
+export async function imapUpdateSavedDraft(
+  input: UpdateSavedDraftInput,
+  deps: ImapDeps = {}
+): Promise<UpdateSavedDraftResult> {
+  const ref = decodeImapId(input.draftId);
+  if (
+    !ref ||
+    !ref.account ||
+    !ref.path ||
+    !Number.isSafeInteger(ref.uid) ||
+    ref.uid < 1 ||
+    ref.uid > 0xffffffff
+  ) {
+    throw new Error(
+      "update-saved-draft requires an imap: id from a configured account's Drafts mailbox; no AppleScript fallback."
+    );
+  }
+  if (
+    !input.dryRun &&
+    (!/^[a-f0-9]{64}$/i.test(input.approvedSha256 ?? "") ||
+      !/^[1-9]\d*$/.test(input.approvedUidValidity ?? "") ||
+      !input.changes ||
+      !Object.values(input.changes).some((v) => v !== undefined))
+  ) {
+    throw new Error(
+      "Updating requires changes and the approvedSha256/approvedUidValidity from a fresh preview."
+    );
+  }
+  const selectedDeps = depsForMessageRef(ref, deps);
+  if (
+    !deps.config &&
+    listImapAccountSpecs().filter((spec) => specMatchesSelector(spec, ref.account)).length !== 1
+  ) {
+    throw new Error(
+      "Draft account is absent or ambiguous; exactly one configured IMAP login must match the id. No fallback is permitted."
+    );
+  }
+  return withClient(selectedDeps, async (client) => {
+    const boxes = (await client.list()).filter(
+      (b) =>
+        !b.flags?.has("\\Noselect") &&
+        (b.specialUse?.toLowerCase() === "\\drafts" || b.flags?.has("\\Drafts"))
+    );
+    if (boxes.length !== 1)
+      throw new Error(
+        "Drafts mailbox is absent or ambiguous; exactly one SPECIAL-USE \\Drafts mailbox is required."
+      );
+    if (boxes[0].path !== ref.path)
+      throw new Error("The message is not in the account's exact SPECIAL-USE \\Drafts mailbox.");
+    if (!input.dryRun && !client.capabilities?.has("UIDPLUS")) {
+      throw new Error(
+        "Saved-draft replacement requires UIDPLUS for APPENDUID and targeted UID EXPUNGE; no global EXPUNGE is permitted."
+      );
+    }
+    const lock = await client.getMailboxLock(ref.path, { readOnly: input.dryRun });
+    try {
+      const uidValidity = client.mailbox && client.mailbox.uidValidity?.toString();
+      if (!uidValidity || !/^[1-9]\d*$/.test(uidValidity))
+        throw new Error("Draft mailbox has no usable UIDVALIDITY.");
+      if (!input.dryRun && client.mailbox && client.mailbox.readOnly)
+        throw new Error("Drafts mailbox is read-only; nothing was appended.");
+      const read = async (uid: number) => {
+        const m = await client.fetchOne(
+          String(uid),
+          {
+            uid: true,
+            flags: true,
+            size: true,
+            source: { start: 0, maxLength: MAX_RFC822_FILE_BYTES + 1 },
+          },
+          { uid: true }
+        );
+        if (!m || m.uid !== uid)
+          throw new Error(`Draft UID ${uid} is missing or changed; re-list Drafts.`);
+        if (!m.flags?.has("\\Draft") || m.flags.has("\\Deleted"))
+          throw new Error(`UID ${uid} is not an active draft; editing refused.`);
+        if (!m.source?.length) throw new Error("IMAP returned no stored draft MIME.");
+        const bytes = asBuffer(m.source);
+        // RFC822.SIZE is advisory: Gmail reports it after its own line-ending
+        // normalisation, so it differs from the fetched bytes by a few bytes on a
+        // perfectly good draft (live-found 2026-11-11). Refuse only a gross
+        // shortfall/excess, which is what a truncated fetch would look like.
+        if (
+          bytes.length > MAX_RFC822_FILE_BYTES ||
+          (m.size !== undefined && Math.abs(m.size - bytes.length) > 1024 + m.size * 0.02)
+        )
+          throw new Error("Draft source is oversized or incomplete; editing refused.");
+        return {
+          bytes,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          flags: [...m.flags].filter((f) => f !== "\\Recent" && f !== "\\Deleted"),
+        };
+      };
+      const current = await read(ref.uid);
+      const preview: SavedDraftPreview = {
+        ...previewSavedDraftMime(current.bytes),
+        draftId: input.draftId,
+        uid: ref.uid,
+        uidValidity,
+        sha256: current.sha256,
+      };
+      if (
+        !input.dryRun &&
+        (input.approvedUidValidity !== uidValidity ||
+          input.approvedSha256?.toLowerCase() !== current.sha256)
+      )
+        throw new Error(
+          "Draft changed since preview (UIDVALIDITY or MIME SHA-256); review its current revision again."
+        );
+      const replacement = input.changes
+        ? await patchSavedDraftMime(current.bytes, input.changes)
+        : current.bytes;
+      const proposed = previewSavedDraftMime(replacement);
+      if (replacement.length > MAX_RFC822_FILE_BYTES)
+        throw new Error("Edited draft exceeds the 25 MiB stored-MIME limit.");
+      if (input.dryRun)
+        return {
+          ok: true,
+          status: "preview",
+          sourceDraftId: input.draftId,
+          draftId: input.draftId,
+          preview,
+          ...(input.changes ? { proposed } : {}),
+        };
+      if (replacement.equals(current.bytes))
+        return {
+          ok: true,
+          status: "unchanged",
+          sourceDraftId: input.draftId,
+          draftId: input.draftId,
+          preview,
+          sourceRemoved: false,
+        };
+      // Preparing MIME may take time: refuse a disappeared/changed source before
+      // creating anything. A new UID from another client is never a substitute.
+      const fresh = await read(ref.uid);
+      if (
+        fresh.sha256 !== current.sha256 ||
+        !client.mailbox ||
+        client.mailbox.uidValidity?.toString() !== uidValidity
+      )
+        throw new Error("Draft changed while preparing the edit; nothing appended.");
+      let appended: Awaited<ReturnType<ImapClientLike["append"]>>;
+      try {
+        appended = await client.append(ref.path, replacement, fresh.flags);
+      } catch (error) {
+        const status =
+          error && typeof error === "object" && "responseStatus" in error
+            ? String(error.responseStatus).toUpperCase()
+            : "";
+        const rejected = status === "NO" || status === "BAD";
+        return {
+          ok: false,
+          status: rejected ? "append_failed" : "append_unknown",
+          sourceDraftId: input.draftId,
+          sourceRemoved: false,
+          error: `APPEND ${rejected ? "was rejected" : "outcome is uncertain"}: ${errText(error)}. Source was not removed. Re-list Drafts before any retry.`,
+        };
+      }
+      if (!appended)
+        return {
+          ok: false,
+          status: "append_failed",
+          sourceDraftId: input.draftId,
+          sourceRemoved: false,
+          error: "Server rejected APPEND; source was not removed.",
+        };
+      const newUid = appended.uid;
+      if (
+        !newUid ||
+        !Number.isSafeInteger(newUid) ||
+        newUid > 0xffffffff ||
+        newUid === ref.uid ||
+        appended.uidValidity?.toString() !== uidValidity
+      ) {
+        return {
+          ok: false,
+          status: "append_unknown",
+          sourceDraftId: input.draftId,
+          sourceRemoved: false,
+          error:
+            "APPEND returned no trustworthy new UID/UIDVALIDITY. Source was not removed. Re-list Drafts; do not blindly repeat the edit.",
+        };
+      }
+      const draftId = encodeImapId(ref.account, ref.path, newUid);
+      const replacementSha256 = createHash("sha256").update(replacement).digest("hex");
+      let savedPreview: SavedDraftPreview;
+      try {
+        const saved = await read(newUid);
+        if (saved.sha256 !== replacementSha256)
+          throw new Error("Stored replacement MIME differs from APPEND bytes.");
+        savedPreview = {
+          ...previewSavedDraftMime(saved.bytes),
+          draftId,
+          uid: newUid,
+          uidValidity,
+          sha256: saved.sha256,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          status: "append_unknown",
+          sourceDraftId: input.draftId,
+          draftId,
+          sourceRemoved: false,
+          error: `${errText(error)} Source was not removed; inspect both draft IDs before retrying.`,
+        };
+      }
+      let removalOutcome: "not_attempted" | "uncertain" | "not_removed" = "not_attempted";
+      try {
+        const original = await read(ref.uid);
+        if (
+          original.sha256 !== current.sha256 ||
+          !client.mailbox ||
+          client.mailbox.uidValidity?.toString() !== uidValidity
+        )
+          throw new Error("Source revision changed during APPEND; cleanup refused.");
+        removalOutcome = "uncertain";
+        if (!(await client.messageDelete([ref.uid], { uid: true }))) {
+          removalOutcome = "not_removed";
+          throw new Error("Server rejected removal of the old draft.");
+        }
+        if (await client.fetchOne(String(ref.uid), { uid: true }, { uid: true })) {
+          removalOutcome = "not_removed";
+          throw new Error("Old draft removal was not confirmed.");
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          status: "cleanup_failed",
+          sourceDraftId: input.draftId,
+          draftId,
+          preview: savedPreview,
+          sourceRemoved: removalOutcome === "uncertain" ? undefined : false,
+          error: `${errText(error)} Replacement is saved; inspect both IDs. No cleanup retry was attempted.`,
+        };
+      }
+      return {
+        ok: true,
+        status: "updated",
+        sourceDraftId: input.draftId,
+        draftId,
+        preview: savedPreview,
+        sourceRemoved: true,
+      };
+    } finally {
+      lock.release();
+    }
   });
 }
 
