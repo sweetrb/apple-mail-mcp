@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [2.20.56] - 2026-11-11
+### Changed
+- Dependency bump via Dependabot; committed bundle rebuilt. (automated)
+
 ## [2.20.55] - 2026-11-04
 
 ### Fixed
