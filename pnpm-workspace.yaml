@@ -47,7 +47,13 @@ overrides:
   # and the advisory could not clear. Floor, not pin -- two-sided per the
   # fast-uri precedent below. Reached via @modelcontextprotocol/sdk; the HTTP
   # transport is tree-shaken out of this stdio server.
-  "@hono/node-server": ">=2.1.3 <3"
+  # 2026-11-13: Dependabot alerts #50 (medium, GHSA-jpvv-r467-5p4w: backslash in
+  # the request path parsed as a separator -> reverse-proxy ACL bypass) and #51
+  # (medium, GHSA-qv5m-9pm6-hqp3: unhandled ECONNRESET during an async WebSocket
+  # upgrade crashes the process), both fixed in 2.1.6. 2.1.6 published
+  # 2026-11-02T10:22Z; the 7-day minimumReleaseAge soak cleared 2026-11-09T10:22Z
+  # -- no minimumReleaseAgeExclude was used. Raised >=2.1.3 <3 -> >=2.1.6 <3.
+  "@hono/node-server": ">=2.1.6 <3"
   # GHSA-27r3-jxmh-p828 (high): body-parser, fixed in 2.4.0 (published
   # 2026-10-22T11:39Z; floored once the 7-day minimumReleaseAge soak above
   # cleared on 2026-10-29T11:40Z -- no minimumReleaseAgeExclude was used).
@@ -116,7 +122,16 @@ overrides:
   # Floor raised ^4.12.34 -> ^4.13.5. 4.13.6/4.13.7 (published 2026-09-04) are
   # still inside the 7-day soak above, so resolution lands on 4.13.5 — expected,
   # not a stale floor. Still a caret floor, never an exact pin (see fast-uri).
-  hono: ^4.13.5
+  # 2026-11-13: five further advisories, all fixed in 4.13.16 — GHSA-46wx-v44x-9hh2
+  # (csrf() ignores hyperlink-auditing text/ping requests), GHSA-4h7h-rv7c-7m2v
+  # (validator('form') skips multipart with extra parameters), GHSA-4m76-xfj5-7975
+  # (mount() forwards a path bypassing prefix-scoped middleware),
+  # GHSA-h7mg-cq63-vhpq (RegExpRouter skips wildcard middleware), all medium, and
+  # GHSA-3gg2-335m-rxc6 (low, css helper split closing-tag HTML injection).
+  # 4.13.16 published 2026-11-01T03:04Z; the 7-day soak cleared
+  # 2026-11-08T03:04Z -- no minimumReleaseAgeExclude was used. Raised ^4.13.5 ->
+  # ">=4.13.16 <5": two-sided per-major like fast-uri, never an exact pin.
+  hono: ">=4.13.16 <5"
   # GHSA-5p4m-2wfm-xmqj (high): quadratic CPU consumption resolving !!omap,
   # fixed in 4.3.1 — the CVE-2026-59870 fix was never backported to the 3.x line.
   # This entry already existed as `^4.2.0`, a floor for an earlier advisory, and
