@@ -212,26 +212,26 @@ tool, and troubleshooting. Verify any time by running the **`doctor`** tool.
 
 ### Messages
 
-| Feature               | Description                                                                                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **List Messages**     | List messages with pagination, sender filter, date display                                                                               |
-| **Search Messages**   | Search by sender, subject, content, date range, read/flagged status — across all accounts                                                |
-| **Read Messages**     | Get full email content (plain text or HTML)                                                                                              |
-| **Read Headers**      | Get a message's raw RFC 5322 headers — the author's `Date:`, Message-ID, threading ids, `Received:` trace — without downloading the body |
-| **Send Email**        | Compose and send new emails (attach by file path or inline base64 content; optional `inReplyTo`/`references` threading over SMTP)        |
-| **Send Serial Email** | Mail merge — send personalized emails to a list of recipients with {{placeholder}} support                                               |
-| **Create Draft**      | Save emails to Drafts folder (attach by file path or inline base64 content; threaded drafts filed over IMAP)                             |
-| **Update Saved Draft** | Preview and partially edit a stored IMAP draft, retaining unchanged MIME and returning the new UID and revision |
-| **Reply**             | Reply to messages (with reply-all support and attachments)                                                                               |
-| **Forward**           | Forward messages to new recipients (with extra attachments)                                                                              |
-| **Get Thread**        | Group a conversation by normalized subject (across AppleScript or IMAP)                                                                  |
-| **Mark Read/Unread**  | Change read status (single or batch)                                                                                                     |
-| **Flag/Unflag**       | Flag or unflag messages (single or batch)                                                                                                |
-| **Delete Messages**   | Move messages to trash (single or batch)                                                                                                 |
-| **Move Messages**     | Organize into mailboxes (single or batch)                                                                                                |
-| **List Attachments**  | View attachment metadata (name, type, size)                                                                                              |
-| **Save Attachment**   | Save attachments to disk                                                                                                                 |
-| **Fetch Attachment**  | Get an attachment's bytes as base64 (no disk write)                                                                                      |
+| Feature                | Description                                                                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **List Messages**      | List messages with pagination, sender filter, date display                                                                               |
+| **Search Messages**    | Search by sender, subject, content, date range, read/flagged status — across all accounts                                                |
+| **Read Messages**      | Get full email content (plain text or HTML)                                                                                              |
+| **Read Headers**       | Get a message's raw RFC 5322 headers — the author's `Date:`, Message-ID, threading ids, `Received:` trace — without downloading the body |
+| **Send Email**         | Compose and send new emails (attach by file path or inline base64 content; optional `inReplyTo`/`references` threading over SMTP)        |
+| **Send Serial Email**  | Mail merge — send personalized emails to a list of recipients with {{placeholder}} support                                               |
+| **Create Draft**       | Save emails to Drafts folder (attach by file path or inline base64 content; threaded drafts filed over IMAP)                             |
+| **Update Saved Draft** | Preview and partially edit a stored IMAP draft, retaining unchanged MIME and returning the new UID and revision                          |
+| **Reply**              | Reply to messages (with reply-all support and attachments)                                                                               |
+| **Forward**            | Forward messages to new recipients (with extra attachments)                                                                              |
+| **Get Thread**         | Group a conversation by normalized subject (across AppleScript or IMAP)                                                                  |
+| **Mark Read/Unread**   | Change read status (single or batch)                                                                                                     |
+| **Flag/Unflag**        | Flag or unflag messages (single or batch)                                                                                                |
+| **Delete Messages**    | Move messages to trash (single or batch)                                                                                                 |
+| **Move Messages**      | Organize into mailboxes (single or batch)                                                                                                |
+| **List Attachments**   | View attachment metadata (name, type, size)                                                                                              |
+| **Save Attachment**    | Save attachments to disk                                                                                                                 |
+| **Fetch Attachment**   | Get an attachment's bytes as base64 (no disk write)                                                                                      |
 
 Read/list/get tools also return **structured JSON** (`structuredContent`) alongside the text, so agents can consume results without parsing prose.
 
@@ -1033,13 +1033,13 @@ AppleScript or SMTP fallback. The message itself must carry `\Draft` and must
 not be marked `\Deleted`. Editing requires UIDPLUS, so removal uses **UID
 EXPUNGE**, never a global EXPUNGE that could remove unrelated messages.
 
-| Parameter | Type | Required | Description |
-| --- | --- | --- | --- |
-| `draftId` | string | Yes | Fresh `imap:` ID from `list-messages` on Drafts. Numeric IDs are refused. |
-| `dryRun` | boolean | No | Defaults to `true`: only read and preview, including proposed changes when supplied. |
-| `approvedSha256` | string | For an update | `preview.sha256` of the current stored source. |
-| `approvedUidValidity` | string | For an update | `preview.uidValidity` of the current source mailbox. The UID is encoded in `draftId` and also returned in the preview. |
-| `changes` | object | For an update | Partial patch; omitted fields remain unchanged. |
+| Parameter             | Type    | Required      | Description                                                                                                            |
+| --------------------- | ------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `draftId`             | string  | Yes           | Fresh `imap:` ID from `list-messages` on Drafts. Numeric IDs are refused.                                              |
+| `dryRun`              | boolean | No            | Defaults to `true`: only read and preview, including proposed changes when supplied.                                   |
+| `approvedSha256`      | string  | For an update | `preview.sha256` of the current stored source.                                                                         |
+| `approvedUidValidity` | string  | For an update | `preview.uidValidity` of the current source mailbox. The UID is encoded in `draftId` and also returned in the preview. |
+| `changes`             | object  | For an update | Partial patch; omitted fields remain unchanged.                                                                        |
 
 `changes` accepts `subject`, `to`, `cc`, `bcc`, `body`, `htmlBody`,
 `addAttachments` and `removeAttachments`. An explicit `[]` clears a recipient
@@ -2267,7 +2267,14 @@ allow-list: a tool added later stays out until it is classified, and a test
 fails while any registered tool is unclassified. Tools that send or delete carry
 `destructiveHint` and allow-listed reads carry `readOnlyHint`. The `compose-reply`
 prompt is dropped when `reply-to-message` is not offered, and the `apple-mail-send`
-CLI refuses to send when the mode removes sending.
+CLI refuses to send when the mode removes sending (the CLI reads the mode from its
+environment only, not from `config.json`).
+
+An `APPLE_MAIL_MCP_MODE` already set in the client's MCP `env` wins over
+`config.json`, which only fills keys that are unset, so a leftover `full` there
+silently overrides a `read_only` in the file. Under `no_send`, dropping
+`reply-to-message` and `forward-message` also removes their `send: false` draft
+paths.
 
 ### Sending Personalized Emails (Mail Merge)
 
@@ -2396,7 +2403,7 @@ The entrypoint is written as:
 | Date filter format                                                           | Date filters must be valid parseable dates (e.g., "January 1, 2026" or "2026-03-15"); bare numbers or non-date strings are rejected                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Attachment save path restrictions                                            | `save-attachment` saves only into Downloads, Desktop, Documents, iCloud Drive, CloudStorage or temp directories (plus `APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS`); protected and hidden paths, traversal and overwrites are refused                                                                                                                                                                                                                                                                                                                                                                      |
 | Attachment count limit                                                       | `send-email` and `create-draft` accept a maximum of 20 file attachments                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Attachment fetch size                                                        | `fetch-attachment` refuses inline results over 3 MiB on either backend. IMAP `save-attachment` retains its separate 25 MiB download limit.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Attachment fetch size                                                        | `fetch-attachment` refuses inline results over 3 MiB on either backend. IMAP `save-attachment` retains its separate 25 MiB download limit.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ### Mail.app `<blockquote>` wrapping on macOS 15+ (workaround in v1.6.0)
 
