@@ -164,6 +164,7 @@ import { fileConfigPath, loadFileConfig } from "@/services/fileConfig.js";
 import { isOrphaned } from "@/utils/orphan.js";
 import { withJsonSchema2020_12 } from "@/utils/jsonSchemaDialect.js";
 import { isToolAllowed, resolveToolMode, withSafetyAnnotations } from "@/utils/toolMode.js";
+import { restartMail } from "@/utils/mailRecovery.js";
 import {
   writeDestructiveAudit,
   reconciliationWarnings,
@@ -3784,6 +3785,26 @@ registerTool(
 
     return successResponse(`${statusIcon} ${statusText}\n\n${checkLines}`, { ...result });
   }, "Error running health check")
+);
+
+// --- restart-mail ---
+
+registerTool(
+  "restart-mail",
+  {
+    description:
+      'Use when: Mail.app is closed or stopped answering (every call fails with `AppleEvent timed out (-1712)` or "not running") and health-check confirms it. Quits Mail.app, force-kills it if it will not quit, opens it again and waits until it answers.\nReturns: ok plus the steps taken.\nDo not use when: the failure is a permission refusal (-1743: grant Automation access instead) or you only want to check status (use health-check). An unsaved draft in Mail.app is lost.',
+    inputSchema: {},
+    outputSchema: {
+      ok: z.boolean().optional(),
+      steps: z.array(z.string()).optional(),
+    },
+  },
+  withErrorHandling(() => {
+    const report = restartMail();
+    const text = `${report.ok ? "✓" : "✗"} ${report.steps.join("; ")}`;
+    return report.ok ? successResponse(text, { ...report }) : errorResponse(text, { ...report });
+  }, "Error restarting Mail.app")
 );
 
 // --- doctor ---

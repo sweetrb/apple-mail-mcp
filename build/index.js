@@ -69563,12 +69563,12 @@ async function imapFetchAttachment(id, attachmentName, deps = {}, mode = "save")
         }
         const probePart = match.part === "1" && !msg.bodyStructure.childNodes ? "text" : match.part;
         const probeStart = Math.max(0, encoded - 1);
-        const probe = await client.fetchOne(
+        const probe2 = await client.fetchOne(
           String(ref.uid),
           { bodyParts: [{ key: probePart, start: probeStart, maxLength: encoded > 0 ? 2 : 1 }] },
           { uid: true }
         );
-        const tail = probe && probe.bodyParts?.get(probePart.toLowerCase());
+        const tail = probe2 && probe2.bodyParts?.get(probePart.toLowerCase());
         if (!tail || tail.length !== (encoded > 0 ? 1 : 0)) {
           return {
             success: false,
@@ -99688,6 +99688,8 @@ var TOOL_ANNOTATIONS = {
   "create-smart-mailbox": WRITE,
   "create-newsletter-smart-mailboxes": WRITE,
   "disable-rule": IDEMPOTENT_WRITE,
+  "restart-mail": WRITE,
+  // quits and relaunches Mail.app; no data is changed
   // Destructive or irreversible
   "update-saved-draft": DESTRUCTIVE,
   // overwrites a stored draft by APPEND + targeted removal
@@ -99723,7 +99725,7 @@ function annotationsFor(name2, own2) {
 }
 
 // src/services/appleMailManager.ts
-import { spawnSync as spawnSync4 } from "child_process";
+import { spawnSync as spawnSync5 } from "child_process";
 import {
   constants as fsConstants,
   chmodSync as chmodSync2,
@@ -99747,7 +99749,173 @@ import { homedir as homedir7 } from "os";
 import { randomUUID as randomUUID3 } from "crypto";
 
 // src/utils/applescript.ts
-import { execSync, spawnSync } from "child_process";
+import { execSync, spawnSync as spawnSync2 } from "child_process";
+
+// src/utils/mailRecovery.ts
+import { spawnSync } from "child_process";
+var AUTO_RECOVER_ENV = "APPLE_MAIL_MCP_AUTO_RECOVER";
+var MAIL_RUNNING_GUARD = 'if application "Mail" is running then';
+var PROBE_TIMEOUT_MS = 12e3;
+var HEALTHY_TTL_MS = 3e4;
+var RESTART_COOLDOWN_MS = 10 * 6e4;
+var READY_WAIT_MS = 45e3;
+var STOP_WAIT_MS = 6e3;
+var POLL_MS = 1500;
+var OPEN_RETRY_MS = 2e3;
+var CONFIRM_WAIT_MS = 5e3;
+var PERMISSION_DENIED = /\(-1743\)|not author(?:i[sz])ed|not permitted/i;
+var healthyUntil = 0;
+var skipUntil = 0;
+var lastRestartAt = 0;
+var busy = false;
+function autoRecoverEnabled() {
+  const flag = (process.env[AUTO_RECOVER_ENV] ?? "").trim().toLowerCase();
+  if (["0", "false", "off", "no"].includes(flag)) return false;
+  if (["1", "true", "on", "yes"].includes(flag)) return true;
+  return !process.env.VITEST;
+}
+function markMailUnhealthy() {
+  healthyUntil = 0;
+}
+function sleepMs(ms) {
+  spawnSync("sleep", [String(ms / 1e3)], { stdio: "ignore" });
+}
+function mailPids() {
+  const uid = process.getuid?.();
+  if (uid === void 0) return [];
+  const result = spawnSync("pgrep", ["-u", String(uid), "-x", "Mail"], { encoding: "utf8" });
+  if (result.status !== 0 || !result.stdout) return [];
+  return result.stdout.split("\n").map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+function probe() {
+  const result = spawnSync(
+    "osascript",
+    ["-e", 'with timeout of 8 seconds\ntell application "Mail" to count of accounts\nend timeout'],
+    { encoding: "utf8", timeout: PROBE_TIMEOUT_MS, killSignal: "SIGKILL" }
+  );
+  if (result.status === 0) return "ok";
+  const text = result.stderr ?? "";
+  if (PERMISSION_DENIED.test(text)) return "denied";
+  const timedOut = result.error?.code === "ETIMEDOUT";
+  if (timedOut || result.signal || /\(-1712\)/.test(text)) return "wedged";
+  return "other";
+}
+function waitUntilGone(ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (mailPids().length === 0) return true;
+    sleepMs(500);
+  }
+  return mailPids().length === 0;
+}
+function waitUntilAnswering(ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (mailPids().length > 0 && probe() === "ok") return true;
+    sleepMs(POLL_MS);
+  }
+  return false;
+}
+function openMail() {
+  const open2 = () => spawnSync("open", ["-g", "-a", "Mail"], { stdio: "ignore" }).status === 0;
+  return open2() || (sleepMs(OPEN_RETRY_MS), open2());
+}
+function restartMail() {
+  const steps = [];
+  lastRestartAt = Date.now();
+  healthyUntil = 0;
+  skipUntil = 0;
+  const running2 = mailPids();
+  if (running2.length === 0) {
+    steps.push("Mail was not running");
+  } else {
+    spawnSync(
+      "osascript",
+      ["-e", 'with timeout of 5 seconds\ntell application "Mail" to quit\nend timeout'],
+      { timeout: 8e3, killSignal: "SIGKILL", stdio: "ignore" }
+    );
+    if (waitUntilGone(STOP_WAIT_MS)) {
+      steps.push("Mail quit normally");
+    } else {
+      const stuck = mailPids();
+      for (const pid of stuck) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+        }
+      }
+      steps.push(`Mail did not quit; force-killed pid ${stuck.join(", ")}`);
+      if (!waitUntilGone(STOP_WAIT_MS)) {
+        steps.push("Mail is still running after SIGKILL");
+        return { ok: false, steps };
+      }
+    }
+  }
+  if (!openMail()) {
+    steps.push("`open -g -a Mail` failed");
+    return { ok: false, steps };
+  }
+  const ready = waitUntilAnswering(READY_WAIT_MS);
+  steps.push(
+    ready ? "Mail opened again and is answering Apple Events" : `Mail opened again but did not answer within ${READY_WAIT_MS / 1e3}s`
+  );
+  if (ready) healthyUntil = Date.now() + HEALTHY_TTL_MS;
+  return { ok: ready, steps };
+}
+function ensureMailReady(options = {}) {
+  if (busy || !autoRecoverEnabled() || Date.now() < Math.max(healthyUntil, skipUntil)) return;
+  const deadline = options.budgetMs === void 0 ? Infinity : Date.now() + options.budgetMs;
+  const left = () => deadline - Date.now();
+  busy = true;
+  try {
+    if (mailPids().length === 0) {
+      if (options.launch === false) return;
+      if (Date.now() - lastRestartAt < RESTART_COOLDOWN_MS) {
+        console.error(
+          "mail-recovery: Mail.app is not running; last open failed under 10 minutes ago, not retrying"
+        );
+        skipUntil = Date.now() + HEALTHY_TTL_MS;
+        return;
+      }
+      console.error("mail-recovery: Mail.app is not running; opening it");
+      const cut = left() < READY_WAIT_MS;
+      const ready = openMail() && waitUntilAnswering(Math.min(READY_WAIT_MS, left()));
+      console.error(
+        `mail-recovery: ${ready ? "Mail is answering" : cut ? "Mail is still starting; the call's timeout ended the wait" : "Mail did not answer in time"}`
+      );
+      if (ready) healthyUntil = Date.now() + HEALTHY_TTL_MS;
+      else if (!cut) lastRestartAt = Date.now();
+      return;
+    }
+    if (left() < PROBE_TIMEOUT_MS) return;
+    let state = probe();
+    if (state === "wedged") {
+      if (left() < CONFIRM_WAIT_MS + PROBE_TIMEOUT_MS) return;
+      sleepMs(CONFIRM_WAIT_MS);
+      state = probe();
+    }
+    if (state === "ok") {
+      healthyUntil = Date.now() + HEALTHY_TTL_MS;
+      return;
+    }
+    if (state !== "wedged") return;
+    if (Date.now() - lastRestartAt < RESTART_COOLDOWN_MS) {
+      console.error(
+        "mail-recovery: Mail.app is not answering; last restart was under 10 minutes ago, not restarting"
+      );
+      skipUntil = Date.now() + HEALTHY_TTL_MS;
+      return;
+    }
+    console.error("mail-recovery: Mail.app is not answering; restarting it");
+    const report = restartMail();
+    console.error(`mail-recovery: ${report.steps.join("; ")}`);
+    if (!report.ok) skipUntil = Date.now() + HEALTHY_TTL_MS;
+  } finally {
+    busy = false;
+  }
+}
+
+// src/utils/applescript.ts
 var DEFAULT_TIMEOUT_MS = 3e4;
 var DEFAULT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 function getMaxBuffer() {
@@ -99803,7 +99971,7 @@ function isRetryableError(errorMessage) {
 }
 function sleep(ms) {
   const seconds = ms / 1e3;
-  const result = spawnSync("sleep", [seconds.toString()], { stdio: "ignore" });
+  const result = spawnSync2("sleep", [seconds.toString()], { stdio: "ignore" });
   if (result.error) {
     const end = Date.now() + ms;
     while (Date.now() < end) {
@@ -99917,6 +100085,7 @@ function executeAppleScript(script, options = {}) {
     timeout: timeoutMs,
     maxRetries
   });
+  ensureMailReady({ launch: !script.includes(MAIL_RUNNING_GUARD), budgetMs: timeoutMs });
   let lastError2 = null;
   const startTime = Date.now();
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -99955,6 +100124,7 @@ function executeAppleScript(script, options = {}) {
       let rawError;
       if (isTimeoutError(error63)) {
         isTimeout = true;
+        markMailUnhealthy();
         const timeoutSecs = Math.round(timeoutMs / 1e3);
         errorMessage = `Operation timed out after ${timeoutSecs} seconds. Mail.app may be unresponsive or the operation involves too many messages.`;
       } else if (error63 instanceof Error) {
@@ -100428,10 +100598,10 @@ function senderGuardScript(safeAddress) {
 }
 
 // src/services/nativeMailComposer.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawnSync as spawnSync4 } from "node:child_process";
 
 // src/services/nativeClipboardRecovery.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 var MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 var MAX_NATIVE_EDITOR_OUTPUT_BYTES = MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES + 64 * 1024;
 var MAX_RECOVERY_INPUT_BYTES = MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES + 4096;
@@ -100491,7 +100661,7 @@ function recoverNativeClipboard(output2, token) {
       ownedCount: owned?.count ?? null
     });
     if (Buffer.byteLength(input2, "utf8") > MAX_RECOVERY_INPUT_BYTES) return false;
-    const restored = spawnSync2("/usr/bin/osascript", ["-l", "JavaScript", "-e", RESTORE], {
+    const restored = spawnSync3("/usr/bin/osascript", ["-l", "JavaScript", "-e", RESTORE], {
       input: input2,
       encoding: "utf8",
       timeout: 1e4,
@@ -100797,7 +100967,7 @@ var ERRORS = {
 };
 function runNativeEditor(payload) {
   try {
-    const result = spawnSync3(
+    const result = spawnSync4(
       "/usr/bin/osascript",
       ["-l", "JavaScript", "-e", NATIVE_EDITOR_SCRIPT],
       {
@@ -103599,7 +103769,7 @@ function buildAppLevelScriptIfRunning(command) {
 }
 function guardMailRunning(script) {
   return `
-    if application "Mail" is running then
+    ${MAIL_RUNNING_GUARD}
       ${script}
     else
       return "${MAIL_NOT_RUNNING_MARKER}"
@@ -106316,7 +106486,7 @@ end try`
         });
       }
       if (effectiveDelay > 0 && i < recipients2.length - 1) {
-        spawnSync4("sleep", [(effectiveDelay / 1e3).toString()], { stdio: "ignore" });
+        spawnSync5("sleep", [(effectiveDelay / 1e3).toString()], { stdio: "ignore" });
       }
     }
     return results;
@@ -107764,7 +107934,7 @@ ${this.errorEmit("              ")}
    */
   readSmartMailboxEntries(plistPath) {
     if (!plistPath || !existsSync6(plistPath)) return [];
-    const j = spawnSync4("plutil", ["-convert", "json", "-o", "-", plistPath], {
+    const j = spawnSync5("plutil", ["-convert", "json", "-o", "-", plistPath], {
       encoding: "utf8"
     });
     if (j.status === 0 && j.stdout) {
@@ -107790,12 +107960,12 @@ ${this.errorEmit("              ")}
     const buddy = "/usr/libexec/PlistBuddy";
     const out = [];
     for (let i = 0; i < 1e3; i++) {
-      const exists = spawnSync4(buddy, ["-c", `Print :${i}`, plistPath], { encoding: "utf8" });
+      const exists = spawnSync5(buddy, ["-c", `Print :${i}`, plistPath], { encoding: "utf8" });
       if (exists.status !== 0) break;
-      const nameR = spawnSync4(buddy, ["-c", `Print :${i}:MailboxName`, plistPath], {
+      const nameR = spawnSync5(buddy, ["-c", `Print :${i}:MailboxName`, plistPath], {
         encoding: "utf8"
       });
-      const idR = spawnSync4(buddy, ["-c", `Print :${i}:MailboxID`, plistPath], {
+      const idR = spawnSync5(buddy, ["-c", `Print :${i}:MailboxID`, plistPath], {
         encoding: "utf8"
       });
       out.push({
@@ -107829,7 +107999,7 @@ ${this.errorEmit("              ")}
   }
   /** Lint the mutated temp file and atomically move it into place. */
   commitSmartPlist(temp, plistPath) {
-    const lint = spawnSync4("plutil", ["-lint", temp], { encoding: "utf8" });
+    const lint = spawnSync5("plutil", ["-lint", temp], { encoding: "utf8" });
     if (lint.status !== 0) {
       try {
         unlinkSync3(temp);
@@ -107936,7 +108106,7 @@ ${this.errorEmit("              ")}
       }
     };
     writeFileSync4(entryJson, JSON.stringify([entry]), "utf8");
-    const conv = spawnSync4("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
+    const conv = spawnSync5("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
       encoding: "utf8"
     });
     if (conv.status !== 0) {
@@ -107951,7 +108121,7 @@ ${this.errorEmit("              ")}
         error: (conv.stderr || "plutil could not encode the smart mailbox entry").trim()
       };
     }
-    const ins = spawnSync4("/usr/libexec/PlistBuddy", ["-c", `Merge ${entryPlist} :`, temp], {
+    const ins = spawnSync5("/usr/libexec/PlistBuddy", ["-c", `Merge ${entryPlist} :`, temp], {
       encoding: "utf8"
     });
     cleanupEntryFiles();
@@ -107995,7 +108165,7 @@ ${this.errorEmit("              ")}
       return { deleted: false, error: `Smart mailbox "${name2}" not found` };
     }
     const temp = this.prepareSmartPlistWrite(plistPath);
-    const del = spawnSync4("/usr/libexec/PlistBuddy", ["-c", `Delete :${idx}`, temp], {
+    const del = spawnSync5("/usr/libexec/PlistBuddy", ["-c", `Delete :${idx}`, temp], {
       encoding: "utf8"
     });
     if (del.status !== 0) {
@@ -113090,6 +113260,22 @@ registerTool(
 
 ${checkLines}`, { ...result });
   }, "Error running health check")
+);
+registerTool(
+  "restart-mail",
+  {
+    description: 'Use when: Mail.app is closed or stopped answering (every call fails with `AppleEvent timed out (-1712)` or "not running") and health-check confirms it. Quits Mail.app, force-kills it if it will not quit, opens it again and waits until it answers.\nReturns: ok plus the steps taken.\nDo not use when: the failure is a permission refusal (-1743: grant Automation access instead) or you only want to check status (use health-check). An unsaved draft in Mail.app is lost.',
+    inputSchema: {},
+    outputSchema: {
+      ok: external_exports.boolean().optional(),
+      steps: external_exports.array(external_exports.string()).optional()
+    }
+  },
+  withErrorHandling(() => {
+    const report = restartMail();
+    const text = `${report.ok ? "\u2713" : "\u2717"} ${report.steps.join("; ")}`;
+    return report.ok ? successResponse(text, { ...report }) : errorResponse(text, { ...report });
+  }, "Error restarting Mail.app")
 );
 registerTool(
   "doctor",

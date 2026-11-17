@@ -36,6 +36,7 @@ import { resolve, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
+import { MAIL_RUNNING_GUARD } from "@/utils/mailRecovery.js";
 import { flagColorName, isGmailHost } from "@/services/imapClient.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 
@@ -1588,7 +1589,7 @@ function buildAppLevelScriptIfRunning(command: string): string {
 /** Wrap a whole `tell application "Mail"` script in the not-launching running check. */
 function guardMailRunning(script: string): string {
   return `
-    if application "Mail" is running then
+    ${MAIL_RUNNING_GUARD}
       ${script}
     else
       return "${MAIL_NOT_RUNNING_MARKER}"

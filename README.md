@@ -1840,6 +1840,16 @@ Verify Mail.app connectivity and permissions.
 
 ---
 
+#### `restart-mail`
+
+Quit Mail.app (force-kill it if it will not quit), open it again and wait until it answers Apple Events. The server does this by itself before an AppleScript call when Mail is closed or stops answering (at most once per 10 minutes; `APPLE_MAIL_MCP_AUTO_RECOVER=0` turns the automatic part off); this tool runs it on demand. An unsaved draft in Mail.app is lost.
+
+**Parameters:** None
+
+**Returns:** `ok` and the list of steps taken.
+
+---
+
 #### `doctor`
 
 Run a full setup diagnostic: Mail.app automation permission, account state (flagging disabled accounts), and each configured IMAP/SMTP backend — each reported as ok / warn / fail with an actionable message.

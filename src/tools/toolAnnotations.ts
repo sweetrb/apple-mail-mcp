@@ -78,6 +78,7 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, ToolAnnotations>> = {
   "create-smart-mailbox": WRITE,
   "create-newsletter-smart-mailboxes": WRITE,
   "disable-rule": IDEMPOTENT_WRITE,
+  "restart-mail": WRITE, // quits and relaunches Mail.app; no data is changed
 
   // Destructive or irreversible
   "update-saved-draft": DESTRUCTIVE, // overwrites a stored draft by APPEND + targeted removal

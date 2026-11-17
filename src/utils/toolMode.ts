@@ -80,6 +80,7 @@ export const WRITING_TOOLS = new Set([
   "delete-mailbox",
   "rename-mailbox",
   "set-account-settings",
+  "restart-mail",
   "create-smart-mailbox",
   "delete-smart-mailbox",
   "create-newsletter-smart-mailboxes",
