@@ -47,6 +47,7 @@ export const READ_ONLY_TOOLS = new Set([
   "get-unread-count",
   "list-smart-mailboxes",
   "list-accounts",
+  "get-account-settings",
   "list-rules",
   "search-contacts",
   "list-templates",
@@ -78,6 +79,7 @@ export const WRITING_TOOLS = new Set([
   "create-mailbox",
   "delete-mailbox",
   "rename-mailbox",
+  "set-account-settings",
   "create-smart-mailbox",
   "delete-smart-mailbox",
   "create-newsletter-smart-mailboxes",
@@ -99,6 +101,8 @@ const DESTRUCTIVE_TOOLS = new Set([
   "create-rule",
   "delete-rule",
   "delete-template",
+  // It can switch an account off, which stops its mail fetching and sending.
+  "set-account-settings",
 ]);
 
 /** Parse the mode; an unknown value is a configuration error, never a silent `full`. */
