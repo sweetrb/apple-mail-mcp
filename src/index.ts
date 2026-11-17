@@ -3326,7 +3326,7 @@ registerTool(
   "set-account-settings",
   {
     description:
-      "Use when: the user asked to change a setting of a Mail account: turn it on or off (enabled), its full name, include it when getting new mail, move deleted messages to the Trash, empty Trash/Junk/Sent on quit, or the IMAP flags (store drafts, junk, sent, deleted on the server; compact mailboxes when closing).\nReturns: the settings read back, and any setting Mail refused.\nDo not use when: the change involves a password, server, port, user name or the account's email addresses — those cannot be changed with this tool.\nSafety: turning an account off stops its mail arriving and sending; confirm with the user first.",
+      "Use when: the user asked to change a setting of a Mail account: turn it on or off (enabled), its full name, include it when getting new mail, move deleted messages to the Trash, empty Trash/Junk/Sent on quit, or the IMAP flags (store drafts, junk, sent, deleted on the server; compact mailboxes when closing).\nReturns: the settings read back, and any setting Mail refused.\nDo not use when: the change involves a password, server, port, user name or the account's email addresses — those cannot be changed with this tool.\nSafety: confirm with the user first. Turning an account off stops its mail arriving and sending; moveDeletedMessagesToTrash: false makes every later delete permanent; emptyTrashOnQuit/emptyJunkOnQuit/emptySentOnQuit: true purge those folders; storeSentOnServer/storeDeletedOnServer (and the other store…OnServer flags): false drop the server's copies.",
     inputSchema: {
       account: z.string().min(1).describe("Account name or its email address (see list-accounts)"),
       enabled: z.boolean().optional(),
