@@ -599,6 +599,20 @@ Send a new email immediately.
 }
 ```
 
+##### Deleting the draft after the send (`draftId`)
+
+Pass `draftId` (the id of the draft the message was written in, from `list-messages` or
+`search-messages` on Drafts; an `imap:` id is preferred) to have the draft removed once the
+mail has gone out. The id is checked **before** sending: it must name a draft with the same
+subject, or nothing is sent. After the send, the draft is deleted only when a copy was filed
+in Sent (SMTP reports it directly; on the AppleScript path Sent is polled for up to 50 s,
+bounded by the clock), because without that copy the message may not have left. The result
+carries `draftDeleted`, and `draftError` when the draft was kept or could not be deleted. A
+failing clean-up never turns a send that went out into an error, so the caller does not
+retry and send it twice. Mail gives a server-side draft a new numeric id each time it
+re-saves it: a numeric id that no longer exists stands in for the single draft with that
+subject in the account's Drafts, and is refused when there are none or several.
+
 ##### Threading headers (`inReplyTo` / `references`)
 
 `send-email` and `create-draft` accept caller-built threading headers (2.20.0, #267) for

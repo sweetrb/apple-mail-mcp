@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.61] - 2026-11-17
+
+### Added
+
+- **`send-email` takes a `draftId` and deletes that draft after the send.** The id of the draft the message was written in (from `list-messages` or `search-messages` on Drafts; an `imap:` id is preferred) is checked before anything is sent: it must name a draft with the same subject, or nothing is sent. After the send the draft is deleted only when a copy was filed in Sent: the SMTP path reports it directly, and the AppleScript path polls Sent for up to 50 s, bounded by the clock so a slow search cannot stretch the call past its deadline. The result carries `draftDeleted`, and `draftError` when the draft was kept or could not be deleted. A clean-up that fails never turns a send that already went out into an error, so the caller does not retry and send it twice. Mail gives a server-side draft a new numeric id each time it re-saves it: a numeric `draftId` that no longer exists stands in for the single draft with that subject in the account's Drafts, and is refused when there are none or several. Drafts and Sent mailboxes are recognised by their localized names (English, Spanish, Catalan, German, French, Italian, Portuguese, Dutch, Swedish, Norwegian, Danish, Finnish, Polish) and matched as whole words, so `Presentations` never reads as Sent.
+
 ## [2.20.60] - 2026-11-17
 
 ### Added

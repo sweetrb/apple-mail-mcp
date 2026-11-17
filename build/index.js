@@ -81843,12 +81843,12 @@ function hu_default() {
 function getArmenianPlural(count, one, many) {
   return Math.abs(count) === 1 ? one : many;
 }
-function withDefiniteArticle(word) {
-  if (!word)
+function withDefiniteArticle(word2) {
+  if (!word2)
     return "";
   const vowels = ["\u0561", "\u0565", "\u0568", "\u056B", "\u0578", "\u0578\u0582", "\u0585"];
-  const lastChar = word[word.length - 1];
-  return word + (vowels.includes(lastChar) ? "\u0576" : "\u0568");
+  const lastChar = word2[word2.length - 1];
+  return word2 + (vowels.includes(lastChar) ? "\u0576" : "\u0568");
 }
 var error24 = () => {
   const Sizable = {
@@ -101206,10 +101206,10 @@ function emlxSource(bytes) {
   if (!Number.isInteger(count) || count <= 0) return null;
   return bytes.subarray(nl + 1, nl + 1 + count).toString("latin1");
 }
-function asciiWordAt(s, at, word) {
-  for (let k = 0; k < word.length; k++) {
+function asciiWordAt(s, at, word2) {
+  for (let k = 0; k < word2.length; k++) {
     const c = s.charCodeAt(at + k);
-    if (c !== word.charCodeAt(k) && !(c >= 65 && c <= 90 && (c | 32) === word.charCodeAt(k))) {
+    if (c !== word2.charCodeAt(k) && !(c >= 65 && c <= 90 && (c | 32) === word2.charCodeAt(k))) {
       return false;
     }
   }
@@ -102108,15 +102108,15 @@ function upperBound(dateTo) {
 }
 function resolveMailboxIds(db, accountId, mailbox) {
   const rows = db.prepare(`SELECT ROWID AS id, url FROM mailboxes WHERE url LIKE ?`).all(`%://${accountId}/%`);
-  const fold = (p) => p.normalize("NFC").toLowerCase();
-  const wanted = fold(mailbox.replace(/\/+$/, ""));
+  const fold2 = (p) => p.normalize("NFC").toLowerCase();
+  const wanted = fold2(mailbox.replace(/\/+$/, ""));
   const exact = [];
   const leaf = [];
   for (const r of rows) {
     const parsed = parseMailboxUrl(String(r.url ?? ""));
     if (!parsed || parsed.accountId !== accountId) continue;
     const path3 = parsed.path;
-    const lower = fold(path3);
+    const lower = fold2(path3);
     if (lower === wanted) exact.push({ id: Number(r.id), path: path3 });
     else if (lower.split("/").pop() === wanted) leaf.push({ id: Number(r.id), path: path3 });
   }
@@ -110089,6 +110089,48 @@ async function routeMessage(id, opts) {
   return opts.apple();
 }
 
+// src/tools/draftCleanup.ts
+var SEND_CLOCK_SLACK_MS = 6e4;
+var SENT_COPY_WAIT_MS = 5e4;
+var SENT_COPY_POLL_MS = 2e3;
+async function pollUntil(check2, timeoutMs = SENT_COPY_WAIT_MS, intervalMs = SENT_COPY_POLL_MS, sleep2 = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now) {
+  const deadline = now() + timeoutMs;
+  for (; ; ) {
+    if (check2()) return true;
+    if (now() + intervalMs > deadline) return false;
+    await sleep2(intervalMs);
+  }
+}
+var word = (alternatives) => new RegExp(`(?<!\\p{L})(?:${alternatives})(?!\\p{L})`, "u");
+var DRAFTS = word(
+  "drafts?|borradore?s?|esborranys?|entwurfe?|brouillons?|bozze|bozza|rascunhos?|concepten|concept|utkast|kladder|kladde|luonnokset|luonnos|szkice|szkic"
+);
+var SENT = word(
+  "sent|enviados?|enviadas?|enviats?|gesendet\\p{L}*|envoyes?|inviat[ie]|verzonden|skickat\\p{L}*|sendte?|lahetetyt|wyslane"
+);
+var fold = (name2) => name2.normalize("NFD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase();
+function isDraftMailbox(mailbox) {
+  return DRAFTS.test(fold(mailbox));
+}
+function isSentMailbox(mailbox) {
+  return SENT.test(fold(mailbox));
+}
+function isDraftForSend(draft, subject) {
+  return draft !== null && draft.subject === subject && isDraftMailbox(draft.mailbox);
+}
+function pickCurrentDraft(drafts, subject) {
+  const same2 = drafts.filter((d) => isDraftForSend(d, subject));
+  if (same2.length === 1) return { id: same2[0].id };
+  return same2.length === 0 ? { none: true } : { several: same2.length };
+}
+function hasSentCopy(hits, subject, sentAfter) {
+  return hits.some((m) => {
+    if (m.subject !== subject || !isSentMailbox(m.mailbox)) return false;
+    const when = m.dateSent ?? m.dateReceived;
+    return when.getTime() >= sentAfter.getTime() - SEND_CLOCK_SLACK_MS;
+  });
+}
+
 // src/index.ts
 init_attachmentLimits();
 
@@ -111591,6 +111633,48 @@ var SMTP_DELIVERY_SCHEMA = {
   accepted: external_exports.array(external_exports.string()).optional().describe("Recipients accepted by the SMTP server, not final inbox delivery."),
   rejected: external_exports.array(external_exports.string()).optional().describe("Recipients rejected by the SMTP server.")
 };
+async function checkDraftForSend(draftId, subject, account) {
+  const mismatch = `draftId "${draftId}" is not a draft with subject "${subject}"; nothing was sent.`;
+  const ref = decodeImapId(draftId);
+  if (ref) {
+    const read = await imapGetMessageHeaders(draftId);
+    if (!read.success) return { refusal: read.error ?? `Draft "${draftId}" could not be read.` };
+    const draftSubject = parseHeaderBlock(read.info ?? "").subject ?? "";
+    return isDraftForSend({ subject: draftSubject, mailbox: ref.path }, subject) ? { draftId } : { refusal: mismatch };
+  }
+  const found = mailManager.getMessageById(draftId);
+  if (found) return isDraftForSend(found, subject) ? { draftId } : { refusal: mismatch };
+  const stale = `draftId "${draftId}" no longer exists (Mail changes a draft's id when it re-saves it)`;
+  const current = pickCurrentDraft(mailManager.listMessages("Drafts", account, 50), subject);
+  if ("id" in current) return { draftId: current.id };
+  return {
+    refusal: "none" in current ? `${stale} and no draft with subject "${subject}" was found; nothing was sent. List Drafts again for the current id.` : `${stale} and ${current.several} drafts have subject "${subject}"; nothing was sent. List Drafts again and pass the current id.`
+  };
+}
+async function deleteDraftAfterSend(draftId) {
+  let r;
+  if (decodeImapId(draftId)) {
+    r = await imapDeleteMessageById(draftId);
+  } else {
+    r = mailManager.deleteMessage(draftId);
+    collectForensics("send-email", { draftId });
+  }
+  return r.success ? { deleted: true } : { deleted: false, error: r.error };
+}
+async function cleanUpDraft(draftId, hasSentCopy2) {
+  try {
+    if (!await hasSentCopy2()) {
+      return { draftDeleted: false, draftError: "No Sent copy found; the draft was kept." };
+    }
+    const d = await deleteDraftAfterSend(draftId);
+    return d.deleted ? { draftDeleted: true } : { draftDeleted: false, draftError: d.error };
+  } catch (error63) {
+    return {
+      draftDeleted: false,
+      draftError: `Draft clean-up failed after the send: ${error63 instanceof Error ? error63.message : String(error63)}`
+    };
+  }
+}
 var COMPOSITION_SCHEMA = external_exports.literal("native-editor").optional().describe(
   "Opt in to Mail's visible native editor: inserts only new prose, preserving its signature, HTML quotation and reply ancestry without the AppleScript content setter. Requires an unlocked desktop and existing Accessibility and Automation permissions. Uses Mail.app even when SMTP is configured; cannot be combined with transport=smtp or caller-built threading headers. New messages require an explicit account. Do not interact with Mail or the clipboard while it runs. Failure never falls back to another composition method or sends an unverified message."
 );
@@ -111617,6 +111701,9 @@ registerTool(
       ),
       transport: external_exports.enum(["applescript", "smtp"]).optional().describe(
         "Send transport. 'smtp' submits clean MIME directly via SMTP, avoiding the macOS 15+ Mail.app <blockquote> wrapping (issue #12); requires APPLE_MAIL_MCP_SMTP_* env config. 'applescript' sends through Mail.app. If omitted, configured SMTP is used unless account is a Mail.app account label (for example 'Work'), which selects AppleScript. Explicit SMTP uses the configured SMTP identity; it does not resolve Mail.app account labels. Without SMTP configuration, use AppleScript."
+      ),
+      draftId: external_exports.string().optional().describe(
+        "The draft this email was written in (its id from list-messages or search-messages in Drafts; an imap: id is preferred). Checked before sending: it must be a draft with the same subject, or nothing is sent. After a send that files a Sent copy, the draft is deleted; without that copy it is kept."
       )
     },
     outputSchema: {
@@ -111630,6 +111717,8 @@ registerTool(
       messageId: external_exports.string().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
+      draftDeleted: external_exports.boolean().optional(),
+      draftError: external_exports.string().optional().describe("Present only when draftId was given and the draft was kept or not deleted."),
       sentCopyAlreadyFiled: SENT_COPY_ALREADY_FILED_SCHEMA
     }
   },
@@ -111646,10 +111735,18 @@ registerTool(
       composition,
       replyTo,
       inReplyTo,
-      references
+      references,
+      draftId
     }) => {
       const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
       const attachmentCount = attachments?.length ?? 0;
+      let draftToClean;
+      if (draftId) {
+        const checked = await checkDraftForSend(draftId, subject, account);
+        if ("refusal" in checked) return errorResponse(checked.refusal);
+        draftToClean = checked.draftId;
+      }
+      const sentAfter = /* @__PURE__ */ new Date();
       if (composition && transport2 === "smtp") {
         return errorResponse(
           "Native-editor composition uses Mail.app and cannot be combined with SMTP."
@@ -111692,6 +111789,7 @@ registerTool(
           });
         }
         const copyNote = result.sentCopy === true ? result.sentCopyAlreadyFiled ? " (Sent-folder copy already filed by the server)" : " (Sent-folder copy filed)" : result.sentCopy === false ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})` : "";
+        const draft2 = draftToClean ? await cleanUpDraft(draftToClean, () => result.sentCopy === true) : {};
         const delivery = result.partial ? smtpDeliveryNotice(result) : `Email sent via SMTP to ${to.join(", ")}`;
         return successResponse(`${delivery}${attachInfo}${copyNote}`, {
           ok: !result.partial,
@@ -111703,13 +111801,33 @@ registerTool(
           ...result.messageId ? { messageId: result.messageId } : {},
           ...result.sentCopy !== void 0 ? { sentCopy: result.sentCopy } : {},
           ...result.sentCopyError !== void 0 ? { sentCopyError: result.sentCopyError } : {},
-          ...result.sentCopyAlreadyFiled ? { sentCopyAlreadyFiled: true } : {}
+          ...result.sentCopyAlreadyFiled ? { sentCopyAlreadyFiled: true } : {},
+          ...draft2
         });
       }
       const sent = composition ? mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments, true) : mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
       if (!sent.success) {
         return errorResponse(sent.error ?? "Failed to send email. Check Mail.app configuration.");
       }
+      const draft = draftToClean ? await cleanUpDraft(
+        draftToClean,
+        () => pollUntil(
+          () => hasSentCopy(
+            mailManager.searchMessages(
+              void 0,
+              void 0,
+              account,
+              50,
+              void 0,
+              void 0,
+              void 0,
+              subject
+            ),
+            subject,
+            sentAfter
+          )
+        )
+      ) : {};
       return successResponse(
         `Email sent to ${to.join(", ")}${attachInfo}${sent.from ? ` from ${sent.from}` : ""}`,
         {
@@ -111717,7 +111835,8 @@ registerTool(
           recipients: to,
           attachmentCount,
           transport: "applescript",
-          from: sent.from
+          from: sent.from,
+          ...draft
         }
       );
     },
