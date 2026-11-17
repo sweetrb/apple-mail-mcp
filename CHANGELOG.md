@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+## [2.20.61] - 2026-11-17
+
+### Added
+
+- **`send-email` takes a `draftId` and deletes that draft after the send.** The id of the draft the message was written in (from `list-messages` or `search-messages` on Drafts; an `imap:` id is preferred) is checked before anything is sent: it must name a draft with the same subject, or nothing is sent. After the send the draft is deleted only when a copy was filed in Sent: the SMTP path reports it directly, and the AppleScript path polls Sent for up to 50 s, bounded by the clock so a slow search cannot stretch the call past its deadline. The result carries `draftDeleted`, and `draftError` when the draft was kept or could not be deleted. A clean-up that fails never turns a send that already went out into an error, so the caller does not retry and send it twice. Mail gives a server-side draft a new numeric id each time it re-saves it: a numeric `draftId` that no longer exists stands in for the single draft with that subject in the account's Drafts, and is refused when there are none or several. Drafts and Sent mailboxes are recognised by their localized names (English, Spanish, Catalan, German, French, Italian, Portuguese, Dutch, Swedish, Norwegian, Danish, Finnish, Polish) and matched as whole words, so `Presentations` never reads as Sent.
+
+## [2.20.60] - 2026-11-17
+
+### Added
+
+- **Mail.app recovery and `restart-mail`.** Every AppleScript call goes through one synchronous `osascript`, so a Mail.app that has stopped answering Apple Events made every tool fail with `AppleEvent timed out (-1712)` until somebody restarted it by hand. Before an AppleScript call the server now opens Mail when it is closed (`open -g -a Mail`, then waits until it answers) and, when a cheap probe times out and a second probe confirms it, quits Mail, force-kills it if it will not quit, opens it again and waits. It never retries the failed call, so a send that timed out is never sent twice; a restart happens at most once per 10 minutes and only touches the current user's own Mail process; permission refusals (-1743) are left alone. A script that checks `application "Mail" is running` first still does not launch Mail, and the recovery is bounded by the call's own timeout. `APPLE_MAIL_MCP_AUTO_RECOVER=0` turns the automatic part off. The new `restart-mail` tool runs the same recovery on demand; an unsaved draft in Mail.app is lost. It is classified as a write, so it is allowed in `no_send` mode and not in `read_only`.
+
+## [2.20.59] - 2026-11-17
+
+### Added
+
+- **`get-account-settings` and `set-account-settings`.** Read the settings of one Mail account (full name, addresses, enabled, server and port, Trash and Junk behaviour, which IMAP folders are kept on the server, outgoing server; never the password) and change the ones that cannot lock the account out or redirect its mail: `enabled`, `fullName`, `includeWhenGettingNewMail`, `moveDeletedMessagesToTrash`, `emptyTrashOnQuit`, `emptyJunkOnQuit`, `emptySentOnQuit`, `storeDraftsOnServer`, `storeJunkOnServer`, `storeSentOnServer`, `storeDeletedOnServer` and `compactMailboxesWhenClosing`. Servers, ports, user names, passwords and addresses stay read-only. The account is given by name or address; an ambiguous one is refused, because Mail addresses an account only by name. The write returns the settings read back, and when Mail refuses part of a change it says which settings were applied and which were refused. Control characters are stripped from a written value. `set-account-settings` is classified destructive and is allowed in `no_send` mode but not in `read_only`.
+
+## [2.20.58] - 2026-11-17
+
+### Added
+
+- **Server-side tool gate (`APPLE_MAIL_MCP_MODE`).** A tool description that says "confirm with the user" is advice to the model, and a prompt injection carried in an email body can ignore it. `APPLE_MAIL_MCP_MODE` removes tools from the server, so they are neither listed nor callable: `full` (default) offers every tool, `no_send` drops `send-email`, `send-serial-email`, `reply-to-message`, `forward-message` and `enable-rule`, and `read_only` offers only an explicit allow-list of reads. An unknown value, or a `config.json` that names the mode but could not be applied or read, stops the server instead of falling back to `full`. `read_only` is an allow-list, and `src/utils/toolMode.test.ts` fails while any registered tool is unclassified. The `compose-reply` prompt is dropped when `reply-to-message` is not offered, and the `apple-mail-send` CLI refuses to send when the mode removes sending. Tools that send or delete also carry `destructiveHint`, and allow-listed reads carry `readOnlyHint`.
+
 ## [2.20.57] - 2026-11-11
 
 ### Added

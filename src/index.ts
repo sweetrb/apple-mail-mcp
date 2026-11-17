@@ -37,7 +37,7 @@ import {
   LOCAL_STORE_LABEL,
   noteAccountListFailure,
 } from "@/services/appleMailManager.js";
-import { writeFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { join as joinPath } from "path";
 import {
   sendViaSmtp,
@@ -122,6 +122,7 @@ import {
   runUpdateSavedDraft,
 } from "@/tools/savedDraft.js";
 import { createCallStop, searchDeadlineMs, stoppedByDeadline } from "@/utils/callStop.js";
+import { describeAccountSettings, splitAppliedSettings } from "@/utils/accountSettings.js";
 import { hybridBatchCounts, batchResponse } from "@/tools/batchResults.js";
 import { runBatchDelete, runBatchMove } from "@/tools/batchMutations.js";
 import {
@@ -134,6 +135,7 @@ import {
 } from "@/services/imapMultiAccount.js";
 import type { Account, SearchDiagnostics, SearchResult } from "@/types.js";
 import { routeMessage } from "@/services/messageRouter.js";
+import { hasSentCopy, isDraftForSend, pickCurrentDraft, pollUntil } from "@/tools/draftCleanup.js";
 import {
   FETCH_ATTACHMENT_TOO_LARGE,
   MAX_FETCH_ATTACHMENT_BASE64_CHARS,
@@ -159,9 +161,11 @@ import {
 } from "@/utils/bodyIndexSync.js";
 import { headersStructured, isoOrUndefined, parseHeaderBlock } from "@/utils/headers.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
-import { loadFileConfig } from "@/services/fileConfig.js";
+import { fileConfigPath, loadFileConfig } from "@/services/fileConfig.js";
 import { isOrphaned } from "@/utils/orphan.js";
 import { withJsonSchema2020_12 } from "@/utils/jsonSchemaDialect.js";
+import { isToolAllowed, resolveToolMode, withSafetyAnnotations } from "@/utils/toolMode.js";
+import { restartMail } from "@/utils/mailRecovery.js";
 import {
   writeDestructiveAudit,
   reconciliationWarnings,
@@ -568,12 +572,34 @@ function registerTool<
     const token = REFERENCES_SCHEMA.unwrap().element;
     z.globalRegistry.add(token, { ...token.meta(), description: IN_REPLY_TO_SCHEMA.description });
   }
-  return registerToolWithContracts(
+  const tool = registerToolWithContracts(
     server,
     name,
-    { ...config, annotations: annotationsFor(name, config.annotations) },
+    {
+      ...config,
+      annotations: withSafetyAnnotations(name, annotationsFor(name, config.annotations)),
+    },
     cb
   );
+  // A disabled tool is neither listed nor callable (see toolMode.ts).
+  if (!isToolAllowed(name, toolMode)) tool.disable();
+  return tool;
+}
+
+/** Parsed once, after loadFileConfig() has filled the environment. */
+const toolMode = (() => {
+  const config = readConfigText();
+  return resolveToolMode(process.env, config.text, config.unreadable);
+})();
+
+/** The config file's text; a missing file is no config, any other failure is reported. */
+function readConfigText(): { text?: string; unreadable?: string } {
+  try {
+    return { text: readFileSync(fileConfigPath(), "utf8") };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" ? {} : { unreadable: code ?? String(error) };
+  }
 }
 
 /**
@@ -584,7 +610,7 @@ const mailManager = new AppleMailManager();
 
 // MCP resources (accounts/templates/mailboxes) and prompts (triage/reply/
 // summary) — additive context + workflows alongside the tools (D2).
-registerResourcesAndPrompts(server, mailManager);
+registerResourcesAndPrompts(server, mailManager, (tool) => isToolAllowed(tool, toolMode));
 
 // Response helpers, the AppleScript serial gate, withErrorHandling, and the
 // message backend router now live in @/tools/respond and @/services/messageRouter.
@@ -1534,8 +1560,88 @@ const SMTP_DELIVERY_SCHEMA = {
   rejected: z.array(z.string()).optional().describe("Recipients rejected by the SMTP server."),
 };
 
-// --- send-email ---
+// --- send-email: draftId clean-up ---
 
+/**
+ * Before sending: `draftId` must name a draft whose subject is the one being
+ * sent. Returns the refusal text, or the id to clean up after the send. Refusing
+ * here keeps a wrong id from sending anything.
+ *
+ * A numeric id that no longer exists is not a wrong id: Mail gives a server-side
+ * draft a new id each time it re-saves it. The single draft with the subject in
+ * the account's Drafts then stands in for it; with none or several, it refuses.
+ */
+async function checkDraftForSend(
+  draftId: string,
+  subject: string,
+  account?: string
+): Promise<{ refusal: string } | { draftId: string }> {
+  const mismatch = `draftId "${draftId}" is not a draft with subject "${subject}"; nothing was sent.`;
+  const ref = decodeImapId(draftId);
+  if (ref) {
+    // Only the header block: the subject is all the check needs, not the whole draft.
+    const read = await imapGetMessageHeaders(draftId);
+    if (!read.success) return { refusal: read.error ?? `Draft "${draftId}" could not be read.` };
+    const draftSubject = parseHeaderBlock(read.info ?? "").subject ?? "";
+    return isDraftForSend({ subject: draftSubject, mailbox: ref.path }, subject)
+      ? { draftId }
+      : { refusal: mismatch };
+  }
+  const found = mailManager.getMessageById(draftId);
+  if (found) return isDraftForSend(found, subject) ? { draftId } : { refusal: mismatch };
+
+  const stale = `draftId "${draftId}" no longer exists (Mail changes a draft's id when it re-saves it)`;
+  const current = pickCurrentDraft(mailManager.listMessages("Drafts", account, 50), subject);
+  if ("id" in current) return { draftId: current.id };
+  return {
+    refusal:
+      "none" in current
+        ? `${stale} and no draft with subject "${subject}" was found; nothing was sent. List Drafts again for the current id.`
+        : `${stale} and ${current.several} drafts have subject "${subject}"; nothing was sent. List Drafts again and pass the current id.`,
+  };
+}
+
+/** Deletes the draft: IMAP moves it to Trash, AppleScript deletes it by its bound id. */
+async function deleteDraftAfterSend(
+  draftId: string
+): Promise<{ deleted: boolean; error?: string }> {
+  let r: { success: boolean; error?: string };
+  if (decodeImapId(draftId)) {
+    r = await imapDeleteMessageById(draftId);
+  } else {
+    r = mailManager.deleteMessage(draftId);
+    // Read at once (collectForensics' rule), so this delete reaches the audit
+    // record the delete-message tool writes; the warnings have no place in a send's answer.
+    collectForensics("send-email", { draftId });
+  }
+  return r.success ? { deleted: true } : { deleted: false, error: r.error };
+}
+
+/**
+ * Deletes the draft only when a Sent copy was filed. Without that copy the email
+ * may not have gone out, so the draft stays.
+ */
+async function cleanUpDraft(
+  draftId: string,
+  hasSentCopy: () => boolean | Promise<boolean>
+): Promise<{ draftDeleted: boolean; draftError?: string }> {
+  // The email has already left: nothing here may turn the send into an error, or
+  // the caller retries and the recipient gets it twice.
+  try {
+    if (!(await hasSentCopy())) {
+      return { draftDeleted: false, draftError: "No Sent copy found; the draft was kept." };
+    }
+    const d = await deleteDraftAfterSend(draftId);
+    return d.deleted ? { draftDeleted: true } : { draftDeleted: false, draftError: d.error };
+  } catch (error) {
+    return {
+      draftDeleted: false,
+      draftError: `Draft clean-up failed after the send: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+// --- send-email ---
 const COMPOSITION_SCHEMA = z
   .literal("native-editor")
   .optional()
@@ -1596,6 +1702,15 @@ registerTool(
             "Explicit SMTP uses the configured SMTP identity; it does not resolve " +
             "Mail.app account labels. Without SMTP configuration, use AppleScript."
         ),
+      draftId: z
+        .string()
+        .optional()
+        .describe(
+          "The draft this email was written in (its id from list-messages or " +
+            "search-messages in Drafts; an imap: id is preferred). Checked before sending: " +
+            "it must be a draft with the same subject, or nothing is sent. After a send " +
+            "that files a Sent copy, the draft is deleted; without that copy it is kept."
+        ),
     },
     outputSchema: {
       ok: z.boolean().optional(),
@@ -1608,6 +1723,11 @@ registerTool(
       messageId: z.string().optional(),
       sentCopy: SENT_COPY_SCHEMA,
       sentCopyError: SENT_COPY_ERROR_SCHEMA,
+      draftDeleted: z.boolean().optional(),
+      draftError: z
+        .string()
+        .optional()
+        .describe("Present only when draftId was given and the draft was kept or not deleted."),
       sentCopyAlreadyFiled: SENT_COPY_ALREADY_FILED_SCHEMA,
     },
   },
@@ -1625,10 +1745,20 @@ registerTool(
       replyTo,
       inReplyTo,
       references,
+      draftId,
     }) => {
       const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
 
       const attachmentCount = attachments?.length ?? 0;
+
+      // The id to clean up after the send: the caller's, or the current one when theirs went stale.
+      let draftToClean: string | undefined;
+      if (draftId) {
+        const checked = await checkDraftForSend(draftId, subject, account);
+        if ("refusal" in checked) return errorResponse(checked.refusal);
+        draftToClean = checked.draftId;
+      }
+      const sentAfter = new Date();
 
       // Prefer SMTP when explicitly requested, or automatically when it is
       // configured and no transport was specified — except when a non-email
@@ -1689,6 +1819,9 @@ registerTool(
             : result.sentCopy === false
               ? ` (Sent-folder copy NOT filed: ${result.sentCopyError ?? "unknown error"})`
               : "";
+        const draft = draftToClean
+          ? await cleanUpDraft(draftToClean, () => result.sentCopy === true)
+          : {};
         const delivery = result.partial
           ? smtpDeliveryNotice(result)
           : `Email sent via SMTP to ${to.join(", ")}`;
@@ -1703,6 +1836,7 @@ registerTool(
           ...(result.sentCopy !== undefined ? { sentCopy: result.sentCopy } : {}),
           ...(result.sentCopyError !== undefined ? { sentCopyError: result.sentCopyError } : {}),
           ...(result.sentCopyAlreadyFiled ? { sentCopyAlreadyFiled: true } : {}),
+          ...draft,
         });
       }
 
@@ -1714,6 +1848,26 @@ registerTool(
         return errorResponse(sent.error ?? "Failed to send email. Check Mail.app configuration.");
       }
 
+      const draft = draftToClean
+        ? await cleanUpDraft(draftToClean, () =>
+            pollUntil(() =>
+              hasSentCopy(
+                mailManager.searchMessages(
+                  undefined,
+                  undefined,
+                  account,
+                  50,
+                  undefined,
+                  undefined,
+                  undefined,
+                  subject
+                ),
+                subject,
+                sentAfter
+              )
+            )
+          )
+        : {};
       return successResponse(
         `Email sent to ${to.join(", ")}${attachInfo}${sent.from ? ` from ${sent.from}` : ""}`,
         {
@@ -1722,6 +1876,7 @@ registerTool(
           attachmentCount,
           transport: "applescript",
           from: sent.from,
+          ...draft,
         }
       );
     },
@@ -3272,6 +3427,77 @@ registerTool(
   }, "Error listing accounts")
 );
 
+// --- get-account-settings ---
+
+registerTool(
+  "get-account-settings",
+  {
+    description:
+      "Use when: you need the settings of one Mail account — full name, email addresses, enabled, server and port, whether deleted mail goes to the Trash, when the Trash/Junk/Sent are emptied, which IMAP folders are kept on the server, and its outgoing (SMTP) server.\nReturns: the account name and a settings object. The password is never read or returned.\nDo not use when: you only need the account names (use list-accounts).",
+    inputSchema: {
+      account: z.string().min(1).describe("Account name or its email address (see list-accounts)"),
+    },
+    outputSchema: {
+      account: z.string().optional(),
+      settings: z.record(z.string(), z.unknown()).optional(),
+    },
+  },
+  withErrorHandling(({ account }) => {
+    const result = mailManager.getAccountSettings(account);
+    return successResponse(
+      `Settings of "${result.account}":\n${describeAccountSettings(result.settings)}`,
+      result
+    );
+  }, "Error reading account settings")
+);
+
+// --- set-account-settings ---
+
+registerTool(
+  "set-account-settings",
+  {
+    description:
+      "Use when: the user asked to change a setting of a Mail account: turn it on or off (enabled), its full name, include it when getting new mail, move deleted messages to the Trash, empty Trash/Junk/Sent on quit, or the IMAP flags (store drafts, junk, sent, deleted on the server; compact mailboxes when closing).\nReturns: the settings read back, and any setting Mail refused.\nDo not use when: the change involves a password, server, port, user name or the account's email addresses — those cannot be changed with this tool.\nSafety: turning an account off stops its mail arriving and sending; confirm with the user first.",
+    inputSchema: {
+      account: z.string().min(1).describe("Account name or its email address (see list-accounts)"),
+      enabled: z.boolean().optional(),
+      fullName: z.string().min(1).optional(),
+      includeWhenGettingNewMail: z.boolean().optional(),
+      moveDeletedMessagesToTrash: z.boolean().optional(),
+      emptyTrashOnQuit: z.boolean().optional(),
+      emptyJunkOnQuit: z.boolean().optional(),
+      emptySentOnQuit: z.boolean().optional(),
+      storeDraftsOnServer: z.boolean().optional(),
+      storeJunkOnServer: z.boolean().optional(),
+      storeSentOnServer: z.boolean().optional(),
+      storeDeletedOnServer: z.boolean().optional(),
+      compactMailboxesWhenClosing: z.boolean().optional(),
+    },
+    outputSchema: {
+      account: z.string().optional(),
+      refused: z.array(z.string()).optional(),
+      settings: z.record(z.string(), z.unknown()).optional(),
+    },
+  },
+  withErrorHandling(({ account, ...changes }) => {
+    const result = mailManager.setAccountSettings(account, changes);
+    if (result.refused.length > 0) {
+      // The rest of the change stands: say which settings, and show what Mail
+      // reads back, so the caller does not have to guess or re-read.
+      const { applied } = splitAppliedSettings(changes, result.refused);
+      return errorResponse(
+        `Mail refused part of the change on "${result.account}": ${result.refused.join("; ")}. ` +
+          (applied.length > 0
+            ? `Applied: ${applied.join(", ")}.`
+            : "None of the requested settings was applied.") +
+          `\nSettings now:\n${describeAccountSettings(result.settings)}`,
+        { ...result, applied }
+      );
+    }
+    return successResponse(`Settings of "${result.account}" updated.`, result);
+  }, "Error changing account settings")
+);
+
 // =============================================================================
 // Mail Rules Tools
 // =============================================================================
@@ -3689,6 +3915,26 @@ registerTool(
 
     return successResponse(`${statusIcon} ${statusText}\n\n${checkLines}`, { ...result });
   }, "Error running health check")
+);
+
+// --- restart-mail ---
+
+registerTool(
+  "restart-mail",
+  {
+    description:
+      'Use when: Mail.app is closed or stopped answering (every call fails with `AppleEvent timed out (-1712)` or "not running") and health-check confirms it. Quits Mail.app, force-kills it if it will not quit, opens it again and waits until it answers.\nReturns: ok plus the steps taken.\nDo not use when: the failure is a permission refusal (-1743: grant Automation access instead) or you only want to check status (use health-check). An unsaved draft in Mail.app is lost.',
+    inputSchema: {},
+    outputSchema: {
+      ok: z.boolean().optional(),
+      steps: z.array(z.string()).optional(),
+    },
+  },
+  withErrorHandling(() => {
+    const report = restartMail();
+    const text = `${report.ok ? "✓" : "✗"} ${report.steps.join("; ")}`;
+    return report.ok ? successResponse(text, { ...report }) : errorResponse(text, { ...report });
+  }, "Error restarting Mail.app")
 );
 
 // --- doctor ---

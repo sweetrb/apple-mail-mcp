@@ -32,6 +32,7 @@ import {
 } from "@/services/smtpMailer.js";
 import type { AttachmentInput } from "@/types.js";
 import { SETUP_GUIDE_URL } from "@/utils/docsUrls.js";
+import { TOOL_MODE_ENV, isToolAllowed, parseToolMode } from "@/utils/toolMode.js";
 
 /** sysexits.h codes used so callers can distinguish failure modes. */
 export const EX_USAGE = 64;
@@ -132,6 +133,18 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   if (values.help) {
     out(USAGE);
     return 0;
+  }
+
+  // The CLI is a sending tool, so it honours the same gate as send-email: a mode that
+  // removes sending from the server removes it here too.
+  try {
+    if (!isToolAllowed("send-email", parseToolMode(env[TOOL_MODE_ENV]))) {
+      err(`${TOOL_MODE_ENV} does not allow sending email; nothing was sent.`);
+      return EX_CONFIG;
+    }
+  } catch (e) {
+    err(e instanceof Error ? e.message : String(e));
+    return EX_CONFIG;
   }
 
   const missing: string[] = [];
