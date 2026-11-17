@@ -8,6 +8,7 @@
  * @module utils/mimeParse
  */
 
+import { decodeText, decodeWindows1252 } from "@/utils/textDecode.js";
 import { sameAttachmentName } from "@/utils/attachmentName.js";
 
 export interface MimeAttachmentInfo {
@@ -53,7 +54,7 @@ function getHeader(headers: string, name: string): string | null {
 /** Decodes bytes in `charset`, UTF-8 when the label is unknown. */
 function decodeBytes(bytes: Buffer, charset: string): string {
   try {
-    return new TextDecoder(charset.trim().toLowerCase()).decode(bytes);
+    return decodeText(bytes, charset.trim().toLowerCase());
   } catch {
     return bytes.toString("utf8");
   }
@@ -294,7 +295,7 @@ function extractCharset(headers: string): string | null {
 function decodePartText(bytes: Buffer, charset: string | null): string {
   if (charset && !["utf-8", "utf8", "us-ascii", "ascii"].includes(charset)) {
     try {
-      return new TextDecoder(charset).decode(bytes);
+      return decodeText(bytes, charset);
     } catch {
       // Unknown label: fall through to the UTF-8 / windows-1252 heuristic.
     }
@@ -302,7 +303,7 @@ function decodePartText(bytes: Buffer, charset: string | null): string {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    return new TextDecoder("windows-1252").decode(bytes);
+    return decodeWindows1252(bytes);
   }
 }
 

@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.58] - 2026-11-17
+
+### Fixed
+
+- **Windows-1252 text decoded to C1 control characters on some Node releases.** Node 22.22.0 decodes `windows-1252` as plain ISO-8859-1, so bytes 0x80–0x9F (`€`, `…`, `‘’`, `“”`, `–`, `—`, `™`) came back as invisible control characters. WHATWG maps the `latin1`, `iso-8859-1` and `us-ascii` labels to windows-1252 too, so every 8-bit fallback in the header and MIME decoders was affected. A new `src/utils/textDecode.ts` decodes that one encoding by table (`decodeWindows1252`, `decodeText`), so the result no longer depends on the Node build. Other encodings still go through `TextDecoder`, and an unknown label still throws `RangeError`.
+
 ## [2.20.57] - 2026-11-11
 
 ### Added

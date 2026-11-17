@@ -58885,6 +58885,66 @@ var init_messageLocation = __esm({
   }
 });
 
+// src/utils/textDecode.ts
+function decodeWindows1252(bytes) {
+  let out = "";
+  const CHUNK = 8192;
+  for (let start = 0; start < bytes.length; start += CHUNK) {
+    const end = Math.min(start + CHUNK, bytes.length);
+    const codes = new Array(end - start);
+    for (let i = start; i < end; i++) {
+      const b = bytes[i];
+      codes[i - start] = b >= 128 && b <= 159 ? CP1252_HIGH[b - 128] : b;
+    }
+    out += String.fromCharCode(...codes);
+  }
+  return out;
+}
+function decodeText(bytes, label) {
+  const decoder = new TextDecoder(label);
+  return decoder.encoding === "windows-1252" ? decodeWindows1252(bytes) : decoder.decode(bytes);
+}
+var CP1252_HIGH;
+var init_textDecode = __esm({
+  "src/utils/textDecode.ts"() {
+    "use strict";
+    CP1252_HIGH = [
+      8364,
+      129,
+      8218,
+      402,
+      8222,
+      8230,
+      8224,
+      8225,
+      710,
+      8240,
+      352,
+      8249,
+      338,
+      141,
+      381,
+      143,
+      144,
+      8216,
+      8217,
+      8220,
+      8221,
+      8226,
+      8211,
+      8212,
+      732,
+      8482,
+      353,
+      8250,
+      339,
+      157,
+      382,
+      376
+    ];
+  }
+});
+
 // src/utils/mimeParse.ts
 function extractBoundary(source) {
   const match = source.match(/boundary="?([^";\s\r\n]+)"?/i);
@@ -58898,7 +58958,7 @@ function getHeader(headers2, name2) {
 }
 function decodeBytes(bytes, charset) {
   try {
-    return new TextDecoder(charset.trim().toLowerCase()).decode(bytes);
+    return decodeText(bytes, charset.trim().toLowerCase());
   } catch {
     return bytes.toString("utf8");
   }
@@ -59066,14 +59126,14 @@ function extractCharset(headers2) {
 function decodePartText(bytes, charset) {
   if (charset && !["utf-8", "utf8", "us-ascii", "ascii"].includes(charset)) {
     try {
-      return new TextDecoder(charset).decode(bytes);
+      return decodeText(bytes, charset);
     } catch {
     }
   }
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    return new TextDecoder("windows-1252").decode(bytes);
+    return decodeWindows1252(bytes);
   }
 }
 function base64DecodedSize(base64Body) {
@@ -59248,6 +59308,7 @@ var MAX_MIME_DEPTH;
 var init_mimeParse = __esm({
   "src/utils/mimeParse.ts"() {
     "use strict";
+    init_textDecode();
     init_attachmentName();
     MAX_MIME_DEPTH = 20;
   }
@@ -59268,7 +59329,7 @@ function decodeEncodedWords2(value) {
           ),
           "latin1"
         );
-        return new TextDecoder(normalizeCharset(charset)).decode(bytes);
+        return decodeText(bytes, normalizeCharset(charset));
       } catch {
         return whole;
       }
@@ -59384,7 +59445,6 @@ function headerBlockBytes(source, whole) {
 }
 function decodeHeaderBytes(bytes) {
   const utf8 = new TextDecoder("utf-8", { fatal: true });
-  const cp1252 = new TextDecoder("windows-1252");
   const lines = [];
   let start = 0;
   for (let i = 0; i <= bytes.length; i++) {
@@ -59393,7 +59453,7 @@ function decodeHeaderBytes(bytes) {
     try {
       lines.push(utf8.decode(line));
     } catch {
-      lines.push(cp1252.decode(line));
+      lines.push(decodeWindows1252(line));
     }
     start = i + 1;
   }
@@ -59408,6 +59468,7 @@ var LOCALE_MONTHS, FUSABLE_HEADER_NAMES, MAX_SENT_AFTER_RECEIVED_MS;
 var init_headers = __esm({
   "src/utils/headers.ts"() {
     "use strict";
+    init_textDecode();
     LOCALE_MONTHS = {
       // Spanish
       ene: "Jan",
