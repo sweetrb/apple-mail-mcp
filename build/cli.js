@@ -62597,6 +62597,62 @@ init_docsUrls();
 import { readFileSync as readFileSync2, realpathSync as realpathSync2 } from "fs";
 import { fileURLToPath } from "url";
 import { parseArgs } from "util";
+
+// src/utils/toolMode.ts
+var TOOL_MODE_ENV = "APPLE_MAIL_MCP_MODE";
+var TOOL_MODES = ["full", "no_send", "read_only"];
+var SENDING_TOOLS = /* @__PURE__ */ new Set([
+  "send-email",
+  "send-serial-email",
+  "reply-to-message",
+  "forward-message",
+  // A disabled rule can forward, redirect or auto-reply once enabled.
+  "enable-rule"
+]);
+var READ_ONLY_TOOLS = /* @__PURE__ */ new Set([
+  "search-messages",
+  "get-message",
+  "get-message-headers",
+  "get-thread",
+  "list-messages",
+  "resolve-message-id",
+  "list-attachments",
+  "fetch-attachment",
+  "list-mailboxes",
+  "get-unread-count",
+  "list-smart-mailboxes",
+  "list-accounts",
+  "list-rules",
+  "search-contacts",
+  "list-templates",
+  "get-template",
+  "health-check",
+  "doctor",
+  "get-mail-stats",
+  "get-sync-status"
+]);
+var DESTRUCTIVE_TOOLS = /* @__PURE__ */ new Set([
+  ...SENDING_TOOLS,
+  "delete-message",
+  "batch-delete-messages",
+  "delete-mailbox",
+  "delete-smart-mailbox",
+  "create-rule",
+  "delete-rule",
+  "delete-template"
+]);
+function parseToolMode(raw) {
+  const value = (raw ?? "").trim().toLowerCase() || "full";
+  if (TOOL_MODES.includes(value)) return value;
+  throw new Error(`${TOOL_MODE_ENV} must be one of ${TOOL_MODES.join(", ")}; got "${raw}".`);
+}
+function isToolAllowed(name2, mode) {
+  if (mode === "full") return true;
+  if (mode === "read_only") return READ_ONLY_TOOLS.has(name2);
+  return !SENDING_TOOLS.has(name2);
+}
+
+// src/cli.ts
 var EX_USAGE = 64;
 var EX_NOINPUT = 66;
 var EX_CONFIG = 78;
@@ -62661,6 +62717,15 @@ async function runCli(argv, deps = {}) {
   if (values.help) {
     out(USAGE);
     return 0;
+  }
+  try {
+    if (!isToolAllowed("send-email", parseToolMode(env[TOOL_MODE_ENV]))) {
+      err(`${TOOL_MODE_ENV} does not allow sending email; nothing was sent.`);
+      return EX_CONFIG;
+    }
+  } catch (e) {
+    err(e instanceof Error ? e.message : String(e));
+    return EX_CONFIG;
   }
   const missing = [];
   if (!values.from) missing.push("--from");
