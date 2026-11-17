@@ -62320,6 +62320,50 @@ function buildRawMime(mail) {
   message.keepBcc = mail.keepBcc === true;
   return message.build();
 }
+function parseSmtpIdentities(env) {
+  const raw = env[SMTP_ENV.identities]?.trim();
+  if (!raw) return [];
+  const invalid = (reason) => new Error(`${SMTP_ENV.identities} is invalid: ${reason}. ${SETUP_HINT}`);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw invalid("not valid JSON");
+  }
+  if (!Array.isArray(parsed)) throw invalid("expected a JSON array");
+  const seen = /* @__PURE__ */ new Set();
+  return parsed.map((entry) => {
+    const from = entry?.from;
+    if (typeof from !== "string" || !from.trim()) throw invalid('every entry needs a "from"');
+    const fields = entry;
+    if (fields.password !== void 0) {
+      throw invalid(
+        `"password" of ${from.trim()} is not allowed; store it in the Keychain (keychainService / keychainAccount)`
+      );
+    }
+    const key = from.trim().toLowerCase();
+    if (seen.has(key)) throw invalid(`"${from.trim()}" is listed more than once`);
+    seen.add(key);
+    for (const key2 of ["user", "host", "keychainService", "keychainAccount"]) {
+      if (fields[key2] !== void 0 && typeof fields[key2] !== "string") {
+        throw invalid(`"${key2}" of ${from.trim()} must be a string`);
+      }
+    }
+    if (fields.secure !== void 0 && typeof fields.secure !== "boolean") {
+      throw invalid(`"secure" of ${from.trim()} must be true or false`);
+    }
+    if (fields.port !== void 0 && !(Number.isInteger(fields.port) && fields.port > 0)) {
+      throw invalid(`"port" of ${from.trim()} must be a positive integer`);
+    }
+    return { ...entry, from: from.trim() };
+  });
+}
+function findSmtpIdentity(env, requestedFrom, primaryFrom) {
+  const wanted = requestedFrom?.trim().toLowerCase();
+  const identities = parseSmtpIdentities(env);
+  if (!wanted || wanted === primaryFrom.toLowerCase()) return void 0;
+  return identities.find((identity) => identity.from.toLowerCase() === wanted);
+}
 function readKeychainPassword(service, account) {
   for (const kind of ["find-internet-password", "find-generic-password"]) {
     try {
@@ -62334,7 +62378,7 @@ function readKeychainPassword(service, account) {
   }
   return null;
 }
-function resolveSmtpConfig(env = process.env) {
+function resolveSmtpConfig(env = process.env, requestedFrom) {
   const host = env[SMTP_ENV.host]?.trim();
   const user = env[SMTP_ENV.user]?.trim();
   const missing = [];
@@ -62351,6 +62395,32 @@ function resolveSmtpConfig(env = process.env) {
     throw new Error(`Invalid ${SMTP_ENV.port}: "${env[SMTP_ENV.port]}" is not a valid port.`);
   }
   const from = env[SMTP_ENV.from]?.trim() || user;
+  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
+  const identity = findSmtpIdentity(env, requestedFrom, from);
+  if (identity) {
+    const identityHost = identity.host?.trim() || host;
+    const identityUser = identity.user?.trim() || identity.from;
+    const identitySecure = identity.secure ?? secure;
+    const pass2 = readKeychainPassword(
+      identity.keychainService?.trim() || identityHost,
+      identity.keychainAccount?.trim() || identityUser
+    );
+    if (!pass2) {
+      throw new Error(
+        `No SMTP password found for identity "${identityUser}". Store an internet password in the Keychain for service "${identity.keychainService?.trim() || identityHost}" / account "${identity.keychainAccount?.trim() || identityUser}". ` + SETUP_HINT
+      );
+    }
+    return {
+      host: identityHost,
+      port: identity.port ?? (identity.secure === void 0 ? port : identitySecure ? 465 : 587),
+      secure: identitySecure,
+      allowPlaintext,
+      user: identityUser,
+      pass: pass2,
+      from: identity.from,
+      allowedFrom: []
+    };
+  }
   const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   let pass = env[SMTP_ENV.password];
   if (!pass) {
@@ -62363,7 +62433,6 @@ function resolveSmtpConfig(env = process.env) {
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
   }
-  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
   return {
     host,
     port,
@@ -62424,7 +62493,7 @@ async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.c
   let cfg;
   let from;
   try {
-    cfg = config ?? resolveSmtpConfig();
+    cfg = config ?? resolveSmtpConfig(process.env, opts.from);
     from = resolveSmtpFrom(opts.from, cfg);
   } catch (error2) {
     return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
@@ -62516,7 +62585,8 @@ var init_smtpMailer = __esm({
       allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
       password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
       keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
-      keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
+      keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT",
+      identities: "APPLE_MAIL_MCP_SMTP_IDENTITIES"
     };
   }
 });
@@ -62604,7 +62674,7 @@ async function runCli(argv, deps = {}) {
   }
   let config;
   try {
-    config = resolveConfig(env);
+    config = resolveConfig(env, values.from);
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
     err(`Setup guide: ${SETUP_GUIDE_URL}`);

@@ -32,6 +32,26 @@ describe("runDoctor (C3)", () => {
     expect(smtp?.detail).not.toContain("no Mail.app Sent-folder copy");
   });
 
+  it("names the additional SMTP sender identities, or flags an invalid list", async () => {
+    vi.stubEnv("APPLE_MAIL_MCP_IMAP_USER", "");
+    vi.stubEnv("APPLE_MAIL_MCP_IMAP_ACCOUNTS", "");
+    vi.stubEnv("APPLE_MAIL_MCP_SMTP_HOST", "smtp.example.test");
+    vi.stubEnv("APPLE_MAIL_MCP_SMTP_USER", "sender@example.test");
+    vi.stubEnv(
+      "APPLE_MAIL_MCP_SMTP_IDENTITIES",
+      JSON.stringify([{ from: "a@example.test" }, { from: "b@example.test" }])
+    );
+    const ok = await runDoctor(fakeManager());
+    expect(ok.checks.find((c) => c.name === "SMTP transport")?.detail).toContain(
+      "2 additional sender identities"
+    );
+    vi.stubEnv("APPLE_MAIL_MCP_SMTP_IDENTITIES", "not json");
+    const bad = await runDoctor(fakeManager());
+    const smtp = bad.checks.find((c) => c.name === "SMTP transport");
+    expect(smtp?.status).toBe("warn");
+    expect(smtp?.detail).toContain("APPLE_MAIL_MCP_SMTP_IDENTITIES is invalid");
+  });
+
   it("reports accounts, names disabled ones, and stays healthy when only warnings", async () => {
     vi.stubEnv("APPLE_MAIL_MCP_IMAP_USER", "");
     vi.stubEnv("APPLE_MAIL_MCP_IMAP_ACCOUNTS", "");
