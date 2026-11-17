@@ -276,7 +276,6 @@ interface SmtpIdentity {
   host?: string;
   port?: number;
   secure?: boolean;
-  password?: string;
   keychainService?: string;
   keychainAccount?: string;
 }
@@ -297,11 +296,23 @@ export function parseSmtpIdentities(env: NodeJS.ProcessEnv): SmtpIdentity[] {
     throw invalid("not valid JSON");
   }
   if (!Array.isArray(parsed)) throw invalid("expected a JSON array");
+  const seen = new Set<string>();
   return parsed.map((entry) => {
     const from = (entry as { from?: unknown } | null)?.from;
     if (typeof from !== "string" || !from.trim()) throw invalid('every entry needs a "from"');
     const fields = entry as Record<string, unknown>;
-    for (const key of ["user", "host", "password", "keychainService", "keychainAccount"]) {
+    // Passwords live in the Keychain only. This value is typically stored in
+    // config.json, which must never hold a secret.
+    if (fields.password !== undefined) {
+      throw invalid(
+        `"password" of ${from.trim()} is not allowed; store it in the Keychain ` +
+          `(keychainService / keychainAccount)`
+      );
+    }
+    const key = from.trim().toLowerCase();
+    if (seen.has(key)) throw invalid(`"${from.trim()}" is listed more than once`);
+    seen.add(key);
+    for (const key of ["user", "host", "keychainService", "keychainAccount"]) {
       if (fields[key] !== undefined && typeof fields[key] !== "string") {
         throw invalid(`"${key}" of ${from.trim()} must be a string`);
       }
@@ -438,12 +449,10 @@ export function resolveSmtpConfig(
     const identityHost = identity.host?.trim() || (host as string);
     const identityUser = identity.user?.trim() || identity.from;
     const identitySecure = identity.secure ?? secure;
-    const pass =
-      identity.password ||
-      readKeychainPassword(
-        identity.keychainService?.trim() || identityHost,
-        identity.keychainAccount?.trim() || identityUser
-      );
+    const pass = readKeychainPassword(
+      identity.keychainService?.trim() || identityHost,
+      identity.keychainAccount?.trim() || identityUser
+    );
     if (!pass) {
       throw new Error(
         `No SMTP password found for identity "${identityUser}". Store an internet password ` +

@@ -264,7 +264,7 @@ alias of the primary login — that is what `ALLOWED_FROM` is for), list it in
 
 ```json
 {
-  "APPLE_MAIL_MCP_SMTP_IDENTITIES": "[{\"from\":\"james@elcine.com\",\"user\":\"james@elcine.com\",\"keychainService\":\"smtp.example.com\",\"keychainAccount\":\"james@elcine.com\"}]"
+  "APPLE_MAIL_MCP_SMTP_IDENTITIES": "[{\"from\":\"james@example.org\",\"user\":\"james@example.org\",\"keychainService\":\"smtp.example.com\",\"keychainAccount\":\"james@example.org\"}]"
 }
 ```
 

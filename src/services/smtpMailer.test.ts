@@ -7,6 +7,22 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+
+// Identity passwords come from the Keychain only; stand in for the `security`
+// CLI so no test touches the real login Keychain.
+const keychain = vi.hoisted(() => new Map<string, string>());
+vi.mock("child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("child_process")>();
+  return {
+    ...actual,
+    execFileSync: vi.fn((cmd: string, args: string[]) => {
+      if (cmd !== "security") return actual.execFileSync(cmd, args);
+      const pass = keychain.get(`${args[2]}|${args[4]}`);
+      if (pass === undefined) throw new Error("The specified item could not be found.");
+      return `${pass}\n`;
+    }),
+  };
+});
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import {
   resolveSmtpConfig,
@@ -111,21 +127,21 @@ describe("resolveSmtpConfig identities", () => {
     ...baseEnv,
     [SMTP_ENV.identities]: typeof value === "string" ? value : JSON.stringify(value),
   });
-  const identitiesEnv = withIdentities([
-    { from: "james@elcine.com", user: "james@elcine.com", password: "pw2" },
-  ]);
+  const identitiesEnv = withIdentities([{ from: "james@example.org", user: "james@example.org" }]);
+  keychain.set("smtp.example.com|james@example.org", "pw2");
+  keychain.set("smtp.other.test|j@example.org", "pw2");
 
   it("uses the matching identity's login and inherits host and port", () => {
-    const cfg = resolveSmtpConfig(identitiesEnv, "james@elcine.com");
-    expect(cfg.user).toBe("james@elcine.com");
-    expect(cfg.from).toBe("james@elcine.com");
+    const cfg = resolveSmtpConfig(identitiesEnv, "james@example.org");
+    expect(cfg.user).toBe("james@example.org");
+    expect(cfg.from).toBe("james@example.org");
     expect(cfg.pass).toBe("pw2");
     expect(cfg.host).toBe("smtp.example.com");
     expect(cfg.port).toBe(587);
   });
 
   it("matches the From case-insensitively", () => {
-    expect(resolveSmtpConfig(identitiesEnv, "James@Elcine.com").user).toBe("james@elcine.com");
+    expect(resolveSmtpConfig(identitiesEnv, "James@Example.org").user).toBe("james@example.org");
   });
 
   it("returns the primary config when no From or another From is requested", () => {
@@ -140,15 +156,14 @@ describe("resolveSmtpConfig identities", () => {
     const cfg = resolveSmtpConfig(
       withIdentities([
         {
-          from: "j@elcine.com",
-          user: "j@elcine.com",
-          password: "pw2",
+          from: "j@example.org",
+          user: "j@example.org",
           host: "smtp.other.test",
           port: 465,
           secure: true,
         },
       ]),
-      "j@elcine.com"
+      "j@example.org"
     );
     expect(cfg.host).toBe("smtp.other.test");
     expect(cfg.port).toBe(465);
@@ -157,7 +172,7 @@ describe("resolveSmtpConfig identities", () => {
 
   it("rejects malformed identities naming the variable", () => {
     for (const bad of ["not json", "{}", JSON.stringify([{ user: "x" }])]) {
-      expect(() => resolveSmtpConfig(withIdentities(bad), "james@elcine.com")).toThrow(
+      expect(() => resolveSmtpConfig(withIdentities(bad), "james@example.org")).toThrow(
         /APPLE_MAIL_MCP_SMTP_IDENTITIES/
       );
     }
@@ -168,9 +183,11 @@ describe("resolveSmtpConfig identities", () => {
     { from: "a@example.test", user: 5 },
     { from: "a@example.test", port: "465" },
     { from: "a@example.test", port: 0 },
-    { from: "a@example.test", password: 1234 },
-  ])("rejects an identity with a wrongly typed field %j, naming the variable", (identity) => {
-    expect(() => resolveSmtpConfig(withIdentities([identity]), "a@example.test")).toThrow(
+    { from: "a@example.test", password: "plaintext" },
+    [{ from: "a@example.test" }, { from: "A@example.test" }],
+  ])("rejects an invalid identity list %j, naming the variable", (identity) => {
+    const list = Array.isArray(identity) ? identity : [identity];
+    expect(() => resolveSmtpConfig(withIdentities(list), "a@example.test")).toThrow(
       /APPLE_MAIL_MCP_SMTP_IDENTITIES/
     );
   });
@@ -178,19 +195,19 @@ describe("resolveSmtpConfig identities", () => {
   it("never falls back to the primary password for an identity", () => {
     const env = withIdentities([
       {
-        from: "james@elcine.com",
-        user: "james@elcine.com",
+        from: "james@example.org",
+        user: "james@example.org",
         keychainService: "smtp.nonexistent.invalid",
       },
     ]);
-    expect(() => resolveSmtpConfig(env, "james@elcine.com")).toThrow(
-      /no smtp password.*james@elcine\.com/i
+    expect(() => resolveSmtpConfig(env, "james@example.org")).toThrow(
+      /no smtp password.*james@example\.org/i
     );
   });
 
   it("accepts the identity From through resolveSmtpFrom", () => {
-    const cfg = resolveSmtpConfig(identitiesEnv, "james@elcine.com");
-    expect(resolveSmtpFrom("james@elcine.com", cfg)).toBe("james@elcine.com");
+    const cfg = resolveSmtpConfig(identitiesEnv, "james@example.org");
+    expect(resolveSmtpFrom("james@example.org", cfg)).toBe("james@example.org");
   });
 });
 
