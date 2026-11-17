@@ -18,7 +18,10 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
     async connect() {}
   },
 }));
-vi.mock("@/services/fileConfig.js", () => ({ loadFileConfig: vi.fn() }));
+vi.mock("@/services/fileConfig.js", () => ({
+  loadFileConfig: vi.fn(),
+  fileConfigPath: () => "/nonexistent/apple-mail-mcp-test-config.json",
+}));
 vi.mock("@/tools/resourcesAndPrompts.js", () => ({ registerResourcesAndPrompts: vi.fn() }));
 vi.mock("@/services/appleMailManager.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/appleMailManager.js")>()),

@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.60] - 2026-11-17
+
+### Added
+
+- **Server-side tool gate (`APPLE_MAIL_MCP_MODE`).** A tool description that says "confirm with the user" is advice to the model, and a prompt injection carried in an email body can ignore it. `APPLE_MAIL_MCP_MODE` removes tools from the server, so they are neither listed nor callable: `full` (default) offers every tool, `no_send` drops `send-email`, `send-serial-email`, `reply-to-message`, `forward-message` and `enable-rule`, and `read_only` offers only an explicit allow-list of reads. An unknown value, or a `config.json` that names the mode but could not be applied or read, stops the server instead of falling back to `full`. `read_only` is an allow-list, and `src/utils/toolMode.test.ts` fails while any registered tool is unclassified. The `compose-reply` prompt is dropped when `reply-to-message` is not offered, and the `apple-mail-send` CLI refuses to send when the mode removes sending. Tools that send or delete also carry `destructiveHint`, and allow-listed reads carry `readOnlyHint`. The CLI reads the mode from its environment only, and a mode set in the client's MCP `env` wins over `config.json`. Contributed by @JaumeAP (#379).
+
 ## [2.20.59] - 2026-11-17
 
 ### Added
@@ -19,7 +25,9 @@
 - **`update-saved-draft` (#372):** preview and partially edit stored IMAP drafts, including subject, To/Cc/Bcc, existing plain/HTML bodies and explicit attachment additions/removals. Unchanged headers, native formatting, signatures, threading and encoded attachments are retained. The current UIDVALIDITY, UID and MIME SHA-256 pin the source revision. The tool never sends mail or uses SMTP/AppleScript. A replacement is APPENDed and verified before targeted UID EXPUNGE removes the old revision; UIDPLUS is required, uncertain APPENDs preserve the source, and cleanup failures return both IDs and the saved replacement preview without retrying. Includes stale-revision, non-draft, ambiguous-account/mailbox and failure-path tests. Verified live against a Gmail Drafts mailbox (preview, apply, UID replacement, stale-revision refusal); that run found Gmail's `RFC822.SIZE` differs from the fetched bytes by a few bytes, so the size cross-check now tolerates drift (1 KiB + 2%) instead of requiring equality.
 
 ## [2.20.56] - 2026-11-11
+
 ### Changed
+
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
 
 ## [2.20.55] - 2026-11-04
@@ -32,7 +40,7 @@
 
 ### Security
 
-- **`save-attachment` could create files anywhere under the home folder.** The protected-path rules (hidden segments, credential roots, `~/Library` outside iCloud Drive and CloudStorage) were applied only to outbound attachment *reads*; the save side checked nothing but "under `$HOME`, `/tmp` or `/Volumes`" plus no-overwrite. An instruction smuggled into an email could therefore lead the model to write a new `~/Library/LaunchAgents/*.plist`, a `~/.zshenv`, or this server's own `~/Library/Application Support/apple-mail-mcp/config.json` (whose keys, including the SMTP settings, are merged into the environment). Every save target (`save-attachment` on both backends and `get-message-rfc822`'s `savePath`) is now checked against those rules on both the typed and the resolved path, and saves are limited to `~/Downloads`, `~/Desktop`, `~/Documents`, iCloud Drive, `~/Library/CloudStorage` and the temporary directories. Reported privately by Alejandro San Martin Lamas — thank you.
+- **`save-attachment` could create files anywhere under the home folder.** The protected-path rules (hidden segments, credential roots, `~/Library` outside iCloud Drive and CloudStorage) were applied only to outbound attachment _reads_; the save side checked nothing but "under `$HOME`, `/tmp` or `/Volumes`" plus no-overwrite. An instruction smuggled into an email could therefore lead the model to write a new `~/Library/LaunchAgents/*.plist`, a `~/.zshenv`, or this server's own `~/Library/Application Support/apple-mail-mcp/config.json` (whose keys, including the SMTP settings, are merged into the environment). Every save target (`save-attachment` on both backends and `get-message-rfc822`'s `savePath`) is now checked against those rules on both the typed and the resolved path, and saves are limited to `~/Downloads`, `~/Desktop`, `~/Documents`, iCloud Drive, `~/Library/CloudStorage` and the temporary directories. Reported privately by Alejandro San Martin Lamas — thank you.
 - **Every tool now declares MCP annotations.** Only one tool carried a hint before, so clients could not auto-approve reads while still asking before a send. Reads are `readOnlyHint: true`; deletes, overwrites (`save-template`) and rule creation/enabling are `destructiveHint: true`; `send-email`, `send-serial-email`, `reply-to-message` and `forward-message` are destructive and `openWorldHint: true`. A new tool cannot register without a classification (`src/tools/toolAnnotations.ts`).
 
 ### Changed
@@ -40,7 +48,9 @@
 - **Saving to other folders now needs `APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS`.** The home folder as a whole and `/Volumes` are no longer default save roots. To keep saving somewhere else (an external disk, a project folder), set `APPLE_MAIL_MCP_ATTACHMENT_SAVE_ROOTS` to a colon-separated list of absolute paths, in the environment or `config.json`. Hidden and credential locations stay refused even inside a configured root, and a root containing the whole home folder does not lift the `~/Library` rule.
 
 ## [2.20.53] - 2026-11-04
+
 ### Changed
+
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)
 
 ## [2.20.52] - 2026-11-02

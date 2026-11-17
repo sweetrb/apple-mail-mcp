@@ -18,9 +18,14 @@ function jsonResource(uri: string, data: unknown) {
   };
 }
 
+/**
+ * `toolAllowed` is the server's tool gate (APPLE_MAIL_MCP_MODE): a prompt that tells
+ * the model to call a tool the mode has removed is removed with it.
+ */
 export function registerResourcesAndPrompts(
   server: McpServer,
-  mailManager: AppleMailManager
+  mailManager: AppleMailManager,
+  toolAllowed: (tool: string) => boolean = () => true
 ): void {
   // --- Resources ---
 
@@ -94,7 +99,7 @@ export function registerResourcesAndPrompts(
     })
   );
 
-  server.registerPrompt(
+  const composeReply = server.registerPrompt(
     "compose-reply",
     {
       title: "Compose reply",
@@ -120,6 +125,7 @@ export function registerResourcesAndPrompts(
       ],
     })
   );
+  if (!toolAllowed("reply-to-message")) composeReply.disable();
 
   server.registerPrompt(
     "weekly-summary",
