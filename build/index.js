@@ -66202,6 +66202,41 @@ function buildRawMime(mail) {
   message.keepBcc = mail.keepBcc === true;
   return message.build();
 }
+function parseSmtpIdentities(env) {
+  const raw = env[SMTP_ENV.identities]?.trim();
+  if (!raw) return [];
+  const invalid = (reason) => new Error(`${SMTP_ENV.identities} is invalid: ${reason}. ${SETUP_HINT}`);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw invalid("not valid JSON");
+  }
+  if (!Array.isArray(parsed)) throw invalid("expected a JSON array");
+  return parsed.map((entry) => {
+    const from = entry?.from;
+    if (typeof from !== "string" || !from.trim()) throw invalid('every entry needs a "from"');
+    const fields = entry;
+    for (const key of ["user", "host", "password", "keychainService", "keychainAccount"]) {
+      if (fields[key] !== void 0 && typeof fields[key] !== "string") {
+        throw invalid(`"${key}" of ${from.trim()} must be a string`);
+      }
+    }
+    if (fields.secure !== void 0 && typeof fields.secure !== "boolean") {
+      throw invalid(`"secure" of ${from.trim()} must be true or false`);
+    }
+    if (fields.port !== void 0 && !(Number.isInteger(fields.port) && fields.port > 0)) {
+      throw invalid(`"port" of ${from.trim()} must be a positive integer`);
+    }
+    return { ...entry, from: from.trim() };
+  });
+}
+function findSmtpIdentity(env, requestedFrom, primaryFrom) {
+  const wanted = requestedFrom?.trim().toLowerCase();
+  const identities = parseSmtpIdentities(env);
+  if (!wanted || wanted === primaryFrom.toLowerCase()) return void 0;
+  return identities.find((identity) => identity.from.toLowerCase() === wanted);
+}
 function isSmtpConfigured(env = process.env) {
   return Boolean(env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim());
 }
@@ -66226,7 +66261,7 @@ function readKeychainPassword(service, account) {
   }
   return null;
 }
-function resolveSmtpConfig(env = process.env) {
+function resolveSmtpConfig(env = process.env, requestedFrom) {
   const host = env[SMTP_ENV.host]?.trim();
   const user = env[SMTP_ENV.user]?.trim();
   const missing = [];
@@ -66243,6 +66278,32 @@ function resolveSmtpConfig(env = process.env) {
     throw new Error(`Invalid ${SMTP_ENV.port}: "${env[SMTP_ENV.port]}" is not a valid port.`);
   }
   const from = env[SMTP_ENV.from]?.trim() || user;
+  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
+  const identity = findSmtpIdentity(env, requestedFrom, from);
+  if (identity) {
+    const identityHost = identity.host?.trim() || host;
+    const identityUser = identity.user?.trim() || identity.from;
+    const identitySecure = identity.secure ?? secure;
+    const pass2 = identity.password || readKeychainPassword(
+      identity.keychainService?.trim() || identityHost,
+      identity.keychainAccount?.trim() || identityUser
+    );
+    if (!pass2) {
+      throw new Error(
+        `No SMTP password found for identity "${identityUser}". Store an internet password in the Keychain for service "${identity.keychainService?.trim() || identityHost}" / account "${identity.keychainAccount?.trim() || identityUser}". ` + SETUP_HINT
+      );
+    }
+    return {
+      host: identityHost,
+      port: identity.port ?? (identity.secure === void 0 ? port : identitySecure ? 465 : 587),
+      secure: identitySecure,
+      allowPlaintext,
+      user: identityUser,
+      pass: pass2,
+      from: identity.from,
+      allowedFrom: []
+    };
+  }
   const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   let pass = env[SMTP_ENV.password];
   if (!pass) {
@@ -66255,7 +66316,6 @@ function resolveSmtpConfig(env = process.env) {
       `No SMTP password found. Set ${SMTP_ENV.password}, or store an internet password in the Keychain for service "${env[SMTP_ENV.keychainService]?.trim() || host}" / account "${env[SMTP_ENV.keychainAccount]?.trim() || user}". ` + SETUP_HINT
     );
   }
-  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
   return {
     host,
     port,
@@ -66323,7 +66383,7 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
   let cfg;
   let from;
   try {
-    cfg = config2 ?? resolveSmtpConfig();
+    cfg = config2 ?? resolveSmtpConfig(process.env, opts.from);
     from = resolveSmtpFrom(opts.from, cfg);
   } catch (error63) {
     return { success: false, error: error63 instanceof Error ? error63.message : String(error63) };
@@ -66459,7 +66519,8 @@ var init_smtpMailer = __esm({
       allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
       password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
       keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
-      keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
+      keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT",
+      identities: "APPLE_MAIL_MCP_SMTP_IDENTITIES"
     };
   }
 });
@@ -109150,7 +109211,7 @@ function createSerialEmailHandler(deps) {
             "A Mail.app account label cannot select an SMTP identity. Use a configured sender email address, omit account to use the configured SMTP sender, or explicitly select transport=applescript."
           );
         }
-        const config2 = deps.smtpConfig();
+        const config2 = deps.smtpConfig(account);
         const from = account ? resolveSmtpFrom(account, config2) : void 0;
         results = await deps.smtpSend(recipients2, subject, body, config2, {
           delayMs,
@@ -109764,10 +109825,19 @@ async function runDoctor(mailManager2) {
     }
   }
   const smtpHost = process.env[SMTP_ENV.host]?.trim();
+  let identityNote = "";
+  let identitiesInvalid = false;
+  try {
+    const count = parseSmtpIdentities(process.env).length;
+    if (count > 0) identityNote = ` ${count} additional sender identities configured.`;
+  } catch (error63) {
+    identitiesInvalid = true;
+    identityNote = ` ${error63 instanceof Error ? error63.message : String(error63)}`;
+  }
   checks.push({
     name: "SMTP transport",
-    status: isSmtpConfigured() ? "ok" : "warn",
-    detail: isSmtpConfigured() ? `configuration present (${smtpHost}); SMTP authentication and delivery have not been checked. send-email auto-prefers SMTP unless a non-email "account" label selects AppleScript. SMTP sends attempt a best-effort Sent-folder copy through matching-account IMAP; check the send result for whether it was filed. Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.` : `not configured \u2014 send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} and ${SMTP_ENV.user} (+ password via Keychain) to enable. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE_URL}`
+    status: isSmtpConfigured() && !identitiesInvalid ? "ok" : "warn",
+    detail: isSmtpConfigured() ? `configuration present (${smtpHost});${identityNote} SMTP authentication and delivery have not been checked. send-email auto-prefers SMTP unless a non-email "account" label selects AppleScript. SMTP sends attempt a best-effort Sent-folder copy through matching-account IMAP; check the send result for whether it was filed. Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.` : `not configured \u2014 send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} and ${SMTP_ENV.user} (+ password via Keychain) to enable. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE_URL}`
   });
   const body = bodyIndexCheck(bodyIndexStatus());
   if (body) checks.push(body);
@@ -111288,7 +111358,7 @@ registerTool(
   },
   createSerialEmailHandler({
     smtpConfigured: isSmtpConfigured,
-    smtpConfig: resolveSmtpConfig,
+    smtpConfig: (from) => resolveSmtpConfig(process.env, from),
     smtpSend: sendSerialViaSmtp,
     appleScriptSend: (...args) => mailManager.sendSerialEmail(...args)
   })

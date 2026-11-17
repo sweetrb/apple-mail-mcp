@@ -150,7 +150,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   // "needs setup" signal as a missing host/user — rather than a generic failure.
   let config;
   try {
-    config = resolveConfig(env);
+    config = resolveConfig(env, values.from);
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
     err(`Setup guide: ${SETUP_GUIDE_URL}`);

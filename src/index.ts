@@ -1805,7 +1805,7 @@ registerTool(
   },
   createSerialEmailHandler({
     smtpConfigured: isSmtpConfigured,
-    smtpConfig: resolveSmtpConfig,
+    smtpConfig: (from) => resolveSmtpConfig(process.env, from),
     smtpSend: sendSerialViaSmtp,
     appleScriptSend: (...args) => mailManager.sendSerialEmail(...args),
   })

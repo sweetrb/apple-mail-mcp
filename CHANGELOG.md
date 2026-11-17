@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.58] - 2026-11-17
+
+### Added
+
+- **SMTP sender identities (`APPLE_MAIL_MCP_SMTP_IDENTITIES`).** A JSON array of extra senders, each with its own SMTP login. A requested From that matches an identity's `from` is sent with that identity's user and Keychain password; `host`, `port` and `secure` default to the primary values, and an identity never falls back to the primary password. Any other From behaves as before. Applies to `send-email`, `send-serial-email` and the `apple-mail-send` CLI; `reply-to-message` and `forward-message` stay on the primary login. Identity fields are validated, and `doctor` reports how many identities are configured and flags an invalid list. See `docs/IMAP-SETUP.md`.
+
 ## [2.20.57] - 2026-11-11
 
 ### Added

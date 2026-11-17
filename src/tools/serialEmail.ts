@@ -13,7 +13,7 @@ import { errorResponse, successResponse, withErrorHandling } from "@/tools/respo
 
 export interface SerialEmailDeps {
   smtpConfigured: () => boolean;
-  smtpConfig: () => SmtpConfig;
+  smtpConfig: (from?: string) => SmtpConfig;
   smtpSend: typeof sendSerialViaSmtp;
   appleScriptSend: AppleMailManager["sendSerialEmail"];
 }
@@ -43,7 +43,7 @@ export function createSerialEmailHandler(deps: SerialEmailDeps) {
               "or explicitly select transport=applescript."
           );
         }
-        const config = deps.smtpConfig();
+        const config = deps.smtpConfig(account);
         // Validate the whole batch's sender before invoking either send backend.
         // Keep the original config: changing config.from would widen its allowlist.
         const from = account ? resolveSmtpFrom(account, config) : undefined;

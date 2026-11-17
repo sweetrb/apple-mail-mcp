@@ -255,6 +255,34 @@ the macOS 15+ blockquote wrapping. SMTP is single-account (the default sender):
 (Reusing the IMAP Keychain item is fine when the provider accepts the same app
 password for SMTP, as Gmail does.)
 
+### Multiple SMTP identities
+
+When a second sender logs in to the SMTP server with its own credentials (not as an
+alias of the primary login — that is what `ALLOWED_FROM` is for), list it in
+`APPLE_MAIL_MCP_SMTP_IDENTITIES`, a JSON array passed as a single string, like
+`APPLE_MAIL_MCP_IMAP_ACCOUNTS`:
+
+```json
+{
+  "APPLE_MAIL_MCP_SMTP_IDENTITIES": "[{\"from\":\"james@elcine.com\",\"user\":\"james@elcine.com\",\"keychainService\":\"smtp.example.com\",\"keychainAccount\":\"james@elcine.com\"}]"
+}
+```
+
+A call whose `from` (or `account` given as an email address) equals an identity's
+`from` is sent with that identity's login and Keychain password. `host`, `port`
+and `secure` default to the primary values; `user` defaults to `from`;
+`keychainService` to the host and `keychainAccount` to the user. An identity never
+falls back to the primary password. `doctor` reports how many identities are
+configured and flags an invalid list.
+
+Where identities apply: `send-email`, `send-serial-email` (its `account`) and the
+`apple-mail-send` CLI (`--from`). `reply-to-message` and `forward-message` stay on
+the primary login; reply from an identity with `send-email` and `inReplyTo`, or
+with `transport: "applescript"`. If `secure` is set on an identity without a
+`port`, the port defaults to 465 (or 587 when `secure` is false), not to the
+primary port. A malformed `APPLE_MAIL_MCP_SMTP_IDENTITIES` makes every SMTP send
+fail with an error naming the variable, so a typo is never ignored silently.
+
 ---
 
 ## Step 5 (optional) — New-mail push (IMAP IDLE)
@@ -387,6 +415,7 @@ GUI is ignoring.
 | `APPLE_MAIL_MCP_SMTP_USER` / `_FROM`                         | SMTP login / From address.                                                                                                                                                                                                                                                                                                                             |
 | `APPLE_MAIL_MCP_SMTP_PASSWORD`                               | Password (discouraged; prefer Keychain).                                                                                                                                                                                                                                                                                                               |
 | `APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE` / `_KEYCHAIN_ACCOUNT` | SMTP Keychain reference.                                                                                                                                                                                                                                                                                                                               |
+| `APPLE_MAIL_MCP_SMTP_IDENTITIES`                             | JSON array of extra SMTP senders with their own login (`from`, `user`, `host`, `port`, `secure`, `keychainService`, `keychainAccount`).                                                                                                                                                                                                                |
 | `APPLE_MAIL_MCP_CONFIG_FILE`                                 | Path to the config JSON (default app-support dir).                                                                                                                                                                                                                                                                                                     |
 | `APPLE_MAIL_MCP_TEMPLATES_FILE`                              | Email-templates store path (default `~/Library/Application Support/apple-mail-mcp/templates.json`).                                                                                                                                                                                                                                                    |
 | `APPLE_MAIL_MCP_STALLED_MAILBOXES_FILE`                      | Where the numeric-id scan remembers mailboxes whose size count timed out, so they are skipped for 7 days across restarts (default `~/Library/Application Support/apple-mail-mcp/stalled-mailboxes.json`; delete it to forget them).                                                                                                                    |
