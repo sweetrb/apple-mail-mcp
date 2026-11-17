@@ -56,6 +56,7 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, ToolAnnotations>> = {
   doctor: READ,
   "get-mail-stats": READ,
   "get-sync-status": READ,
+  "get-account-settings": READ,
 
   // Writes that add, or that can be undone
   "get-message-rfc822": WRITE, // optional savePath creates a file
@@ -77,9 +78,11 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, ToolAnnotations>> = {
   "create-smart-mailbox": WRITE,
   "create-newsletter-smart-mailboxes": WRITE,
   "disable-rule": IDEMPOTENT_WRITE,
+  "restart-mail": WRITE, // quits and relaunches Mail.app; no data is changed
 
   // Destructive or irreversible
   "update-saved-draft": DESTRUCTIVE, // overwrites a stored draft by APPEND + targeted removal
+  "set-account-settings": DESTRUCTIVE, // changes server-side retention (trash, junk, sent) of an account
   "delete-message": DESTRUCTIVE,
   "batch-delete-messages": DESTRUCTIVE,
   "delete-mailbox": DESTRUCTIVE,

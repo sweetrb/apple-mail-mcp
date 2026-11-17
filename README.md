@@ -1666,6 +1666,22 @@ List all configured Mail accounts.
 
 **Returns:** List of account names and email addresses.
 
+#### `get-account-settings`
+
+Read the settings of one account: full name, email addresses, enabled, server and port, whether deleted mail goes to the Trash, when Trash/Junk/Sent are emptied, which IMAP folders are kept on the server, and the outgoing (SMTP) server.
+
+**Parameters:** `account` (name or email address)
+
+**Returns:** `{ account, settings }`. The password is never read or returned.
+
+#### `set-account-settings`
+
+Change settings of one account that cannot lock it out or redirect its mail.
+
+**Parameters:** `account`, and at least one of `enabled`, `fullName`, `includeWhenGettingNewMail`, `moveDeletedMessagesToTrash`, `emptyTrashOnQuit`, `emptyJunkOnQuit`, `emptySentOnQuit`, `storeDraftsOnServer`, `storeJunkOnServer`, `storeSentOnServer`, `storeDeletedOnServer`, `compactMailboxesWhenClosing`.
+
+**Returns:** the settings read back, or the settings Mail refused. Servers, ports, user names, passwords and the account's email addresses are read-only here. Allowed in `no_send` mode, not in `read_only`.
+
 ---
 
 ### Rules
@@ -1821,6 +1837,16 @@ Verify Mail.app connectivity and permissions.
 **Parameters:** None
 
 **Returns:** Status of all health checks (app running, permissions, account access).
+
+---
+
+#### `restart-mail`
+
+Quit Mail.app (force-kill it if it will not quit), open it again and wait until it answers Apple Events. The server does this by itself before an AppleScript call when Mail is closed or stops answering (at most once per 10 minutes; `APPLE_MAIL_MCP_AUTO_RECOVER=0` turns the automatic part off); this tool runs it on demand. An unsaved draft in Mail.app is lost.
+
+**Parameters:** None
+
+**Returns:** `ok` and the list of steps taken.
 
 ---
 
@@ -2247,6 +2273,27 @@ AI: [calls create-draft with to=["team@..."], subject="...", body="..."]
 User: "Send it"
 AI: [User opens Mail.app and sends manually, or AI calls send-email]
 ```
+
+#### Server-side tool gate (`APPLE_MAIL_MCP_MODE`)
+
+"Confirm before sending" in a tool description is advice to the model, and a
+prompt injection inside an email body can ignore it. `APPLE_MAIL_MCP_MODE`
+removes tools from the server instead, so they are neither listed nor callable:
+
+| Value            | Tools offered                                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `full` (default) | All of them                                                                                                        |
+| `no_send`        | All except `send-email`, `send-serial-email`, `reply-to-message`, `forward-message` and `enable-rule`              |
+| `read_only`      | Only an explicit allow-list of reads (`src/utils/toolMode.ts`); `get-message-rfc822` is out, its `savePath` writes |
+
+An unknown value stops the server rather than falling back to `full`, and so
+does a `config.json` that names `APPLE_MAIL_MCP_MODE` but could not be applied
+(invalid JSON, a nested `env` block, a non-string value). `read_only` is an
+allow-list: a tool added later stays out until it is classified, and a test
+fails while any registered tool is unclassified. Tools that send or delete carry
+`destructiveHint` and allow-listed reads carry `readOnlyHint`. The `compose-reply`
+prompt is dropped when `reply-to-message` is not offered, and the `apple-mail-send`
+CLI refuses to send when the mode removes sending.
 
 ### Sending Personalized Emails (Mail Merge)
 

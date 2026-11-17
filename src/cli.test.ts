@@ -166,6 +166,24 @@ describe("runCli", () => {
     expect(out.join("\n")).toMatch(/sent to you@example.com/);
   });
 
+  it("sends nothing when APPLE_MAIL_MCP_MODE removes sending", async () => {
+    for (const mode of ["read_only", "no_send"]) {
+      const { deps, send, err } = makeDeps({ env: { APPLE_MAIL_MCP_MODE: mode } });
+      expect(await runCli(REQUIRED, deps)).toBe(EX_CONFIG);
+      expect(send).not.toHaveBeenCalled();
+      expect(err.join("\n")).toMatch(/does not allow sending/);
+    }
+    const { deps, send } = makeDeps({ env: { APPLE_MAIL_MCP_MODE: "full" } });
+    expect(await runCli(REQUIRED, deps)).toBe(0);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an unknown mode instead of sending", async () => {
+    const { deps, send } = makeDeps({ env: { APPLE_MAIL_MCP_MODE: "readonly" } });
+    expect(await runCli(REQUIRED, deps)).toBe(EX_CONFIG);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("reads an HTML alternative body and multiple recipients/attachments", async () => {
     const { deps, send } = makeDeps();
     const code = await runCli(

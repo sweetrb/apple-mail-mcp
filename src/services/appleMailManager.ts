@@ -36,6 +36,7 @@ import { resolve, join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
+import { MAIL_RUNNING_GUARD } from "@/utils/mailRecovery.js";
 import { flagColorName, isGmailHost } from "@/services/imapClient.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 
@@ -50,6 +51,14 @@ import {
   STALLED_MAILBOX_TTL_MS,
 } from "@/services/stalledMailboxStore.js";
 import { materializeAttachments } from "@/utils/attachmentMaterialize.js";
+import {
+  buildAccountSettingsReadScript,
+  buildAccountSettingsWriteScript,
+  parseAccountSettings,
+  validateAccountSettingsChanges,
+  type AccountSettings,
+  type AccountSettingsChanges,
+} from "@/utils/accountSettings.js";
 import {
   FETCH_ATTACHMENT_TOO_LARGE,
   MAX_FETCH_ATTACHMENT_BYTES,
@@ -1580,7 +1589,7 @@ function buildAppLevelScriptIfRunning(command: string): string {
 /** Wrap a whole `tell application "Mail"` script in the not-launching running check. */
 function guardMailRunning(script: string): string {
   return `
-    if application "Mail" is running then
+    ${MAIL_RUNNING_GUARD}
       ${script}
     else
       return "${MAIL_NOT_RUNNING_MARKER}"
@@ -3165,6 +3174,82 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     // No accounts at all — return something rather than throw; downstream
     // AppleScript will surface a clear "account not found".
     return accounts[0]?.name ?? "iCloud";
+  }
+
+  /**
+   * Mail's own name for an account given by its name or its email address.
+   *
+   * Refuses an ambiguous account: Mail's AppleScript addresses an account only by
+   * name (`account "Name"`) and takes the first one with that name, so a name
+   * shared by two accounts, or an input that matches two, could change the wrong one.
+   */
+  private resolveAccountName(account: string): string {
+    const wanted = account.trim().toLowerCase();
+    const accounts = this.getCachedAccounts();
+    const matches = accounts.filter(
+      (a) => a.name.toLowerCase() === wanted || a.email.toLowerCase() === wanted
+    );
+    if (matches.length === 0) {
+      throw new Error(
+        `Account "${account}" does not match any Mail account. Use list-accounts for the names.`
+      );
+    }
+    const name = matches[0].name.toLowerCase();
+    const candidates = [
+      ...matches,
+      ...accounts.filter((a) => a.name.toLowerCase() === name && !matches.includes(a)),
+    ];
+    if (candidates.length > 1) {
+      const list = candidates.map((a) => `${a.name} <${a.email}>`).join(", ");
+      throw new Error(
+        `Account "${account}" is ambiguous (${list}). Mail can address an account only by name, ` +
+          "so rename one of them in Mail first."
+      );
+    }
+    return matches[0].name;
+  }
+
+  /**
+   * The settings of one account: identity, fetch and trash behaviour, the
+   * IMAP storage flags and its outgoing server. Never the password.
+   */
+  getAccountSettings(account: string): { account: string; settings: AccountSettings } {
+    const name = this.resolveAccountName(account);
+    const result = executeAppleScript(buildAppLevelScript(buildAccountSettingsReadScript(name)), {
+      timeoutMs: 30000,
+    });
+    if (!result.success) {
+      throw new Error(`Could not read the settings of "${name}": ${result.error}`);
+    }
+    return { account: name, settings: parseAccountSettings(result.output) };
+  }
+
+  /**
+   * Changes the settings of one account that cannot lock it out or redirect its
+   * mail (see utils/accountSettings). Returns the settings read back, and what
+   * Mail refused. One attempt: nothing here is retried.
+   */
+  setAccountSettings(
+    account: string,
+    changes: AccountSettingsChanges
+  ): { account: string; refused: string[]; settings: AccountSettings } {
+    validateAccountSettingsChanges(changes);
+    const name = this.resolveAccountName(account);
+    const result = executeAppleScript(
+      buildAppLevelScript(buildAccountSettingsWriteScript(name, changes)),
+      { timeoutMs: 30000, maxRetries: 1 }
+    );
+    // Even a failed or partial write may have changed `enabled`: the account list
+    // and the default account chosen from it must be read again, not served for up
+    // to CACHE_TTL_MS, or a send would go by the old state.
+    this.invalidateCache();
+    this.defaultAccount = null;
+    if (!result.success) {
+      throw new Error(`Could not change the settings of "${name}": ${result.error}`);
+    }
+    const out = result.output.trim();
+    const refused = out === "ok" ? [] : out.split("\x1e").filter(Boolean);
+    return { account: name, refused, settings: this.getAccountSettings(name).settings };
   }
 
   /**

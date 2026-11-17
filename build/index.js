@@ -69563,12 +69563,12 @@ async function imapFetchAttachment(id, attachmentName, deps = {}, mode = "save")
         }
         const probePart = match.part === "1" && !msg.bodyStructure.childNodes ? "text" : match.part;
         const probeStart = Math.max(0, encoded - 1);
-        const probe = await client.fetchOne(
+        const probe2 = await client.fetchOne(
           String(ref.uid),
           { bodyParts: [{ key: probePart, start: probeStart, maxLength: encoded > 0 ? 2 : 1 }] },
           { uid: true }
         );
-        const tail = probe && probe.bodyParts?.get(probePart.toLowerCase());
+        const tail = probe2 && probe2.bodyParts?.get(probePart.toLowerCase());
         if (!tail || tail.length !== (encoded > 0 ? 1 : 0)) {
           return {
             success: false,
@@ -99664,6 +99664,7 @@ var TOOL_ANNOTATIONS = {
   doctor: READ,
   "get-mail-stats": READ,
   "get-sync-status": READ,
+  "get-account-settings": READ,
   // Writes that add, or that can be undone
   "get-message-rfc822": WRITE,
   // optional savePath creates a file
@@ -99687,9 +99688,13 @@ var TOOL_ANNOTATIONS = {
   "create-smart-mailbox": WRITE,
   "create-newsletter-smart-mailboxes": WRITE,
   "disable-rule": IDEMPOTENT_WRITE,
+  "restart-mail": WRITE,
+  // quits and relaunches Mail.app; no data is changed
   // Destructive or irreversible
   "update-saved-draft": DESTRUCTIVE,
   // overwrites a stored draft by APPEND + targeted removal
+  "set-account-settings": DESTRUCTIVE,
+  // changes server-side retention (trash, junk, sent) of an account
   "delete-message": DESTRUCTIVE,
   "batch-delete-messages": DESTRUCTIVE,
   "delete-mailbox": DESTRUCTIVE,
@@ -99720,7 +99725,7 @@ function annotationsFor(name2, own2) {
 }
 
 // src/services/appleMailManager.ts
-import { spawnSync as spawnSync4 } from "child_process";
+import { spawnSync as spawnSync5 } from "child_process";
 import {
   constants as fsConstants,
   chmodSync as chmodSync2,
@@ -99744,7 +99749,173 @@ import { homedir as homedir7 } from "os";
 import { randomUUID as randomUUID3 } from "crypto";
 
 // src/utils/applescript.ts
-import { execSync, spawnSync } from "child_process";
+import { execSync, spawnSync as spawnSync2 } from "child_process";
+
+// src/utils/mailRecovery.ts
+import { spawnSync } from "child_process";
+var AUTO_RECOVER_ENV = "APPLE_MAIL_MCP_AUTO_RECOVER";
+var MAIL_RUNNING_GUARD = 'if application "Mail" is running then';
+var PROBE_TIMEOUT_MS = 12e3;
+var HEALTHY_TTL_MS = 3e4;
+var RESTART_COOLDOWN_MS = 10 * 6e4;
+var READY_WAIT_MS = 45e3;
+var STOP_WAIT_MS = 6e3;
+var POLL_MS = 1500;
+var OPEN_RETRY_MS = 2e3;
+var CONFIRM_WAIT_MS = 5e3;
+var PERMISSION_DENIED = /\(-1743\)|not author(?:i[sz])ed|not permitted/i;
+var healthyUntil = 0;
+var skipUntil = 0;
+var lastRestartAt = 0;
+var busy = false;
+function autoRecoverEnabled() {
+  const flag = (process.env[AUTO_RECOVER_ENV] ?? "").trim().toLowerCase();
+  if (["0", "false", "off", "no"].includes(flag)) return false;
+  if (["1", "true", "on", "yes"].includes(flag)) return true;
+  return !process.env.VITEST;
+}
+function markMailUnhealthy() {
+  healthyUntil = 0;
+}
+function sleepMs(ms) {
+  spawnSync("sleep", [String(ms / 1e3)], { stdio: "ignore" });
+}
+function mailPids() {
+  const uid = process.getuid?.();
+  if (uid === void 0) return [];
+  const result = spawnSync("pgrep", ["-u", String(uid), "-x", "Mail"], { encoding: "utf8" });
+  if (result.status !== 0 || !result.stdout) return [];
+  return result.stdout.split("\n").map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+function probe() {
+  const result = spawnSync(
+    "osascript",
+    ["-e", 'with timeout of 8 seconds\ntell application "Mail" to count of accounts\nend timeout'],
+    { encoding: "utf8", timeout: PROBE_TIMEOUT_MS, killSignal: "SIGKILL" }
+  );
+  if (result.status === 0) return "ok";
+  const text = result.stderr ?? "";
+  if (PERMISSION_DENIED.test(text)) return "denied";
+  const timedOut = result.error?.code === "ETIMEDOUT";
+  if (timedOut || result.signal || /\(-1712\)/.test(text)) return "wedged";
+  return "other";
+}
+function waitUntilGone(ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (mailPids().length === 0) return true;
+    sleepMs(500);
+  }
+  return mailPids().length === 0;
+}
+function waitUntilAnswering(ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (mailPids().length > 0 && probe() === "ok") return true;
+    sleepMs(POLL_MS);
+  }
+  return false;
+}
+function openMail() {
+  const open2 = () => spawnSync("open", ["-g", "-a", "Mail"], { stdio: "ignore" }).status === 0;
+  return open2() || (sleepMs(OPEN_RETRY_MS), open2());
+}
+function restartMail() {
+  const steps = [];
+  lastRestartAt = Date.now();
+  healthyUntil = 0;
+  skipUntil = 0;
+  const running2 = mailPids();
+  if (running2.length === 0) {
+    steps.push("Mail was not running");
+  } else {
+    spawnSync(
+      "osascript",
+      ["-e", 'with timeout of 5 seconds\ntell application "Mail" to quit\nend timeout'],
+      { timeout: 8e3, killSignal: "SIGKILL", stdio: "ignore" }
+    );
+    if (waitUntilGone(STOP_WAIT_MS)) {
+      steps.push("Mail quit normally");
+    } else {
+      const stuck = mailPids();
+      for (const pid of stuck) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+        }
+      }
+      steps.push(`Mail did not quit; force-killed pid ${stuck.join(", ")}`);
+      if (!waitUntilGone(STOP_WAIT_MS)) {
+        steps.push("Mail is still running after SIGKILL");
+        return { ok: false, steps };
+      }
+    }
+  }
+  if (!openMail()) {
+    steps.push("`open -g -a Mail` failed");
+    return { ok: false, steps };
+  }
+  const ready = waitUntilAnswering(READY_WAIT_MS);
+  steps.push(
+    ready ? "Mail opened again and is answering Apple Events" : `Mail opened again but did not answer within ${READY_WAIT_MS / 1e3}s`
+  );
+  if (ready) healthyUntil = Date.now() + HEALTHY_TTL_MS;
+  return { ok: ready, steps };
+}
+function ensureMailReady(options = {}) {
+  if (busy || !autoRecoverEnabled() || Date.now() < Math.max(healthyUntil, skipUntil)) return;
+  const deadline = options.budgetMs === void 0 ? Infinity : Date.now() + options.budgetMs;
+  const left = () => deadline - Date.now();
+  busy = true;
+  try {
+    if (mailPids().length === 0) {
+      if (options.launch === false) return;
+      if (Date.now() - lastRestartAt < RESTART_COOLDOWN_MS) {
+        console.error(
+          "mail-recovery: Mail.app is not running; last open failed under 10 minutes ago, not retrying"
+        );
+        skipUntil = Date.now() + HEALTHY_TTL_MS;
+        return;
+      }
+      console.error("mail-recovery: Mail.app is not running; opening it");
+      const cut = left() < READY_WAIT_MS;
+      const ready = openMail() && waitUntilAnswering(Math.min(READY_WAIT_MS, left()));
+      console.error(
+        `mail-recovery: ${ready ? "Mail is answering" : cut ? "Mail is still starting; the call's timeout ended the wait" : "Mail did not answer in time"}`
+      );
+      if (ready) healthyUntil = Date.now() + HEALTHY_TTL_MS;
+      else if (!cut) lastRestartAt = Date.now();
+      return;
+    }
+    if (left() < PROBE_TIMEOUT_MS) return;
+    let state = probe();
+    if (state === "wedged") {
+      if (left() < CONFIRM_WAIT_MS + PROBE_TIMEOUT_MS) return;
+      sleepMs(CONFIRM_WAIT_MS);
+      state = probe();
+    }
+    if (state === "ok") {
+      healthyUntil = Date.now() + HEALTHY_TTL_MS;
+      return;
+    }
+    if (state !== "wedged") return;
+    if (Date.now() - lastRestartAt < RESTART_COOLDOWN_MS) {
+      console.error(
+        "mail-recovery: Mail.app is not answering; last restart was under 10 minutes ago, not restarting"
+      );
+      skipUntil = Date.now() + HEALTHY_TTL_MS;
+      return;
+    }
+    console.error("mail-recovery: Mail.app is not answering; restarting it");
+    const report = restartMail();
+    console.error(`mail-recovery: ${report.steps.join("; ")}`);
+    if (!report.ok) skipUntil = Date.now() + HEALTHY_TTL_MS;
+  } finally {
+    busy = false;
+  }
+}
+
+// src/utils/applescript.ts
 var DEFAULT_TIMEOUT_MS = 3e4;
 var DEFAULT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 function getMaxBuffer() {
@@ -99800,7 +99971,7 @@ function isRetryableError(errorMessage) {
 }
 function sleep(ms) {
   const seconds = ms / 1e3;
-  const result = spawnSync("sleep", [seconds.toString()], { stdio: "ignore" });
+  const result = spawnSync2("sleep", [seconds.toString()], { stdio: "ignore" });
   if (result.error) {
     const end = Date.now() + ms;
     while (Date.now() < end) {
@@ -99914,6 +100085,7 @@ function executeAppleScript(script, options = {}) {
     timeout: timeoutMs,
     maxRetries
   });
+  ensureMailReady({ launch: !script.includes(MAIL_RUNNING_GUARD), budgetMs: timeoutMs });
   let lastError2 = null;
   const startTime = Date.now();
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -99952,6 +100124,7 @@ function executeAppleScript(script, options = {}) {
       let rawError;
       if (isTimeoutError(error63)) {
         isTimeout = true;
+        markMailUnhealthy();
         const timeoutSecs = Math.round(timeoutMs / 1e3);
         errorMessage = `Operation timed out after ${timeoutSecs} seconds. Mail.app may be unresponsive or the operation involves too many messages.`;
       } else if (error63 instanceof Error) {
@@ -100236,6 +100409,148 @@ function preflightAttachments(attachments) {
   }
 }
 
+// src/utils/accountSettings.ts
+var FIELD_SEP = "";
+var RECORD_SEP = "";
+var ACCOUNT_READS = [
+  ["fullName", "full name"],
+  ["emailAddresses", "email addresses"],
+  ["enabled", "enabled"],
+  ["accountType", "account type"],
+  ["userName", "user name"],
+  ["serverName", "server name"],
+  ["port", "port"],
+  ["usesSsl", "uses ssl"],
+  ["includeWhenGettingNewMail", "include when getting new mail"],
+  ["moveDeletedMessagesToTrash", "move deleted messages to trash"],
+  ["emptyTrashOnQuit", "empty trash on quit"],
+  ["emptyJunkOnQuit", "empty junk messages on quit"],
+  ["emptySentOnQuit", "empty sent messages on quit"],
+  ["emptyTrashFrequency", "empty trash frequency"],
+  ["emptyJunkFrequency", "empty junk messages frequency"],
+  ["emptySentFrequency", "empty sent messages frequency"],
+  // IMAP accounts only; a property an account does not have is skipped.
+  ["storeDraftsOnServer", "store drafts on server"],
+  ["storeJunkOnServer", "store junk mail on server"],
+  ["storeSentOnServer", "store sent messages on server"],
+  ["storeDeletedOnServer", "store deleted messages on server"],
+  ["compactMailboxesWhenClosing", "compact mailboxes when closing"],
+  ["messageCaching", "message caching"]
+];
+var SMTP_READS = [
+  ["smtpName", "name"],
+  ["smtpServerName", "server name"],
+  ["smtpPort", "port"],
+  ["smtpUsesSsl", "uses ssl"],
+  ["smtpUserName", "user name"],
+  ["smtpEnabled", "enabled"]
+];
+var WRITABLE_ACCOUNT_SETTINGS = {
+  enabled: "enabled",
+  fullName: "full name",
+  includeWhenGettingNewMail: "include when getting new mail",
+  moveDeletedMessagesToTrash: "move deleted messages to trash",
+  emptyTrashOnQuit: "empty trash on quit",
+  emptyJunkOnQuit: "empty junk messages on quit",
+  emptySentOnQuit: "empty sent messages on quit",
+  storeDraftsOnServer: "store drafts on server",
+  storeJunkOnServer: "store junk mail on server",
+  storeSentOnServer: "store sent messages on server",
+  storeDeletedOnServer: "store deleted messages on server",
+  compactMailboxesWhenClosing: "compact mailboxes when closing"
+};
+var escape2 = (text) => text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, "");
+function buildAccountSettingsReadScript(accountName) {
+  const reads = ACCOUNT_READS.map(
+    ([key, prop]) => `
+      try
+        set end of out to "${key}${FIELD_SEP}" & ((${prop} of a) as text)
+      end try`
+  ).join("");
+  const smtp = SMTP_READS.map(
+    ([key, prop]) => `
+        try
+          set end of out to "${key}${FIELD_SEP}" & ((${prop} of d) as text)
+        end try`
+  ).join("");
+  return `
+      set a to account "${escape2(accountName)}"
+      set out to {}
+      set AppleScript's text item delimiters to ", "
+      ${reads}
+      try
+        set d to delivery account of a
+        ${smtp}
+      end try
+      set AppleScript's text item delimiters to "${RECORD_SEP}"
+      return out as text
+    `;
+}
+function parseAccountSettings(output2) {
+  const settings = {};
+  for (const record2 of output2.split(RECORD_SEP)) {
+    const at = record2.indexOf(FIELD_SEP);
+    if (at < 0) continue;
+    const key = record2.slice(0, at);
+    const value = record2.slice(at + 1);
+    if (value === "true" || value === "false") settings[key] = value === "true";
+    else if (key === "emailAddresses") settings[key] = value.split(", ").filter(Boolean);
+    else settings[key] = value;
+  }
+  return settings;
+}
+function buildAccountSettingsWriteScript(accountName, changes) {
+  const sets = Object.keys(changes).map((key) => {
+    const prop = WRITABLE_ACCOUNT_SETTINGS[key];
+    const raw = changes[key];
+    const value = typeof raw === "boolean" ? String(raw) : `"${escape2(String(raw))}"`;
+    return `
+      try
+        set ${prop} of a to ${value}
+      on error errMsg
+        set end of fails to "${key}: " & errMsg
+      end try`;
+  }).join("");
+  return `
+      set a to account "${escape2(accountName)}"
+      set fails to {}${sets}
+      if (count of fails) is 0 then return "ok"
+      set AppleScript's text item delimiters to "${RECORD_SEP}"
+      return fails as text
+    `;
+}
+function describeAccountSettings(settings) {
+  return Object.entries(settings).map(([key, value]) => `  ${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`).join("\n");
+}
+function splitAppliedSettings(changes, refused) {
+  const refusedKeys = refused.map((entry) => entry.split(":")[0].trim());
+  const applied = Object.keys(changes).filter(
+    (key) => changes[key] !== void 0 && !refusedKeys.includes(key)
+  );
+  return { applied, refusedKeys };
+}
+function validateAccountSettingsChanges(changes) {
+  const keys = Object.keys(changes).filter((k) => changes[k] !== void 0);
+  if (keys.length === 0) {
+    throw new Error(
+      `Nothing to change. Pass at least one of: ${Object.keys(WRITABLE_ACCOUNT_SETTINGS).join(", ")}.`
+    );
+  }
+  for (const key of keys) {
+    if (!(key in WRITABLE_ACCOUNT_SETTINGS)) {
+      throw new Error(
+        `"${key}" cannot be changed here. Changeable: ${Object.keys(WRITABLE_ACCOUNT_SETTINGS).join(", ")}.`
+      );
+    }
+    const value = changes[key];
+    if (key === "fullName") {
+      if (typeof value !== "string" || !value.trim()) throw new Error("fullName must be text.");
+    } else if (typeof value !== "boolean") {
+      throw new Error(`${key} must be true or false.`);
+    }
+  }
+}
+
 // src/services/appleMailManager.ts
 init_attachmentLimits();
 
@@ -100283,10 +100598,10 @@ function senderGuardScript(safeAddress) {
 }
 
 // src/services/nativeMailComposer.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawnSync as spawnSync4 } from "node:child_process";
 
 // src/services/nativeClipboardRecovery.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 var MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 var MAX_NATIVE_EDITOR_OUTPUT_BYTES = MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES + 64 * 1024;
 var MAX_RECOVERY_INPUT_BYTES = MAX_NATIVE_CLIPBOARD_SNAPSHOT_BYTES + 4096;
@@ -100346,7 +100661,7 @@ function recoverNativeClipboard(output2, token) {
       ownedCount: owned?.count ?? null
     });
     if (Buffer.byteLength(input2, "utf8") > MAX_RECOVERY_INPUT_BYTES) return false;
-    const restored = spawnSync2("/usr/bin/osascript", ["-l", "JavaScript", "-e", RESTORE], {
+    const restored = spawnSync3("/usr/bin/osascript", ["-l", "JavaScript", "-e", RESTORE], {
       input: input2,
       encoding: "utf8",
       timeout: 1e4,
@@ -100652,7 +100967,7 @@ var ERRORS = {
 };
 function runNativeEditor(payload) {
   try {
-    const result = spawnSync3(
+    const result = spawnSync4(
       "/usr/bin/osascript",
       ["-l", "JavaScript", "-e", NATIVE_EDITOR_SCRIPT],
       {
@@ -102900,8 +103215,8 @@ function extractFreshlyStalledMailboxes(raw) {
   return out;
 }
 var GROUP_SEP = "";
-var FIELD_SEP = "";
-var RECORD_SEP = "";
+var FIELD_SEP2 = "";
+var RECORD_SEP2 = "";
 var ITEM_SEP = "";
 var SENT_PREFIX = "sent:";
 var DRAFT_PREFIX = "draft created:";
@@ -102922,7 +103237,7 @@ var SNAP_ITEM = "I";
 var DELIMITER_REPLACEMENT = "\uFFFD";
 function stripStreamDelimiters(value) {
   let out = value;
-  for (const d of [GROUP_SEP, RECORD_SEP, FIELD_SEP])
+  for (const d of [GROUP_SEP, RECORD_SEP2, FIELD_SEP2])
     out = out.split(d).join(DELIMITER_REPLACEMENT);
   return out;
 }
@@ -103268,7 +103583,7 @@ function buildMessageRowLoop(opts) {
           try
             if (count of mail attachments of (item _i of _msgs)) > 0 then set msgHasAtt to "true"
           end try` : "";
-  const attField = withAttachments ? ` & "${FIELD_SEP}" & msgHasAtt` : "";
+  const attField = withAttachments ? ` & "${FIELD_SEP2}" & msgHasAtt` : "";
   return `
       set _msgs to ${collection}
       set _bulkOK to true
@@ -103342,8 +103657,8 @@ function buildMessageRowLoop(opts) {
             end if
             set msgDateSentStr to ${asDateToString("dSent")}
           end try
-          if msgCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-          set outputText to outputText & msgId & "${FIELD_SEP}" & msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDateStr & "${FIELD_SEP}" & msgDateSentStr & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgFlagColorRaw${trailing}${attField}
+          if msgCount > 0 then set outputText to outputText & "${RECORD_SEP2}"
+          set outputText to outputText & msgId & "${FIELD_SEP2}" & msgSubject & "${FIELD_SEP2}" & msgSender & "${FIELD_SEP2}" & msgDateStr & "${FIELD_SEP2}" & msgDateSentStr & "${FIELD_SEP2}" & msgRead & "${FIELD_SEP2}" & msgFlagged & "${FIELD_SEP2}" & msgFlagColorRaw${trailing}${attField}
           set msgCount to msgCount + 1
           ${dateClose}
           ${offsetClose}
@@ -103454,7 +103769,7 @@ function buildAppLevelScriptIfRunning(command) {
 }
 function guardMailRunning(script) {
   return `
-    if application "Mail" is running then
+    ${MAIL_RUNNING_GUARD}
       ${script}
     else
       return "${MAIL_NOT_RUNNING_MARKER}"
@@ -103816,7 +104131,7 @@ var AppleMailManager = class {
   sanitizeFragment(varName, indent = "        ") {
     return `
 ${indent}set _zTid to AppleScript's text item delimiters
-${indent}set AppleScript's text item delimiters to {"${GROUP_SEP}", "${RECORD_SEP}", "${FIELD_SEP}"}
+${indent}set AppleScript's text item delimiters to {"${GROUP_SEP}", "${RECORD_SEP2}", "${FIELD_SEP2}"}
 ${indent}set _zParts to text items of ${varName}
 ${indent}set AppleScript's text item delimiters to "${DELIMITER_REPLACEMENT}"
 ${indent}set ${varName} to _zParts as string
@@ -103834,12 +104149,12 @@ ${indent}set AppleScript's text item delimiters to _zTid`;
    */
   errorEmit(indent) {
     return `${indent}set _zErr to (_e as string)${this.sanitizeFragment("_zErr", indent)}
-${indent}set _out to _out & (_idx as string) & "${FIELD_SEP}error:" & _zErr & "${RECORD_SEP}"`;
+${indent}set _out to _out & (_idx as string) & "${FIELD_SEP2}error:" & _zErr & "${RECORD_SEP2}"`;
   }
   /** AppleScript emitting one RECON record into `_out`. */
   reconEmit(acctExpr, mbExpr, beforeVar, afterVar, posExpr = '""') {
     return `
-        set _out to _out & "${RECON_TAG}${FIELD_SEP}" & ${acctExpr} & "${FIELD_SEP}" & ${mbExpr} & "${FIELD_SEP}" & (${beforeVar} as string) & "${FIELD_SEP}" & (${afterVar} as string) & "${FIELD_SEP}" & ${posExpr} & "${RECORD_SEP}"`;
+        set _out to _out & "${RECON_TAG}${FIELD_SEP2}" & ${acctExpr} & "${FIELD_SEP2}" & ${mbExpr} & "${FIELD_SEP2}" & (${beforeVar} as string) & "${FIELD_SEP2}" & (${afterVar} as string) & "${FIELD_SEP2}" & ${posExpr} & "${RECORD_SEP2}"`;
   }
   /**
    * RECON emission for the unlocated paths, where the account and mailbox names
@@ -104041,7 +104356,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
           set _sPayload to _sPairs as string
           set AppleScript's text item delimiters to _sTid
         end if
-        set _out to _out & "${SNAP_TAG}${FIELD_SEP}" & ${acctExpr} & "${FIELD_SEP}" & ${mbExpr} & "${FIELD_SEP}${phase}${FIELD_SEP}" & _sStatus & "${FIELD_SEP}" & _sPayload & "${FIELD_SEP}" & _sMiss & "${FIELD_SEP}" & (_sTrue as string) & "${RECORD_SEP}"`;
+        set _out to _out & "${SNAP_TAG}${FIELD_SEP2}" & ${acctExpr} & "${FIELD_SEP2}" & ${mbExpr} & "${FIELD_SEP2}${phase}${FIELD_SEP2}" & _sStatus & "${FIELD_SEP2}" & _sPayload & "${FIELD_SEP2}" & _sMiss & "${FIELD_SEP2}" & (_sTrue as string) & "${RECORD_SEP2}"`;
   }
   /**
    * AppleScript capturing the message the op is ABOUT to touch into `_pre`,
@@ -104062,14 +104377,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
               if _pre is not "" then
                 try
                   set _zSub to ((subject of ${msgVar}) as string)${this.sanitizeFragment("_zSub", ind + "  ")}
-                  set _pre to _pre & "${FIELD_SEP}" & _zSub
+                  set _pre to _pre & "${FIELD_SEP2}" & _zSub
                 end try
               end if` : "";
     return `
               try
                 set _zMid to ((message id of ${msgVar}) as string)${this.sanitizeFragment("_zMid", ind)}
                 set _zDate to ((date received of ${msgVar}) as string)${this.sanitizeFragment("_zDate", ind)}
-                set _pre to "${FIELD_SEP}" & _zMid & "${FIELD_SEP}" & _zDate
+                set _pre to "${FIELD_SEP2}" & _zMid & "${FIELD_SEP2}" & _zDate
               end try${subject}`;
   }
   /**
@@ -104087,9 +104402,9 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const preImages = /* @__PURE__ */ new Map();
     const recons = [];
     const snaps = [];
-    for (const rec of output2.split(RECORD_SEP)) {
+    for (const rec of output2.split(RECORD_SEP2)) {
       if (!rec) continue;
-      const f = rec.split(FIELD_SEP);
+      const f = rec.split(FIELD_SEP2);
       if (f.length < 2) continue;
       if (f[0] === RECON_TAG) {
         recons.push({
@@ -104134,7 +104449,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         byId.set(id, { id, success: false, error: "Message not found" });
         outcomes.push({ id, status: "notfound" });
       } else if (status.startsWith("error:")) {
-        const error63 = f.slice(1).join(FIELD_SEP).slice("error:".length);
+        const error63 = f.slice(1).join(FIELD_SEP2).slice("error:".length);
         byId.set(id, { id, success: false, error: error63 });
         outcomes.push({ id, status: "error", error: error63 });
       } else {
@@ -104389,16 +104704,16 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         buildAppLevelScript(`
       set idList to {}
       repeat with acct in accounts
-        set end of idList to (name of acct) & "${FIELD_SEP}" & (id of acct)
+        set end of idList to (name of acct) & "${FIELD_SEP2}" & (id of acct)
       end repeat
-      set AppleScript's text item delimiters to "${RECORD_SEP}"
+      set AppleScript's text item delimiters to "${RECORD_SEP2}"
       return idList as text
     `)
       );
       if (!result.success) return null;
       const ids = /* @__PURE__ */ new Map();
-      for (const item of result.output.split(RECORD_SEP)) {
-        const [name2, id] = item.split(FIELD_SEP);
+      for (const item of result.output.split(RECORD_SEP2)) {
+        const [name2, id] = item.split(FIELD_SEP2);
         if (name2 && id) ids.set(name2.trim(), id.trim());
       }
       this.cache.accountIds = { data: ids, expiry: now + this.CACHE_TTL_MS };
@@ -104629,6 +104944,72 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     return accounts[0]?.name ?? "iCloud";
   }
   /**
+   * Mail's own name for an account given by its name or its email address.
+   *
+   * Refuses an ambiguous account: Mail's AppleScript addresses an account only by
+   * name (`account "Name"`) and takes the first one with that name, so a name
+   * shared by two accounts, or an input that matches two, could change the wrong one.
+   */
+  resolveAccountName(account) {
+    const wanted = account.trim().toLowerCase();
+    const accounts = this.getCachedAccounts();
+    const matches = accounts.filter(
+      (a) => a.name.toLowerCase() === wanted || a.email.toLowerCase() === wanted
+    );
+    if (matches.length === 0) {
+      throw new Error(
+        `Account "${account}" does not match any Mail account. Use list-accounts for the names.`
+      );
+    }
+    const name2 = matches[0].name.toLowerCase();
+    const candidates = [
+      ...matches,
+      ...accounts.filter((a) => a.name.toLowerCase() === name2 && !matches.includes(a))
+    ];
+    if (candidates.length > 1) {
+      const list = candidates.map((a) => `${a.name} <${a.email}>`).join(", ");
+      throw new Error(
+        `Account "${account}" is ambiguous (${list}). Mail can address an account only by name, so rename one of them in Mail first.`
+      );
+    }
+    return matches[0].name;
+  }
+  /**
+   * The settings of one account: identity, fetch and trash behaviour, the
+   * IMAP storage flags and its outgoing server. Never the password.
+   */
+  getAccountSettings(account) {
+    const name2 = this.resolveAccountName(account);
+    const result = executeAppleScript(buildAppLevelScript(buildAccountSettingsReadScript(name2)), {
+      timeoutMs: 3e4
+    });
+    if (!result.success) {
+      throw new Error(`Could not read the settings of "${name2}": ${result.error}`);
+    }
+    return { account: name2, settings: parseAccountSettings(result.output) };
+  }
+  /**
+   * Changes the settings of one account that cannot lock it out or redirect its
+   * mail (see utils/accountSettings). Returns the settings read back, and what
+   * Mail refused. One attempt: nothing here is retried.
+   */
+  setAccountSettings(account, changes) {
+    validateAccountSettingsChanges(changes);
+    const name2 = this.resolveAccountName(account);
+    const result = executeAppleScript(
+      buildAppLevelScript(buildAccountSettingsWriteScript(name2, changes)),
+      { timeoutMs: 3e4, maxRetries: 1 }
+    );
+    this.invalidateCache();
+    this.defaultAccount = null;
+    if (!result.success) {
+      throw new Error(`Could not change the settings of "${name2}": ${result.error}`);
+    }
+    const out = result.output.trim();
+    const refused = out === "ok" ? [] : out.split("").filter(Boolean);
+    return { account: name2, refused, settings: this.getAccountSettings(name2).settings };
+  }
+  /**
    * Resolves a mailbox name to its actual name in the account.
    *
    * Different account types (IMAP, Exchange, iCloud) use different
@@ -104842,7 +105223,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         ignoring case
           if _wantNames contains (name of mb) then
             try
-              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
+              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, withAttachments: true, trailing: ` & "${FIELD_SEP2}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
@@ -104902,7 +105283,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")${DIAG_ITEM_SEP}"
           else
             try
-              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
+              ${buildMessageRowLoop({ collection: `messages of mb ${searchCondition}`, limit, dedup: true, dateFilter, withAttachments: true, trailing: ` & "${FIELD_SEP2}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
@@ -104984,10 +105365,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
                   if attCount > 0 then set hasAtt to "true"
                 end try
                 ${deepScan}
-                return msgSubject & "${FIELD_SEP}" & msgSender & "${FIELD_SEP}" & msgDate & "${FIELD_SEP}" & msgRead & "${FIELD_SEP}" & msgFlagged & "${FIELD_SEP}" & msgJunk & "${FIELD_SEP}" & msgDeleted & "${FIELD_SEP}" & msgMailbox & "${FIELD_SEP}" & msgAccount & "${FIELD_SEP}" & hasAtt`;
+                return msgSubject & "${FIELD_SEP2}" & msgSender & "${FIELD_SEP2}" & msgDate & "${FIELD_SEP2}" & msgRead & "${FIELD_SEP2}" & msgFlagged & "${FIELD_SEP2}" & msgJunk & "${FIELD_SEP2}" & msgDeleted & "${FIELD_SEP2}" & msgMailbox & "${FIELD_SEP2}" & msgAccount & "${FIELD_SEP2}" & hasAtt`;
     const output2 = this.resolveById(id, innerFetch, void 0, { firstHit: true });
     if (output2 === null) return null;
-    const parts = output2.split(FIELD_SEP);
+    const parts = output2.split(FIELD_SEP2);
     if (parts.length < 9) return null;
     this.rememberLocation(id.toString(), parts[8], parts[7]);
     return {
@@ -105166,7 +105547,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
     const stalledKeys = threshold > 0 ? this.stalledMailboxes.keys() : [];
     const stalledList = `{${stalledKeys.map((key) => {
       const i = key.indexOf(STALLED_KEY_SEP);
-      return `"${escapeForAppleScript(key.slice(0, i))}${FIELD_SEP}${escapeForAppleScript(key.slice(i + 1))}"`;
+      return `"${escapeForAppleScript(key.slice(0, i))}${FIELD_SEP2}${escapeForAppleScript(key.slice(i + 1))}"`;
     }).join(", ")}}`;
     const stalledLabel = `size unknown (count probe exceeded ${BYID_PROBE_TIMEOUT_SECONDS}s)`;
     const sizeGuard = (mbVar, acctNameExpr, mbNameExpr) => {
@@ -105197,7 +105578,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
               ${skipEntry("_sizeLabel")}
             end if`;
       if (stalledKeys.length === 0) return probeBlock;
-      return `if _stalledKeys contains {(${acctNameExpr} & "${FIELD_SEP}" & ${mbNameExpr})} then
+      return `if _stalledKeys contains {(${acctNameExpr} & "${FIELD_SEP2}" & ${mbNameExpr})} then
               ${skipEntry('"size unknown (previously timed out)"')}
             else
               ${probeBlock}
@@ -105554,14 +105935,14 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
       id,
       `set _sourceMailbox to ""
        ${mailboxPathFragment("_hitMb", "_sourceMailbox")}
-       if _hitAcct contains "${FIELD_SEP}" or _sourceMailbox contains "${FIELD_SEP}" then return "invalid-source-scope"
-       return _hitAcct & "${FIELD_SEP}" & _sourceMailbox & "${FIELD_SEP}" & (source of msg)`,
+       if _hitAcct contains "${FIELD_SEP2}" or _sourceMailbox contains "${FIELD_SEP2}" then return "invalid-source-scope"
+       return _hitAcct & "${FIELD_SEP2}" & _sourceMailbox & "${FIELD_SEP2}" & (source of msg)`,
       void 0,
       { requireCompleteCoverage: true }
     );
     if (output2 === null) return null;
-    const first = output2.indexOf(FIELD_SEP);
-    const second = output2.indexOf(FIELD_SEP, first + 1);
+    const first = output2.indexOf(FIELD_SEP2);
+    const second = output2.indexOf(FIELD_SEP2, first + 1);
     if (first < 1 || second <= first + 1 || !output2.slice(second + 1).trim()) {
       this.lastMessageLookupError = "Mail could not return a readable source with its account and mailbox.";
       return null;
@@ -105654,7 +106035,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
         ignoring case
           if _wantNames contains (name of mb) then
             try
-              ${buildMessageRowLoop({ collection: `messages of mb ${fromFilter}`, limit, offset, dedup: true, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
+              ${buildMessageRowLoop({ collection: `messages of mb ${fromFilter}`, limit, offset, dedup: true, withAttachments: true, trailing: ` & "${FIELD_SEP2}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
@@ -105716,7 +106097,7 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
             set _skipped to _skipped & mbName & " (" & (mbCount as string) & ")${DIAG_ITEM_SEP}"
           else
             try
-              ${buildMessageRowLoop({ collection: `messages of mb ${fromFilter}`, limit, dedup: true, offset, withAttachments: true, trailing: ` & "${FIELD_SEP}" & mbName` })}
+              ${buildMessageRowLoop({ collection: `messages of mb ${fromFilter}`, limit, dedup: true, offset, withAttachments: true, trailing: ` & "${FIELD_SEP2}" & mbName` })}
             on error _errMsg number _errNum
               set _timedOut to true
               set _notSearched to _notSearched & mbName & "${DIAG_ITEM_SEP}"
@@ -105759,10 +106140,10 @@ ${indent}end try${this.sanitizeFragment("_uacct", indent)}${this.sanitizeFragmen
    * limitation). Use getMessage or list-attachments for authoritative info.
    */
   parseMessageList(output2, mailbox, account, rowsIncludeMailbox = false) {
-    const items = output2.split(RECORD_SEP);
+    const items = output2.split(RECORD_SEP2);
     const messages = [];
     for (const item of items) {
-      const parts = item.split(FIELD_SEP);
+      const parts = item.split(FIELD_SEP2);
       if (parts.length < 8) continue;
       let msgMailbox = mailbox;
       let hasAttachments = false;
@@ -106105,7 +106486,7 @@ end try`
         });
       }
       if (effectiveDelay > 0 && i < recipients2.length - 1) {
-        spawnSync4("sleep", [(effectiveDelay / 1e3).toString()], { stdio: "ignore" });
+        spawnSync5("sleep", [(effectiveDelay / 1e3).toString()], { stdio: "ignore" });
       }
     }
     return results;
@@ -106308,7 +106689,7 @@ end try`
           set _out to ""
           set _pre to ""${this.countFragment("_cb")}${this.snapshotFragment("before", acctLit, mbLit, "_cb")}${this.preImageFragment("msg")}
           ${operation}${this.countFragment("_ca")}${this.snapshotFragment("after", acctLit, mbLit, "_ca")}${this.reconEmit(acctLit, mbLit, "_cb", "_ca")}
-          return "1${FIELD_SEP}ok" & _pre & "${RECORD_SEP}" & _out` : `
+          return "1${FIELD_SEP2}ok" & _pre & "${RECORD_SEP2}" & _out` : `
           ${operation}
           return "ok"`}
         end if
@@ -106358,7 +106739,7 @@ end try`
           end try
           ${this.reconEmitFromMessage("_cb", "_ca")}
         end if
-        return "1${FIELD_SEP}ok" & _pre & "${RECORD_SEP}" & _out` : `
+        return "1${FIELD_SEP2}ok" & _pre & "${RECORD_SEP2}" & _out` : `
         ${operation}
         return "ok"`}
       on error errMsg
@@ -106584,7 +106965,7 @@ end try`
         set _out to ""
         set _pre to ""${this.countFragment("_cb")}${this.snapshotFragment("before", srcAcctLit, srcMbLit, "_cb")}${this.preImageFragment("msg")}
         move msg to destMailbox${this.countFragment("_ca")}${this.snapshotFragment("after", srcAcctLit, srcMbLit, "_ca")}${this.reconEmit(srcAcctLit, srcMbLit, "_cb", "_ca")}
-        return "1${FIELD_SEP}ok" & _pre & "${RECORD_SEP}" & _out` : `
+        return "1${FIELD_SEP2}ok" & _pre & "${RECORD_SEP2}" & _out` : `
         set _hits to {}
         set _names to ""
         repeat with acct in accounts
@@ -106623,7 +107004,7 @@ end try`
           end try
           ${this.reconEmitFromMessage("_cb", "_ca")}
         end if
-        return "1${FIELD_SEP}ok" & _pre & "${RECORD_SEP}" & _out`;
+        return "1${FIELD_SEP2}ok" & _pre & "${RECORD_SEP2}" & _out`;
     const script = buildAppLevelScript(`
       try
         -- \`mailboxes of account\` recursively includes nested mailboxes, but
@@ -106824,7 +107205,7 @@ end try`
         set _gpos to ${asList(g.items.map((it) => it.pos))}
         if _tmb is missing value then
           repeat with _k from 1 to (count of _gpos)
-            set _out to _out & ((item _k of _gpos) as string) & "${FIELD_SEP}error:source mailbox \\"${mbInProse}\\" not found in account \\"${acctInProse}\\"${RECORD_SEP}"
+            set _out to _out & ((item _k of _gpos) as string) & "${FIELD_SEP2}error:source mailbox \\"${mbInProse}\\" not found in account \\"${acctInProse}\\"${RECORD_SEP2}"
           end repeat
         else${instrument ? `${this.countFragment("_cb")}${this.snapshotFragment("before", acctLit, mbLit, "_cb")}` : ""}
           -- WARNING: "whose id is N" is NOT an exact match -- Mail ROUNDS.
@@ -106854,9 +107235,9 @@ end try`
               if (count of _m) > 0 and ((id of (item 1 of _m)) is (item _k of _gids)) then
                 set _msg to item 1 of _m${pre}
                 ${operation}
-                set _out to _out & (_idx as string) & "${FIELD_SEP}ok" & _pre & "${RECORD_SEP}"
+                set _out to _out & (_idx as string) & "${FIELD_SEP2}ok" & _pre & "${RECORD_SEP2}"
               else
-                set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+                set _out to _out & (_idx as string) & "${FIELD_SEP2}notfound${RECORD_SEP2}"
               end if
             on error _e
 ${this.errorEmit("              ")}
@@ -106893,10 +107274,10 @@ ${this.errorEmit("              ")}
         repeat with _k from 1 to _ucount
           set _idx to item _k of _upos
           if (item _k of _uhit) is 0 then
-            set _out to _out & (_idx as string) & "${FIELD_SEP}notfound${RECORD_SEP}"
+            set _out to _out & (_idx as string) & "${FIELD_SEP2}notfound${RECORD_SEP2}"
           else if (item _k of _uhit) > 1 then
             set _uname to (item _k of _unames)${this.sanitizeFragment("_uname", "            ")}
-            set _out to _out & (_idx as string) & "${FIELD_SEP}error:${AMBIGUOUS_ID_BATCH}(" & _uname & "); list or search that mailbox first so the operation targets the right copy${RECORD_SEP}"
+            set _out to _out & (_idx as string) & "${FIELD_SEP2}error:${AMBIGUOUS_ID_BATCH}(" & _uname & "); list or search that mailbox first so the operation targets the right copy${RECORD_SEP2}"
           else
             set _pre to ""
             try
@@ -106915,7 +107296,7 @@ ${this.errorEmit("              ")}
                 end try
               end if${this.preImageFragment("_msg")}` : ""}
               ${operation}
-              set _out to _out & (_idx as string) & "${FIELD_SEP}ok" & _pre & "${RECORD_SEP}"${instrument ? `
+              set _out to _out & (_idx as string) & "${FIELD_SEP2}ok" & _pre & "${RECORD_SEP2}"${instrument ? `
               if _umb is not missing value then
                 try
                   set _uca to (count of messages of _umb)
@@ -107072,8 +107453,8 @@ ${this.errorEmit("              ")}
                     set attSize to file size of att as string
                   end try
                   if attName is not "" then
-                    if attCount > 0 then set outputText to outputText & "${RECORD_SEP}"
-                    set outputText to outputText & attName & "${FIELD_SEP}" & attType & "${FIELD_SEP}" & attSize
+                    if attCount > 0 then set outputText to outputText & "${RECORD_SEP2}"
+                    set outputText to outputText & attName & "${FIELD_SEP2}" & attType & "${FIELD_SEP2}" & attSize
                     set attCount to attCount + 1
                   end if
                 end repeat`;
@@ -107089,10 +107470,10 @@ ${this.errorEmit("              ")}
       if (refusal) throw new Error(refusal);
     }
     if (output2?.startsWith(ATTACHMENTS_MARKER) && output2.length > ATTACHMENTS_MARKER.length) {
-      const items = output2.slice(ATTACHMENTS_MARKER.length).split(RECORD_SEP);
+      const items = output2.slice(ATTACHMENTS_MARKER.length).split(RECORD_SEP2);
       const attachments = [];
       for (const item of items) {
-        const parts = item.split(FIELD_SEP);
+        const parts = item.split(FIELD_SEP2);
         if (parts.length < 3) continue;
         attachments.push({
           id: `${id}-${parts[0]}`,
@@ -107154,7 +107535,7 @@ ${this.errorEmit("              ")}
                 try
                   ${mailboxPathFragment("_hitMb", "_where")}
                 end try
-                return _hitAcct & "${FIELD_SEP}" & _where`,
+                return _hitAcct & "${FIELD_SEP2}" & _where`,
       void 0
     );
     if (located === null) {
@@ -107165,7 +107546,7 @@ ${this.errorEmit("              ")}
         return false;
       }
     }
-    const [holderAccount, holderMailbox] = (located ?? "").split(FIELD_SEP);
+    const [holderAccount, holderMailbox] = (located ?? "").split(FIELD_SEP2);
     if (holderAccount && holderMailbox)
       this.rememberLocation(String(id), holderAccount, holderMailbox);
     const saveAction = `
@@ -107308,9 +107689,9 @@ ${this.errorEmit("              ")}
         ${mailboxPathFragment("mb", "mbPath")}
         set mbUnread to unread count of mb
         set mbCount to count of messages of mb
-        set end of mailboxList to mbPath & "${FIELD_SEP}" & mbUnread & "${FIELD_SEP}" & mbCount
+        set end of mailboxList to mbPath & "${FIELD_SEP2}" & mbUnread & "${FIELD_SEP2}" & mbCount
       end repeat
-      set AppleScript's text item delimiters to "${RECORD_SEP}"
+      set AppleScript's text item delimiters to "${RECORD_SEP2}"
       return mailboxList as text
     `;
     const script = local ? buildAppLevelScript(`${localMailboxBindingFragment()}
@@ -107322,10 +107703,10 @@ ${this.errorEmit("              ")}
       return [];
     }
     if (!result.output.trim()) return [];
-    const items = result.output.split(RECORD_SEP);
+    const items = result.output.split(RECORD_SEP2);
     const mailboxes = [];
     for (const item of items) {
-      const parts = item.split(FIELD_SEP);
+      const parts = item.split(FIELD_SEP2);
       if (parts.length < 3) continue;
       mailboxes.push({
         name: parts[0],
@@ -107490,9 +107871,9 @@ ${this.errorEmit("              ")}
         set srcAfter to count of messages of srcMailbox
         if srcAfter is 0 then
           delete srcMailbox
-          return "ok${FIELD_SEP}" & srcCount
+          return "ok${FIELD_SEP2}" & srcCount
         else
-          return "partial${FIELD_SEP}" & (srcCount - srcAfter) & "${FIELD_SEP}" & srcCount & "${FIELD_SEP}" & srcAfter
+          return "partial${FIELD_SEP2}" & (srcCount - srcAfter) & "${FIELD_SEP2}" & srcCount & "${FIELD_SEP2}" & srcAfter
         end if
       on error errMsg
         return "error:" & errMsg
@@ -107509,7 +107890,7 @@ ${this.errorEmit("              ")}
       return { success: false, error: error63 };
     }
     if (result.output.startsWith("partial")) {
-      const parts = result.output.split(FIELD_SEP);
+      const parts = result.output.split(FIELD_SEP2);
       const remaining = parts[3] ?? "?";
       const total = parts[2] ?? "?";
       const error63 = `Only ${parts[1] ?? "?"} of ${total} messages moved, ${remaining} remain in "${resolvedOld}"; the source was NOT deleted (both mailboxes left intact). Retry to move the rest.`;
@@ -107553,7 +107934,7 @@ ${this.errorEmit("              ")}
    */
   readSmartMailboxEntries(plistPath) {
     if (!plistPath || !existsSync6(plistPath)) return [];
-    const j = spawnSync4("plutil", ["-convert", "json", "-o", "-", plistPath], {
+    const j = spawnSync5("plutil", ["-convert", "json", "-o", "-", plistPath], {
       encoding: "utf8"
     });
     if (j.status === 0 && j.stdout) {
@@ -107579,12 +107960,12 @@ ${this.errorEmit("              ")}
     const buddy = "/usr/libexec/PlistBuddy";
     const out = [];
     for (let i = 0; i < 1e3; i++) {
-      const exists = spawnSync4(buddy, ["-c", `Print :${i}`, plistPath], { encoding: "utf8" });
+      const exists = spawnSync5(buddy, ["-c", `Print :${i}`, plistPath], { encoding: "utf8" });
       if (exists.status !== 0) break;
-      const nameR = spawnSync4(buddy, ["-c", `Print :${i}:MailboxName`, plistPath], {
+      const nameR = spawnSync5(buddy, ["-c", `Print :${i}:MailboxName`, plistPath], {
         encoding: "utf8"
       });
-      const idR = spawnSync4(buddy, ["-c", `Print :${i}:MailboxID`, plistPath], {
+      const idR = spawnSync5(buddy, ["-c", `Print :${i}:MailboxID`, plistPath], {
         encoding: "utf8"
       });
       out.push({
@@ -107618,7 +107999,7 @@ ${this.errorEmit("              ")}
   }
   /** Lint the mutated temp file and atomically move it into place. */
   commitSmartPlist(temp, plistPath) {
-    const lint = spawnSync4("plutil", ["-lint", temp], { encoding: "utf8" });
+    const lint = spawnSync5("plutil", ["-lint", temp], { encoding: "utf8" });
     if (lint.status !== 0) {
       try {
         unlinkSync3(temp);
@@ -107725,7 +108106,7 @@ ${this.errorEmit("              ")}
       }
     };
     writeFileSync4(entryJson, JSON.stringify([entry]), "utf8");
-    const conv = spawnSync4("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
+    const conv = spawnSync5("plutil", ["-convert", "xml1", "-o", entryPlist, entryJson], {
       encoding: "utf8"
     });
     if (conv.status !== 0) {
@@ -107740,7 +108121,7 @@ ${this.errorEmit("              ")}
         error: (conv.stderr || "plutil could not encode the smart mailbox entry").trim()
       };
     }
-    const ins = spawnSync4("/usr/libexec/PlistBuddy", ["-c", `Merge ${entryPlist} :`, temp], {
+    const ins = spawnSync5("/usr/libexec/PlistBuddy", ["-c", `Merge ${entryPlist} :`, temp], {
       encoding: "utf8"
     });
     cleanupEntryFiles();
@@ -107784,7 +108165,7 @@ ${this.errorEmit("              ")}
       return { deleted: false, error: `Smart mailbox "${name2}" not found` };
     }
     const temp = this.prepareSmartPlistWrite(plistPath);
-    const del = spawnSync4("/usr/libexec/PlistBuddy", ["-c", `Delete :${idx}`, temp], {
+    const del = spawnSync5("/usr/libexec/PlistBuddy", ["-c", `Delete :${idx}`, temp], {
       encoding: "utf8"
     });
     if (del.status !== 0) {
@@ -107979,9 +108360,9 @@ end tell`;
         set acctEnabled to enabled of acct
         set AppleScript's text item delimiters to "${ITEM_SEP}"
         set emailStr to (email addresses of acct) as text
-        set end of accountList to acctName & "${FIELD_SEP}" & emailStr & "${FIELD_SEP}" & acctEnabled
+        set end of accountList to acctName & "${FIELD_SEP2}" & emailStr & "${FIELD_SEP2}" & acctEnabled
       end repeat
-      set AppleScript's text item delimiters to "${RECORD_SEP}"
+      set AppleScript's text item delimiters to "${RECORD_SEP2}"
       return accountList as text
     `);
     const result = executeAppleScript(
@@ -107994,10 +108375,10 @@ end tell`;
       return null;
     }
     if (!result.output.trim()) return [];
-    const items = result.output.split(RECORD_SEP);
+    const items = result.output.split(RECORD_SEP2);
     const accounts = [];
     for (const item of items) {
-      const parts = item.split(FIELD_SEP);
+      const parts = item.split(FIELD_SEP2);
       if (parts.length < 3) continue;
       const addresses2 = parts[1].split(ITEM_SEP).filter(Boolean);
       accounts.push({
@@ -108050,19 +108431,19 @@ end tell`;
       repeat with r in rules
         set ruleName to name of r
         set ruleEnabled to enabled of r
-        set end of ruleList to ruleName & "${FIELD_SEP}" & (ruleEnabled as string)
+        set end of ruleList to ruleName & "${FIELD_SEP2}" & (ruleEnabled as string)
       end repeat
-      set AppleScript's text item delimiters to "${RECORD_SEP}"
+      set AppleScript's text item delimiters to "${RECORD_SEP2}"
       return ruleList as text
     `);
     const result = executeAppleScript(script);
     if (!result.success || !result.output.trim()) {
       return [];
     }
-    const items = result.output.split(RECORD_SEP);
+    const items = result.output.split(RECORD_SEP2);
     const rules = [];
     for (const item of items) {
-      const parts = item.split(FIELD_SEP);
+      const parts = item.split(FIELD_SEP2);
       if (parts.length < 2) continue;
       rules.push({
         name: parts[0],
@@ -108444,14 +108825,14 @@ ${actionStmts.join("\n")}
         end try
       end repeat
 
-      return (last24h as string) & "${FIELD_SEP}" & (last7d as string) & "${FIELD_SEP}" & (last30d as string)
+      return (last24h as string) & "${FIELD_SEP2}" & (last7d as string) & "${FIELD_SEP2}" & (last30d as string)
     `);
     const result = executeAppleScript(script, { timeoutMs: 6e4 });
     if (!result.success || !result.output.trim()) {
       console.error(`Failed to get recently received stats: ${result.error}`);
       return { last24h: 0, last7d: 0, last30d: 0 };
     }
-    const parts = result.output.split(FIELD_SEP);
+    const parts = result.output.split(FIELD_SEP2);
     if (parts.length < 3) {
       return { last24h: 0, last7d: 0, last30d: 0 };
     }
@@ -108492,7 +108873,7 @@ ${actionStmts.join("\n")}
         set totalMailboxes to totalMailboxes + (count of mailboxes of acct)
       end repeat
 
-      return "running${FIELD_SEP}" & accountCount & "${FIELD_SEP}" & totalMailboxes
+      return "running${FIELD_SEP2}" & accountCount & "${FIELD_SEP2}" & totalMailboxes
     `);
     const result = executeAppleScript(script, { timeoutMs: 6e4 });
     if (!result.success) {
@@ -108513,7 +108894,7 @@ ${actionStmts.join("\n")}
         error: "Mail.app is not running"
       };
     }
-    const parts = result.output.split(FIELD_SEP);
+    const parts = result.output.split(FIELD_SEP2);
     const isRunning = parts[0] === "running";
     const accountCount = parseInt(parts[1]) || 0;
     return {
@@ -108528,7 +108909,7 @@ ${actionStmts.join("\n")}
 
 // src/index.ts
 init_smtpMailer();
-import { writeFileSync as writeFileSync5 } from "fs";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync5 } from "fs";
 import { join as joinPath } from "path";
 
 // src/tools/compose.ts
@@ -109834,7 +110215,7 @@ function jsonResource(uri, data) {
     contents: [{ uri, mimeType: "application/json", text: JSON.stringify(data, null, 2) }]
   };
 }
-function registerResourcesAndPrompts(server2, mailManager2) {
+function registerResourcesAndPrompts(server2, mailManager2, toolAllowed = () => true) {
   server2.registerResource(
     "accounts",
     "mail://accounts",
@@ -109894,7 +110275,7 @@ function registerResourcesAndPrompts(server2, mailManager2) {
       ]
     })
   );
-  server2.registerPrompt(
+  const composeReply = server2.registerPrompt(
     "compose-reply",
     {
       title: "Compose reply",
@@ -109917,6 +110298,7 @@ function registerResourcesAndPrompts(server2, mailManager2) {
       ]
     })
   );
+  if (!toolAllowed("reply-to-message")) composeReply.disable();
   server2.registerPrompt(
     "weekly-summary",
     {
@@ -110224,6 +110606,82 @@ function withJsonSchema2020_12(transport2) {
   return transport2;
 }
 
+// src/utils/toolMode.ts
+var TOOL_MODE_ENV = "APPLE_MAIL_MCP_MODE";
+var TOOL_MODES = ["full", "no_send", "read_only"];
+var SENDING_TOOLS = /* @__PURE__ */ new Set([
+  "send-email",
+  "send-serial-email",
+  "reply-to-message",
+  "forward-message",
+  // A disabled rule can forward, redirect or auto-reply once enabled.
+  "enable-rule"
+]);
+var READ_ONLY_TOOLS = /* @__PURE__ */ new Set([
+  "search-messages",
+  "get-message",
+  "get-message-headers",
+  "get-thread",
+  "list-messages",
+  "resolve-message-id",
+  "list-attachments",
+  "fetch-attachment",
+  "list-mailboxes",
+  "get-unread-count",
+  "list-smart-mailboxes",
+  "list-accounts",
+  "get-account-settings",
+  "list-rules",
+  "search-contacts",
+  "list-templates",
+  "get-template",
+  "health-check",
+  "doctor",
+  "get-mail-stats",
+  "get-sync-status"
+]);
+var DESTRUCTIVE_TOOLS = /* @__PURE__ */ new Set([
+  ...SENDING_TOOLS,
+  "delete-message",
+  "batch-delete-messages",
+  "delete-mailbox",
+  "delete-smart-mailbox",
+  "create-rule",
+  "delete-rule",
+  "delete-template",
+  // It can switch an account off, which stops its mail fetching and sending.
+  "set-account-settings"
+]);
+function parseToolMode(raw) {
+  const value = (raw ?? "").trim().toLowerCase() || "full";
+  if (TOOL_MODES.includes(value)) return value;
+  throw new Error(`${TOOL_MODE_ENV} must be one of ${TOOL_MODES.join(", ")}; got "${raw}".`);
+}
+function resolveToolMode(env, configText, unreadable) {
+  const raw = env[TOOL_MODE_ENV];
+  if ((raw === void 0 || raw === "") && unreadable !== void 0) {
+    throw new Error(
+      `The config file could not be read (${unreadable}), so ${TOOL_MODE_ENV} may be set in it and not applied. Fix the file's permissions; the server will not fall back to "full".`
+    );
+  }
+  if ((raw === void 0 || raw === "") && configText?.includes(TOOL_MODE_ENV)) {
+    throw new Error(
+      `The config file mentions ${TOOL_MODE_ENV} but it was not applied (invalid JSON, a nested block, or a non-string value). Fix the file; the server will not fall back to "full".`
+    );
+  }
+  return parseToolMode(raw);
+}
+function isToolAllowed(name2, mode) {
+  if (mode === "full") return true;
+  if (mode === "read_only") return READ_ONLY_TOOLS.has(name2);
+  return !SENDING_TOOLS.has(name2);
+}
+function withSafetyAnnotations(name2, annotations) {
+  if (DESTRUCTIVE_TOOLS.has(name2)) return { ...annotations, destructiveHint: true };
+  if (READ_ONLY_TOOLS.has(name2)) return { ...annotations, readOnlyHint: true };
+  return annotations;
+}
+
 // src/index.ts
 init_auditLog();
 if (process.argv.includes(BODY_INDEX_BUILDER_ARG) && process.send) {
@@ -110429,15 +110887,32 @@ function registerTool(name2, config2, cb) {
     const token = REFERENCES_SCHEMA.unwrap().element;
     external_exports.globalRegistry.add(token, { ...token.meta(), description: IN_REPLY_TO_SCHEMA.description });
   }
-  return registerToolWithContracts(
+  const tool = registerToolWithContracts(
     server,
     name2,
-    { ...config2, annotations: annotationsFor(name2, config2.annotations) },
+    {
+      ...config2,
+      annotations: withSafetyAnnotations(name2, annotationsFor(name2, config2.annotations))
+    },
     cb
   );
+  if (!isToolAllowed(name2, toolMode)) tool.disable();
+  return tool;
+}
+var toolMode = (() => {
+  const config2 = readConfigText();
+  return resolveToolMode(process.env, config2.text, config2.unreadable);
+})();
+function readConfigText() {
+  try {
+    return { text: readFileSync6(fileConfigPath(), "utf8") };
+  } catch (error63) {
+    const code = error63.code;
+    return code === "ENOENT" ? {} : { unreadable: code ?? String(error63) };
+  }
 }
 var mailManager = new AppleMailManager();
-registerResourcesAndPrompts(server, mailManager);
+registerResourcesAndPrompts(server, mailManager, (tool) => isToolAllowed(tool, toolMode));
 function collectForensics(tool, args) {
   const report = mailManager.consumeLastForensics();
   if (!report) return { warnings: [] };
@@ -112412,6 +112887,66 @@ ${accountList}`, structured);
   }, "Error listing accounts")
 );
 registerTool(
+  "get-account-settings",
+  {
+    description: "Use when: you need the settings of one Mail account \u2014 full name, email addresses, enabled, server and port, whether deleted mail goes to the Trash, when the Trash/Junk/Sent are emptied, which IMAP folders are kept on the server, and its outgoing (SMTP) server.\nReturns: the account name and a settings object. The password is never read or returned.\nDo not use when: you only need the account names (use list-accounts).",
+    inputSchema: {
+      account: external_exports.string().min(1).describe("Account name or its email address (see list-accounts)")
+    },
+    outputSchema: {
+      account: external_exports.string().optional(),
+      settings: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+    }
+  },
+  withErrorHandling(({ account }) => {
+    const result = mailManager.getAccountSettings(account);
+    return successResponse(
+      `Settings of "${result.account}":
+${describeAccountSettings(result.settings)}`,
+      result
+    );
+  }, "Error reading account settings")
+);
+registerTool(
+  "set-account-settings",
+  {
+    description: "Use when: the user asked to change a setting of a Mail account: turn it on or off (enabled), its full name, include it when getting new mail, move deleted messages to the Trash, empty Trash/Junk/Sent on quit, or the IMAP flags (store drafts, junk, sent, deleted on the server; compact mailboxes when closing).\nReturns: the settings read back, and any setting Mail refused.\nDo not use when: the change involves a password, server, port, user name or the account's email addresses \u2014 those cannot be changed with this tool.\nSafety: turning an account off stops its mail arriving and sending; confirm with the user first.",
+    inputSchema: {
+      account: external_exports.string().min(1).describe("Account name or its email address (see list-accounts)"),
+      enabled: external_exports.boolean().optional(),
+      fullName: external_exports.string().min(1).optional(),
+      includeWhenGettingNewMail: external_exports.boolean().optional(),
+      moveDeletedMessagesToTrash: external_exports.boolean().optional(),
+      emptyTrashOnQuit: external_exports.boolean().optional(),
+      emptyJunkOnQuit: external_exports.boolean().optional(),
+      emptySentOnQuit: external_exports.boolean().optional(),
+      storeDraftsOnServer: external_exports.boolean().optional(),
+      storeJunkOnServer: external_exports.boolean().optional(),
+      storeSentOnServer: external_exports.boolean().optional(),
+      storeDeletedOnServer: external_exports.boolean().optional(),
+      compactMailboxesWhenClosing: external_exports.boolean().optional()
+    },
+    outputSchema: {
+      account: external_exports.string().optional(),
+      refused: external_exports.array(external_exports.string()).optional(),
+      settings: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+    }
+  },
+  withErrorHandling(({ account, ...changes }) => {
+    const result = mailManager.setAccountSettings(account, changes);
+    if (result.refused.length > 0) {
+      const { applied } = splitAppliedSettings(changes, result.refused);
+      return errorResponse(
+        `Mail refused part of the change on "${result.account}": ${result.refused.join("; ")}. ` + (applied.length > 0 ? `Applied: ${applied.join(", ")}.` : "None of the requested settings was applied.") + `
+Settings now:
+${describeAccountSettings(result.settings)}`,
+        { ...result, applied }
+      );
+    }
+    return successResponse(`Settings of "${result.account}" updated.`, result);
+  }, "Error changing account settings")
+);
+registerTool(
   "list-rules",
   {
     description: "Use when: discovering the Mail rules that exist and whether each is enabled or disabled, e.g. before enabling/disabling/deleting one.\nReturns: each rule's name and enabled/disabled state.\nDo not use when: you want to change a rule (use enable-rule / disable-rule / create-rule / delete-rule).",
@@ -112725,6 +113260,22 @@ registerTool(
 
 ${checkLines}`, { ...result });
   }, "Error running health check")
+);
+registerTool(
+  "restart-mail",
+  {
+    description: 'Use when: Mail.app is closed or stopped answering (every call fails with `AppleEvent timed out (-1712)` or "not running") and health-check confirms it. Quits Mail.app, force-kills it if it will not quit, opens it again and waits until it answers.\nReturns: ok plus the steps taken.\nDo not use when: the failure is a permission refusal (-1743: grant Automation access instead) or you only want to check status (use health-check). An unsaved draft in Mail.app is lost.',
+    inputSchema: {},
+    outputSchema: {
+      ok: external_exports.boolean().optional(),
+      steps: external_exports.array(external_exports.string()).optional()
+    }
+  },
+  withErrorHandling(() => {
+    const report = restartMail();
+    const text = `${report.ok ? "\u2713" : "\u2717"} ${report.steps.join("; ")}`;
+    return report.ok ? successResponse(text, { ...report }) : errorResponse(text, { ...report });
+  }, "Error restarting Mail.app")
 );
 registerTool(
   "doctor",
