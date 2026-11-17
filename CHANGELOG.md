@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.59] - 2026-11-17
+
+### Added
+
+- **`get-account-settings` and `set-account-settings`.** Read the settings of one Mail account (full name, addresses, enabled, server and port, Trash and Junk behaviour, which IMAP folders are kept on the server, outgoing server; never the password) and change the ones that cannot lock the account out or redirect its mail: `enabled`, `fullName`, `includeWhenGettingNewMail`, `moveDeletedMessagesToTrash`, `emptyTrashOnQuit`, `emptyJunkOnQuit`, `emptySentOnQuit`, `storeDraftsOnServer`, `storeJunkOnServer`, `storeSentOnServer`, `storeDeletedOnServer` and `compactMailboxesWhenClosing`. Servers, ports, user names, passwords and addresses stay read-only. The account is given by name or address; an ambiguous one is refused, because Mail addresses an account only by name. The write returns the settings read back, and when Mail refuses part of a change it says which settings were applied and which were refused. Control characters are stripped from a written value. `set-account-settings` is classified destructive and is allowed in `no_send` mode but not in `read_only`.
+
 ## [2.20.58] - 2026-11-17
 
 ### Added
