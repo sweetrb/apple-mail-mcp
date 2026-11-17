@@ -17,7 +17,7 @@ const results: SerialSmtpResult[] = [{ email: recipients[0].email, success: true
 function fixture() {
   return {
     smtpConfigured: vi.fn(() => true),
-    smtpConfig: vi.fn(() => config),
+    smtpConfig: vi.fn((_from?: string) => config),
     smtpSend: vi.fn(async () => results),
     appleScriptSend: vi.fn(() => results),
   } satisfies SerialEmailDeps;
@@ -198,6 +198,27 @@ describe("mail-merge transport selection", () => {
     });
     expect(aliasConfig.from).toBe("sender@example.test");
     expect(deps.appleScriptSend).not.toHaveBeenCalled();
+  });
+
+  it("asks for the SMTP config of the requested identity account and sends with it", async () => {
+    const deps = fixture();
+    const identityConfig = { ...config, user: "james@example.test", from: "james@example.test" };
+    deps.smtpConfig.mockReturnValue(identityConfig);
+
+    const response = await createSerialEmailHandler(deps)({
+      ...args,
+      account: "james@example.test",
+    });
+
+    expect(deps.smtpConfig).toHaveBeenCalledWith("james@example.test");
+    expect(response.structuredContent).toMatchObject({ ok: true, transport: "smtp" });
+    expect(deps.smtpSend).toHaveBeenCalledWith(
+      recipients,
+      args.subject,
+      args.body,
+      identityConfig,
+      { delayMs: 0, from: "james@example.test" }
+    );
   });
 
   it("rejects an unapproved sender before starting any recipient in the batch", async () => {

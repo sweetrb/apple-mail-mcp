@@ -54,6 +54,13 @@ const REQUIRED = [
 ];
 
 describe("runCli", () => {
+  it("resolves the SMTP config for the requested --from", async () => {
+    const resolveConfig = vi.fn((_env: NodeJS.ProcessEnv, _from?: string) => FAKE_CONFIG);
+    const { deps } = makeDeps({ resolveConfig });
+    await runCli(REQUIRED, deps);
+    expect(resolveConfig).toHaveBeenCalledWith(deps.env, "me@example.com");
+  });
+
   it.each([
     { name: "all accepted", refused: [], finalReply: "accept" as const, code: 0, count: 1 },
     {

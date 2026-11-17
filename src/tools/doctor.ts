@@ -8,7 +8,7 @@
  */
 import type { AppleMailManager } from "@/services/appleMailManager.js";
 import { imapHealthCheck, IMAP_ENV, listImapAccountLabels } from "@/services/imapClient.js";
-import { SMTP_ENV, isSmtpConfigured } from "@/services/smtpMailer.js";
+import { SMTP_ENV, isSmtpConfigured, parseSmtpIdentities } from "@/services/smtpMailer.js";
 import { SETUP_GUIDE_URL } from "@/utils/docsUrls.js";
 import { BODY_INDEX_ENV, bodyIndexStatus, type BodyIndexStatus } from "@/utils/bodyIndexSync.js";
 import { ENVELOPE_INDEX_ENV, isTruthyFlag } from "@/utils/envelopeIndex.js";
@@ -91,11 +91,20 @@ export async function runDoctor(mailManager: AppleMailManager): Promise<DoctorRe
 
   // 4. SMTP transport (optional) — configured?
   const smtpHost = process.env[SMTP_ENV.host]?.trim();
+  let identityNote = "";
+  let identitiesInvalid = false;
+  try {
+    const count = parseSmtpIdentities(process.env).length;
+    if (count > 0) identityNote = ` ${count} additional sender identities configured.`;
+  } catch (error) {
+    identitiesInvalid = true;
+    identityNote = ` ${error instanceof Error ? error.message : String(error)}`;
+  }
   checks.push({
     name: "SMTP transport",
-    status: isSmtpConfigured() ? "ok" : "warn",
+    status: isSmtpConfigured() && !identitiesInvalid ? "ok" : "warn",
     detail: isSmtpConfigured()
-      ? `configuration present (${smtpHost}); SMTP authentication and delivery have not been checked. send-email auto-prefers SMTP unless a non-email "account" label selects AppleScript. SMTP sends attempt a best-effort Sent-folder copy through matching-account IMAP; check the send result for whether it was filed. Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.`
+      ? `configuration present (${smtpHost});${identityNote} SMTP authentication and delivery have not been checked. send-email auto-prefers SMTP unless a non-email "account" label selects AppleScript. SMTP sends attempt a best-effort Sent-folder copy through matching-account IMAP; check the send result for whether it was filed. Pass transport:"applescript" to force Mail.app. The apple-mail-send CLI is also available.`
       : `not configured — send-email uses AppleScript (subject to macOS 15+ blockquote wrapping). Set ${SMTP_ENV.host} and ${SMTP_ENV.user} (+ password via Keychain) to enable. ${CONFIG_FILE_HINT}. Setup guide: ${SETUP_GUIDE_URL}`,
   });
 

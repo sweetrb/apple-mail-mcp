@@ -266,7 +266,70 @@ export const SMTP_ENV = {
   password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
   keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
   keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT",
+  identities: "APPLE_MAIL_MCP_SMTP_IDENTITIES",
 } as const;
+
+/** One extra sender with its own SMTP login (a JSON entry of {@link SMTP_ENV.identities}). */
+interface SmtpIdentity {
+  from: string;
+  user?: string;
+  host?: string;
+  port?: number;
+  secure?: boolean;
+  password?: string;
+  keychainService?: string;
+  keychainAccount?: string;
+}
+
+/**
+ * Parses {@link SMTP_ENV.identities}. Returns [] when unset; throws naming the
+ * variable when the value is not a JSON array of objects that each have a `from`.
+ */
+export function parseSmtpIdentities(env: NodeJS.ProcessEnv): SmtpIdentity[] {
+  const raw = env[SMTP_ENV.identities]?.trim();
+  if (!raw) return [];
+  const invalid = (reason: string) =>
+    new Error(`${SMTP_ENV.identities} is invalid: ${reason}. ${SETUP_HINT}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw invalid("not valid JSON");
+  }
+  if (!Array.isArray(parsed)) throw invalid("expected a JSON array");
+  return parsed.map((entry) => {
+    const from = (entry as { from?: unknown } | null)?.from;
+    if (typeof from !== "string" || !from.trim()) throw invalid('every entry needs a "from"');
+    const fields = entry as Record<string, unknown>;
+    for (const key of ["user", "host", "password", "keychainService", "keychainAccount"]) {
+      if (fields[key] !== undefined && typeof fields[key] !== "string") {
+        throw invalid(`"${key}" of ${from.trim()} must be a string`);
+      }
+    }
+    if (fields.secure !== undefined && typeof fields.secure !== "boolean") {
+      throw invalid(`"secure" of ${from.trim()} must be true or false`);
+    }
+    if (
+      fields.port !== undefined &&
+      !(Number.isInteger(fields.port) && (fields.port as number) > 0)
+    ) {
+      throw invalid(`"port" of ${from.trim()} must be a positive integer`);
+    }
+    return { ...(entry as SmtpIdentity), from: from.trim() };
+  });
+}
+
+/** The identity whose `from` is the requested sender, unless it is the primary From. */
+function findSmtpIdentity(
+  env: NodeJS.ProcessEnv,
+  requestedFrom: string | undefined,
+  primaryFrom: string
+): SmtpIdentity | undefined {
+  const wanted = requestedFrom?.trim().toLowerCase();
+  const identities = parseSmtpIdentities(env);
+  if (!wanted || wanted === primaryFrom.toLowerCase()) return undefined;
+  return identities.find((identity) => identity.from.toLowerCase() === wanted);
+}
 
 /**
  * Cheap check for whether the SMTP transport is configured at all, i.e. the two
@@ -336,7 +399,10 @@ export function readKeychainPassword(service: string, account: string): string |
  *
  * @throws Error with an actionable message listing the missing settings.
  */
-export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpConfig {
+export function resolveSmtpConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  requestedFrom?: string
+): SmtpConfig {
   const host = env[SMTP_ENV.host]?.trim();
   const user = env[SMTP_ENV.user]?.trim();
 
@@ -363,6 +429,41 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
   }
 
   const from = env[SMTP_ENV.from]?.trim() || (user as string);
+  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
+
+  // A requested From that names a configured identity is sent with that
+  // identity's own login; it never borrows the primary password.
+  const identity = findSmtpIdentity(env, requestedFrom, from);
+  if (identity) {
+    const identityHost = identity.host?.trim() || (host as string);
+    const identityUser = identity.user?.trim() || identity.from;
+    const identitySecure = identity.secure ?? secure;
+    const pass =
+      identity.password ||
+      readKeychainPassword(
+        identity.keychainService?.trim() || identityHost,
+        identity.keychainAccount?.trim() || identityUser
+      );
+    if (!pass) {
+      throw new Error(
+        `No SMTP password found for identity "${identityUser}". Store an internet password ` +
+          `in the Keychain for service "${identity.keychainService?.trim() || identityHost}" / ` +
+          `account "${identity.keychainAccount?.trim() || identityUser}". ` +
+          SETUP_HINT
+      );
+    }
+    return {
+      host: identityHost,
+      port: identity.port ?? (identity.secure === undefined ? port : identitySecure ? 465 : 587),
+      secure: identitySecure,
+      allowPlaintext,
+      user: identityUser,
+      pass,
+      from: identity.from,
+      allowedFrom: [],
+    };
+  }
+
   const allowedFrom = (env[SMTP_ENV.allowedFrom] ?? "")
     .split(",")
     .map((value) => value.trim())
@@ -386,7 +487,6 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
     );
   }
 
-  const allowPlaintext = /^(1|true|yes|on)$/i.test(env[SMTP_ENV.allowPlaintext]?.trim() ?? "");
   return {
     host: host as string,
     port,
@@ -496,7 +596,7 @@ export async function sendViaSmtp(
   let cfg: SmtpConfig;
   let from: string;
   try {
-    cfg = config ?? resolveSmtpConfig();
+    cfg = config ?? resolveSmtpConfig(process.env, opts.from);
     from = resolveSmtpFrom(opts.from, cfg);
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
