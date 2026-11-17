@@ -1666,6 +1666,22 @@ List all configured Mail accounts.
 
 **Returns:** List of account names and email addresses.
 
+#### `get-account-settings`
+
+Read the settings of one account: full name, email addresses, enabled, server and port, whether deleted mail goes to the Trash, when Trash/Junk/Sent are emptied, which IMAP folders are kept on the server, and the outgoing (SMTP) server.
+
+**Parameters:** `account` (name or email address)
+
+**Returns:** `{ account, settings }`. The password is never read or returned.
+
+#### `set-account-settings`
+
+Change settings of one account that cannot lock it out or redirect its mail.
+
+**Parameters:** `account`, and at least one of `enabled`, `fullName`, `includeWhenGettingNewMail`, `moveDeletedMessagesToTrash`, `emptyTrashOnQuit`, `emptyJunkOnQuit`, `emptySentOnQuit`, `storeDraftsOnServer`, `storeJunkOnServer`, `storeSentOnServer`, `storeDeletedOnServer`, `compactMailboxesWhenClosing`.
+
+**Returns:** the settings read back, or the settings Mail refused. Servers, ports, user names, passwords and the account's email addresses are read-only here. Allowed in `no_send` mode, not in `read_only`.
+
 ---
 
 ### Rules

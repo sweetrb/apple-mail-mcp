@@ -39,7 +39,7 @@ Use this skill when the user:
 | `send-email`          | Send a new email immediately (`attachments`; `inReplyTo`/`references` threading, SMTP only)                                                                                                                                                                                             |
 | `send-serial-email`   | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders)                                                                                                                                                                                                    |
 | `create-draft`        | Save an email to Drafts for review (`attachments`; with `inReplyTo`/`references` a threaded draft is filed over IMAP)                                                                                                                                                                   |
-| `update-saved-draft` | Preview and partially edit a stored IMAP draft; approval pins its revision, returns the new ID, never sends |
+| `update-saved-draft`  | Preview and partially edit a stored IMAP draft; approval pins its revision, returns the new ID, never sends                                                                                                                                                                             |
 | `reply-to-message`    | Reply to a message (`replyAll`, `send`, `transport`, `attachments`)                                                                                                                                                                                                                     |
 | `forward-message`     | Forward a message to new recipients (`body`, `send`, `transport`, `attachments`)                                                                                                                                                                                                        |
 | `mark-as-read`        | Mark a message as read                                                                                                                                                                                                                                                                  |
@@ -67,7 +67,6 @@ use that ID for subsequent operations. APPEND is confirmed before removing the
 old UID; `append_unknown` and `cleanup_failed` require inspection, not a blind
 retry. Numeric IDs, non-drafts and accounts without IMAP are refused.
 
-
 ### Batch Operations (1-100 ids per call)
 
 | Tool                    | Purpose                                 |
@@ -91,9 +90,11 @@ retry. Numeric IDs, non-drafts and accounts without IMAP are refused.
 
 ### Account Operations
 
-| Tool            | Purpose                        |
-| --------------- | ------------------------------ |
-| `list-accounts` | List configured email accounts |
+| Tool                   | Purpose                                                      |
+| ---------------------- | ------------------------------------------------------------ |
+| `list-accounts`        | List configured email accounts                               |
+| `get-account-settings` | Read one account's settings (never the password)             |
+| `set-account-settings` | Change safe account settings — confirm first; some lose mail |
 
 ### Smart Mailbox Operations
 

@@ -62622,6 +62622,7 @@ var READ_ONLY_TOOLS = /* @__PURE__ */ new Set([
   "get-unread-count",
   "list-smart-mailboxes",
   "list-accounts",
+  "get-account-settings",
   "list-rules",
   "search-contacts",
   "list-templates",
@@ -62639,7 +62640,9 @@ var DESTRUCTIVE_TOOLS = /* @__PURE__ */ new Set([
   "delete-smart-mailbox",
   "create-rule",
   "delete-rule",
-  "delete-template"
+  "delete-template",
+  // It can switch an account off, which stops its mail fetching and sending.
+  "set-account-settings"
 ]);
 function parseToolMode(raw) {
   const value = (raw ?? "").trim().toLowerCase() || "full";
