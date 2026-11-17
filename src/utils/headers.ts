@@ -22,6 +22,8 @@
  * @module utils/headers
  */
 
+import { decodeText, decodeWindows1252 } from "@/utils/textDecode.js";
+
 export interface HeaderField {
   /** Header name as written (`Message-ID`, `received`, …) — case preserved. */
   name: string;
@@ -92,7 +94,7 @@ export function decodeEncodedWords(value: string): string {
                   ),
                 "latin1"
               );
-        return new TextDecoder(normalizeCharset(charset)).decode(bytes);
+        return decodeText(bytes, normalizeCharset(charset));
       } catch {
         return whole;
       }
@@ -462,7 +464,6 @@ export function headerBlockBytes(source: Buffer, whole: boolean): Buffer | undef
  */
 export function decodeHeaderBytes(bytes: Buffer): string {
   const utf8 = new TextDecoder("utf-8", { fatal: true });
-  const cp1252 = new TextDecoder("windows-1252");
   const lines: string[] = [];
   let start = 0;
   for (let i = 0; i <= bytes.length; i++) {
@@ -471,7 +472,7 @@ export function decodeHeaderBytes(bytes: Buffer): string {
     try {
       lines.push(utf8.decode(line));
     } catch {
-      lines.push(cp1252.decode(line));
+      lines.push(decodeWindows1252(line));
     }
     start = i + 1;
   }
