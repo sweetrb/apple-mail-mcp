@@ -37,7 +37,7 @@ import {
   LOCAL_STORE_LABEL,
   noteAccountListFailure,
 } from "@/services/appleMailManager.js";
-import { writeFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { join as joinPath } from "path";
 import {
   sendViaSmtp,
@@ -159,9 +159,10 @@ import {
 } from "@/utils/bodyIndexSync.js";
 import { headersStructured, isoOrUndefined, parseHeaderBlock } from "@/utils/headers.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
-import { loadFileConfig } from "@/services/fileConfig.js";
+import { fileConfigPath, loadFileConfig } from "@/services/fileConfig.js";
 import { isOrphaned } from "@/utils/orphan.js";
 import { withJsonSchema2020_12 } from "@/utils/jsonSchemaDialect.js";
+import { isToolAllowed, resolveToolMode, withSafetyAnnotations } from "@/utils/toolMode.js";
 import {
   writeDestructiveAudit,
   reconciliationWarnings,
@@ -568,12 +569,34 @@ function registerTool<
     const token = REFERENCES_SCHEMA.unwrap().element;
     z.globalRegistry.add(token, { ...token.meta(), description: IN_REPLY_TO_SCHEMA.description });
   }
-  return registerToolWithContracts(
+  const tool = registerToolWithContracts(
     server,
     name,
-    { ...config, annotations: annotationsFor(name, config.annotations) },
+    {
+      ...config,
+      annotations: withSafetyAnnotations(name, annotationsFor(name, config.annotations)),
+    },
     cb
   );
+  // A disabled tool is neither listed nor callable (see toolMode.ts).
+  if (!isToolAllowed(name, toolMode)) tool.disable();
+  return tool;
+}
+
+/** Parsed once, after loadFileConfig() has filled the environment. */
+const toolMode = (() => {
+  const config = readConfigText();
+  return resolveToolMode(process.env, config.text, config.unreadable);
+})();
+
+/** The config file's text; a missing file is no config, any other failure is reported. */
+function readConfigText(): { text?: string; unreadable?: string } {
+  try {
+    return { text: readFileSync(fileConfigPath(), "utf8") };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" ? {} : { unreadable: code ?? String(error) };
+  }
 }
 
 /**
@@ -584,7 +607,7 @@ const mailManager = new AppleMailManager();
 
 // MCP resources (accounts/templates/mailboxes) and prompts (triage/reply/
 // summary) — additive context + workflows alongside the tools (D2).
-registerResourcesAndPrompts(server, mailManager);
+registerResourcesAndPrompts(server, mailManager, (tool) => isToolAllowed(tool, toolMode));
 
 // Response helpers, the AppleScript serial gate, withErrorHandling, and the
 // message backend router now live in @/tools/respond and @/services/messageRouter.

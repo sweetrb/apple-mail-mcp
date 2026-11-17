@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.58] - 2026-11-17
+
+### Added
+
+- **Server-side tool gate (`APPLE_MAIL_MCP_MODE`).** A tool description that says "confirm with the user" is advice to the model, and a prompt injection carried in an email body can ignore it. `APPLE_MAIL_MCP_MODE` removes tools from the server, so they are neither listed nor callable: `full` (default) offers every tool, `no_send` drops `send-email`, `send-serial-email`, `reply-to-message`, `forward-message` and `enable-rule`, and `read_only` offers only an explicit allow-list of reads. An unknown value, or a `config.json` that names the mode but could not be applied or read, stops the server instead of falling back to `full`. `read_only` is an allow-list, and `src/utils/toolMode.test.ts` fails while any registered tool is unclassified. The `compose-reply` prompt is dropped when `reply-to-message` is not offered, and the `apple-mail-send` CLI refuses to send when the mode removes sending. Tools that send or delete also carry `destructiveHint`, and allow-listed reads carry `readOnlyHint`.
+
 ## [2.20.57] - 2026-11-11
 
 ### Added

@@ -2248,6 +2248,27 @@ User: "Send it"
 AI: [User opens Mail.app and sends manually, or AI calls send-email]
 ```
 
+#### Server-side tool gate (`APPLE_MAIL_MCP_MODE`)
+
+"Confirm before sending" in a tool description is advice to the model, and a
+prompt injection inside an email body can ignore it. `APPLE_MAIL_MCP_MODE`
+removes tools from the server instead, so they are neither listed nor callable:
+
+| Value            | Tools offered                                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `full` (default) | All of them                                                                                                        |
+| `no_send`        | All except `send-email`, `send-serial-email`, `reply-to-message`, `forward-message` and `enable-rule`              |
+| `read_only`      | Only an explicit allow-list of reads (`src/utils/toolMode.ts`); `get-message-rfc822` is out, its `savePath` writes |
+
+An unknown value stops the server rather than falling back to `full`, and so
+does a `config.json` that names `APPLE_MAIL_MCP_MODE` but could not be applied
+(invalid JSON, a nested `env` block, a non-string value). `read_only` is an
+allow-list: a tool added later stays out until it is classified, and a test
+fails while any registered tool is unclassified. Tools that send or delete carry
+`destructiveHint` and allow-listed reads carry `readOnlyHint`. The `compose-reply`
+prompt is dropped when `reply-to-message` is not offered, and the `apple-mail-send`
+CLI refuses to send when the mode removes sending.
+
 ### Sending Personalized Emails (Mail Merge)
 
 ```

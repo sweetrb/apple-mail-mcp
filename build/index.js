@@ -108528,7 +108528,7 @@ ${actionStmts.join("\n")}
 
 // src/index.ts
 init_smtpMailer();
-import { writeFileSync as writeFileSync5 } from "fs";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync5 } from "fs";
 import { join as joinPath } from "path";
 
 // src/tools/compose.ts
@@ -109834,7 +109834,7 @@ function jsonResource(uri, data) {
     contents: [{ uri, mimeType: "application/json", text: JSON.stringify(data, null, 2) }]
   };
 }
-function registerResourcesAndPrompts(server2, mailManager2) {
+function registerResourcesAndPrompts(server2, mailManager2, toolAllowed = () => true) {
   server2.registerResource(
     "accounts",
     "mail://accounts",
@@ -109894,7 +109894,7 @@ function registerResourcesAndPrompts(server2, mailManager2) {
       ]
     })
   );
-  server2.registerPrompt(
+  const composeReply = server2.registerPrompt(
     "compose-reply",
     {
       title: "Compose reply",
@@ -109917,6 +109917,7 @@ function registerResourcesAndPrompts(server2, mailManager2) {
       ]
     })
   );
+  if (!toolAllowed("reply-to-message")) composeReply.disable();
   server2.registerPrompt(
     "weekly-summary",
     {
@@ -110224,6 +110225,79 @@ function withJsonSchema2020_12(transport2) {
   return transport2;
 }
 
+// src/utils/toolMode.ts
+var TOOL_MODE_ENV = "APPLE_MAIL_MCP_MODE";
+var TOOL_MODES = ["full", "no_send", "read_only"];
+var SENDING_TOOLS = /* @__PURE__ */ new Set([
+  "send-email",
+  "send-serial-email",
+  "reply-to-message",
+  "forward-message",
+  // A disabled rule can forward, redirect or auto-reply once enabled.
+  "enable-rule"
+]);
+var READ_ONLY_TOOLS = /* @__PURE__ */ new Set([
+  "search-messages",
+  "get-message",
+  "get-message-headers",
+  "get-thread",
+  "list-messages",
+  "resolve-message-id",
+  "list-attachments",
+  "fetch-attachment",
+  "list-mailboxes",
+  "get-unread-count",
+  "list-smart-mailboxes",
+  "list-accounts",
+  "list-rules",
+  "search-contacts",
+  "list-templates",
+  "get-template",
+  "health-check",
+  "doctor",
+  "get-mail-stats",
+  "get-sync-status"
+]);
+var DESTRUCTIVE_TOOLS = /* @__PURE__ */ new Set([
+  ...SENDING_TOOLS,
+  "delete-message",
+  "batch-delete-messages",
+  "delete-mailbox",
+  "delete-smart-mailbox",
+  "create-rule",
+  "delete-rule",
+  "delete-template"
+]);
+function parseToolMode(raw) {
+  const value = (raw ?? "").trim().toLowerCase() || "full";
+  if (TOOL_MODES.includes(value)) return value;
+  throw new Error(`${TOOL_MODE_ENV} must be one of ${TOOL_MODES.join(", ")}; got "${raw}".`);
+}
+function resolveToolMode(env, configText, unreadable) {
+  const raw = env[TOOL_MODE_ENV];
+  if ((raw === void 0 || raw === "") && unreadable !== void 0) {
+    throw new Error(
+      `The config file could not be read (${unreadable}), so ${TOOL_MODE_ENV} may be set in it and not applied. Fix the file's permissions; the server will not fall back to "full".`
+    );
+  }
+  if ((raw === void 0 || raw === "") && configText?.includes(TOOL_MODE_ENV)) {
+    throw new Error(
+      `The config file mentions ${TOOL_MODE_ENV} but it was not applied (invalid JSON, a nested block, or a non-string value). Fix the file; the server will not fall back to "full".`
+    );
+  }
+  return parseToolMode(raw);
+}
+function isToolAllowed(name2, mode) {
+  if (mode === "full") return true;
+  if (mode === "read_only") return READ_ONLY_TOOLS.has(name2);
+  return !SENDING_TOOLS.has(name2);
+}
+function withSafetyAnnotations(name2, annotations) {
+  if (DESTRUCTIVE_TOOLS.has(name2)) return { ...annotations, destructiveHint: true };
+  if (READ_ONLY_TOOLS.has(name2)) return { ...annotations, readOnlyHint: true };
+  return annotations;
+}
+
 // src/index.ts
 init_auditLog();
 if (process.argv.includes(BODY_INDEX_BUILDER_ARG) && process.send) {
@@ -110429,15 +110503,32 @@ function registerTool(name2, config2, cb) {
     const token = REFERENCES_SCHEMA.unwrap().element;
     external_exports.globalRegistry.add(token, { ...token.meta(), description: IN_REPLY_TO_SCHEMA.description });
   }
-  return registerToolWithContracts(
+  const tool = registerToolWithContracts(
     server,
     name2,
-    { ...config2, annotations: annotationsFor(name2, config2.annotations) },
+    {
+      ...config2,
+      annotations: withSafetyAnnotations(name2, annotationsFor(name2, config2.annotations))
+    },
     cb
   );
+  if (!isToolAllowed(name2, toolMode)) tool.disable();
+  return tool;
+}
+var toolMode = (() => {
+  const config2 = readConfigText();
+  return resolveToolMode(process.env, config2.text, config2.unreadable);
+})();
+function readConfigText() {
+  try {
+    return { text: readFileSync6(fileConfigPath(), "utf8") };
+  } catch (error63) {
+    const code = error63.code;
+    return code === "ENOENT" ? {} : { unreadable: code ?? String(error63) };
+  }
 }
 var mailManager = new AppleMailManager();
-registerResourcesAndPrompts(server, mailManager);
+registerResourcesAndPrompts(server, mailManager, (tool) => isToolAllowed(tool, toolMode));
 function collectForensics(tool, args) {
   const report = mailManager.consumeLastForensics();
   if (!report) return { warnings: [] };
