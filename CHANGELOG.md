@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.63] - 2026-11-18
+
+### Fixed
+
+- **A rejected TLS certificate no longer reports `deliveryUnknown`.** Nodemailer labels a failed certificate check `ESOCKET`/`CONN` and keeps the TLS code in `originalCode`. `ESOCKET`/`CONN` alone has to stay unknown, because a socket can close after DATA, so a hostname mismatch, an incomplete chain or an expired certificate came back as an unknown outcome with no error text, although the check runs during the handshake, before AUTH and DATA. `ERR_TLS_CERT_ALTNAME_INVALID`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `UNABLE_TO_GET_ISSUER_CERT(_LOCALLY)`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `CERT_HAS_EXPIRED`, `CERT_NOT_YET_VALID`, `CERT_REVOKED` and `CERT_UNTRUSTED` are now a known unsent failure that carries the error. A reset connection stays unknown. `build/` is regenerated.
+
 ## [2.20.62] - 2026-11-18
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)

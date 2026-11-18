@@ -62596,6 +62596,7 @@ function definiteSmtpFailure(error2) {
   if (!error2 || typeof error2 !== "object") return false;
   const { code, originalCode, command, responseCode, timeoutType, syscall } = error2;
   if (code === "EAUTH" || code === "EDNS") return true;
+  if (TLS_CERT_FAILURE_CODES.has(originalCode ?? code ?? "")) return true;
   if (code === "ETIMEDOUT" && ["CONNECT_TIMEOUT", "GREETING_TIMEOUT", "UPGRADE_TIMEOUT"].includes(timeoutType ?? ""))
     return true;
   if ((originalCode ?? code) === "ETIMEDOUT" && syscall === "connect") return true;
@@ -62866,7 +62867,7 @@ async function sendViaSmtp(opts, config, createTransport2 = nodemailer_default.c
     }
   }
 }
-var SMTP_ENV;
+var TLS_CERT_FAILURE_CODES, SMTP_ENV;
 var init_smtpMailer = __esm({
   "src/services/smtpMailer.ts"() {
     "use strict";
@@ -62875,6 +62876,18 @@ var init_smtpMailer = __esm({
     init_attachmentLimits();
     init_attachmentReadPolicy();
     init_docsUrls();
+    TLS_CERT_FAILURE_CODES = /* @__PURE__ */ new Set([
+      "CERT_HAS_EXPIRED",
+      "CERT_NOT_YET_VALID",
+      "CERT_REVOKED",
+      "CERT_UNTRUSTED",
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+      "ERR_TLS_CERT_ALTNAME_INVALID",
+      "SELF_SIGNED_CERT_IN_CHAIN",
+      "UNABLE_TO_GET_ISSUER_CERT",
+      "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+      "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
+    ]);
     SMTP_ENV = {
       host: "APPLE_MAIL_MCP_SMTP_HOST",
       port: "APPLE_MAIL_MCP_SMTP_PORT",

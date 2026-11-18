@@ -183,6 +183,24 @@ export function unknownSmtpResult(error: unknown): SmtpSendResult {
 }
 
 /**
+ * Nodemailer reports a failed certificate check as ESOCKET/CONN and keeps the
+ * TLS code in `originalCode`. The check runs during the handshake, before AUTH
+ * and DATA, so one of these proves nothing was submitted.
+ */
+const TLS_CERT_FAILURE_CODES = new Set([
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "CERT_REVOKED",
+  "CERT_UNTRUSTED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+
+/**
  * Only protocol phases or explicit negative DATA replies prove no submission.
  * Nodemailer labels socket close/timeouts CONN even AFTER sending DATA, so a
  * generic connection error must remain unknown. RCPT acceptance is not delivery.
@@ -198,6 +216,7 @@ function definiteSmtpFailure(error: unknown): boolean {
     syscall?: string;
   };
   if (code === "EAUTH" || code === "EDNS") return true;
+  if (TLS_CERT_FAILURE_CODES.has(originalCode ?? code ?? "")) return true;
   // Nodemailer reports both setup and post-DATA socket timeouts as CONN.
   // Only the explicit setup phases, or an OS connect syscall, prove unsent.
   if (
