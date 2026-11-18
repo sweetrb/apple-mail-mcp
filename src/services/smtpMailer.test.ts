@@ -454,6 +454,52 @@ describe("sendViaSmtp", () => {
   });
 
   it.each([
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "CERT_HAS_EXPIRED",
+  ])(
+    "reports a %s certificate failure as a known unsent result, not an unknown outcome",
+    async (originalCode) => {
+      // Nodemailer labels it ESOCKET/CONN, which alone stays unknown: a socket
+      // can close after DATA. A certificate check runs during the handshake.
+      const sendMail = vi.fn().mockRejectedValue(
+        Object.assign(new Error("certificate check failed"), {
+          code: "ESOCKET",
+          originalCode,
+          command: "CONN",
+        })
+      );
+      const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
+      const result = await sendViaSmtp(
+        { to: ["bob@example.com"], subject: "s", body: "b" },
+        testConfig,
+        createTransport as never
+      );
+      expect(result.success).toBe(false);
+      expect(result.deliveryUnknown).not.toBe(true);
+      expect(result.error).toMatch(/SMTP send failed: certificate check failed/);
+    }
+  );
+
+  it("keeps a reset ESOCKET/CONN connection unknown", async () => {
+    const sendMail = vi.fn().mockRejectedValue(
+      Object.assign(new Error("read ECONNRESET"), {
+        code: "ESOCKET",
+        originalCode: "ECONNRESET",
+        command: "CONN",
+      })
+    );
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close: vi.fn() });
+    const result = await sendViaSmtp(
+      { to: ["bob@example.com"], subject: "s", body: "b" },
+      testConfig,
+      createTransport as never
+    );
+    expect(result).toMatchObject({ success: false, deliveryUnknown: true });
+  });
+
+  it.each([
     { code: "ECONNECTION", command: "CONN" },
     { code: "ETIMEDOUT", command: "CONN" },
     { code: "ESTREAM", command: "API" },
