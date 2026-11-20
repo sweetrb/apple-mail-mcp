@@ -4275,8 +4275,8 @@ var require_fast_uri = __commonJS({
       } catch {
         return void 0;
       }
-      const { normalized: normalized2, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme } = normalizeStringWithStatus(value, opts);
-      return malformedAuthorityOrPort || malformedPercentEncoding || malformedSchemeSpecific || malformedHost || malformedScheme ? void 0 : normalized2;
+      const { normalized: normalized3, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme } = normalizeStringWithStatus(value, opts);
+      return malformedAuthorityOrPort || malformedPercentEncoding || malformedSchemeSpecific || malformedHost || malformedScheme ? void 0 : normalized3;
     }
     var fastUri = {
       SCHEMES,
@@ -43619,9 +43619,9 @@ var require_connection_deadline = __commonJS({
         if (err.code !== "ETIMEDOUT" && !/timed out/i.test(err.message || "")) {
           return err;
         }
-        let normalized2 = this.error();
-        normalized2._err = err;
-        return normalized2;
+        let normalized3 = this.error();
+        normalized3._err = err;
+        return normalized3;
       }
       /**
        * Throws before a phase is started if the budget is already used up, so no work is begun
@@ -44295,7 +44295,7 @@ var require_tools2 = __commonJS({
     var libmime = require_libmime();
     var { resolveCharset } = require_charsets2();
     var { compiler } = require_imap_handler();
-    var { createHash: createHash2 } = __require("crypto");
+    var { createHash: createHash3 } = __require("crypto");
     var { JPDecoder } = require_jp_decoder();
     var iconv = require_lib();
     var FLAG_COLORS = ["red", "orange", "yellow", "green", "blue", "purple", "grey"];
@@ -44925,7 +44925,7 @@ var require_tools2 = __commonJS({
             } catch {
             }
           }
-          map3.id = map3.emailId || createHash2("md5").update([path3, mailbox.uidValidity?.toString() || "", map3.uid.toString()].join(":")).digest("hex");
+          map3.id = map3.emailId || createHash3("md5").update([path3, mailbox.uidValidity?.toString() || "", map3.uid.toString()].join(":")).digest("hex");
         }
         if (map3.flags) {
           let flagColor = tools.getFlagColor(map3.flags);
@@ -52964,12 +52964,12 @@ var init_url = __esm({
     parse3 = (input2, parseQueryString) => {
       input2 = stripSurroundingWhitespace(input2 || "");
       const slashless = SLASHLESS_AUTHORITY.exec(input2);
-      const normalized2 = slashless ? slashless[1] + "//" + slashless[2] : input2;
+      const normalized3 = slashless ? slashless[1] + "//" + slashless[2] : input2;
       let u;
       try {
-        u = new URL(normalized2);
+        u = new URL(normalized3);
       } catch (err) {
-        return legacyParse(normalized2, parseQueryString, err);
+        return legacyParse(normalized3, parseQueryString, err);
       }
       const hostname3 = normalizeHostname(u.hostname, u.href);
       const port = u.port || null;
@@ -58623,8 +58623,8 @@ var init_mime_node = __esm({
             return;
           }
           if (typeof this.normalizeHeaderKey === "function") {
-            const normalized2 = this.normalizeHeaderKey(key, value);
-            const cleaned = typeof normalized2 === "string" ? normalized2.replace(/[\x00-\x1f\x7f]/g, "") : "";
+            const normalized3 = this.normalizeHeaderKey(key, value);
+            const cleaned = typeof normalized3 === "string" ? normalized3.replace(/[\x00-\x1f\x7f]/g, "") : "";
             if (cleaned) {
               key = cleaned;
             }
@@ -59072,13 +59072,13 @@ var init_mime_node = __esm({
             continue;
           }
           if (address && address.address) {
-            const normalized2 = this._normalizeAddress(address.address);
-            if (normalized2 === address.address && typeof address.name === "string") {
+            const normalized3 = this._normalizeAddress(address.address);
+            if (normalized3 === address.address && typeof address.name === "string") {
               flattened.push(address);
               continue;
             }
             const copy = copyOwnKeys({}, address);
-            copy.address = normalized2;
+            copy.address = normalized3;
             copy.name = address.name || "";
             flattened.push(copy);
             continue;
@@ -66765,6 +66765,47 @@ async function sendViaSmtp(opts, config2, createTransport2 = nodemailer_default.
     }
   }
 }
+async function submitRawViaSmtp(raw, envelope, config2, createTransport2 = nodemailer_default.createTransport) {
+  let transporter;
+  let attempted = false;
+  try {
+    resolveSmtpFrom(envelope.from, config2);
+    transporter = createTransport2({
+      host: config2.host,
+      port: config2.port,
+      secure: config2.secure,
+      requireTLS: !config2.secure && !config2.allowPlaintext,
+      auth: { user: config2.user, pass: config2.pass }
+    });
+    attempted = true;
+    const info = await transporter.sendMail({ raw, envelope });
+    const accepted = recipientAddresses(info.accepted);
+    const rejected = recipientAddresses(info.rejected);
+    return {
+      success: true,
+      messageId: info.messageId,
+      ...accepted !== void 0 ? { accepted } : {},
+      ...rejected !== void 0 ? { rejected } : {},
+      ...accepted !== void 0 && rejected !== void 0 ? { partial: accepted.length > 0 && rejected.length > 0 } : {}
+    };
+  } catch (error63) {
+    if (attempted && !definiteSmtpFailure(error63)) return unknownSmtpResult(error63);
+    const rejected = recipientAddresses(
+      error63 && typeof error63 === "object" && "rejected" in error63 ? error63.rejected : void 0
+    );
+    return {
+      success: false,
+      error: `SMTP send failed: ${errText(error63)}`,
+      ...rejected !== void 0 ? { rejected } : {}
+    };
+  } finally {
+    try {
+      transporter?.close();
+    } catch (error63) {
+      console.error(`Failed to close SMTP transport: ${errText(error63)}`);
+    }
+  }
+}
 function applyPlaceholders(template, variables) {
   let out = template;
   for (const [key, value] of Object.entries(variables)) {
@@ -68010,6 +68051,7 @@ __export(imapClient_exports, {
   imapRenameMailbox: () => imapRenameMailbox,
   imapSearchMessages: () => imapSearchMessages,
   imapThread: () => imapThread,
+  imapTrashSavedDraft: () => imapTrashSavedDraft,
   imapUnflagMessage: () => imapUnflagMessage,
   imapUnreadCount: () => imapUnreadCount,
   imapUpdateSavedDraft: () => imapUpdateSavedDraft,
@@ -68385,8 +68427,8 @@ function describeMailboxFailure(error63) {
   return safe.length > 300 ? `${safe.slice(0, 300)}\u2026` : safe;
 }
 function hasMailboxFlag(mailbox, wanted) {
-  const normalized2 = wanted.toLowerCase();
-  return [...mailbox.flags ?? []].some((flag) => flag.toLowerCase() === normalized2);
+  const normalized3 = wanted.toLowerCase();
+  return [...mailbox.flags ?? []].some((flag) => flag.toLowerCase() === normalized3);
 }
 function messageDateEpoch(message) {
   return (sentDate(message) ?? validDate(message.internalDate))?.getTime() ?? 0;
@@ -69470,9 +69512,24 @@ async function imapGetMessageSource(id, deps = {}) {
 async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  if (opts.requireDraftMailbox && (!ref.account || !ref.path || !Number.isSafeInteger(ref.uid) || ref.uid < 1 || ref.uid > 4294967295))
+    return { success: false, error: "A complete stored Drafts identity is required." };
+  if (opts.requireDraftMailbox && !deps.config && listImapAccountSpecs().filter((spec) => specMatchesSelector(spec, ref.account)).length !== 1)
+    return {
+      success: false,
+      error: "Draft account is absent or ambiguous; no fallback is permitted."
+    };
   const requested = Math.floor(opts.maxBytes ?? MAX_RFC822_INLINE_BYTES);
   const limit = Math.min(Math.max(1, requested), MAX_RFC822_FILE_BYTES);
-  return withClient(depsForMessageRef(ref, deps), async (client) => {
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    if (opts.requireDraftMailbox) {
+      const boxes = (await client.list()).filter(
+        (box) => !box.flags?.has("\\Noselect") && (box.specialUse?.toLowerCase() === "\\drafts" || box.flags?.has("\\Drafts"))
+      );
+      if (boxes.length !== 1 || boxes[0].path !== ref.path) {
+        return { success: false, error: `"${ref.path}" is not the account's Drafts mailbox.` };
+      }
+    }
     const lock = await client.getMailboxLock(ref.path, { readOnly: true });
     try {
       const mb = client.mailbox;
@@ -69497,6 +69554,10 @@ async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
       }
       const bytes = asBuffer(msg.source);
       const size = typeof msg.size === "number" ? msg.size : void 0;
+      if (opts.requireDraftMailbox && (msg.uid !== ref.uid || !msg.flags?.has("\\Draft") || msg.flags.has("\\Deleted") || !uidValidity || !client.mailbox || client.mailbox.uidValidity?.toString() !== uidValidity))
+        return { success: false, error: "The stored message is not the requested active draft." };
+      if (opts.requireDraftMailbox && size !== void 0 && Math.abs(size - bytes.length) > 1024 + size * 0.02)
+        return { success: false, error: "Stored draft source is incomplete; no send performed." };
       if (bytes.length > limit) {
         return {
           success: false,
@@ -69518,6 +69579,12 @@ async function imapGetMessageRfc822(id, opts = {}, deps = {}) {
         success: true,
         acquisition: {
           account: ref.account,
+          accountUser: cfg.user,
+          envelopeRecipients: msg.envelope?.to || msg.envelope?.cc || msg.envelope?.bcc ? {
+            to: msg.envelope.to?.map((address) => address.address ?? "") ?? [],
+            cc: msg.envelope.cc?.map((address) => address.address ?? "") ?? [],
+            bcc: msg.envelope.bcc?.map((address) => address.address ?? "") ?? []
+          } : void 0,
           mailbox: ref.path,
           uid: ref.uid,
           uidValidity,
@@ -69781,6 +69848,92 @@ async function verifyExpunged(client, uid, path3) {
     };
   } catch (e) {
     return { verdict: "unverified", why: `the post-delete check could not run: ${errText2(e)}` };
+  }
+}
+async function imapTrashSavedDraft(id, approved, deps = {}) {
+  let attempted = false;
+  try {
+    const ref = decodeImapId(id);
+    if (!ref || !ref.account || !ref.path || !Number.isSafeInteger(ref.uid) || ref.uid < 1 || ref.uid > 4294967295 || !/^[1-9]\d*$/.test(approved.uidValidity) || !/^[a-f0-9]{64}$/i.test(approved.sha256))
+      throw new Error("Cleanup requires the submitted draft's complete identity and revision.");
+    if (!deps.config && listImapAccountSpecs().filter((spec) => specMatchesSelector(spec, ref.account)).length !== 1)
+      throw new Error("Draft account is absent or ambiguous; cleanup refused.");
+    return await withClient(depsForMessageRef(ref, deps), async (client) => {
+      const boxes = (await client.list()).filter((box) => !box.flags?.has("\\Noselect"));
+      const special = (name2) => boxes.filter(
+        (box) => box.specialUse?.toLowerCase() === name2.toLowerCase() || box.flags?.has(name2)
+      );
+      const drafts = special("\\Drafts"), trash = special("\\Trash");
+      if (drafts.length !== 1 || drafts[0].path !== ref.path || trash.length !== 1 || trash[0].path === ref.path)
+        throw new Error(
+          "Cleanup requires unambiguous, distinct SPECIAL-USE Drafts and Trash mailboxes."
+        );
+      if (!client.capabilities?.has("MOVE"))
+        throw new Error("Draft cleanup requires server-side MOVE; no COPY/EXPUNGE fallback.");
+      const lock = await client.getMailboxLock(ref.path, { readOnly: false });
+      try {
+        const assertRevisionMailbox = () => {
+          if (!client.mailbox || client.mailbox.readOnly || client.mailbox.uidValidity?.toString() !== approved.uidValidity)
+            throw new Error("Draft mailbox revision changed or became read-only; cleanup refused.");
+        };
+        assertRevisionMailbox();
+        const message = await client.fetchOne(
+          String(ref.uid),
+          {
+            uid: true,
+            flags: true,
+            size: true,
+            source: { start: 0, maxLength: MAX_RFC822_FILE_BYTES + 1 }
+          },
+          { uid: true }
+        );
+        if (!message || message.uid !== ref.uid || !message.flags?.has("\\Draft") || message.flags.has("\\Deleted") || !message.source?.length)
+          throw new Error("Submitted draft is missing or no longer active; cleanup refused.");
+        const bytes = asBuffer(message.source);
+        if (bytes.length > MAX_RFC822_FILE_BYTES || message.size !== void 0 && Math.abs(message.size - bytes.length) > 1024 + message.size * 0.02 || createHash("sha256").update(bytes).digest("hex") !== approved.sha256.toLowerCase())
+          throw new Error("Stored draft differs from the submitted revision; cleanup refused.");
+        assertRevisionMailbox();
+        attempted = true;
+        const moved = await client.messageMove([ref.uid], trash[0].path, { uid: true });
+        if (!moved) {
+          attempted = false;
+          return { success: false, removed: false, error: "Server rejected draft MOVE to Trash." };
+        }
+        try {
+          assertRevisionMailbox();
+          const remaining = await client.fetchOne(String(ref.uid), { uid: true }, { uid: true });
+          assertRevisionMailbox();
+          if (remaining)
+            return {
+              success: true,
+              verification: {
+                verdict: "unverified",
+                why: "MOVE was acknowledged, but the source UID is still visible; inspect Drafts and Trash without resending."
+              }
+            };
+          return {
+            success: true,
+            removed: true,
+            verification: {
+              verdict: "verified",
+              how: `MOVE to ${trash[0].path} acknowledged and source UID ${ref.uid} absent in UIDVALIDITY ${approved.uidValidity}.`
+            }
+          };
+        } catch (error63) {
+          return {
+            success: true,
+            verification: {
+              verdict: "unverified",
+              why: `MOVE was acknowledged but readback failed: ${errText2(error63)}`
+            }
+          };
+        }
+      } finally {
+        lock.release();
+      }
+    });
+  } catch (error63) {
+    return { success: false, ...attempted ? {} : { removed: false }, error: errText2(error63) };
   }
 }
 async function imapDeleteMessageById(id, deps = {}) {
@@ -77620,8 +77773,8 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   const _normalized = cached(() => normalizeDef(def));
   const memo2 = globalConfig.memoizer;
   const generateFastpass = (shape) => {
-    const normalized2 = _normalized.value;
-    const syms = normalized2.symbolKeys;
+    const normalized3 = _normalized.value;
+    const syms = normalized3.symbolKeys;
     const doc = new Doc(["payload", "ctx"], { shape, inst, memo: memo2, syms });
     const parseStr = (k) => `shape[${k}]._zod.run({ value: input[${k}], issues: [] }, ctx)`;
     const prefixStr = (id, k) => `
@@ -77639,11 +77792,11 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     doc.write(`const input = payload.value;`);
     const ids = /* @__PURE__ */ Object.create(null);
     let counter = 0;
-    for (const key of normalized2.allKeys) {
+    for (const key of normalized3.allKeys) {
       ids[key] = `key_${counter++}`;
     }
     doc.write(memo2 ? `const newResult = memo.alloc(inst, payload, {}, ctx);` : `const newResult = {};`);
-    for (const key of normalized2.allKeys) {
+    for (const key of normalized3.allKeys) {
       if (key === "__proto__")
         continue;
       const id = ids[key];
@@ -94126,23 +94279,23 @@ function fromJSONSchema(schema, params) {
   if (typeof schema === "boolean") {
     return schema ? z.any() : z.never();
   }
-  let normalized2;
+  let normalized3;
   try {
-    normalized2 = JSON.parse(JSON.stringify(schema));
+    normalized3 = JSON.parse(JSON.stringify(schema));
   } catch {
     throw new Error("fromJSONSchema input is not valid JSON (possibly cyclic); use $defs/$ref for recursive schemas");
   }
-  const version4 = detectVersion(normalized2, params?.defaultTarget);
-  const defs = normalized2.$defs || normalized2.definitions || {};
+  const version4 = detectVersion(normalized3, params?.defaultTarget);
+  const defs = normalized3.$defs || normalized3.definitions || {};
   const ctx = {
     version: version4,
     defs,
     refs: /* @__PURE__ */ new Map(),
     processing: /* @__PURE__ */ new Set(),
-    rootSchema: normalized2,
+    rootSchema: normalized3,
     registry: params?.registry ?? globalRegistry
   };
-  return convertSchema(normalized2, ctx);
+  return convertSchema(normalized3, ctx);
 }
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/deep-partial.js
@@ -100137,6 +100290,7 @@ var TOOL_ANNOTATIONS = {
   "enable-rule": { ...SEND, idempotentHint: true },
   // Outbound mail: leaves the machine and cannot be recalled
   "send-email": SEND,
+  "send-saved-draft": SEND,
   "send-serial-email": SEND,
   "reply-to-message": SEND,
   // sends by default (send: true)
@@ -100435,6 +100589,190 @@ function executeAppleScript(script, options = {}) {
 // src/services/appleMailManager.ts
 init_imapClient();
 init_docsUrls();
+
+// src/services/draftSend.ts
+init_addressparser();
+init_imapClient();
+init_smtpMailer();
+init_savedDraftMime();
+init_headers();
+import { createHash as createHash2 } from "node:crypto";
+var attemptedRevisions = /* @__PURE__ */ new Map();
+var fetchDraft = (id) => imapGetMessageRfc822(id, { maxBytes: MAX_RFC822_FILE_BYTES, requireDraftMailbox: true });
+function addressFields(headers2, name2) {
+  const values = headers2.filter((field) => field.name.toLowerCase() === name2);
+  const addresses2 = values.flatMap(
+    (field) => addressparser_default(field.value, { flatten: true }).map((item) => item.address)
+  );
+  if (addresses2.some((address) => !/^[^\s@<>]+@[^\s@<>]+$/.test(address)))
+    throw new Error("Draft has an invalid " + name2 + " address; no send performed.");
+  return addresses2;
+}
+function cleanDraftHeaders(raw, keepBcc) {
+  const source = raw.toString("latin1");
+  const match = /\r?\n\r?\n/.exec(source);
+  if (!match) throw new Error("Draft has no MIME header/body boundary.");
+  const separator = match[0];
+  const lines = source.slice(0, match.index).split(/\r?\n/);
+  const kept = [];
+  let omit2 = false;
+  for (const line of lines) {
+    if (!/^[ \t]/.test(line)) {
+      const name2 = line.slice(0, line.indexOf(":")).toLowerCase();
+      omit2 = !keepBcc && name2 === "bcc" || [
+        "x-unsent",
+        "x-apple-mail-draft",
+        "x-uniform-type-identifier",
+        "x-universally-unique-identifier"
+      ].includes(name2);
+    }
+    if (!omit2) kept.push(line);
+  }
+  return Buffer.from(
+    kept.join(separator.startsWith("\r") ? "\r\n" : "\n") + separator + source.slice(match.index + separator.length),
+    "latin1"
+  );
+}
+var normalized2 = (addresses2) => [...new Set(addresses2.map((x) => x.toLowerCase()))].sort().join("\0");
+function prepare(acquisition, draftId) {
+  if (!/^[1-9]\d*$/.test(acquisition.uidValidity ?? "") || !acquisition.flags.includes("\\Draft") || acquisition.flags.includes("\\Deleted"))
+    throw new Error("A current active draft with UIDVALIDITY is required; no send performed.");
+  const sha256 = createHash2("sha256").update(acquisition.bytes).digest("hex");
+  if (sha256 !== acquisition.sha256 || acquisition.bytes.length > MAX_RFC822_FILE_BYTES || acquisition.size !== void 0 && Math.abs(acquisition.size - acquisition.bytes.length) > 1024 + acquisition.size * 0.02)
+    throw new Error("Draft MIME acquisition is incomplete or inconsistent; no send performed.");
+  const content3 = previewSavedDraftMime(acquisition.bytes);
+  const parsed = parseHeaderBlock(decodeHeaderBytes(acquisition.bytes));
+  const sender = addressFields(parsed.headers, "sender");
+  if (sender.length && (sender.length !== 1 || sender[0].toLowerCase() !== content3.from.toLowerCase()))
+    throw new Error("A different Sender identity cannot be approved by this version.");
+  const messageIds = parsed.headers.filter((field) => field.name.toLowerCase() === "message-id");
+  if (messageIds.length !== 1 || !/^<[^<>\s]+@[^<>\s]+>$/.test(messageIds[0].value.trim()))
+    throw new Error("Stored draft needs an unambiguous Message-ID; no send performed.");
+  const envelope = acquisition.envelopeRecipients;
+  if (!envelope)
+    throw new Error("IMAP did not report draft envelope recipients; no send performed.");
+  if (["to", "cc", "bcc"].some((field) => {
+    const name2 = field;
+    return normalized2(content3[name2]) !== normalized2(envelope[name2]);
+  }))
+    throw new Error("Draft MIME recipients differ from the IMAP envelope; no send performed.");
+  if (!content3.to.length && !content3.cc.length && !content3.bcc.length)
+    throw new Error("Draft needs at least one recipient; no send performed.");
+  const preview = {
+    ...content3,
+    status: "preview",
+    draftId,
+    uid: acquisition.uid,
+    sha256,
+    uidValidity: acquisition.uidValidity,
+    replyTo: addressFields(parsed.headers, "reply-to")
+  };
+  return {
+    preview,
+    wire: cleanDraftHeaders(acquisition.bytes, false),
+    sentCopy: cleanDraftHeaders(acquisition.bytes, true)
+  };
+}
+async function sendSavedDraft(input2, deps = {}) {
+  if (!input2.draftId.startsWith("imap:"))
+    throw new Error('Use an imap: id from list-messages on Drafts (transport: "imap").');
+  if (!input2.dryRun && (!/^[a-f0-9]{64}$/i.test(input2.approvedSha256 ?? "") || !/^[1-9]\d*$/.test(input2.approvedUidValidity ?? "")))
+    throw new Error("A fresh preview sha256 and uidValidity are required before sending.");
+  const attempts = deps.attempts ?? attemptedRevisions;
+  const key = createHash2("sha256").update(
+    JSON.stringify([
+      input2.draftId,
+      input2.approvedUidValidity,
+      input2.approvedSha256?.toLowerCase()
+    ])
+  ).digest("hex");
+  const previous = input2.dryRun ? void 0 : attempts.get(key);
+  if (previous === null)
+    throw new Error("Submission for this revision is already in progress; do not resend.");
+  if (previous) return { ...previous, alreadyAttempted: true };
+  const fetched = await (deps.fetch ?? fetchDraft)(input2.draftId);
+  if (!fetched.success) throw new Error(fetched.error);
+  const prepared = prepare(fetched.acquisition, input2.draftId);
+  if (input2.dryRun) return prepared.preview;
+  if (prepared.preview.sha256 !== input2.approvedSha256?.toLowerCase() || prepared.preview.uidValidity !== input2.approvedUidValidity)
+    throw new Error("Draft changed since the Codex preview; review the current draft again.");
+  const cfg = (deps.smtpConfig ?? ((from) => resolveSmtpConfig(process.env, from)))(
+    prepared.preview.from
+  );
+  resolveSmtpFrom(prepared.preview.from, cfg);
+  if (fetched.acquisition.accountUser?.toLowerCase() !== cfg.user.toLowerCase())
+    throw new Error("Draft account or From address does not match the configured SMTP identity.");
+  const envelope = {
+    from: prepared.preview.from,
+    to: [.../* @__PURE__ */ new Set([...prepared.preview.to, ...prepared.preview.cc, ...prepared.preview.bcc])]
+  };
+  if (attempts.has(key))
+    throw new Error(
+      "This revision has already been attempted; inspect its submission before retrying."
+    );
+  if (attempts.size >= 1e4)
+    throw new Error("Submission history limit reached; provider reconciliation is required.");
+  attempts.set(key, null);
+  let submitted;
+  try {
+    submitted = await (deps.submit ?? submitRawViaSmtp)(prepared.wire, envelope, cfg);
+  } catch (error63) {
+    submitted = unknownSmtpResult(error63);
+  }
+  const partial2 = submitted.partial === true || !!submitted.accepted?.length && !!submitted.rejected?.length;
+  const full = submitted.success && !submitted.deliveryUnknown && !partial2 && submitted.accepted !== void 0 && submitted.rejected?.length === 0 && normalized2(submitted.accepted) === normalized2(envelope.to);
+  const unknown2 = !!submitted.deliveryUnknown || submitted.success && !full && !partial2;
+  const result = {
+    status: unknown2 ? "submission_unknown" : partial2 ? "partial" : full ? "submitted" : "not_submitted",
+    success: submitted.success,
+    messageId: submitted.messageId,
+    ...smtpDeliveryFields(submitted),
+    ...partial2 ? { partial: true } : {},
+    ...unknown2 ? { deliveryUnknown: true } : {},
+    error: submitted.error ?? (unknown2 ? "SMTP acceptance for the entire approved recipient set is unconfirmed; do not resend automatically." : void 0),
+    draftRemoved: false,
+    draftCleanupStatus: "not_attempted"
+  };
+  if (!submitted.success && !unknown2 && !partial2) {
+    attempts.delete(key);
+    return result;
+  }
+  if (unknown2) {
+    attempts.set(key, result);
+    return result;
+  }
+  try {
+    const copy = await (deps.appendSent ?? ((user, raw, smtpHost) => imapAppendSentCopy(user, raw, {}, { smtpHost })))(cfg.user, prepared.sentCopy, cfg.host);
+    if (copy.attempted) {
+      result.sentCopy = copy.success ?? false;
+      if (!copy.success) result.sentCopyError = copy.error;
+      if (copy.alreadyFiled) result.sentCopyAlreadyFiled = true;
+    }
+  } catch (error63) {
+    result.sentCopy = false;
+    result.sentCopyError = error63 instanceof Error ? error63.message : String(error63);
+  }
+  if (full) {
+    try {
+      const removed = await (deps.removeDraft ?? imapTrashSavedDraft)(input2.draftId, {
+        sha256: prepared.preview.sha256,
+        uidValidity: prepared.preview.uidValidity
+      });
+      result.draftRemovalVerification = removed.verification;
+      result.draftRemovalError = removed.error;
+      result.draftRemoved = removed.removed === true && removed.verification?.verdict === "verified" ? true : removed.removed === false ? false : void 0;
+      result.draftCleanupStatus = result.draftRemoved === true ? "verified" : removed.success ? "unverified" : removed.removed === false ? "failed" : "unknown";
+    } catch (error63) {
+      result.draftRemoved = void 0;
+      result.draftCleanupStatus = "unknown";
+      result.draftRemovalError = error63 instanceof Error ? error63.message : String(error63);
+    }
+  }
+  attempts.set(key, result);
+  return result;
+}
+
+// src/services/appleMailManager.ts
 init_mimeParse();
 init_attachmentName();
 init_headers();
@@ -101595,8 +101933,8 @@ function inMessagesFolder(dir) {
 function parseEmlxBody(bytes) {
   const source = emlxSource(bytes);
   if (source === null) return null;
-  const normalized2 = messageText(source).replace(/\s+/g, " ").trim();
-  return normalized2 ? normalized2.slice(0, MAX_BODY_CHARS) : null;
+  const normalized3 = messageText(source).replace(/\s+/g, " ").trim();
+  return normalized3 ? normalized3.slice(0, MAX_BODY_CHARS) : null;
 }
 function ftsPhrase(text) {
   return `"${text.replace(/"/g, '""')}"`;
@@ -103940,8 +104278,8 @@ function parseAppleScriptDate(dateStr) {
     );
   }
   const withoutPrefix = dateStr.replace(/^date\s+/, "");
-  const normalized2 = withoutPrefix.replace(" at ", " ");
-  const parsed = new Date(normalized2);
+  const normalized3 = withoutPrefix.replace(" at ", " ");
+  const parsed = new Date(normalized3);
   return isNaN(parsed.getTime()) ? /* @__PURE__ */ new Date(NaN) : parsed;
 }
 function buildAppleScriptDate(varName, d) {
@@ -104181,6 +104519,10 @@ function buildSearchCondition(filters) {
   return conditions.length > 0 ? `whose ${conditions.join(" and ")}` : "";
 }
 var AppleMailManager = class {
+  /** Preview or submit the exact approved stored MIME; no AppleScript fallback. */
+  sendSavedDraft(input2) {
+    return sendSavedDraft(input2);
+  }
   /**
    * Default account used when no account is specified.
    */
@@ -109977,6 +110319,7 @@ var REFERENCES_SCHEMA = external_exports.array(MESSAGE_ID_TOKEN_SCHEMA).min(1, "
 );
 
 // src/tools/savedDraft.ts
+init_smtpMailer();
 var header = external_exports.string().max(1e4).regex(/^[^\r\n\0]*$/, "Headers cannot contain CR, LF or NUL");
 var recipients = external_exports.array(header.min(1)).max(100);
 var SAVED_DRAFT_CHANGES_SCHEMA = external_exports.object({
@@ -110024,6 +110367,62 @@ var content2 = {
     })
   )
 };
+var SEND_SAVED_DRAFT_INPUT = {
+  draftId: UPDATE_SAVED_DRAFT_INPUT.draftId,
+  dryRun: external_exports.boolean().default(true).describe(
+    "Preview without sending by default; false submits the approved current revision once."
+  ),
+  approvedSha256: UPDATE_SAVED_DRAFT_INPUT.approvedSha256,
+  approvedUidValidity: UPDATE_SAVED_DRAFT_INPUT.approvedUidValidity
+};
+var SEND_SAVED_DRAFT_OUTPUT = {
+  status: external_exports.enum(["preview", "submitted", "partial", "submission_unknown", "not_submitted"]).optional(),
+  success: external_exports.boolean().optional(),
+  alreadyAttempted: external_exports.boolean().optional(),
+  draftId: external_exports.string().optional(),
+  uid: external_exports.number().optional(),
+  uidValidity: external_exports.string().optional(),
+  sha256: external_exports.string().optional(),
+  from: content2.from.optional(),
+  to: content2.to.optional(),
+  cc: content2.cc.optional(),
+  bcc: content2.bcc.optional(),
+  replyTo: external_exports.array(external_exports.string()).optional(),
+  subject: content2.subject.optional(),
+  body: content2.body.optional(),
+  isHtml: content2.isHtml.optional(),
+  htmlBody: content2.htmlBody,
+  attachments: content2.attachments.optional(),
+  messageId: external_exports.string().optional(),
+  error: external_exports.string().optional(),
+  deliveryUnknown: external_exports.boolean().optional(),
+  partial: external_exports.boolean().optional(),
+  accepted: external_exports.array(external_exports.string()).optional(),
+  rejected: external_exports.array(external_exports.string()).optional(),
+  sentCopy: external_exports.boolean().optional(),
+  sentCopyError: external_exports.string().optional(),
+  sentCopyAlreadyFiled: external_exports.boolean().optional(),
+  draftRemoved: external_exports.boolean().optional(),
+  draftCleanupStatus: external_exports.enum(["not_attempted", "verified", "unverified", "failed", "unknown"]).optional(),
+  draftRemovalError: external_exports.string().optional(),
+  draftRemovalVerification: external_exports.discriminatedUnion("verdict", [
+    external_exports.object({ verdict: external_exports.literal("verified"), how: external_exports.string() }),
+    external_exports.object({ verdict: external_exports.literal("unverified"), why: external_exports.string() })
+  ]).optional()
+};
+async function runSendSavedDraft(input2, send) {
+  const result = await send(input2);
+  if (result.status === "preview")
+    return successResponse(
+      "Current stored draft for approval; nothing sent.\n\n" + JSON.stringify(result, null, 2),
+      { ...result }
+    );
+  const notice = smtpDeliveryNotice(result);
+  const text = (notice || (result.status === "submitted" ? "SMTP accepted the complete approved recipient set." : result.error || "SMTP did not submit the draft.")) + " Sent-copy and draft cleanup are separate outcomes. Cleanup: " + result.draftCleanupStatus + (result.alreadyAttempted ? " This is the prior attempt's result; no submission or cleanup was repeated." : "");
+  if (result.status === "submission_unknown" || result.status === "not_submitted")
+    return errorResponse(text, { ...result });
+  return successResponse(text, { ...result });
+}
 var UPDATE_SAVED_DRAFT_OUTPUT = {
   ok: external_exports.boolean().optional(),
   status: external_exports.enum(["preview", "updated", "unchanged", "append_failed", "append_unknown", "cleanup_failed"]).optional(),
@@ -110880,6 +111279,7 @@ function withJsonSchema2020_12(transport2) {
 var TOOL_MODE_ENV = "APPLE_MAIL_MCP_MODE";
 var TOOL_MODES = ["full", "no_send", "read_only"];
 var SENDING_TOOLS = /* @__PURE__ */ new Set([
+  "send-saved-draft",
   "send-email",
   "send-serial-email",
   "reply-to-message",
@@ -112051,9 +112451,21 @@ registerTool(
   )
 );
 registerTool(
+  "send-saved-draft",
+  {
+    description: "Use when: previewing a current stored IMAP Drafts message, then submitting exactly its approved revision through a matching configured SMTP identity. dryRun defaults to true.\nReturns: full sender/To/Cc/Bcc/Reply-To, plain/HTML body and attachment preview with UIDVALIDITY/UID/MIME SHA-256; or explicit submitted/partial/submission_unknown/not_submitted status, accepted/rejected recipients and separate Sent-copy/cleanup results.\nDo not use when: the draft is non-IMAP, signed/encrypted, ambiguous, unpreviewable or lacks a matching IMAP/SMTP login. No AppleScript fallback.\nSafety: dryRun=false SENDS real email. Show the complete current preview and obtain explicit approval before passing its approvedSha256 and approvedUidValidity. Never retry a partial/unknown send or switch transport. Only full acknowledged acceptance permits revision-checked MOVE to Trash; MOVE support and unambiguous Trash are required for cleanup. Unverified cleanup is not confirmed removal. Repeated attempted revisions are guarded for this server process only; after restart reconcile with the provider before any retry. This tool, including preview, is disabled in no_send/read_only modes.",
+    inputSchema: SEND_SAVED_DRAFT_INPUT,
+    outputSchema: SEND_SAVED_DRAFT_OUTPUT
+  },
+  withErrorHandling(
+    (input2) => runSendSavedDraft(input2, (request) => mailManager.sendSavedDraft(request)),
+    "Error sending saved draft"
+  )
+);
+registerTool(
   "create-draft",
   {
-    description: "Use when: composing an email the user should review in Mail.app before sending \u2014 the safe default for any new message (to/cc/bcc are arrays, optional attachments). With inReplyTo/references the draft is threaded: it is composed by this server and filed over IMAP into the account's Drafts mailbox (Mail.app's AppleScript cannot set those headers), so an IMAP account is required.\nReturns: a confirmation that the draft was created, with recipients and attachment count; for a threaded draft also its Drafts mailbox, account and Message-ID (transport: imap).\nDo not use when: the user has already confirmed they want it sent now (use send-email), or is replying to an existing message (use reply-to-message with send=false \u2014 it derives recipients, threading and the quote and takes attachments).\nSafety: low risk \u2014 creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
+    description: "Use when: composing an email the user should review in Mail.app before sending \u2014 the safe default for any new message (to/cc/bcc are arrays, optional attachments). With inReplyTo/references the draft is threaded: it is composed by this server and filed over IMAP into the account's Drafts mailbox (Mail.app's AppleScript cannot set those headers), so an IMAP account is required.\nReturns: a confirmation that the draft was created, with recipients and attachment count; for a threaded draft also its Drafts mailbox, account and Message-ID (transport: imap).\nDo not use when: the user has already confirmed they want it sent now (use send-email), or is replying to an existing message (use reply-to-message with send=false \u2014 it derives recipients, threading and the quote and takes attachments).\nSafety: creates a draft only and sends nothing. The user can review/send in Mail.app, or use send-saved-draft with a fresh stored preview and explicit approval when matching IMAP/SMTP is configured.",
     inputSchema: {
       to: external_exports.array(external_exports.string()).min(1, "At least one recipient is required"),
       subject: external_exports.string().min(1, "Subject is required"),

@@ -25,6 +25,7 @@ const TOOL_MODES: readonly ToolMode[] = ["full", "no_send", "read_only"];
 
 /** Tools that put a message on the wire, or let Mail do it unattended. */
 export const SENDING_TOOLS = new Set([
+  "send-saved-draft",
   "send-email",
   "send-serial-email",
   "reply-to-message",

@@ -40,6 +40,7 @@ Use this skill when the user:
 | `send-serial-email`   | Send personalized copies to many recipients (mail merge with `{{Key}}` placeholders)                                                                                                                                                                                                    |
 | `create-draft`        | Save an email to Drafts for review (`attachments`; with `inReplyTo`/`references` a threaded draft is filed over IMAP)                                                                                                                                                                   |
 | `update-saved-draft`  | Preview and partially edit a stored IMAP draft; approval pins its revision, returns the new ID, never sends                                                                                                                                                                             |
+| `send-saved-draft`    | Preview a current stored IMAP draft, then submit its exact approved revision over matching SMTP; report acceptance, Sent copy and cleanup separately                                                                                                                                    |
 | `reply-to-message`    | Reply to a message (`replyAll`, `send`, `transport`, `attachments`)                                                                                                                                                                                                                     |
 | `forward-message`     | Forward a message to new recipients (`body`, `send`, `transport`, `attachments`)                                                                                                                                                                                                        |
 | `mark-as-read`        | Mark a message as read                                                                                                                                                                                                                                                                  |
@@ -66,6 +67,25 @@ part ID. This tool never sends. It returns a new stored draft ID after editing;
 use that ID for subsequent operations. APPEND is confirmed before removing the
 old UID; `append_unknown` and `cleanup_failed` require inspection, not a blind
 retry. Numeric IDs, non-drafts and accounts without IMAP are refused.
+
+### Sending a stored draft
+
+Use `send-saved-draft` to preview a freshly listed IMAP Drafts ID, including after
+`update-saved-draft` returns a new ID. Show the current From, To/Cc/Bcc, Reply-To,
+subject, plain/HTML bodies and attachments to the user. Only after explicit
+approval submit with `dryRun: false`, `approvedSha256: sha256` and
+`approvedUidValidity: uidValidity` from that stored preview. The default is
+preview only. The IMAP account login must match the selected SMTP identity;
+unsupported or ambiguous MIME is refused. No AppleScript/transport fallback.
+
+Inspect `accepted`, `rejected`, `partial` and `deliveryUnknown`: partial/unknown
+submission preserves the draft and must never trigger a blind retry. Sent-copy
+filing and revision-checked MOVE to Trash are separate outcomes. A cleanup failure
+does not justify another send; `draftRemoved` is omitted when removal is unknown
+or unverified. `alreadyAttempted` returns an earlier outcome without repeating
+submission/cleanup. That guard lasts only for this server process, so after a
+restart reconcile with the provider before retrying an uncertain send. The tool
+is disabled entirely in `no_send`/`read_only` modes, including preview.
 
 ### Batch Operations (1-100 ids per call)
 

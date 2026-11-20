@@ -3452,7 +3452,7 @@ describe("imapGetMessageRfc822 (#244 — raw bytes with IMAP identity)", () => {
   });
 
   it("requires the server's special-use Drafts mailbox before a saved-draft send", async () => {
-    const d = rfcClient();
+    const d = rfcClient(raw, { flags: new Set(["\\Draft"]) });
     const draftId = encodeImapId(cfg.accountLabel, "Drafts", 42);
     vi.spyOn(d.client, "list").mockResolvedValue([
       { path: "Drafts", name: "Drafts", specialUse: "\\Drafts" },

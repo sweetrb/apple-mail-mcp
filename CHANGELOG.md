@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.63] - 2026-11-20
+
+### Added
+
+- `send-saved-draft`: preview a stored IMAP draft and submit only its approved UIDVALIDITY/UID/MIME SHA-256 revision through the matching SMTP identity. Continues @maxschuetz06's stored-MIME design in #241, with the approach agreed in #372. Preserves bodies, attachments and threading; strips Bcc only from the wire copy. Partial/unknown acceptance preserves the draft and reports accepted/rejected recipients without retries or transport fallback. Sent-copy filing/deduplication and revision-checked MOVE-to-Trash cleanup have separate outcomes; unverified removal is never reported as confirmed. Repeated attempted revisions are guarded within the server process; after restart an uncertain submission needs provider reconciliation. The tool is unavailable in no_send/read_only modes. Existing create-draft/native-editor behavior remains unchanged.
+
 ## [2.20.62] - 2026-11-18
 ### Changed
 - Dependency bump via Dependabot; committed bundle rebuilt. (automated)

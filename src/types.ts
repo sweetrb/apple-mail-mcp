@@ -734,3 +734,47 @@ export interface UpdateSavedDraftResult {
   sourceRemoved?: boolean;
   error?: string;
 }
+
+export interface SendSavedDraftInput {
+  draftId: string;
+  dryRun: boolean;
+  approvedSha256?: string;
+  approvedUidValidity?: string;
+}
+
+export interface SendSavedDraftPreview extends SavedDraftPreview {
+  status: "preview";
+  replyTo: string[];
+}
+
+export type DraftCleanupVerification =
+  { verdict: "verified"; how: string } | { verdict: "unverified"; why: string };
+
+export interface SavedDraftCleanupResult {
+  success: boolean;
+  /** Omitted when a MOVE may have happened but its outcome is unverified. */
+  removed?: boolean;
+  error?: string;
+  verification?: DraftCleanupVerification;
+}
+
+export interface SendSavedDraftSubmission {
+  status: "submitted" | "partial" | "submission_unknown" | "not_submitted";
+  success: boolean;
+  alreadyAttempted?: boolean;
+  messageId?: string;
+  error?: string;
+  deliveryUnknown?: boolean;
+  partial?: boolean;
+  accepted?: string[];
+  rejected?: string[];
+  sentCopy?: boolean;
+  sentCopyError?: string;
+  sentCopyAlreadyFiled?: boolean;
+  draftRemoved?: boolean;
+  draftCleanupStatus: "not_attempted" | "verified" | "unverified" | "failed" | "unknown";
+  draftRemovalError?: string;
+  draftRemovalVerification?: DraftCleanupVerification;
+}
+
+export type SendSavedDraftResult = SendSavedDraftPreview | SendSavedDraftSubmission;

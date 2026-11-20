@@ -94,6 +94,7 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, ToolAnnotations>> = {
 
   // Outbound mail: leaves the machine and cannot be recalled
   "send-email": SEND,
+  "send-saved-draft": SEND,
   "send-serial-email": SEND,
   "reply-to-message": SEND, // sends by default (send: true)
   "forward-message": SEND, // sends by default (send: true)

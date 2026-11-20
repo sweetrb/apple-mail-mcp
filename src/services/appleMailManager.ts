@@ -38,6 +38,8 @@ import { randomUUID } from "crypto";
 import { executeAppleScript, isPermissionDenied } from "@/utils/applescript.js";
 import { flagColorName, isGmailHost } from "@/services/imapClient.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
+import { sendSavedDraft as submitSavedDraft } from "@/services/draftSend.js";
+import type { SendSavedDraftInput, SendSavedDraftResult } from "@/types.js";
 
 import { parseMimeAttachments, extractMimeAttachment, extractHtmlBody } from "@/utils/mimeParse.js";
 import { attachmentNameForms } from "@/utils/attachmentName.js";
@@ -1909,6 +1911,10 @@ export function buildSearchCondition(filters: SearchConditionFilters): string {
 }
 
 export class AppleMailManager {
+  /** Preview or submit the exact approved stored MIME; no AppleScript fallback. */
+  sendSavedDraft(input: SendSavedDraftInput): Promise<SendSavedDraftResult> {
+    return submitSavedDraft(input);
+  }
   /**
    * Default account used when no account is specified.
    */
