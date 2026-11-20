@@ -382,6 +382,21 @@ describe("send-saved-draft", () => {
     expect(d.removeDraft).toHaveBeenCalledWith(draftId, { sha256, uidValidity: "100" });
   });
 
+  it("reports the stored Message-ID, not nodemailer's generated raw-send id", async () => {
+    const d = deps();
+    d.submit.mockResolvedValueOnce({
+      success: true,
+      messageId: "<generated-by-nodemailer@example.com>",
+      accepted: ["ada@example.com", "review@example.com", "secret@example.com"],
+      rejected: [],
+    });
+    const result = await sendSavedDraft(
+      { draftId, dryRun: false, approvedSha256: sha256, approvedUidValidity: "100" },
+      d.injected
+    );
+    expect(result).toMatchObject({ status: "submitted", messageId: "<draft@example.com>" });
+  });
+
   it("refuses changes, missing approval, and a mismatched SMTP identity before submission", async () => {
     const d = deps();
     await expect(sendSavedDraft({ draftId, dryRun: false }, d.injected)).rejects.toThrow(

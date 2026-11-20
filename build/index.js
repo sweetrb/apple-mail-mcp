@@ -100689,6 +100689,9 @@ function prepare(acquisition, draftId) {
   };
   return {
     preview,
+    // nodemailer's info.messageId for a raw send is its own generated id, never on the
+    // wire; the stored header is what recipients and the Sent copy actually carry.
+    messageId: messageIds[0].value.trim(),
     wire: cleanDraftHeaders(acquisition.bytes, false),
     sentCopy: cleanDraftHeaders(acquisition.bytes, true)
   };
@@ -100745,7 +100748,7 @@ async function sendSavedDraft(input2, deps = {}) {
   const result = {
     status: unknown2 ? "submission_unknown" : partial2 ? "partial" : full ? "submitted" : "not_submitted",
     success: submitted.success,
-    messageId: submitted.messageId,
+    messageId: prepared.messageId,
     ...smtpDeliveryFields(submitted),
     ...partial2 ? { partial: true } : {},
     ...unknown2 ? { deliveryUnknown: true } : {},

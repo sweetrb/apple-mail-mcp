@@ -149,6 +149,9 @@ function prepare(acquisition: ImapRfc822Acquisition, draftId: string) {
   };
   return {
     preview,
+    // nodemailer's info.messageId for a raw send is its own generated id, never on the
+    // wire; the stored header is what recipients and the Sent copy actually carry.
+    messageId: messageIds[0].value.trim(),
     wire: cleanDraftHeaders(acquisition.bytes, false),
     sentCopy: cleanDraftHeaders(acquisition.bytes, true),
   };
@@ -236,7 +239,7 @@ export async function sendSavedDraft(
           ? "submitted"
           : "not_submitted",
     success: submitted.success,
-    messageId: submitted.messageId,
+    messageId: prepared.messageId,
     ...smtpDeliveryFields(submitted),
     ...(partial ? { partial: true } : {}),
     ...(unknown ? { deliveryUnknown: true } : {}),
