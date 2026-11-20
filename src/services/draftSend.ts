@@ -192,7 +192,7 @@ export async function sendSavedDraft(
     prepared.preview.sha256 !== input.approvedSha256?.toLowerCase() ||
     prepared.preview.uidValidity !== input.approvedUidValidity
   )
-    throw new Error("Draft changed since the Codex preview; review the current draft again.");
+    throw new Error("Draft changed since the approved preview; review the current draft again.");
   const cfg = (deps.smtpConfig ?? ((from: string) => resolveSmtpConfig(process.env, from)))(
     prepared.preview.from
   );

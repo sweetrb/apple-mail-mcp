@@ -227,12 +227,41 @@ describe("revision-bound saved-draft cleanup", () => {
       success: false,
       removed: false,
     });
+    expect(rejected.order).toEqual(["lock", "read", "read", "release"]);
     const uncertain = fixture();
     uncertain.move.mockRejectedValue(new Error("MOVE timeout"));
     const result = await imapTrashSavedDraft(id, revision, uncertain.deps);
     expect(result).toMatchObject({ success: false, error: "MOVE timeout" });
     expect(result.removed).toBeUndefined();
     expect(uncertain.move).toHaveBeenCalledOnce();
+  });
+
+  // imapflow's MOVE command swallows transport errors and returns false, so a false
+  // result after the command was written may still have moved the draft.
+  it("treats a false MOVE with the source gone as unknown, not a definite rejection", async () => {
+    const f = fixture();
+    f.move.mockImplementation(async () => {
+      f.order.push("move");
+      f.fetchOne.mockResolvedValue(false as never);
+      return false as never;
+    });
+    const result = await imapTrashSavedDraft(id, revision, f.deps);
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining("inspect") });
+    expect(result.removed).toBeUndefined();
+    expect(f.move).toHaveBeenCalledOnce();
+    expect(f.client.messageDelete).not.toHaveBeenCalled();
+  });
+
+  it("treats a false MOVE whose readback fails as unknown", async () => {
+    const f = fixture();
+    f.move.mockResolvedValue(false as never);
+    f.fetchOne
+      .mockResolvedValueOnce(f.message)
+      .mockRejectedValueOnce(new Error("connection closed"));
+    const result = await imapTrashSavedDraft(id, revision, f.deps);
+    expect(result.success).toBe(false);
+    expect(result.removed).toBeUndefined();
+    expect(f.move).toHaveBeenCalledOnce();
   });
 
   it("validates malformed revision tokens before connecting", async () => {

@@ -62043,8 +62043,28 @@ async function imapTrashSavedDraft(id, approved, deps = {}) {
         attempted = true;
         const moved = await client.messageMove([ref.uid], trash[0].path, { uid: true });
         if (!moved) {
-          attempted = false;
-          return { success: false, removed: false, error: "Server rejected draft MOVE to Trash." };
+          try {
+            assertRevisionMailbox();
+            const still = await client.fetchOne(
+              String(ref.uid),
+              { uid: true, source: { start: 0, maxLength: MAX_RFC822_FILE_BYTES + 1 } },
+              { uid: true }
+            );
+            assertRevisionMailbox();
+            if (still && still.source?.length && createHash("sha256").update(asBuffer(still.source)).digest("hex") === approved.sha256.toLowerCase()) {
+              attempted = false;
+              return {
+                success: false,
+                removed: false,
+                error: "Server rejected draft MOVE to Trash; the draft is unchanged in Drafts."
+              };
+            }
+          } catch {
+          }
+          return {
+            success: false,
+            error: "Draft MOVE to Trash was not acknowledged and the source could not be confirmed in place; inspect Drafts and Trash without resending."
+          };
         }
         try {
           assertRevisionMailbox();
