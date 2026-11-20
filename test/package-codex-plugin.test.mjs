@@ -156,7 +156,7 @@ test("produces a deterministic, self-contained archive with unchanged source lau
     first.version
   );
   const tools = responses.find((response) => response.id === 2).result.tools;
-  assert.equal(tools.length, 55);
+  assert.equal(tools.length, 56);
   assert.ok(tools.some((tool) => tool.name === "update-saved-draft"));
 });
 

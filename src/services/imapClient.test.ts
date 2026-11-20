@@ -3388,7 +3388,11 @@ describe("imapGetMessageRfc822 (#244 — raw bytes with IMAP identity)", () => {
         flags: new Set(["\\Seen", "$Forwarded"]),
         internalDate: new Date("2026-06-01T12:00:00Z"),
         size: Buffer.byteLength(source),
-        envelope: { messageId: "<evidence@example.com>" },
+        envelope: {
+          messageId: "<evidence@example.com>",
+          to: [{ address: "ada@example.com" }],
+          bcc: [{ address: "hidden@example.com" }],
+        },
         ...overrides,
       })),
     };
@@ -3420,6 +3424,12 @@ describe("imapGetMessageRfc822 (#244 — raw bytes with IMAP identity)", () => {
     expect(r.acquisition.sha256).toBe(createHash("sha256").update(raw).digest("hex"));
     expect(r.acquisition).toMatchObject({
       account: cfg.accountLabel,
+      accountUser: cfg.user,
+      envelopeRecipients: {
+        to: ["ada@example.com"],
+        cc: [],
+        bcc: ["hidden@example.com"],
+      },
       mailbox: "Archive/Inbox",
       uid: 42,
       uidValidity: "1234567890",
@@ -3439,6 +3449,27 @@ describe("imapGetMessageRfc822 (#244 — raw bytes with IMAP identity)", () => {
     const r = await imapGetMessageRfc822("42", {}, d.deps);
     expect(r).toEqual({ success: false, error: expect.stringContaining("Not an IMAP") });
     expect(d.connect).not.toHaveBeenCalled();
+  });
+
+  it("requires the server's special-use Drafts mailbox before a saved-draft send", async () => {
+    const d = rfcClient(raw, { flags: new Set(["\\Draft"]) });
+    const draftId = encodeImapId(cfg.accountLabel, "Drafts", 42);
+    vi.spyOn(d.client, "list").mockResolvedValue([
+      { path: "Drafts", name: "Drafts", specialUse: "\\Drafts" },
+    ]);
+    const allowed = await imapGetMessageRfc822(draftId, { requireDraftMailbox: true }, d.deps);
+    expect(allowed.success).toBe(true);
+    expect(d.client.getMailboxLock).toHaveBeenCalledWith("Drafts", { readOnly: true });
+
+    vi.mocked(d.client.list).mockResolvedValue([
+      { path: "Archive/Drafts", name: "Drafts", specialUse: "\\Drafts" },
+    ]);
+    const refused = await imapGetMessageRfc822(draftId, { requireDraftMailbox: true }, d.deps);
+    expect(refused).toEqual({
+      success: false,
+      error: expect.stringContaining("not the account's Drafts mailbox"),
+    });
+    expect(d.client.fetchOne).toHaveBeenCalledTimes(1);
   });
 
   it("reports a missing message and releases the lock", async () => {

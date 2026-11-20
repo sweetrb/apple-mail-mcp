@@ -120,6 +120,9 @@ import {
   UPDATE_SAVED_DRAFT_INPUT,
   UPDATE_SAVED_DRAFT_OUTPUT,
   runUpdateSavedDraft,
+  SEND_SAVED_DRAFT_INPUT,
+  SEND_SAVED_DRAFT_OUTPUT,
+  runSendSavedDraft,
 } from "@/tools/savedDraft.js";
 import { createCallStop, searchDeadlineMs, stoppedByDeadline } from "@/utils/callStop.js";
 import { describeAccountSettings, splitAppliedSettings } from "@/utils/accountSettings.js";
@@ -1851,13 +1854,29 @@ registerTool(
   )
 );
 
+// --- send-saved-draft ---
+
+registerTool(
+  "send-saved-draft",
+  {
+    description:
+      "Use when: previewing a current stored IMAP Drafts message, then submitting exactly its approved revision through a matching configured SMTP identity. dryRun defaults to true.\nReturns: full sender/To/Cc/Bcc/Reply-To, plain/HTML body and attachment preview with UIDVALIDITY/UID/MIME SHA-256; or explicit submitted/partial/submission_unknown/not_submitted status, accepted/rejected recipients and separate Sent-copy/cleanup results.\nDo not use when: the draft is non-IMAP, signed/encrypted, ambiguous, unpreviewable or lacks a matching IMAP/SMTP login. No AppleScript fallback.\nSafety: dryRun=false SENDS real email. Show the complete current preview and obtain explicit approval before passing its approvedSha256 and approvedUidValidity. Never retry a partial/unknown send or switch transport. Only full acknowledged acceptance permits revision-checked MOVE to Trash; MOVE support and unambiguous Trash are required for cleanup. Unverified cleanup is not confirmed removal. Repeated attempted revisions are guarded for this server process only; after restart reconcile with the provider before any retry. This tool, including preview, is disabled in no_send/read_only modes.",
+    inputSchema: SEND_SAVED_DRAFT_INPUT,
+    outputSchema: SEND_SAVED_DRAFT_OUTPUT,
+  },
+  withErrorHandling(
+    (input) => runSendSavedDraft(input, (request) => mailManager.sendSavedDraft(request)),
+    "Error sending saved draft"
+  )
+);
+
 // --- create-draft ---
 
 registerTool(
   "create-draft",
   {
     description:
-      "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message (to/cc/bcc are arrays, optional attachments). With inReplyTo/references the draft is threaded: it is composed by this server and filed over IMAP into the account's Drafts mailbox (Mail.app's AppleScript cannot set those headers), so an IMAP account is required.\nReturns: a confirmation that the draft was created, with recipients and attachment count; for a threaded draft also its Drafts mailbox, account and Message-ID (transport: imap).\nDo not use when: the user has already confirmed they want it sent now (use send-email), or is replying to an existing message (use reply-to-message with send=false — it derives recipients, threading and the quote and takes attachments).\nSafety: low risk — creates a draft only and sends nothing; the user must open Mail.app and send it themselves.",
+      "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message (to/cc/bcc are arrays, optional attachments). With inReplyTo/references the draft is threaded: it is composed by this server and filed over IMAP into the account's Drafts mailbox (Mail.app's AppleScript cannot set those headers), so an IMAP account is required.\nReturns: a confirmation that the draft was created, with recipients and attachment count; for a threaded draft also its Drafts mailbox, account and Message-ID (transport: imap).\nDo not use when: the user has already confirmed they want it sent now (use send-email), or is replying to an existing message (use reply-to-message with send=false — it derives recipients, threading and the quote and takes attachments).\nSafety: creates a draft only and sends nothing. The user can review/send in Mail.app, or use send-saved-draft with a fresh stored preview and explicit approval when matching IMAP/SMTP is configured.",
     inputSchema: {
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       subject: z.string().min(1, "Subject is required"),

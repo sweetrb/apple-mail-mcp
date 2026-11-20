@@ -1062,9 +1062,8 @@ representation in the preview at 100,000 characters.
 `draftId`, the current preview's approval tokens and the approved `changes`.
 The tokens identify the **source**; a proposed preview is not yet a stored
 revision. A changed UIDVALIDITY or source SHA-256 refuses the edit. The format
-matches the UIDVALIDITY/UID/MIME-SHA-256 revision used in the proposed
-[`send-saved-draft` work (#241)](https://github.com/sweetrb/apple-mail-mcp/pull/241).
-That send feature is separate and is not introduced here.
+matches the UIDVALIDITY/UID/MIME-SHA-256 revision used by `send-saved-draft`.
+After editing, preview the new stored ID again before approving its submission.
 
 **Returns:** `status: preview`, `updated` or `unchanged`, `sourceDraftId`,
 `draftId`, the stored `preview` (From, To/Cc/Bcc, subject, bodies, attachment
@@ -1086,6 +1085,63 @@ deleted, but a racing edit or connection failure may leave multiple versions.
 patch with the user before `dryRun: false`. A successful edit removes the old
 revision after confirming its replacement; a cleanup failure is not a reason
 to repeat the already saved edit.
+
+#### `send-saved-draft`
+
+Preview a saved IMAP draft, then submit exactly the approved current MIME through
+a matching configured SMTP identity. This continues the stored-MIME design from
+[#241](https://github.com/sweetrb/apple-mail-mcp/pull/241) by @maxschuetz06. It uses
+the same revision format and strict MIME preview as `update-saved-draft`.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `draftId` | string | Yes | Fresh `imap:` ID from the account's unique SPECIAL-USE Drafts mailbox; the message must be an active `\Draft`. |
+| `dryRun` | boolean | No | Defaults to `true`: return the current stored preview without sending or changing flags. |
+| `approvedSha256` | string | For sending | Stored MIME SHA-256 from the approved preview. |
+| `approvedUidValidity` | string | For sending | Mailbox UIDVALIDITY from that preview; UID is encoded in `draftId` and also returned. |
+
+Show the complete From, To/Cc/Bcc, Reply-To, subject, plain/HTML bodies and
+attachment list before requesting explicit approval. After an edit use its new
+ID, preview again, and send with `dryRun: false` and those current tokens. The
+send call rereads and checks the stored revision. Signed/encrypted, ambiguous,
+unpreviewable or oversized MIME, a missing Message-ID, a different Sender header
+and a mismatched IMAP/SMTP login are refused. Configured additional SMTP sender
+identities are resolved from the actual From; credentials never fall back to a
+different identity. There is no AppleScript or transport fallback.
+
+The wire copy omits Bcc and draft markers (`X-Unsent`, `X-Apple-Mail-Draft`,
+`X-Uniform-Type-Identifier`, `X-Universally-Unique-Identifier`). Other headers,
+threading and encoded body/attachment bytes are retained. The sender-owned Sent
+copy keeps Bcc and uses the existing provider-aware Sent deduplication.
+
+**Returns:** `status: preview` with content, UID, UIDVALIDITY and SHA-256, or
+`submitted`, `partial`, `submission_unknown` or `not_submitted` with the SMTP
+accepted/rejected recipients. SMTP acceptance is not proof of inbox delivery.
+`sentCopy`, `sentCopyError` and `sentCopyAlreadyFiled` describe archival separately.
+Only full acknowledged acceptance for the complete approved recipient set allows
+cleanup. Partial/unknown submission leaves the draft untouched; never resend to
+accepted recipients to repair a partial submission.
+
+Cleanup rechecks UIDVALIDITY, UID, flags and MIME hash **inside the write mailbox
+lock**, then moves just that UID to the unique SPECIAL-USE Trash mailbox. Server
+MOVE is required; there is no COPY/delete or global EXPUNGE fallback. If MOVE or
+Trash is unavailable, the successful SMTP submission stays successful and the
+draft is retained. `draftCleanupStatus` is independently `not_attempted`,
+`verified`, `unverified`, `failed` or `unknown`. `draftRemoved: true` requires
+confirmed source removal; it is omitted if removal is uncertain. A cleanup
+problem must never cause another send.
+
+Repeated/concurrent calls for an attempted revision are guarded for the life of
+this server process. `alreadyAttempted: true` returns the prior outcome without
+resending or repeating cleanup. This is **not durable across server restarts**:
+reconcile an uncertain submission with the provider before any new attempt.
+IMAP/SMTP do not offer a cross-server transaction; another client's replacement
+gets a different UID and is never removed by this cleanup.
+
+**⚠️ Safety:** `dryRun: false` sends real mail immediately. Never retry an
+uncertain submission or switch transport automatically. Confirm the complete
+current preview first. This entire tool, including its preview operation, is
+unavailable under `APPLE_MAIL_MCP_MODE=no_send` and `read_only`.
 
 #### `get-thread`
 

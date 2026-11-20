@@ -5,8 +5,12 @@ import {
   UPDATE_SAVED_DRAFT_INPUT,
   UPDATE_SAVED_DRAFT_OUTPUT,
   runUpdateSavedDraft,
+  SEND_SAVED_DRAFT_INPUT,
+  SEND_SAVED_DRAFT_OUTPUT,
+  runSendSavedDraft,
 } from "@/tools/savedDraft.js";
 import { annotationsFor } from "@/tools/toolAnnotations.js";
+import { isToolAllowed } from "@/utils/toolMode.js";
 
 describe("update-saved-draft public contract", () => {
   it("defaults to preview and refuses unknown edit/sending fields", () => {
@@ -53,5 +57,88 @@ describe("update-saved-draft public contract", () => {
       )
     ).rejects.toThrow();
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("send-saved-draft public contract", () => {
+  it("defaults to preview and classifies the entire tool as outbound", () => {
+    expect(z.object(SEND_SAVED_DRAFT_INPUT).parse({ draftId: "imap:YWJj" }).dryRun).toBe(true);
+    expect(
+      z.object(SEND_SAVED_DRAFT_INPUT).safeParse({ draftId: "imap:YWJj", approvedUidValidity: "0" })
+        .success
+    ).toBe(false);
+    expect(annotationsFor("send-saved-draft")).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+    });
+    expect(isToolAllowed("send-saved-draft", "full")).toBe(true);
+    expect(isToolAllowed("send-saved-draft", "no_send")).toBe(false);
+    expect(isToolAllowed("send-saved-draft", "read_only")).toBe(false);
+  });
+
+  it("returns actionable partial acceptance without converting it to an ordinary failure", async () => {
+    const result = await runSendSavedDraft({ draftId: "imap:YWJj", dryRun: false }, async () => ({
+      status: "partial",
+      success: true,
+      partial: true,
+      accepted: ["accepted@example.test"],
+      rejected: ["rejected@example.test"],
+      draftRemoved: false,
+      draftCleanupStatus: "not_attempted",
+    }));
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      partial: true,
+      accepted: ["accepted@example.test"],
+      rejected: ["rejected@example.test"],
+      draftRemoved: false,
+    });
+    expect(JSON.stringify(result.content)).toContain("Do not resend to accepted recipients");
+    expect(z.object(SEND_SAVED_DRAFT_OUTPUT).safeParse(result.structuredContent).success).toBe(
+      true
+    );
+  });
+
+  it("exposes uncertain submission explicitly without implying a safe resend", async () => {
+    const result = await runSendSavedDraft({ draftId: "imap:YWJj", dryRun: false }, async () => ({
+      status: "submission_unknown",
+      success: false,
+      deliveryUnknown: true,
+      error: "Lost DATA acknowledgment",
+      draftRemoved: false,
+      draftCleanupStatus: "not_attempted",
+    }));
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      status: "submission_unknown",
+      deliveryUnknown: true,
+    });
+    expect(JSON.stringify(result.content)).toContain("Do not resend automatically");
+    expect(z.object(SEND_SAVED_DRAFT_OUTPUT).safeParse(result.structuredContent).success).toBe(
+      true
+    );
+  });
+
+  it("retains an unverified cleanup independently from a successful SMTP submission", async () => {
+    const result = await runSendSavedDraft({ draftId: "imap:YWJj", dryRun: false }, async () => ({
+      status: "submitted",
+      success: true,
+      sentCopy: false,
+      sentCopyError: "Archive unavailable",
+      draftCleanupStatus: "unverified",
+      draftRemovalVerification: { verdict: "unverified", why: "No readback" },
+    }));
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      status: "submitted",
+      sentCopy: false,
+      draftCleanupStatus: "unverified",
+      draftRemovalVerification: { verdict: "unverified" },
+    });
+    expect(result.structuredContent?.draftRemoved).toBeUndefined();
+    expect(z.object(SEND_SAVED_DRAFT_OUTPUT).safeParse(result.structuredContent).success).toBe(
+      true
+    );
   });
 });

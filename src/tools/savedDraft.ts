@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { ATTACHMENTS_SCHEMA, MESSAGE_ID_SCHEMA } from "@/schemas.js";
 import type { UpdateSavedDraftInput, UpdateSavedDraftResult } from "@/types.js";
+import type { SendSavedDraftInput, SendSavedDraftResult } from "@/types.js";
+import { smtpDeliveryNotice } from "@/services/smtpMailer.js";
 import { preflightAttachments } from "@/utils/attachmentMaterialize.js";
 import { successResponse, errorResponse, type ToolResponse } from "@/tools/respond.js";
 
@@ -82,6 +84,86 @@ const content = {
     })
   ),
 };
+
+export const SEND_SAVED_DRAFT_INPUT = {
+  draftId: UPDATE_SAVED_DRAFT_INPUT.draftId,
+  dryRun: z
+    .boolean()
+    .default(true)
+    .describe(
+      "Preview without sending by default; false submits the approved current revision once."
+    ),
+  approvedSha256: UPDATE_SAVED_DRAFT_INPUT.approvedSha256,
+  approvedUidValidity: UPDATE_SAVED_DRAFT_INPUT.approvedUidValidity,
+};
+
+export const SEND_SAVED_DRAFT_OUTPUT = {
+  status: z
+    .enum(["preview", "submitted", "partial", "submission_unknown", "not_submitted"])
+    .optional(),
+  success: z.boolean().optional(),
+  alreadyAttempted: z.boolean().optional(),
+  draftId: z.string().optional(),
+  uid: z.number().optional(),
+  uidValidity: z.string().optional(),
+  sha256: z.string().optional(),
+  from: content.from.optional(),
+  to: content.to.optional(),
+  cc: content.cc.optional(),
+  bcc: content.bcc.optional(),
+  replyTo: z.array(z.string()).optional(),
+  subject: content.subject.optional(),
+  body: content.body.optional(),
+  isHtml: content.isHtml.optional(),
+  htmlBody: content.htmlBody,
+  attachments: content.attachments.optional(),
+  messageId: z.string().optional(),
+  error: z.string().optional(),
+  deliveryUnknown: z.boolean().optional(),
+  partial: z.boolean().optional(),
+  accepted: z.array(z.string()).optional(),
+  rejected: z.array(z.string()).optional(),
+  sentCopy: z.boolean().optional(),
+  sentCopyError: z.string().optional(),
+  sentCopyAlreadyFiled: z.boolean().optional(),
+  draftRemoved: z.boolean().optional(),
+  draftCleanupStatus: z
+    .enum(["not_attempted", "verified", "unverified", "failed", "unknown"])
+    .optional(),
+  draftRemovalError: z.string().optional(),
+  draftRemovalVerification: z
+    .discriminatedUnion("verdict", [
+      z.object({ verdict: z.literal("verified"), how: z.string() }),
+      z.object({ verdict: z.literal("unverified"), why: z.string() }),
+    ])
+    .optional(),
+};
+
+export async function runSendSavedDraft(
+  input: SendSavedDraftInput,
+  send: (input: SendSavedDraftInput) => Promise<SendSavedDraftResult>
+): Promise<ToolResponse> {
+  const result = await send(input);
+  if (result.status === "preview")
+    return successResponse(
+      "Current stored draft for approval; nothing sent.\n\n" + JSON.stringify(result, null, 2),
+      { ...result }
+    );
+  const notice = smtpDeliveryNotice(result);
+  const text =
+    (notice ||
+      (result.status === "submitted"
+        ? "SMTP accepted the complete approved recipient set."
+        : result.error || "SMTP did not submit the draft.")) +
+    " Sent-copy and draft cleanup are separate outcomes. Cleanup: " +
+    result.draftCleanupStatus +
+    (result.alreadyAttempted
+      ? " This is the prior attempt's result; no submission or cleanup was repeated."
+      : "");
+  if (result.status === "submission_unknown" || result.status === "not_submitted")
+    return errorResponse(text, { ...result });
+  return successResponse(text, { ...result });
+}
 export const UPDATE_SAVED_DRAFT_OUTPUT = {
   ok: z.boolean().optional(),
   status: z

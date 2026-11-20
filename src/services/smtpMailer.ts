@@ -703,6 +703,59 @@ export async function sendViaSmtp(
   }
 }
 
+/** Submit an already approved MIME snapshot once, without recomposing or filing it.
+ * Uses the same recipient/outcome classification as the ordinary SMTP path.
+ * The caller owns its independent Sent-copy and revision-checked cleanup steps.
+ */
+export async function submitRawViaSmtp(
+  raw: Buffer,
+  envelope: { from: string; to: string[] },
+  config: SmtpConfig,
+  createTransport: typeof nodemailer.createTransport = nodemailer.createTransport
+): Promise<SmtpSendResult> {
+  let transporter: ReturnType<typeof createTransport> | undefined;
+  let attempted = false;
+  try {
+    resolveSmtpFrom(envelope.from, config);
+    transporter = createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.secure,
+      requireTLS: !config.secure && !config.allowPlaintext,
+      auth: { user: config.user, pass: config.pass },
+    });
+    attempted = true;
+    const info = await transporter.sendMail({ raw, envelope });
+    const accepted = recipientAddresses(info.accepted);
+    const rejected = recipientAddresses(info.rejected);
+    return {
+      success: true,
+      messageId: info.messageId,
+      ...(accepted !== undefined ? { accepted } : {}),
+      ...(rejected !== undefined ? { rejected } : {}),
+      ...(accepted !== undefined && rejected !== undefined
+        ? { partial: accepted.length > 0 && rejected.length > 0 }
+        : {}),
+    };
+  } catch (error) {
+    if (attempted && !definiteSmtpFailure(error)) return unknownSmtpResult(error);
+    const rejected = recipientAddresses(
+      error && typeof error === "object" && "rejected" in error ? error.rejected : undefined
+    );
+    return {
+      success: false,
+      error: `SMTP send failed: ${errText(error)}`,
+      ...(rejected !== undefined ? { rejected } : {}),
+    };
+  } finally {
+    try {
+      transporter?.close();
+    } catch (error) {
+      console.error(`Failed to close SMTP transport: ${errText(error)}`);
+    }
+  }
+}
+
 /** One recipient of a mail-merge batch (mirrors the AppleScript serial path). */
 export interface SerialSmtpRecipient {
   email: string;

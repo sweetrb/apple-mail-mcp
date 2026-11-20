@@ -42,7 +42,12 @@ import { mailboxNameKey, nfc } from "@/utils/mailboxName.js";
 import { locationSuffix } from "@/utils/messageLocation.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
 import { patchSavedDraftMime, previewSavedDraftMime } from "@/services/savedDraftMime.js";
-import type { SavedDraftPreview, UpdateSavedDraftInput, UpdateSavedDraftResult } from "@/types.js";
+import type {
+  SavedDraftPreview,
+  SavedDraftCleanupResult,
+  UpdateSavedDraftInput,
+  UpdateSavedDraftResult,
+} from "@/types.js";
 import {
   decodeHeaderBytes,
   headerBlockBytes,
@@ -113,6 +118,9 @@ interface ImapEnvelope {
   subject?: string;
   date?: Date | string;
   from?: ImapAddress[];
+  to?: ImapAddress[];
+  cc?: ImapAddress[];
+  bcc?: ImapAddress[];
   messageId?: string;
   inReplyTo?: string;
 }
@@ -3042,6 +3050,10 @@ export const MAX_RFC822_FILE_BYTES = MAX_COMPOSE_SOURCE_BYTES;
 
 export interface ImapRfc822Acquisition {
   account: string;
+  /** Login identity of the account that supplied these bytes. */
+  accountUser: string;
+  /** Server envelope addresses, when supplied, for checking hidden Bcc recipients. */
+  envelopeRecipients?: { to: string[]; cc: string[]; bcc: string[] };
   mailbox: string;
   uid: number;
   /** Mailbox `UIDVALIDITY` as a decimal string. With `uid` it is the durable
@@ -3082,14 +3094,42 @@ export type ImapRfc822Result =
  */
 export async function imapGetMessageRfc822(
   id: string,
-  opts: { maxBytes?: number } = {},
+  opts: { maxBytes?: number; requireDraftMailbox?: boolean } = {},
   deps: ImapDeps = {}
 ): Promise<ImapRfc822Result> {
   const ref = decodeImapId(id);
   if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  if (
+    opts.requireDraftMailbox &&
+    (!ref.account ||
+      !ref.path ||
+      !Number.isSafeInteger(ref.uid) ||
+      ref.uid < 1 ||
+      ref.uid > 0xffffffff)
+  )
+    return { success: false, error: "A complete stored Drafts identity is required." };
+  if (
+    opts.requireDraftMailbox &&
+    !deps.config &&
+    listImapAccountSpecs().filter((spec) => specMatchesSelector(spec, ref.account)).length !== 1
+  )
+    return {
+      success: false,
+      error: "Draft account is absent or ambiguous; no fallback is permitted.",
+    };
   const requested = Math.floor(opts.maxBytes ?? MAX_RFC822_INLINE_BYTES);
   const limit = Math.min(Math.max(1, requested), MAX_RFC822_FILE_BYTES);
-  return withClient(depsForMessageRef(ref, deps), async (client) => {
+  return withClient(depsForMessageRef(ref, deps), async (client, cfg) => {
+    if (opts.requireDraftMailbox) {
+      const boxes = (await client.list()).filter(
+        (box) =>
+          !box.flags?.has("\\Noselect") &&
+          (box.specialUse?.toLowerCase() === "\\drafts" || box.flags?.has("\\Drafts"))
+      );
+      if (boxes.length !== 1 || boxes[0].path !== ref.path) {
+        return { success: false, error: `"${ref.path}" is not the account's Drafts mailbox.` };
+      }
+    }
     const lock = await client.getMailboxLock(ref.path, { readOnly: true });
     try {
       const mb = client.mailbox;
@@ -3117,6 +3157,22 @@ export async function imapGetMessageRfc822(
       }
       const bytes = asBuffer(msg.source);
       const size = typeof msg.size === "number" ? msg.size : undefined;
+      if (
+        opts.requireDraftMailbox &&
+        (msg.uid !== ref.uid ||
+          !msg.flags?.has("\\Draft") ||
+          msg.flags.has("\\Deleted") ||
+          !uidValidity ||
+          !client.mailbox ||
+          client.mailbox.uidValidity?.toString() !== uidValidity)
+      )
+        return { success: false, error: "The stored message is not the requested active draft." };
+      if (
+        opts.requireDraftMailbox &&
+        size !== undefined &&
+        Math.abs(size - bytes.length) > 1024 + size * 0.02
+      )
+        return { success: false, error: "Stored draft source is incomplete; no send performed." };
       if (bytes.length > limit) {
         return {
           success: false,
@@ -3144,6 +3200,15 @@ export async function imapGetMessageRfc822(
         success: true,
         acquisition: {
           account: ref.account,
+          accountUser: cfg.user,
+          envelopeRecipients:
+            msg.envelope?.to || msg.envelope?.cc || msg.envelope?.bcc
+              ? {
+                  to: msg.envelope.to?.map((address) => address.address ?? "") ?? [],
+                  cc: msg.envelope.cc?.map((address) => address.address ?? "") ?? [],
+                  bcc: msg.envelope.bcc?.map((address) => address.address ?? "") ?? [],
+                }
+              : undefined,
           mailbox: ref.path,
           uid: ref.uid,
           uidValidity,
@@ -3583,6 +3648,166 @@ async function verifyExpunged(
     };
   } catch (e) {
     return { verdict: "unverified", why: `the post-delete check could not run: ${errText(e)}` };
+  }
+}
+
+/** Recoverably move exactly the submitted revision to Trash. Never global EXPUNGE.
+ * Validation and final source read happen inside the same write mailbox lock.
+ * A failed/uncertain cleanup does not change the already acknowledged SMTP outcome.
+ */
+export async function imapTrashSavedDraft(
+  id: string,
+  approved: Pick<SavedDraftPreview, "sha256" | "uidValidity">,
+  deps: ImapDeps = {}
+): Promise<SavedDraftCleanupResult> {
+  let attempted = false;
+  try {
+    const ref = decodeImapId(id);
+    if (
+      !ref ||
+      !ref.account ||
+      !ref.path ||
+      !Number.isSafeInteger(ref.uid) ||
+      ref.uid < 1 ||
+      ref.uid > 0xffffffff ||
+      !/^[1-9]\d*$/.test(approved.uidValidity) ||
+      !/^[a-f0-9]{64}$/i.test(approved.sha256)
+    )
+      throw new Error("Cleanup requires the submitted draft's complete identity and revision.");
+    if (
+      !deps.config &&
+      listImapAccountSpecs().filter((spec) => specMatchesSelector(spec, ref.account)).length !== 1
+    )
+      throw new Error("Draft account is absent or ambiguous; cleanup refused.");
+    return await withClient(depsForMessageRef(ref, deps), async (client) => {
+      const boxes = (await client.list()).filter((box) => !box.flags?.has("\\Noselect"));
+      const special = (name: string) =>
+        boxes.filter(
+          (box) => box.specialUse?.toLowerCase() === name.toLowerCase() || box.flags?.has(name)
+        );
+      const drafts = special("\\Drafts"),
+        trash = special("\\Trash");
+      if (
+        drafts.length !== 1 ||
+        drafts[0].path !== ref.path ||
+        trash.length !== 1 ||
+        trash[0].path === ref.path
+      )
+        throw new Error(
+          "Cleanup requires unambiguous, distinct SPECIAL-USE Drafts and Trash mailboxes."
+        );
+      // Refuse imapflow's COPY/delete emulation: it could expunge unrelated mail.
+      if (!client.capabilities?.has("MOVE"))
+        throw new Error("Draft cleanup requires server-side MOVE; no COPY/EXPUNGE fallback.");
+      const lock = await client.getMailboxLock(ref.path, { readOnly: false });
+      try {
+        const assertRevisionMailbox = () => {
+          if (
+            !client.mailbox ||
+            client.mailbox.readOnly ||
+            client.mailbox.uidValidity?.toString() !== approved.uidValidity
+          )
+            throw new Error("Draft mailbox revision changed or became read-only; cleanup refused.");
+        };
+        assertRevisionMailbox();
+        const message = await client.fetchOne(
+          String(ref.uid),
+          {
+            uid: true,
+            flags: true,
+            size: true,
+            source: { start: 0, maxLength: MAX_RFC822_FILE_BYTES + 1 },
+          },
+          { uid: true }
+        );
+        if (
+          !message ||
+          message.uid !== ref.uid ||
+          !message.flags?.has("\\Draft") ||
+          message.flags.has("\\Deleted") ||
+          !message.source?.length
+        )
+          throw new Error("Submitted draft is missing or no longer active; cleanup refused.");
+        const bytes = asBuffer(message.source);
+        if (
+          bytes.length > MAX_RFC822_FILE_BYTES ||
+          (message.size !== undefined &&
+            Math.abs(message.size - bytes.length) > 1024 + message.size * 0.02) ||
+          createHash("sha256").update(bytes).digest("hex") !== approved.sha256.toLowerCase()
+        )
+          throw new Error("Stored draft differs from the submitted revision; cleanup refused.");
+        assertRevisionMailbox();
+        attempted = true;
+        const moved = await client.messageMove([ref.uid], trash[0].path, { uid: true });
+        if (!moved) {
+          // imapflow's MOVE returns false for a tagged NO *and* for any transport error
+          // after the command was written, so `false` alone is not a definite rejection.
+          // Only a readback inside this lock that still finds the unchanged revision is.
+          try {
+            assertRevisionMailbox();
+            const still = await client.fetchOne(
+              String(ref.uid),
+              { uid: true, source: { start: 0, maxLength: MAX_RFC822_FILE_BYTES + 1 } },
+              { uid: true }
+            );
+            assertRevisionMailbox();
+            if (
+              still &&
+              still.source?.length &&
+              createHash("sha256").update(asBuffer(still.source)).digest("hex") ===
+                approved.sha256.toLowerCase()
+            ) {
+              attempted = false;
+              return {
+                success: false,
+                removed: false,
+                error: "Server rejected draft MOVE to Trash; the draft is unchanged in Drafts.",
+              };
+            }
+          } catch {
+            // fall through: outcome unknown
+          }
+          return {
+            success: false,
+            error:
+              "Draft MOVE to Trash was not acknowledged and the source could not be confirmed in place; inspect Drafts and Trash without resending.",
+          };
+        }
+        try {
+          assertRevisionMailbox();
+          const remaining = await client.fetchOne(String(ref.uid), { uid: true }, { uid: true });
+          assertRevisionMailbox();
+          if (remaining)
+            return {
+              success: true,
+              verification: {
+                verdict: "unverified",
+                why: "MOVE was acknowledged, but the source UID is still visible; inspect Drafts and Trash without resending.",
+              },
+            };
+          return {
+            success: true,
+            removed: true,
+            verification: {
+              verdict: "verified",
+              how: `MOVE to ${trash[0].path} acknowledged and source UID ${ref.uid} absent in UIDVALIDITY ${approved.uidValidity}.`,
+            },
+          };
+        } catch (error) {
+          return {
+            success: true,
+            verification: {
+              verdict: "unverified",
+              why: `MOVE was acknowledged but readback failed: ${errText(error)}`,
+            },
+          };
+        }
+      } finally {
+        lock.release();
+      }
+    });
+  } catch (error) {
+    return { success: false, ...(attempted ? {} : { removed: false }), error: errText(error) };
   }
 }
 
