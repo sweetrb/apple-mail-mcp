@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [2.20.64] - 2026-11-24
+
+### Fixed
+
+- **`update-saved-draft` and `send-saved-draft` tool schemas broke every request on DeepSeek models.** The `header` validation schema shared by both tools used the bare ECMAScript null escape (`\0`) in its pattern. Zod serialises that regex into the tool's JSON Schema `pattern` as `^[^\\r\\n\\0]*$`, and the DeepSeek API rejects a tool schema containing it with `Invalid schema for function '...': "..." is not a "regex"` (HTTP 400). Because tool schemas are sent with every model request, a client connected to this server while a DeepSeek model was selected failed on **every** turn — not only when a draft tool was called — and the error named neither this server nor the offending tool. The NUL guard now uses the Unicode escape (`\u0000`), which serialises to `^[^\\r\\n\\u0000]*$` and validates identically in V8: CR, LF and NUL are still rejected exactly as before. Regression coverage in `src/security.test.ts` asserts that no pattern emitted by either saved-draft schema contains a bare `\0`, and that the header patterns still reject CR, LF and NUL. Reported with a reproduction by @HernandoR.
+
 ## [2.20.63] - 2026-11-20
 
 ### Added

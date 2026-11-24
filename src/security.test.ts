@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import { resolve, isAbsolute } from "path";
 import { homedir } from "os";
 import { existsSync } from "fs";
@@ -13,6 +14,7 @@ import {
   DATE_FILTER_SCHEMA,
   MESSAGE_ID_SCHEMA,
 } from "@/schemas.js";
+import { SEND_SAVED_DRAFT_INPUT, UPDATE_SAVED_DRAFT_INPUT } from "@/tools/savedDraft.js";
 
 describe("MESSAGE_ID_SCHEMA", () => {
   it("accepts valid numeric IDs", () => {
@@ -299,5 +301,53 @@ describe("escapeForAppleScript vs escapeForAppleScriptBody (audit #10 + body new
   it("both: empty and falsy input yield empty string", () => {
     expect(escapeForAppleScript("")).toBe("");
     expect(escapeForAppleScriptBody("")).toBe("");
+  });
+});
+
+describe("tool schemas are safe for providers that validate `pattern` strictly", () => {
+  const emitted = (schema: Parameters<typeof z.toJSONSchema>[0]): unknown =>
+    z.toJSONSchema(schema, { io: "input", target: "draft-7" });
+
+  // Collect every `pattern` value anywhere in an emitted schema.
+  const collectPatterns = (node: unknown, out: string[] = []): string[] => {
+    if (Array.isArray(node)) {
+      node.forEach((child) => collectPatterns(child, out));
+    } else if (node && typeof node === "object") {
+      for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+        if (key === "pattern" && typeof value === "string") out.push(value);
+        else collectPatterns(value, out);
+      }
+    }
+    return out;
+  };
+
+  const draftSchemas = [
+    ["UPDATE_SAVED_DRAFT_INPUT", UPDATE_SAVED_DRAFT_INPUT],
+    ["SEND_SAVED_DRAFT_INPUT", SEND_SAVED_DRAFT_INPUT],
+  ] as const;
+
+  it.each(draftSchemas)("%s emits no bare \\0 escape in any pattern", (_name, schema) => {
+    const patterns = collectPatterns(emitted(z.object(schema)));
+    expect(patterns.length).toBeGreaterThan(0);
+    for (const pattern of patterns) {
+      // A bare null escape (\0) is valid ECMAScript, but the DeepSeek API rejects
+      // the whole tool schema with `"..." is not a "regex"` (HTTP 400), and tool
+      // schemas are sent on every request — so every turn fails. Use \u0000.
+      expect(pattern).not.toMatch(/\\0(?!\d)/);
+    }
+  });
+
+  it("header fields still reject CR, LF and NUL after serialization", () => {
+    const patterns = collectPatterns(emitted(z.object(UPDATE_SAVED_DRAFT_INPUT)));
+    // Every header/recipient pattern must reject the three injection characters.
+    const headerPatterns = patterns.filter((p) => p.includes("\\r") && p.includes("\\n"));
+    expect(headerPatterns.length).toBeGreaterThan(0);
+    for (const pattern of headerPatterns) {
+      const re = new RegExp(pattern);
+      expect(re.test("a\rb")).toBe(false);
+      expect(re.test("a\nb")).toBe(false);
+      expect(re.test("a\u0000b")).toBe(false);
+      expect(re.test("Subject: hello")).toBe(true);
+    }
   });
 });
