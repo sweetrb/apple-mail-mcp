@@ -6,10 +6,17 @@ import { smtpDeliveryNotice } from "@/services/smtpMailer.js";
 import { preflightAttachments } from "@/utils/attachmentMaterialize.js";
 import { successResponse, errorResponse, type ToolResponse } from "@/tools/respond.js";
 
+// The NUL guard uses a Unicode code-point escape (\u0000) rather than the bare
+// ECMAScript null escape (\0). Both compile identically in V8, but Zod serialises
+// the regex into the tool's JSON Schema `pattern`, and the DeepSeek API rejects a
+// pattern containing `\0` with `"..." is not a "regex"` (HTTP 400) — which, because
+// tool schemas ride on every request, fails every turn for any client connected
+// to this server while a DeepSeek model is selected.
 const header = z
   .string()
   .max(10_000)
-  .regex(/^[^\r\n\0]*$/, "Headers cannot contain CR, LF or NUL");
+  // eslint-disable-next-line no-control-regex -- deliberately excludes CR, LF and NUL
+  .regex(/^[^\r\n\u0000]*$/, "Headers cannot contain CR, LF or NUL");
 const recipients = z.array(header.min(1)).max(100);
 export const SAVED_DRAFT_CHANGES_SCHEMA = z
   .object({

@@ -110343,7 +110343,7 @@ var REFERENCES_SCHEMA = external_exports.array(MESSAGE_ID_TOKEN_SCHEMA).min(1, "
 
 // src/tools/savedDraft.ts
 init_smtpMailer();
-var header = external_exports.string().max(1e4).regex(/^[^\r\n\0]*$/, "Headers cannot contain CR, LF or NUL");
+var header = external_exports.string().max(1e4).regex(/^[^\r\n\u0000]*$/, "Headers cannot contain CR, LF or NUL");
 var recipients = external_exports.array(header.min(1)).max(100);
 var SAVED_DRAFT_CHANGES_SCHEMA = external_exports.object({
   subject: header.optional(),
